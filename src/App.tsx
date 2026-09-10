@@ -2,6 +2,8 @@ import { useState } from "react";
 import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import { Card } from "./components/ui/card";
+import { Button } from "./components/ui/button";
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -15,7 +17,8 @@ function App() {
   return (
     <main className="container">
       <h1 className="bg-amber-600">Welcome to Tauri + React</h1>
-
+      <Card>Card</Card>
+      <Button>Button</Button>
       <div className="row">
         <a href="https://vite.dev" target="_blank">
           <img src="/vite.svg" className="logo vite" alt="Vite logo" />
