@@ -179,7 +179,7 @@ export function AppMenubar({
             </MenubarGroup>
             <MenubarSeparator />
             {/* 版本号是脚注说明，不属于任何分组，Label 在组外会降级为普通文本行 */}
-            <MenubarLabel>邦禾 · 粮站收粮系统 0.1.0（Mock 数据）</MenubarLabel>
+            <MenubarLabel>磅禾 · 粮站收粮系统 0.1.0（Mock 数据）</MenubarLabel>
           </MenubarContent>
         </MenubarMenu>
 

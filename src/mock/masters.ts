@@ -35,8 +35,8 @@ export function chance(p: number): boolean {
 export const station: Station = {
   id: 1,
   code: "01",
-  name: "邦禾粮食收储站",
-  address: "河南省周口市川汇区邦禾路 8 号",
+  name: "磅禾粮食收储站",
+  address: "河南省周口市川汇区磅禾路 8 号",
   phone: "0394-8123456",
 };
 
@@ -232,7 +232,7 @@ export const parties: Party[] = [];
       const baseTare = heavy ? int(140000, 180000) * 10 : plan.type === "large_grower" ? int(90000, 140000) * 10 : int(9000, 16000);
       const name =
         plan.type === "company"
-          ? `${pick(["邦禾", "豫东", "中裕", "金穗"])}粮油贸易有限公司`
+          ? `${pick(["磅禾", "豫东", "中裕", "金穗"])}粮油贸易有限公司`
           : plan.type === "cooperative"
             ? `${pick(VILLAGES)}${pick(["农机", "种植", "丰穗", "沃土"])}专业合作社`
             : `${SURNAMES[int(0, SURNAMES.length - 1)]}${pick(GIVEN)}`;

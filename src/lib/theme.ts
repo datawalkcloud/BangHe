@@ -105,7 +105,7 @@ export function paletteToClipboardCss(p: ThemePalette): string {
   const base = findBase(p.base);
   const accent = findAccent(p.accent);
   const tail = p.accent === "default" ? "" : ` + 主题色 ${accent.title}（${accent.zh}）`;
-  return `/* 邦禾 · 基础色板 ${base.title}（${base.zh}）${tail} —— 粘进 src/App.css 即为出厂默认 */\n${paletteToCss(p)}\n`;
+  return `/* 磅禾 · 基础色板 ${base.title}（${base.zh}）${tail} —— 粘进 src/App.css 即为出厂默认 */\n${paletteToCss(p)}\n`;
 }
 
 /**

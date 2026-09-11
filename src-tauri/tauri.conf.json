@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "邦禾粮站收粮系统",
+  "productName": "磅禾粮站收粮系统",
   "mainBinaryName": "banghe",
   "version": "0.1.0",
   "identifier": "cn.datawalk.bh",
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "邦禾粮站收粮系统",
+        "title": "磅禾粮站收粮系统",
         "width": 1440,
         "height": 900,
         "minWidth": 1280,
@@ -29,8 +29,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "publisher": "邦禾",
-    "copyright": "© 邦禾",
+    "publisher": "磅禾",
+    "copyright": "© 磅禾",
     "category": "Business",
     "shortDescription": "粮站收粮过磅管理系统",
     "longDescription": "单机版粮站收粮过磅：制单、称重、化验、计价结算、付款、台账报表与小票打印，全部离线可用。",

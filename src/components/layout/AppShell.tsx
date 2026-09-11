@@ -10,10 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import {
-  PanelLeftCloseIcon,
-  ScanLineIcon,
-} from "lucide-react";
+import { PanelLeftCloseIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDeviceStore, useScaleTick } from "@/store/device";
 import { useSession } from "@/store/session";
@@ -52,12 +49,10 @@ function Brand() {
   return (
     <SidebarHeader className="gap-0">
       <div className="flex h-12 items-center gap-2 px-3">
-        <span className="flex size-8 shrink-0 items-center justify-center border bg-primary text-primary-foreground">
-          <ScanLineIcon className="size-4" />
-        </span>
+        <img src="/logo.png" alt="磅禾" className="size-8 shrink-0 object-contain" />
         {state === "expanded" && (
           <span className="flex min-w-0 flex-col leading-tight">
-            <span className="truncate text-sm font-semibold">{st?.name ?? "邦禾粮站"}</span>
+            <span className="truncate text-sm font-semibold">{st?.name ?? "磅禾粮站"}</span>
             <span className="truncate text-xs text-muted-foreground">收粮计量结算系统</span>
           </span>
         )}

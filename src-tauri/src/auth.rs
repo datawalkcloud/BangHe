@@ -15,6 +15,7 @@
 //! 主动登出或进程退出则立刻结束。会话只存内存，所以重启程序必须重登——
 //! 这是"单据署名等于当时坐在磅房里的人"这条链路的唯一支点。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
 
 use argon2::password_hash::generate_salt;
@@ -34,6 +35,23 @@ pub const IDLE_TTL_SECS: i64 = 3600;
 /// 连错几次锁多久（02 §11"连续失败锁定"；`failed_count`/`locked_until` 两列 0001 已备）
 pub const MAX_FAILED: i64 = 5;
 pub const LOCK_MINUTES: i64 = 15;
+
+/// 调试构建是否放行"连错锁定"。默认 `false`（锁定照常生效）：单元测试直接调
+/// [`authenticate`]、不跑 App 启动，所以 §11 的连错锁定契约仍被 `tests/auth_contract.rs` 守着。
+/// 只有 `lib.rs` 在 `cfg(debug_assertions)` 下把它置真，让 `tauri dev` 反复试错不被锁死、
+/// 也能把此前已锁的账号直接登进去（成功登录会顺手把 `failed_count`/`locked_until` 归零）。
+static LOCKOUT_DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// 由 App 启动流程调用（仅 debug 构建传 `true`）。
+pub fn set_lockout_disabled(disabled: bool) {
+    LOCKOUT_DISABLED.store(disabled, Ordering::Relaxed);
+}
+
+/// 锁定逻辑当前是否生效。关掉时：既不因连错而设锁，也无视已有的 `locked_until`。
+fn lockout_active() -> bool {
+    !LOCKOUT_DISABLED.load(Ordering::Relaxed)
+}
+
 /// 最短口令。磅房全键盘作业、操作员以年龄偏大的站长为主，不叠复杂度规则——
 /// 强行大写加符号只会换来贴在显示器边框上的便利贴。
 pub const PWD_MIN_LEN: usize = 6;
@@ -339,15 +357,17 @@ fn precheck(conn: &Connection, username: &str, kind: Kind, session_id: Option<&s
         audit(conn, Some(account.id), &account.display_name, kind.action(), Some(account.id), Some("该账号不是站长，无权授权"), false, session_id);
         return Pending::Done(LoginOutcome::denied(format!("「{}」不是站长，不能授权", account.username)));
     }
-    if let Some(raw) = &account.locked_until {
-        if parse_iso(raw).map(|until| until > now).unwrap_or(false) {
-            // 锁定有效期内不再校验、也不再累加计数——否则一次锁定能被无限续期
-            return Pending::Done(LoginOutcome::denied_locked(
-                format!("口令连错 {MAX_FAILED} 次，账号已锁定，请稍后再试"),
-                Some(raw.clone()),
-            ));
+    if lockout_active() {
+        if let Some(raw) = &account.locked_until {
+            if parse_iso(raw).map(|until| until > now).unwrap_or(false) {
+                // 锁定有效期内不再校验、也不再累加计数——否则一次锁定能被无限续期
+                return Pending::Done(LoginOutcome::denied_locked(
+                    format!("口令连错 {MAX_FAILED} 次，账号已锁定，请稍后再试"),
+                    Some(raw.clone()),
+                ));
+            }
+            // 锁已过期（或时间串解析失败，按未锁定处理）：计数从头开始
         }
-        // 锁已过期（或时间串解析失败，按未锁定处理）：计数从头开始
     }
 
     let is_unset = account.password_hash == PWD_UNSET;
@@ -390,7 +410,7 @@ fn conclude(
 
     if !verified {
         let failed = account.failed_count + 1;
-        let locking = failed >= MAX_FAILED;
+        let locking = lockout_active() && failed >= MAX_FAILED;
         let locked_until = if locking {
             Some(iso_of(now + chrono::Duration::minutes(LOCK_MINUTES)))
         } else {

@@ -105,7 +105,7 @@ function PreviewPair({ palette }: { palette: ThemePalette }) {
         return (
           <div key={m} className={cn("flex min-w-0 flex-col gap-2 border p-3", m === "dark" && "dark")} style={tokenVars(t)}>
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm font-medium">邦禾粮站 · 过磅单</span>
+              <span className="truncate text-sm font-medium">磅禾粮站 · 过磅单</span>
               <span className="tnum shrink-0 text-xs text-muted-foreground">BD0001202609110007</span>
             </div>
             <div className="flex items-end justify-between gap-2">

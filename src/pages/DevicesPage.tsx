@@ -17,6 +17,7 @@ import {
   CreditCardIcon,
   DownloadIcon,
   PlayIcon,
+  PlusIcon,
   PrinterIcon,
   SquareIcon,
   UsbIcon,
@@ -68,6 +69,86 @@ const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
   signpad: UsbIcon,
 };
 
+/* ---------------------------------------------------------- 新增设备表单 */
+
+/** 一栏关键参数：options 存在则渲染下拉，否则渲染文本框 */
+interface FieldSpec {
+  key: string;
+  label: string;
+  placeholder?: string;
+  options?: string[];
+  required?: boolean;
+}
+
+/**
+ * 每类设备在登记表单里暴露的驱动候选与值得现场填的关键参数。
+ *
+ * 只收"寻址必需"的少数几项：帧模板、判稳阈值这类精细配置仍走各自的联机面板，
+ * 登记的目的只是让台账里先有这台机、能被联机测试摸到，而不是在这里配完所有参数。
+ */
+const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; fields: FieldSpec[] }> = {
+  scale: {
+    prefix: "scale",
+    drivers: ["yaohua_xk3190", "toledo", "mock"],
+    fields: [
+      { key: "port", label: "串口", placeholder: "COM3", required: true },
+      { key: "baud", label: "波特率", options: ["9600", "4800", "2400", "19200", "38400"] },
+      { key: "frameFamily", label: "帧族", options: ["A", "B"] },
+    ],
+  },
+  idcard: {
+    prefix: "idcard",
+    drivers: ["bridge_exe", "mock"],
+    fields: [{ key: "exe", label: "桥接程序", placeholder: "idcard-bridge-x86.exe", required: true }],
+  },
+  camera: {
+    prefix: "cam",
+    drivers: ["hikvision_isapi", "dahua_cgi", "mock"],
+    fields: [
+      { key: "host", label: "地址（IP）", placeholder: "192.168.1.64", required: true },
+      { key: "user", label: "登录用户", placeholder: "weigh" },
+    ],
+  },
+  printer: {
+    prefix: "prn",
+    drivers: ["preview", "raw_escp", "escpos_usbprint", "raw_escpos"],
+    fields: [{ key: "paper", label: "纸型", options: ["A4", "dot241", "thermal80", "thermal58"], required: true }],
+  },
+  led: {
+    prefix: "led",
+    drivers: ["mock"],
+    fields: [{ key: "host", label: "地址（IP）", placeholder: "192.168.1.70", required: true }],
+  },
+  cashbox: {
+    prefix: "cash",
+    drivers: ["mock", "escpos_trigger"],
+    fields: [{ key: "port", label: "串口", placeholder: "COM2", required: true }],
+  },
+  signpad: {
+    prefix: "sign",
+    drivers: ["hidapi"],
+    fields: [
+      { key: "vid", label: "VID", placeholder: "0x056a" },
+      { key: "pid", label: "PID", placeholder: "0x00b1" },
+    ],
+  },
+};
+
+interface DeviceForm {
+  kind: DeviceKind;
+  code: string;
+  name: string;
+  driver: string;
+  cfg: Record<string, string>;
+  isDefault: boolean;
+  isMock: boolean;
+}
+
+function emptyDeviceForm(): DeviceForm {
+  const spec = DEVICE_SPEC.scale;
+  return { kind: "scale", code: "", name: "", driver: spec.drivers[0], cfg: {}, isDefault: false, isMock: false };
+}
+
 export function DevicesPage() {
   const queryClient = useQueryClient();
   const can = useSession((s) => s.can);
@@ -94,6 +175,85 @@ export function DevicesPage() {
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
     onError: (e: Error) => toast.error(`操作失败：${e.message}`),
+  });
+
+  /* ------------------------------------------------------- 登记新设备 */
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState<DeviceForm>(emptyDeviceForm);
+
+  /** 同类型已有编码里最大的序号 +1，作为默认建议编码（仍可手改） */
+  function nextCode(kind: DeviceKind): string {
+    const prefix = DEVICE_SPEC[kind].prefix;
+    const nums = devices
+      .filter((d) => d.code.startsWith(prefix))
+      .map((d) => Number.parseInt(d.code.slice(prefix.length), 10))
+      .filter((n) => Number.isFinite(n));
+    return `${prefix}${(nums.length ? Math.max(...nums) : 0) + 1}`;
+  }
+
+  function openAdd() {
+    setForm({ ...emptyDeviceForm(), code: nextCode("scale") });
+    setAddOpen(true);
+  }
+
+  function patchDeviceForm(p: Partial<DeviceForm>) {
+    setForm((f) => ({ ...f, ...p }));
+  }
+
+  /** 换类型时同步重置建议编码、驱动候选与关键参数，避免带着上一类的不兼容字段提交 */
+  function patchKind(kind: DeviceKind) {
+    setForm((f) => ({ ...f, kind, code: nextCode(kind), driver: DEVICE_SPEC[kind].drivers[0], cfg: {} }));
+  }
+
+  function patchCfg(key: string, v: string) {
+    setForm((f) => ({ ...f, cfg: { ...f.cfg, [key]: v } }));
+  }
+
+  /** 下拉字段未手动改过时以第一项为准，避免"界面显示了值、校验却说必填缺失" */
+  function fieldValue(f: FieldSpec): string {
+    return (form.cfg[f.key] ?? (f.options ? f.options[0] : "")).trim();
+  }
+
+  const addSpec = DEVICE_SPEC[form.kind];
+  const addErrors: string[] = [];
+  const trimmedCode = form.code.trim();
+  if (!form.name.trim()) addErrors.push("名称必填");
+  if (!trimmedCode) addErrors.push("编码必填");
+  else if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmedCode)) addErrors.push("编码需字母开头，仅含字母/数字/下划线/连字符");
+  else if (devices.some((d) => d.code === trimmedCode)) addErrors.push(`编码 ${trimmedCode} 已存在`);
+  for (const f of addSpec.fields) {
+    if (f.required && !fieldValue(f)) addErrors.push(`${f.label}必填`);
+  }
+
+  const createDevice = useMutation({
+    mutationFn: () => {
+      const config: Record<string, string> = {};
+      for (const f of DEVICE_SPEC[form.kind].fields) {
+        const v = fieldValue(f);
+        if (v) config[f.key] = v;
+      }
+      return api.createDevice({
+        code: form.code.trim(),
+        name: form.name.trim(),
+        kind: form.kind,
+        driver: form.driver,
+        config,
+        is_default: form.isDefault,
+        is_mock: form.isMock,
+        operator_id: actorId(),
+      });
+    },
+    onSuccess: (d) => {
+      toast.success(`已登记「${d.name}」，请在右侧做联机测试`);
+      setSelected(d.code);
+      setAddOpen(false);
+      setForm(emptyDeviceForm());
+      void queryClient.invalidateQueries({ queryKey: ["devices"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+    },
+    onError: (e: Error) => toast.error(`登记失败：${e.message}`),
   });
 
   const offlineCount = devices.filter((d) => d.is_enabled === 1 && d.last_status !== "online").length;
@@ -128,6 +288,15 @@ export function DevicesPage() {
         description={`${devices.length} 台已登记设备，${offlineCount > 0 ? `${offlineCount} 台已启用但非在线` : "启用设备全部在线"}`}
         actions={
           <>
+            <Button
+              size="sm"
+              onClick={openAdd}
+              disabled={!can("device.manage")}
+              title={can("device.manage") ? undefined : "登记设备需要站长岗位（device.manage）"}
+            >
+              <PlusIcon />
+              添加设备
+            </Button>
             <Button size="sm" variant="outline" onClick={exportConfig} disabled={devices.length === 0}>
               <DownloadIcon />
               导出配置
@@ -212,7 +381,18 @@ export function DevicesPage() {
               {active ? (
                 <TestPanel d={active} mockOff={mockOff} />
               ) : (
-                <EmptyState title="没有可测试的设备" description="先在 Rust 侧登记设备档案。" />
+                <EmptyState
+                  title="还没有登记任何设备"
+                  description="现场硬件按类型录入后即可联机测试、排障。"
+                  action={
+                    can("device.manage") ? (
+                      <Button size="sm" onClick={openAdd}>
+                        <PlusIcon />
+                        添加设备
+                      </Button>
+                    ) : undefined
+                  }
+                />
               )}
             </div>
           </div>
@@ -234,6 +414,114 @@ export function DevicesPage() {
         </CallOut>
         {mockCount > 0 && <p className="pb-2 text-xs text-muted-foreground">另有 {mockCount} 台设备处于 Mock 模式。</p>}
       </div>
+
+      <Dialog
+        open={addOpen}
+        onOpenChange={(v) => {
+          setAddOpen(v);
+          if (!v) createDevice.reset();
+        }}
+      >
+        <DialogContent className="max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">添加设备</DialogTitle>
+            <DialogDescription className="text-xs">
+              登记现场硬件到台账。新设备一律先记「未检测」，保存后在右侧面板做一次联机测试通过才会转绿——
+              登记不等于验证（02 §M9）。编码是台账主键，导出配置与换机重建都按它核对，需唯一。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              设备类型
+              <Choose
+                aria-label="设备类型"
+                value={form.kind}
+                onChange={(v) => patchKind(v as DeviceKind)}
+                options={KIND_ORDER.map((k) => ({ value: k, label: DEVICE_KIND[k] }))}
+              />
+            </Label>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              驱动 / 协议
+              <Choose
+                aria-label="驱动协议"
+                value={form.driver}
+                onChange={(v) => patchDeviceForm({ driver: v })}
+                options={addSpec.drivers.map((d) => ({ value: d, label: d }))}
+              />
+            </Label>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              设备名称 *
+              <Input
+                value={form.name}
+                onChange={(e) => patchDeviceForm({ name: e.target.value })}
+                placeholder="如：3 号地磅（耀华 XK3190-A9）"
+                className="text-sm"
+              />
+            </Label>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              设备编码 *
+              <Input
+                value={form.code}
+                onChange={(e) => patchDeviceForm({ code: e.target.value })}
+                placeholder={nextCode(form.kind)}
+                className="tnum text-sm font-mono"
+              />
+            </Label>
+
+            {addSpec.fields.map((f) => (
+              <Label key={f.key} className="flex flex-col gap-1 text-xs text-muted-foreground">
+                {f.label}
+                {f.required ? " *" : ""}
+                {f.options ? (
+                  <Choose
+                    aria-label={f.label}
+                    value={fieldValue(f)}
+                    onChange={(v) => patchCfg(f.key, v)}
+                    options={f.options.map((o) => ({ value: o, label: o }))}
+                  />
+                ) : (
+                  <Input
+                    value={form.cfg[f.key] ?? ""}
+                    onChange={(e) => patchCfg(f.key, e.target.value)}
+                    placeholder={f.placeholder}
+                    className="tnum text-sm font-mono"
+                  />
+                )}
+              </Label>
+            ))}
+
+            <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch checked={form.isDefault} onCheckedChange={(v) => patchDeviceForm({ isDefault: v === true })} aria-label="设为默认" />
+              设为该类默认设备（工作台优先用它）
+            </Label>
+            <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch checked={form.isMock} onCheckedChange={(v) => patchDeviceForm({ isMock: v === true })} aria-label="Mock 模拟" />
+              先按 Mock 登记（培训/演示用，正式收粮前应切回真实设备）
+            </Label>
+          </div>
+
+          {addErrors.length > 0 && (
+            <CallOut tone="warning" title="还不能保存">
+              <ul className="list-disc pl-4">
+                {addErrors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            </CallOut>
+          )}
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setAddOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={() => createDevice.mutate()} disabled={addErrors.length > 0 || createDevice.isPending}>
+              <PlusIcon />
+              {createDevice.isPending ? "登记中…" : "登记设备"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

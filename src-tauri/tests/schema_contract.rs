@@ -975,6 +975,66 @@ fn tampered_applied_script_refuses_startup() {
     assert!(e.to_string().contains("不允许修改"), "现场提示要说明怎么办：{e}");
 }
 
+/// 校验和只认内容，不认检出时的换行符：`core.autocrlf=true` 的机器把 .sql 检出成
+/// CRLF，逐字节哈希会让同一份脚本算出两个值，两台机器互相拒启。
+/// 同时钉住反向：真的改了内容照样要不同和，别把归一做成把守卫关掉。
+#[test]
+fn checksum_ignores_line_endings() {
+    static LF: &str = "CREATE TABLE t(x INT);\nINSERT INTO t VALUES (1);\n";
+    static CRLF: &str = "CREATE TABLE t(x INT);\r\nINSERT INTO t VALUES (1);\r\n";
+    static TAMPERED: &str = "CREATE TABLE t(x INT);\nINSERT INTO t VALUES (2);\n";
+
+    let of = |sql: &'static str| Migration { name: "x.sql", sql }.checksum();
+    assert_eq!(of(LF), of(CRLF), "同一份脚本换行符不同也必须同和");
+    assert_ne!(of(LF), of(TAMPERED), "改了一个字符就必须不同和");
+}
+
+/// 老库兼容：换行归一之前 Windows 构建记的是 CRLF flavor 哈希 → 启动时补记一次并
+/// 放行（现场从那种构建升上来不该拒启），库里随即换成规范值，第二次不再触发。
+#[test]
+fn legacy_crlf_checksum_is_healed_once_and_accepted() {
+    let conn = &mut migrated_conn();
+    let m = &MIGRATIONS[0];
+    assert_ne!(
+        m.checksum(),
+        m.crlf_checksum(),
+        "脚本按 LF 检出时两种 flavor 必须不同，否则这条测试没意义"
+    );
+    conn.execute(
+        "UPDATE schema_migration SET checksum=?1 WHERE name=?2",
+        rusqlite::params![m.crlf_checksum(), m.name],
+    )
+    .unwrap();
+
+    let r = migrate::apply(conn, "0.1.0-test", None).expect("老哈希应补记后放行，而不是拒启");
+    assert_eq!(r.healed, vec![m.name.to_string()], "补记要报告是哪支脚本");
+    let stored: String = conn
+        .query_row(
+            "SELECT checksum FROM schema_migration WHERE name=?1",
+            rusqlite::params![m.name],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, m.checksum(), "补记后库里应当是规范值");
+
+    let r2 = migrate::apply(conn, "0.1.0-test", None).unwrap();
+    assert!(r2.healed.is_empty(), "第二次启动不该再补记");
+
+    // 反向：既不是规范值也不是 CRLF 值 → 照样拒启，补记不能变成后门
+    conn.execute(
+        "UPDATE schema_migration SET checksum='deadbeef' WHERE name=?1",
+        rusqlite::params![m.name],
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            migrate::apply(conn, "0.1.0-test", None).unwrap_err(),
+            migrate::MigrateError::ChecksumMismatch { .. }
+        ),
+        "对不上任何合法 flavor 的哈希必须仍然拦下"
+    );
+}
+
 /// 库来自更新的程序版本：拒绝启动（不能"忽略未知列"继续收粮）
 #[test]
 fn newer_database_version_refuses_startup() {

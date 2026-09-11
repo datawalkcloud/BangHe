@@ -195,6 +195,7 @@ const AUDIT_ACTION: Record<string, string> = {
   "price.create": "新增价目",
   "price.update": "调价",
   "setting.update": "改站点参数",
+  "device.create": "新增设备",
   "device.update": "改设备配置",
   "staff.create": "新增员工",
   "staff.update": "修改员工",

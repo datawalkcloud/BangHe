@@ -17,6 +17,10 @@ src-tauri/target/
 tools/*/target/
 tools/*/*.bin
 
+# `npx tauri icon` 会顺手生成移动端图标集，本项目只出桌面包（bundle.targets = nsis）
+src-tauri/icons/ios/
+src-tauri/icons/android/
+
 # 浏览器冒烟测试落在仓库根目录的截图，不属于源码（只匹配根层，不影响 src-tauri/icons）
 /*.png
 /_qa/

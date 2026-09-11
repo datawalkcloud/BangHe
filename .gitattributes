@@ -1,0 +1,62 @@
+# ============================================================================
+# 换行符与二进制判定。本文件的优先级高于每个人机器上的 core.autocrlf。
+#
+# 为什么必须有它（不是风格问题，是两处真实的正确性故障）：
+#  1. 迁移校验和 = SHA-256(include_str! 读到的脚本字节)。Windows 上
+#     core.autocrlf=true 会把 .sql 检出成 CRLF，于是同一份脚本在 Windows
+#     与 Linux/CI 上算出两个校验和，两台机器「内容完全一样」的程序会互相
+#     触发 ChecksumMismatch 拒启（src-tauri/src/db/migrate.rs 硬规矩 2）。
+#  2. tests/schema_contract.rs::schema_matches_blessed_snapshot 拿快照文件
+#     字节和 dump_schema（用 \n 拼）逐字比，CRLF 检出下恒定报不一致。
+#
+# 结论：文本一律以 LF 进出仓库；只有真正需要 CRLF 的 Windows 批处理单独覆盖。
+# 兜底另一半在 Migration::checksum()：哈希前先归一换行，防的是本地新建/编辑
+# 出来的 CRLF 脚本（还没经过 checkout 归一）。
+# ============================================================================
+
+* text=auto eol=lf
+
+# Windows 批处理：cmd.exe 对纯 LF 脚本有历史坑，保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 明确是文本的后缀（text=auto 靠内容猜，含大量中文的文件容易被误判成二进制）
+*.sql text eol=lf
+*.rs text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.md text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.svg text eol=lf
+*.lock text eol=lf
+
+# 二进制：任何换行/编码改写都会损坏文件
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.webp -text
+*.ico -text
+*.icns -text
+*.bmp -text
+*.ttf -text
+*.otf -text
+*.woff -text
+*.woff2 -text
+*.eot -text
+*.pdf -text
+*.zip -text
+*.gz -text
+*.7z -text
+*.dll -text
+*.exe -text
+*.so -text
+*.dylib -text
+*.a -text
+*.lib -text

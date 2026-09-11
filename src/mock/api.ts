@@ -581,6 +581,59 @@ export const api = {
     return { ...d };
   },
 
+  /**
+   * 登记现场硬件（新增设备）。真实实现即向 `device_config` 插入一行。
+   *
+   * 编码是台账里的人工主键——「导出配置」和换机重建都按它核对，所以必须唯一；
+   * 新设备一律先记「未检测」：登记 ≠ 联机验证，状态灯要等右侧面板做一次真实联机测试
+   * 通过后才转绿（02 §M9）。设为默认时自动把同类旧的默认机降级，保证每类至多一台默认。
+   */
+  async createDevice(input: {
+    code: string;
+    name: string;
+    kind: DeviceConfig["kind"];
+    driver: string;
+    config: Record<string, string | number | boolean>;
+    is_default: boolean;
+    is_mock: boolean;
+    operator_id: number;
+  }): Promise<DeviceConfig> {
+    await sleep(100);
+    const code = input.code.trim();
+    if (!code) throw new Error("设备编码必填");
+    if (devices.some((d) => d.code === code)) {
+      auditMaster("device.create", "device_config", code, input.operator_id, "编码重复，已拒绝");
+      throw new Error(`编码 ${code} 已存在：编码是台账主键，不能重复`);
+    }
+    if (input.is_default) {
+      devices.filter((d) => d.kind === input.kind).forEach((d) => (d.is_default = 0));
+    }
+    const created: DeviceConfig = {
+      id: devices.reduce((m, d) => Math.max(m, d.id), 0) + 1,
+      code,
+      name: input.name.trim(),
+      kind: input.kind,
+      driver: input.driver,
+      config: input.config,
+      is_enabled: 1,
+      is_mock: input.is_mock ? 1 : 0,
+      is_default: input.is_default ? 1 : 0,
+      last_status: "unknown",
+      last_ok_at: null,
+      last_error: null,
+      err_count: 0,
+    };
+    devices.push(created);
+    auditMaster(
+      "device.create",
+      "device_config",
+      created.code,
+      input.operator_id,
+      `新增 ${created.name}（${created.kind} · 驱动 ${created.driver}），状态未检测待联机测试`,
+    );
+    return { ...created };
+  },
+
   /* ------------------------------------------------------------ 报表 */
   async reportDaily(date: string): Promise<DailyReport> {
     await sleep(160);

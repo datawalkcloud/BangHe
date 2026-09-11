@@ -70,13 +70,12 @@ export const BOOTSTRAP_HINT = "首次使用请先输入装机时交付的初始�
 // ------------------------------------------------------------------- 演示模式
 
 /** 浏览器演示：认 mock 在职名单，不校验口令。
- *  刻意不复用后端那句"用户名或口令不正确"——那句话的意义是防枚举，
- *  而这里根本没有口令可错，伪装成同一套文案反而是在骗人。 */
+ *  演示模式会明确说明口令不校验，但登录失败仍使用与桌面端一致的通用提示。 */
 async function demoSignIn(username: string): Promise<LoginOutcome> {
   const staff = await api.staff();
   const hit = staff.find((u) => u.username === username && u.is_active === 1);
   if (!hit) {
-    return { ok: false, error: "演示名单里没有这个登录名（或已停用）", session: null, needsPasswordSetup: null, attemptsLeft: null, lockedUntil: null };
+    return { ok: false, error: "账号或密码错误", session: null, needsPasswordSetup: null, attemptsLeft: null, lockedUntil: null };
   }
   return {
     ok: true,

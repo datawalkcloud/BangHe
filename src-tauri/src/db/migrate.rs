@@ -8,6 +8,7 @@
 //!   1. 每个脚本在**单个事务**内执行，DDL 与记账一起提交：失败整体回滚，
 //!      绝不会留下"改了一半、账上没记"的库（`app_meta.schema_version` 同理）。
 //!   2. 已应用的脚本被改动 → 校验和比对失败，直接拒绝启动。要修数据请新开一个脚本。
+//!      校验和按内容算（哈希前 CRLF→LF 归一），换行符差异不算改动。
 //!   3. 库结构版本高于本程序能理解的版本 → 拒绝启动并提示从 `backup/` 恢复迁移前快照，
 //!      不做任何"忽略未知列"的乐观兜底。
 
@@ -27,16 +28,36 @@ pub struct Migration {
 
 impl Migration {
     /// 脚本内容 SHA-256，记入 `schema_migration.checksum`。
+    ///
+    /// 哈希前先把 CRLF 归一成 LF：校验和要对的是**脚本内容**，不是各人机器上的
+    /// 检出换行符。`core.autocrlf=true` 的 Windows 机器会把 `.sql` 检出成 CRLF，
+    /// 逐字节哈希会让同一份脚本算出两个值，两台「内容完全一样」的机器互相拒启。
+    /// 语义与 Flyway 一致——换行差异不算改动；真正的改动照样被拦住
+    /// （见 tests/schema_contract.rs 的 tampered_applied_script_refuses_startup
+    /// 与 checksum_ignores_line_endings）。
+    /// 另一半防线是仓库根的 `.gitattributes`（文本统一 LF 检出），两者都要。
     pub fn checksum(&self) -> String {
-        let mut h = Sha256::new();
-        h.update(self.sql.as_bytes());
-        let out = h.finalize();
-        let mut s = String::with_capacity(64);
-        for b in out.iter() {
-            s.push_str(&format!("{b:02x}"));
-        }
-        s
+        sha256_hex(self.sql.replace("\r\n", "\n").as_bytes())
     }
+
+    /// 按 **CRLF 检出** flavor 算的 SHA-256（先归一再统一换成 `\r\n`）。
+    ///
+    /// 只用于一处兼容：换行归一之前，`core.autocrlf=true` 的 Windows 机器构建出来的
+    /// 程序给老库记的就是这个值。见 [`apply_with`] 里的一次性补记。
+    pub fn crlf_checksum(&self) -> String {
+        sha256_hex(self.sql.replace("\r\n", "\n").replace('\n', "\r\n").as_bytes())
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let out = h.finalize();
+    let mut s = String::with_capacity(64);
+    for b in out.iter() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// 全部迁移。新增 `.sql` 文件必须在这里登记，`tests/schema_contract.rs::
@@ -53,6 +74,10 @@ pub static MIGRATIONS: &[Migration] = &[
     Migration {
         name: "0003_seed_superadmin.sql",
         sql: include_str!("migrations/0003_seed_superadmin.sql"),
+    },
+    Migration {
+        name: "0004_fix_station_brand.sql",
+        sql: include_str!("migrations/0004_fix_station_brand.sql"),
     },
 ];
 
@@ -91,6 +116,9 @@ pub struct Report {
     pub to_version: u32,
     /// 迁移前自动备份（§6）生成的文件；空库首装时为 None
     pub backup_path: Option<PathBuf>,
+    /// 本次启动做过「换行符兼容补记」的脚本名：内容一字未改，只是老库里记的是
+    /// CRLF 检出 flavor 的哈希。正常应当永远为空，非空说明这台机器装过历史构建。
+    pub healed: Vec<String>,
 }
 
 /// `0007_xxx.sql` → 7
@@ -133,6 +161,7 @@ pub fn apply_with(
 
     let applied = applied_rows(conn)?;
     let target_max = max_version(migrations);
+    let mut healed: Vec<String> = Vec::new();
     for (name, recorded) in &applied {
         let v = version_of(name);
         if v > target_max {
@@ -143,11 +172,23 @@ pub fn apply_with(
             Some(m) => {
                 let current = m.checksum();
                 if current != *recorded {
-                    return Err(MigrateError::ChecksumMismatch {
-                        name: name.clone(),
-                        recorded: recorded.clone(),
-                        current,
-                    });
+                    // 一次性兼容：换行归一之前，Windows `core.autocrlf=true` 的机器构建出来的
+                    // 程序给老库记的是「脚本按 CRLF 检出时」的哈希。这个值能对上，说明脚本
+                    // 内容一字未改、只是检出换行不同，就地补记成规范值继续启动；
+                    // 对不上才是要拦的改动。
+                    if m.crlf_checksum() == *recorded {
+                        conn.execute(
+                            "UPDATE schema_migration SET checksum = ?1 WHERE name = ?2",
+                            params![current, name],
+                        )?;
+                        healed.push(name.clone());
+                    } else {
+                        return Err(MigrateError::ChecksumMismatch {
+                            name: name.clone(),
+                            recorded: recorded.clone(),
+                            current,
+                        });
+                    }
                 }
             }
         }
@@ -166,6 +207,7 @@ pub fn apply_with(
         from_version,
         to_version: target_max,
         backup_path: None,
+        healed,
     };
 
     let mut report = report;

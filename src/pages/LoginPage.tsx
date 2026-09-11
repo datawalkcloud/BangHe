@@ -9,22 +9,20 @@
  * 三条现场约束：
  *  1. 全程键盘可完成（05 §10-2）：进入即聚焦、回车提交、Caps Lock 有提示
  *  2. 不弹阻塞窗（05 §10-6）：所有失败提示就地显示在表单里
- *  3. 演示模式必须自报身份（浏览器预览没有真实口令校验，见 `src/lib/auth.ts`）
+ *  3. 登录失败统一显示通用提示，不泄露账号是否存在
  */
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, KeyRoundIcon, LogInIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { BOOTSTRAP_HINT, type LoginOutcome } from "@/lib/auth";
-import { ROLE } from "@/lib/constants";
 import { useSession } from "@/store/session";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Kbd } from "@/components/business/layout";
 
 /** 口令最短位数与 Rust 侧同源约定（`auth::PWD_MIN_LEN`） */
@@ -68,19 +66,18 @@ export function LoginPage() {
   const mustSetup = !!session.session?.actor.mustChangePwd;
   const mode: "signin" | "setup" = mustSetup || result?.needsPasswordSetup === true ? "setup" : "signin";
 
-  // 演示模式给一份可点的名单，免得现场演示时谁都不知道该输什么
-  const { data: staff = [] } = useQuery({
-    queryKey: ["staff"],
-    queryFn: () => api.staff(),
-    enabled: session.demo,
-    staleTime: Infinity,
-  });
-
   useEffect(() => {
     firstField.current?.focus();
   }, [mode]);
 
   const error = result?.error ?? session.notice;
+
+  /**
+   * 界面上那一栏此刻显示的就是要交上去的"旧口令"：`mustSetup` 决定它读哪份 state
+   * （见下面输入框的 `value`）。只认这一份，别再去兜 `oldPassword || password`——
+   * 那样会出现"框里是空的、提交上去的却是上一次登录遗留的口令"这种暗坑。
+   */
+  const current = mustSetup ? oldPassword : password;
 
   async function submitSignIn(e?: FormEvent) {
     e?.preventDefault();
@@ -90,7 +87,14 @@ export function LoginPage() {
     const outcome = await session.signIn(username.trim(), password);
     setResult(outcome);
     setBusy(false);
-    if (outcome.ok && !outcome.session?.actor.mustChangePwd) {
+    if (outcome.ok && outcome.session?.actor.mustChangePwd) {
+      // 后端对装机初始口令登录会直接建会话并置 mustChangePwd，于是切到"当前口令"这一支；
+      // 刚在登录表单敲进去的就是当前口令，带过去免得再输一遍、也免得按钮因空字段而点不动
+      setOldPassword(password);
+      // 这条登录回执（"该账号尚未设置口令…"）只给 signin 态看，setup 态另有提示。就地清掉，
+      // 否则改密成功那一刻 mustChangePwd 转 false、mode 会闪回 signin，把这条旧回执当错误红一下（一闪而过）
+      session.setNotice(null);
+    } else if (outcome.ok) {
       await navigate({ to: "/" });
     }
   }
@@ -104,7 +108,33 @@ export function LoginPage() {
     }
     setBusy(true);
     setResult(null);
-    const outcome = await session.setPassword(oldPassword || password, fresh);
+
+    /*
+     * 改密这条命令只认 Rust 内存里那条会话，而 setup 态有两条来路、会话在不在两说：
+     *  - 装机初始口令敲错：占位符账号即使命令失败也把界面停在设置步，此时后端压根没建会话；
+     *  - 初始口令验过了：会话在，只是还欠一次改密。
+     * 没会话硬去改密，只会回一句"登录已失效，请重新登录"——那既不是真正的原因（口令输错了），
+     * 也没给操作员留退路（再点多少次都是这句）。所以先按来路把会话补上 / 验真，再谈改密。
+     */
+    if (!useSession.getState().session) {
+      const login = await session.signIn(username.trim(), current);
+      if (!login.ok || !login.session) {
+        // 初始口令没过：退回登录态，让"用户名或口令不正确（还可试 N 次）"照 signin 那一支显示出来
+        setResult({ ...login, needsPasswordSetup: null });
+        setBusy(false);
+        return;
+      }
+      // 验过了，mustSetup 即将转真、那一栏改读 oldPassword：把刚成功的这条带过去，
+      // 免得下面万一改密失败（新口令不合规等），那栏看起来像是被清空了
+      setOldPassword(current);
+    } else if (!(await session.beat())) {
+      // 表单在磅房机上挂过一夜：本地这份投影还在，后端那条会话早按空闲失效清了。
+      // beat() 已清掉投影并写好提示，界面自然退回登录表单，不必再去撞那句假错误。
+      setBusy(false);
+      return;
+    }
+
+    const outcome = await session.setPassword(current, fresh);
     if (outcome.ok) {
       // 守卫读的是会话里的 mustChangePwd，store 已就地清掉，这里只需回到正常入口
       session.setNotice(null);
@@ -115,37 +145,21 @@ export function LoginPage() {
     setBusy(false);
   }
 
-  const hints = useMemo(
-    () => (session.demo ? staff.filter((u) => u.is_active === 1).slice(0, 6) : []),
-    [session.demo, staff],
-  );
-
-  /** 新口令够长、两次一致、且"要交上去的那条旧口令"已填 */
-  const entering = mustSetup ? !!oldPassword : !!password;
-  const setupReady = !busy && entering && fresh.length >= PWD_MIN_LEN && fresh === again;
+  /** 新口令够长、两次一致、且那一栏里确实有"要交上去的旧口令" */
+  const setupReady = !busy && !!current && fresh.length >= PWD_MIN_LEN && fresh === again;
 
   return (
     <div className="flex h-svh w-full items-center justify-center overflow-auto bg-muted/30 p-6">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-base">{station?.name ?? "邦禾粮站"}</CardTitle>
+          <CardTitle className="text-base">{station?.name ?? "磅禾粮站"}</CardTitle>
           <CardDescription>
             {mode === "signin" ? "收粮计量结算系统 · 请登录后继续" : "首次使用请先设置本站登录口令"}
           </CardDescription>
         </CardHeader>
 
         <CardContent className="flex flex-col gap-3">
-          {session.demo && (
-            <Alert>
-              <AlertCircleIcon />
-              <AlertTitle>浏览器演示模式</AlertTitle>
-              <AlertDescription>
-                这里没有原生通道，<b>口令不做任何校验</b>，只按在职名单认登录名。真实登录请用桌面版启动。
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {error && mode === "signin" && !session.demo && (
+          {error && mode === "signin" && (
             <Alert variant="destructive">
               <AlertCircleIcon />
               <AlertTitle>无法登录</AlertTitle>
@@ -166,6 +180,14 @@ export function LoginPage() {
                 连错口令次数已达上限，请 <span className="tnum font-semibold">{Math.ceil(lockedLeft / 60)}</span> 分钟后再试。
                 <span className="mt-1 block text-xs">找站长在「基础档案 → 员工与岗位」里重置口令也可以。</span>
               </AlertDescription>
+            </Alert>
+          )}
+
+          {mode === "setup" && result && !result.ok && result.error && (
+            <Alert variant="destructive">
+              <AlertCircleIcon />
+              <AlertTitle>设置未完成</AlertTitle>
+              <AlertDescription>{result.error}</AlertDescription>
             </Alert>
           )}
 
@@ -246,35 +268,29 @@ export function LoginPage() {
                 <KeyRoundIcon data-slot="icon" />
                 {busy ? "保存中…" : "设置并进入"}
               </Button>
+              {/* 还没验过口令的这一支留条退路：想换个人登录、或本来就知道自己的口令，不该被扣在这屏。
+                  已登录待改密（mustSetup）不给退——口令没设，回去也只是再被守卫弹回来。 */}
+              {!mustSetup && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResult(null);
+                    session.setNotice(null);
+                  }}
+                  className="text-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  返回登录
+                </button>
+              )}
             </form>
-          )}
-
-          {hints.length > 0 && (
-            <>
-              <Separator />
-              <div className="flex flex-wrap gap-1.5">
-                {hints.map((u) => (
-                  <button
-                    key={u.id}
-                    type="button"
-                    onClick={() => {
-                      setUsername(u.username);
-                      setPassword("demo");
-                    }}
-                    className="border bg-card px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted"
-                  >
-                    {u.display_name}
-                    <span className="ml-1 opacity-70">{ROLE[u.role]}</span>
-                  </button>
-                ))}
-              </div>
-            </>
           )}
         </CardContent>
 
-        <CardFooter className="justify-center text-xs text-muted-foreground">
-          连错 5 次锁定 15 分钟；无操作 1 小时后需重新登录
-        </CardFooter>
+        {!session.demo && (
+          <CardFooter className="justify-center text-xs text-muted-foreground">
+            {!import.meta.env.DEV && <>连错 5 次锁定 15 分钟；</>}无操作 1 小时后需重新登录
+          </CardFooter>
+        )}
       </Card>
     </div>
   );
