@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# 浏览器冒烟测试落在仓库根目录的截图，不属于源码（只匹配根层，不影响 src-tauri/icons）
+/*.png
+/_qa/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

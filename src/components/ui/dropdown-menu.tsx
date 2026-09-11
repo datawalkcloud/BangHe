@@ -46,25 +46,59 @@ function DropdownMenuContent({
   )
 }
 
-function DropdownMenuGroup({ ...props }: MenuPrimitive.Group.Props) {
-  return <MenuPrimitive.Group data-slot="dropdown-menu-group" {...props} />
+/**
+ * 子树是否已经处在 <Menu.Group> / <Menu.RadioGroup> 之内。
+ *
+ * Base UI 的 GroupLabel 取不到 MenuGroupContext 时会直接抛错
+ * （"MenuGroupContext is missing"），整棵组件树被错误边界吞掉；
+ * 这里用本地 scope 兜底：写在组外的标签降级为普通文本行。
+ */
+const MenuGroupScope = React.createContext(false)
+
+function DropdownMenuGroup({ children, ...props }: MenuPrimitive.Group.Props) {
+  return (
+    <MenuGroupScope.Provider value={true}>
+      <MenuPrimitive.Group data-slot="dropdown-menu-group" {...props}>
+        {children}
+      </MenuPrimitive.Group>
+    </MenuGroupScope.Provider>
+  )
 }
 
 function DropdownMenuLabel({
   className,
   inset,
+  render,
+  style,
   ...props
 }: MenuPrimitive.GroupLabel.Props & {
   inset?: boolean
 }) {
+  const inGroup = React.useContext(MenuGroupScope)
+  const classes = cn(
+    "px-3 py-2.5 text-xs text-muted-foreground data-inset:pl-9.5",
+    className
+  )
+
+  if (!inGroup) {
+    return (
+      <div
+        data-slot="dropdown-menu-label"
+        data-inset={inset}
+        className={classes}
+        style={typeof style === "function" ? undefined : style}
+        {...props}
+      />
+    )
+  }
+
   return (
     <MenuPrimitive.GroupLabel
       data-slot="dropdown-menu-label"
       data-inset={inset}
-      className={cn(
-        "px-3 py-2.5 text-xs text-muted-foreground data-inset:pl-9.5",
-        className
-      )}
+      className={classes}
+      render={render}
+      style={style}
       {...props}
     />
   )
@@ -176,12 +210,16 @@ function DropdownMenuCheckboxItem({
   )
 }
 
-function DropdownMenuRadioGroup({ ...props }: MenuPrimitive.RadioGroup.Props) {
+function DropdownMenuRadioGroup({ children, ...props }: MenuPrimitive.RadioGroup.Props) {
   return (
-    <MenuPrimitive.RadioGroup
-      data-slot="dropdown-menu-radio-group"
-      {...props}
-    />
+    <MenuGroupScope.Provider value={true}>
+      <MenuPrimitive.RadioGroup
+        data-slot="dropdown-menu-radio-group"
+        {...props}
+      >
+        {children}
+      </MenuPrimitive.RadioGroup>
+    </MenuGroupScope.Provider>
   )
 }
 

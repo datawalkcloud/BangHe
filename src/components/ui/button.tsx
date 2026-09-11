@@ -47,6 +47,9 @@ function Button({
     <ButtonPrimitive
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
+      // 用 render 把触发元素换成 <a> / <Link> 时，base-ui 默认的 nativeButton=true 会校验失败并告警，
+      // 这里集中按 render 是否存在推导，调用方仍可显式覆盖。
+      nativeButton={props.render ? false : true}
       {...props}
     />
   )
