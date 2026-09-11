@@ -13,7 +13,7 @@ import { api } from "@/lib/api";
 import type { PaperKind, PrintChannel } from "@/lib/constants";
 import { PAPER, PRINT_CHANNEL } from "@/lib/constants";
 import { useDeviceStore } from "@/store/device";
-import { useSession } from "@/store/session";
+import { actorId } from "@/store/session";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -38,7 +38,6 @@ export function PrintPreview({
   const [paper, setPaper] = useState<PaperKind>("A4");
   const [channel, setChannel] = useState<PrintChannel>("preview");
   const printer = useDeviceStore((s) => s.printer);
-  const operator = useSession((s) => s.operator);
 
   const log = useMutation({
     mutationFn: () =>
@@ -49,7 +48,7 @@ export function PrintPreview({
         printer_name: printer.name,
         channel,
         is_reprint: isReprint,
-        operator_id: operator?.id ?? 0,
+        operator_id: actorId(),
       }),
     onSuccess: () => {
       toast.success(`${docNo} 已提交打印（${PAPER[paper]} · ${PRINT_CHANNEL[channel]}）`);

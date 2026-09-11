@@ -16,7 +16,7 @@ import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/
 import { PARTY_TYPE, ROLE } from "@/lib/constants";
 import { maskIdCard, ton, validateIdCard, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
-import { useSession } from "@/store/session";
+import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
@@ -74,7 +74,7 @@ export function IdentityPanel({
   onCreated: (orderNo: string) => void;
   onNewOrder: () => void;
 }) {
-  const operator = useSession((s) => s.operator);
+  const actor = useActor();
   const can = useSession((s) => s.can);
   const mockOff = useDeviceStore((s) => s.mockOff);
   const reading = useDeviceStore((s) => s.idcard.reading);
@@ -111,7 +111,7 @@ export function IdentityPanel({
         warehouse_id: draft.warehouseId,
         slot_id: draft.slotId,
         remark: draft.remark.trim() || null,
-        registered_by: operator!.id,
+        registered_by: actorId(),
         // 外设关掉后只能手录，来源标记必须诚实（05 §6.1）
         weight_source: mockOff ? "manual" : "scale",
       }),
@@ -125,17 +125,15 @@ export function IdentityPanel({
     onError: () => toast.error("取号失败，请检查档案与品种是否齐全"),
   });
 
-  const blocked = !operator
-    ? "请先在左下角选择当前操作员"
-    : !can("order.create")
-      ? `当前岗位「${operator ? ROLE[operator.role] : "未选择"}」无权制单，需磅员、登记员或站长`
-      : !draft.party
-        ? "尚未确定售粮人（读卡、搜档案或手工登记三选一）"
-        : !draft.varietyId
-          ? "请选择收购品种"
-          : draft.party && !validateIdCard(draft.party.id_card_no)
-            ? "该档案身份证号校验位不通过，请到农户档案更正"
-            : null;
+  const blocked = !can("order.create")
+    ? `当前岗位「${actor ? ROLE[actor.role] : "—"}」无权制单，需磅员、登记员或站长`
+    : !draft.party
+      ? "尚未确定售粮人（读卡、搜档案或手工登记三选一）"
+      : !draft.varietyId
+        ? "请选择收购品种"
+        : draft.party && !validateIdCard(draft.party.id_card_no)
+          ? "该档案身份证号校验位不通过，请到农户档案更正"
+          : null;
 
   const slotPool = slots.filter((s) => draft.warehouseId == null || s.warehouse_id === draft.warehouseId);
 

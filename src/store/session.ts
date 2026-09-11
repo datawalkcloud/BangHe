@@ -1,13 +1,22 @@
 /**
- * 当前操作员身份。
+ * 当前登录会话（02 §11 M10 落地后的样子）。
  *
- * P0 未上登录，用"选择操作员"轻量切换（05 §3 末尾的务实做法）：
- * 所有写操作携带该 id 作为署名，P1 换成口令登录后 actor_id 机制完全不变。
+ * 这里只是 **Rust 会话的一份投影**：谁是当前操作员、他的岗位是什么、能不能做某事，
+ * 真相在 `src-tauri/src/auth.rs` 里的那个 `Option<Session>`。前端这份丢了刷新一下
+ * 就能用 `restore()` 拿回来（WebView 刷新、HMR 都不必重打口令）。
+ *
+ * 两条不能弯的：
+ *  1. 未登录拿不到署名。`actorId()` 在没有会话时**抛错**而不是回 0——
+ *     审计写成 0 号是"看着成功、事后查不到人"，比当场炸出来更难收拾。
+ *     路由守卫保证正常操作到不了那一步，真抛错说明有绕过守卫的入口。
+ *  2. `can()` 只管界面显隐（05 §5），命令层的权限校验在 Rust 侧做，两边不互相替代。
  */
 import { create } from "zustand";
-import type { UserAccount } from "@/mock/types";
 import type { Role } from "@/lib/constants";
+import * as auth from "@/lib/auth";
+import type { AuthProfile, AuthSession, LoginOutcome, ActionOutcome } from "@/lib/auth";
 
+/** 岗位 → 能力集。前端用来隐藏按钮；后端命令层同样要校验（02 §11 RBAC） */
 export const PERMISSIONS: Record<string, Role[]> = {
   "order.create": ["station_master", "registrar", "weigher"],
   "order.void": ["station_master", "registrar", "weigher"],
@@ -28,20 +37,142 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "device.manage": ["station_master"],
 };
 
+type Phase =
+  /** 还没问过 Rust，界面什么都不该画（避免闪一下登录页） */
+  | "checking"
+  /** 未登录 / 会话已过期 */
+  | "out"
+  /** 有会话，但可能仍被要求先设口令 */
+  | "in";
+
 interface SessionState {
-  operator: UserAccount | null;
-  setOperator: (u: UserAccount | null) => void;
+  phase: Phase;
+  /** 浏览器预览：口令不校验，界面必须显式挂横幅 */
+  demo: boolean;
+  session: AuthSession | null;
+  /** 上一次动作的回执文案（登录失败原因、锁定倒计时等），由登录页消费后清空 */
+  notice: string | null;
+  /** 组件内用法：`const canPrint = useSession((s) => s.can("print"))` */
   can: (permission: string) => boolean;
+  boot: () => Promise<void>;
+  signIn: (username: string, password: string) => Promise<LoginOutcome>;
+  signOut: () => Promise<void>;
+  /** 心跳：无操作超过后端给的 idleTtlSecs 即失效，返回 false 时调用方负责跳登录页 */
+  beat: () => Promise<boolean>;
+  /** 本地判定已过期（机器休眠、时钟跳变）时清掉投影：不走登出、不写审计，Rust 的 last_seen 才是真相 */
+  expire: (reason: string) => void;
+  setPassword: (old: string, fresh: string) => Promise<ActionOutcome>;
+  setNotice: (text: string | null) => void;
 }
 
+/** 岗位够不够做某件事。站长全量放行，其余查表（05 §5） */
+function roleAllows(actor: AuthProfile | null | undefined, permission: string): boolean {
+  if (!actor) return false;
+  if (actor.role === "station_master") return true;
+  return PERMISSIONS[permission]?.includes(actor.role) ?? false;
+}
+
+/** boot() 只真正跑一次，其余调用等同 await 第一次的结果 */
+let booted: Promise<void> | null = null;
+
 export const useSession = create<SessionState>((set, get) => ({
-  operator: null,
-  setOperator: (u) => set({ operator: u }),
-  can: (permission) => {
-    const op = get().operator;
-    if (!op) return false;
-    if (op.role === "station_master") return true;
-    const allowed = PERMISSIONS[permission];
-    return allowed ? allowed.includes(op.role) : false;
+  phase: "checking",
+  demo: false,
+  session: null,
+  notice: null,
+  can: (permission) => roleAllows(get().session?.actor, permission),
+
+  boot: () => {
+    if (!booted) {
+      booted = (async () => {
+        const r = await auth.restore();
+        if (r.channel === "native" && r.error) {
+          // 问不到会话就当没登录：宁可多要一次口令，也不猜一个身份出来
+          set({ phase: "out", session: null, demo: false, notice: r.error });
+          return;
+        }
+        set({
+          phase: r.data ? "in" : "out",
+          session: r.data ?? null,
+          demo: r.channel === "demo",
+        });
+      })();
+    }
+    return booted;
   },
+
+  signIn: async (username, password) => {
+    const r = await auth.signIn(username, password);
+    const outcome: LoginOutcome =
+      r.data ??
+      ({
+        ok: false,
+        error: r.error ?? "登录未完成",
+        session: null,
+        needsPasswordSetup: null,
+        attemptsLeft: null,
+        lockedUntil: null,
+      } satisfies LoginOutcome);
+    if (outcome.ok && outcome.session) {
+      set({ phase: "in", session: outcome.session, demo: r.channel === "demo", notice: outcome.error });
+    } else {
+      set({ notice: outcome.error });
+    }
+    return outcome;
+  },
+
+  signOut: async () => {
+    await auth.signOut();
+    set({ phase: "out", session: null, notice: null });
+  },
+
+  beat: async () => {
+    const s = get();
+    if (s.phase !== "in" || s.demo) return true;
+    const r = await auth.beat();
+    // 通道错误不等于过期：问不到就当还在，避免网络/进程抖动把磅员踢下线
+    if (r.channel === "native" && r.error) return true;
+    if (r.data === false) {
+      set({ phase: "out", session: null, notice: "已超过 1 小时无操作，请重新登录" });
+      return false;
+    }
+    return true;
+  },
+
+  expire: (reason) => set({ phase: "out", session: null, notice: reason }),
+
+  setPassword: async (old, fresh) => {
+    const r = await auth.setPassword(old, fresh);
+    const outcome: ActionOutcome = r.data ?? { ok: false, error: r.error ?? "设置口令未完成" };
+    if (outcome.ok) {
+      const s = get().session;
+      if (s) set({ session: { ...s, actor: { ...s.actor, mustChangePwd: false } } });
+    }
+    return outcome;
+  },
+
+  setNotice: (text) => set({ notice: text }),
 }));
+
+export const useActor = (): AuthProfile | null => useSession((s) => s.session?.actor ?? null);
+
+export const useMustChangePwd = (): boolean => useSession((s) => s.session?.actor.mustChangePwd ?? false);
+
+/** 写操作署名。未登录时抛错，见文件头第 1 条 */
+export function actorId(): number {
+  const actor = useSession.getState().session?.actor;
+  if (!actor) throw new Error("未登录：写操作没有署名，已阻止提交");
+  return actor.id;
+}
+
+/** 需要"当前是谁"的界面用这个，别在组件里再写一遍 `?.` 兜底 */
+export function requireActor(): AuthProfile {
+  const actor = useSession.getState().session?.actor;
+  if (!actor) throw new Error("未登录：没有可显示的署名");
+  return actor;
+}
+
+/** 命令式权限判断（非组件环境，如菜单项禁用态计算） */
+export function can(permission: string): boolean {
+  return roleAllows(useSession.getState().session?.actor, permission);
+}

@@ -6,13 +6,19 @@
  *
  * 清单里的 /masters/* 与 /reports/* 各用一个动态段收敛，
  * 既保持 URL 与文档一致，又少 10 个几乎同构的 route 定义。
+ *
+ * 登录门禁（02 §11 M10"未登录不可进入任何业务页"）：路由分两个壳——
+ * `plainRoute` 只有登录页，`shellRoute` 带侧栏/菜单栏/设备状态条并挂 beforeLoad 守卫。
+ * 判定只写在守卫这一处，页面组件不再各自判断"我是不是该被挡住"。
  */
 import {
   Link,
+  Outlet,
   createHashHistory,
   createRootRoute,
   createRoute,
   createRouter,
+  redirect,
   useParams,
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/layout/AppShell";
@@ -28,12 +34,14 @@ import { QcDetailPage } from "@/pages/QcDetailPage";
 import { SettlementsPage } from "@/pages/SettlementsPage";
 import { SettlementDetailPage } from "@/pages/SettlementDetailPage";
 import { PaymentsPage } from "@/pages/PaymentsPage";
+import { LoginPage } from "@/pages/LoginPage";
 import { MastersPage, type MastersSection } from "@/pages/MastersPage";
 import { ReportsPage, type ReportKind } from "@/pages/ReportsPage";
 import { DevicesPage } from "@/pages/DevicesPage";
 import { SystemPage, type SystemSection } from "@/pages/SystemPage";
+import { useSession } from "@/store/session";
 
-const rootRoute = createRootRoute({ component: AppShell });
+const rootRoute = createRootRoute({ component: () => <Outlet /> });
 
 /** 兜底：URL 打错时给一个能回到工作台的空态，而不是白屏（05 §6.3） */
 function NotFound() {
@@ -50,12 +58,25 @@ function NotFound() {
   );
 }
 
-const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: DashboardPage });
+/** 会话状态 → 能不能进业务页。`mustChangePwd` 视同未登录：进了也只能看，不如先把口令设了 */
+async function guard() {
+  await useSession.getState().boot();
+  const { session } = useSession.getState();
+  if (!session || session.actor.mustChangePwd) {
+    throw redirect({ to: "/login" });
+  }
+}
+
+/** 壳路由本身不占 URL 段；`id: "/"` 是必须的——否则子路由 id 会变成 "/shell/…"，
+ *  全站 `useParams({ from: "/orders/$orderNo" })` 之类的写法会集体编译不过。 */
+const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "/", beforeLoad: guard, component: AppShell });
+
+const indexRoute = createRoute({ getParentRoute: () => shellRoute, path: "/", component: DashboardPage });
 
 /** 工作台的 orderNo 走 URL，便于看板与在途条"点卡片接着干"，也方便把链接贴给同事。
  *  返回类型必须写成可选属性，否则 TanStack 会把 search 当成必填，`to="/workstation"` 不带 search 就报类型错 */
 const workstationRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/workstation",
   validateSearch: (raw: Record<string, unknown>): { orderNo?: string } => ({
     orderNo: typeof raw.orderNo === "string" ? raw.orderNo : undefined,
@@ -63,39 +84,39 @@ const workstationRoute = createRoute({
   component: WorkstationPage,
 });
 
-const ordersRoute = createRoute({ getParentRoute: () => rootRoute, path: "/orders", component: OrdersPage });
+const ordersRoute = createRoute({ getParentRoute: () => shellRoute, path: "/orders", component: OrdersPage });
 const orderDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/orders/$orderNo",
   component: OrderDetailPage,
 });
 
-const partiesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/parties", component: PartiesPage });
+const partiesRoute = createRoute({ getParentRoute: () => shellRoute, path: "/parties", component: PartiesPage });
 const partyDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/parties/$id",
   component: PartyDetailPage,
 });
 
-const qcRoute = createRoute({ getParentRoute: () => rootRoute, path: "/qc", component: QcPage });
+const qcRoute = createRoute({ getParentRoute: () => shellRoute, path: "/qc", component: QcPage });
 const qcDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/qc/$reportNo",
   component: QcDetailPage,
 });
 
-const settlementsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settlements", component: SettlementsPage });
+const settlementsRoute = createRoute({ getParentRoute: () => shellRoute, path: "/settlements", component: SettlementsPage });
 const settlementDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/settlements/$settleNo",
   component: SettlementDetailPage,
 });
 
-const paymentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/payments", component: PaymentsPage });
+const paymentsRoute = createRoute({ getParentRoute: () => shellRoute, path: "/payments", component: PaymentsPage });
 
 /** /masters/$section —— 用壳组件把 params 传下去，页面本身保持纯 props */
 const mastersRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/masters/$section",
   component: () => {
     const { section } = useParams({ from: "/masters/$section" });
@@ -104,7 +125,7 @@ const mastersRoute = createRoute({
 });
 
 const reportsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/reports/$kind",
   component: () => {
     const { kind } = useParams({ from: "/reports/$kind" });
@@ -112,10 +133,10 @@ const reportsRoute = createRoute({
   },
 });
 
-const devicesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/devices", component: DevicesPage });
+const devicesRoute = createRoute({ getParentRoute: () => shellRoute, path: "/devices", component: DevicesPage });
 
 const systemRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/system/$section",
   component: () => {
     const { section } = useParams({ from: "/system/$section" });
@@ -123,45 +144,20 @@ const systemRoute = createRoute({
   },
 });
 
-/** 未实现页面的占位，避免菜单点到就白屏 */
-function Placeholder({ name }: { name: string }) {
-  return (
-    <EmptyState
-      title={`${name}尚未开放`}
-      description="P0 阶段先交付核心收粮闭环，该模块在 P1 排期内。"
-      action={
-        <Link to="/" className="text-sm underline">
-          回到看板
-        </Link>
-      }
-    />
-  );
-}
-
+/** 已登录就别在登录页杵着；但"必须先设口令"的情况要留在原地（LoginPage 自己判断渲染哪一态） */
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  component: () => <Placeholder name="口令登录" />,
+  beforeLoad: () => {
+    const { session, phase } = useSession.getState();
+    if (phase === "in" && session && !session.actor.mustChangePwd) {
+      throw redirect({ to: "/" });
+    }
+  },
+  component: LoginPage,
 });
 
-const routeTree = rootRoute.addChildren([
-  indexRoute,
-  workstationRoute,
-  ordersRoute,
-  orderDetailRoute,
-  partiesRoute,
-  partyDetailRoute,
-  qcRoute,
-  qcDetailRoute,
-  settlementsRoute,
-  settlementDetailRoute,
-  paymentsRoute,
-  mastersRoute,
-  reportsRoute,
-  devicesRoute,
-  systemRoute,
-  loginRoute,
-]);
+const routeTree = rootRoute.addChildren([loginRoute, shellRoute.addChildren([indexRoute, workstationRoute, ordersRoute, orderDetailRoute, partiesRoute, partyDetailRoute, qcRoute, qcDetailRoute, settlementsRoute, settlementDetailRoute, paymentsRoute, mastersRoute, reportsRoute, devicesRoute, systemRoute])]);
 
 export const router = createRouter({
   routeTree,

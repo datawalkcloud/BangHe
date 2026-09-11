@@ -6,10 +6,12 @@
  */
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Menubar, MenubarContent, MenubarGroup, MenubarItem, MenubarLabel, MenubarMenu, MenubarSeparator, MenubarShortcut, MenubarSub, MenubarSubContent, MenubarSubTrigger, MenubarTrigger } from "@/components/ui/menubar";
+import { Menubar, MenubarContent, MenubarGroup, MenubarItem, MenubarLabel, MenubarMenu, MenubarRadioGroup, MenubarRadioItem, MenubarSeparator, MenubarShortcut, MenubarSub, MenubarSubContent, MenubarSubTrigger, MenubarTrigger } from "@/components/ui/menubar";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Kbd } from "@/components/business/layout";
 import { useDeviceStore } from "@/store/device";
+import { useThemeConfig } from "@/hooks/useThemeConfig";
+import { THEME_MODES, type ThemeMode } from "@/lib/theme";
 import { PanelLeftIcon, SearchIcon } from "lucide-react";
 import { cn } from "cn";
 
@@ -43,6 +45,7 @@ export function AppMenubar({
   const [helpOpen, setHelpOpen] = useState(false);
   const mockOff = useDeviceStore((s) => s.mockOff);
   const setMockOff = useDeviceStore((s) => s.setMockOff);
+  const { mode, setMode } = useThemeConfig();
 
   /** 菜单里的路由用字面量，统一在此收敛一次跳转 */
   const go = (to: string) => {
@@ -74,6 +77,20 @@ export function AppMenubar({
               <MenubarItem onClick={onToggleDisplay}>
                 展示模式 <MenubarShortcut>F2</MenubarShortcut>
               </MenubarItem>
+              {/* 夜班与白班的光照不是一套：模式放在菜单里常驻，不必每次进设置页 */}
+              <MenubarSub>
+                <MenubarSubTrigger>显示模式</MenubarSubTrigger>
+                <MenubarSubContent className="w-44">
+                  <MenubarRadioGroup value={mode} onValueChange={(v) => setMode(v as ThemeMode)}>
+                    {THEME_MODES.map((m) => (
+                      <MenubarRadioItem key={m.value} value={m.value}>
+                        {m.label}
+                      </MenubarRadioItem>
+                    ))}
+                  </MenubarRadioGroup>
+                </MenubarSubContent>
+              </MenubarSub>
+              <MenubarItem onClick={() => go("/system/appearance")}>外观与主题</MenubarItem>
             </MenubarGroup>
           </MenubarContent>
         </MenubarMenu>

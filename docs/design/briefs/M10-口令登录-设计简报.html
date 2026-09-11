@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>M10 口令登录 · 设计简报（待拍板）</title>
+<style>
+  :root{
+    --ink:#16191d; --ink2:#4b5563; --ink3:#8a929c;
+    --line:#dfe3e8; --line2:#eceff3; --bg:#ffffff; --wash:#f6f8fa;
+    --ok:#0f7a3d; --warn:#9a5b00; --no:#b42318; --key:#1d4ed8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.62 -apple-system,"Segoe UI","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:34px 30px 72px}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:.2px}
+  h2{font-size:15.5px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line);letter-spacing:.3px}
+  h2 .no{color:var(--ink3);font-weight:600;margin-right:7px}
+  h3{font-size:13.5px;margin:18px 0 6px}
+  p{margin:8px 0}
+  code{font:12.5px/1.5 ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;background:var(--wash);padding:1px 4px;border:1px solid var(--line2)}
+  .meta{color:var(--ink3);font-size:12.5px;margin-bottom:2px}
+  .lede{border-left:3px solid var(--key);background:var(--wash);padding:11px 14px;margin:16px 0 0}
+  .lede b{color:var(--key)}
+  table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+  th,td{border-bottom:1px solid var(--line2);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--wash);font-weight:600;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .mono{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:12.5px}
+  .sub{color:var(--ink2)}
+  .tiny{font-size:12.3px;color:var(--ink3)}
+  ul{margin:6px 0 6px;padding-left:21px}
+  li{margin:3px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:2px;background:var(--wash);color:var(--ink2);white-space:nowrap}
+  .c-yes{color:var(--ok);font-weight:600;white-space:nowrap}
+  .c-no{color:var(--no);font-weight:600;white-space:nowrap}
+  .c-part{color:var(--warn);font-weight:600;white-space:nowrap}
+  .tag.key{border-color:#b9cbfa;background:#eef3ff;color:var(--key)}
+  .tag.ok{border-color:#b7dcc3;background:#eef8f1;color:var(--ok)}
+  .tag.warn{border-color:#e6d3ae;background:#fdf7ea;color:var(--warn)}
+  .tag.no{border-color:#e8c2be;background:#fdf0ef;color:var(--no)}
+  .card{border:1px solid var(--line);border-radius:3px;padding:13px 15px;margin:11px 0}
+  .card > .hd{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;margin-bottom:5px}
+  .card > .hd b{font-size:13.8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 26px}
+  .strike{text-decoration:line-through;color:var(--ink3)}
+  .foot{margin-top:38px;padding-top:12px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.3px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  @media print{body{font-size:11.5px}.wrap{padding:0;max-width:none}h2{break-after:avoid}.card,table{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>M10 口令登录 · 设计简报</h1>
+<p class="meta">BangHe 收粮计量结算系统 &nbsp;·&nbsp; 2026-09-11 &nbsp;·&nbsp; 状态：<b>待拍板</b>（确认后并入 <span class="mono">docs/design/03 §9.4</span> 与 <span class="mono">05 §3</span>，本文即弃）</p>
+
+<div class="lede">
+<p style="margin:0"><b>一句话主张：</b>口令校验与会话留在 Rust 侧，前端只是这份会话的投影。署名（<code>actor_id</code>）由 Rust 会话决定，不再由前端传参——否则换上的仍然是"可以按 F12 改的身份"，口令只是装饰。</p>
+<p class="tiny" style="margin:6px 0 0">依据：02 §11 要求"用户名口令（argon2 哈希）、连续失败锁定、支持在岗切换而不退出程序、未登录不可进入任何业务页"；02 §11 RBAC 行已明确"前端隐藏 + 后端命令双重校验"；05 行 181 要求破坏性操作"需授权的还要输入站长口令"。库表已备（<code>user_account</code> 有 <code>password_hash/must_change_pwd/failed_count/locked_until/last_login_at</code>，<code>audit_log</code> 有 <code>session_id</code> 与 <code>result</code> 的 <code>denied</code>），<b>本期不需要任何迁移</b>。</p>
+</div>
+
+<h2><span class="no">1</span>范围</h2>
+<div class="grid2">
+<div>
+<h3 style="margin-top:4px">做</h3>
+<ul>
+<li>真实 <code>auth_login</code> / <code>auth_logout</code> / <code>auth_change_password</code>（Rust，argon2id 校验，读写 <code>user_account</code>）</li>
+<li>连续失败锁定（5 次 → 15 分钟），登录成功与拒绝都写 <code>audit_log</code></li>
+<li>首启设置口令（库里是占位符 <code>!set_on_first_run</code> 时开放，无默认口令）；<code>must_change_pwd=1</code> 时强制改密后才进业务页</li>
+<li>路由守卫：未登录不进业务页（<code>/login</code> 现在还是 <span class="mono">Placeholder</span>）</li>
+<li>会话落在 Rust 内存（<code>AppState</code>），前端 <code>useSession</code> 改为它的投影；<code>OperatorProfile</code> DTO 永不含 <code>password_hash</code></li>
+<li>三处身份入口收敛为同一个 <code>&lt;OperatorSwitch/&gt;</code>；文案分叉修掉</li>
+<li>四处授权（作废 / 红冲 / 补打 / 皮重越权）复用同一条"输入站长口令"原语</li>
+</ul>
+</div>
+<div>
+<h3 style="margin-top:4px">不做（下一轮）</h3>
+<ul>
+<li>业务命令真库化。<code>api.ts</code> 仍指向 mock，<code>src-tauri</code> 目前只注册 <code>greet</code> + 4 条 printer 命令——登录会是第一条真正碰 SQLite 的命令，这是把规矩定在 20 条业务命令之前的时机</li>
+<li>空闲自动锁屏（要新增 <code>app_setting</code> 键，牵动 03 §9 文档与 seed 契约测试，且 0002 已发布不可改 → 必须走 0003 迁移）。本期只做"手动锁屏 / 换人必输口令"</li>
+<li>PII 字段级 AES-GCM、备份恢复向导、日结交班（同属 M10 其它行）</li>
+<li>口令策略硬化（复杂度、有效期、历史不可复用）与 LDAP/域账号</li>
+</ul>
+</div>
+</div>
+
+<h2><span class="no">2</span>实体字段清单：<code>user_account</code>（14 列，零改动）</h2>
+<table>
+<thead><tr><th>列</th><th>类型 / 约束</th><th>谁写</th><th>出 Rust？</th><th>本期动作</th></tr></thead>
+<tbody>
+<tr><td class="mono">id</td><td>INTEGER PK AUTOINCREMENT</td><td>DB</td><td class="c-yes">是</td><td>即 <code>actor_id</code>，会话唯一身份</td></tr>
+<tr><td class="mono">username</td><td>TEXT NOT NULL UNIQUE</td><td>建档</td><td class="c-yes">是</td><td>登录输入项</td></tr>
+<tr><td class="mono">display_name</td><td>TEXT NOT NULL</td><td>建档</td><td class="c-yes">是</td><td>单据与界面署名</td></tr>
+<tr><td class="mono">password_hash</td><td>TEXT NOT NULL <span class="sub">argon2</span></td><td>设置 / 改密</td><td class="c-no">否</td><td>不出现在任何返回值，序列化字段名册里都不给</td></tr>
+<tr><td class="mono">role</td><td>TEXT CHECK 7 值</td><td>建档</td><td class="c-yes">是</td><td>能力集来源（<code>PERMISSIONS</code> 17 项不变）</td></tr>
+<tr><td class="mono">phone</td><td>TEXT</td><td>建档</td><td class="c-yes">是</td><td>—</td></tr>
+<tr><td class="mono">must_change_pwd</td><td>INTEGER NOT NULL DEFAULT 0</td><td>建档 / 重置 / 首启</td><td class="c-yes">是</td><td>admin 种子已是 1；改密成功置 0</td></tr>
+<tr><td class="mono">failed_count</td><td>INTEGER NOT NULL DEFAULT 0</td><td><code>auth_login</code></td><td class="c-part">仅剩余次数</td><td>以独立字段 <code>attempts_left</code> 返回，不拼进错误文案；成功登录归零</td></tr>
+<tr><td class="mono">locked_until</td><td>TEXT</td><td><code>auth_login</code></td><td class="c-part">仅是否+倒计时</td><td>NULL=未锁</td></tr>
+<tr><td class="mono">is_active</td><td>INTEGER NOT NULL DEFAULT 1</td><td>建档</td><td class="c-yes">是</td><td>停用即不可登录，历史署名保留（02 行 247）</td></tr>
+<tr><td class="mono">last_login_at</td><td>TEXT</td><td><code>auth_login</code></td><td class="c-yes">是</td><td>现在没有任何代码路径写它，只有 mock 种子值</td></tr>
+<tr><td class="mono">created_at / updated_at / deleted_at</td><td>TEXT（软删）</td><td>建档</td><td class="c-yes">是</td><td>登录查询一律带 <code>deleted_at IS NULL</code></td></tr>
+</tbody>
+</table>
+<p class="tiny">新增 DTO（不是表）：<code>AuthProfile { id, username, display_name, role, must_change_pwd }</code>、<code>AuthSession { actor: AuthProfile, session_id, issued_at }</code>、<code>LoginOutcome { ok, error?, session?, needs_setup?, attempts_left?, locked_until? }</code>。<b>前端 <code>UserAccount</code> 只有 7 字段、与库表已分叉，本期不往上挂字段</b>（继续用 <code>UserAccount</code> 做员工档案展示，登录走 <code>AuthProfile</code>）。</p>
+
+<h2><span class="no">3</span>接线点</h2>
+<h3>Rust 侧</h3>
+<table>
+<thead><tr><th>文件</th><th>现状</th><th>M10 之后</th></tr></thead>
+<tbody>
+<tr><td class="mono">Cargo.toml</td><td>有 <code>sha2</code> / <code>rusqlite(bundled)</code> / <code>chrono</code> / <code>strum</code>；<b>无</b> argon2</td><td>+ <code>argon2</code>（含 <code>password-hash</code>、盐来源 <code>getrandom</code> 已在锁内）。<span class="sub">argon2 栈在 Cargo.lock 里零命中，需开发机一次联网 <code>cargo fetch</code> 后提交锁文件</span></td></tr>
+<tr><td class="mono">src/auth.rs</td><td>不存在</td><td>新模块，照 <code>printer.rs</code> 三条约定：阻塞活进 <code>spawn_blocking</code>、失败不 <code>Err</code> 而回 <code>ok=false</code> + 人话原因。<code>Db</code> 是 <code>Arc&lt;Mutex&lt;Connection&gt;&gt;</code>，clone 后再移进闭包（<span class="mono">db/mod.rs:55</span> 已写明）；argon2 单次约 50–100 ms，<b>绝不能跑在 async 线程上</b></td></tr>
+<tr><td class="mono">src/lib.rs</td><td><code>setup</code> 里 <code>app.manage(database)</code>；<code>generate_handler![greet, printer×4]</code></td><td>+ <code>manage(AppState{ RwLock&lt;Option&lt;AuthSession&gt;&gt; })</code>，注册 4 条：<code>auth_login / auth_logout / auth_change_password / auth_verify_supervisor</code></td></tr>
+<tr><td class="mono">db/migrations/*</td><td>0001 建 24 表、0002 seed（admin 的 hash 是 <code>!set_on_first_run</code>）</td><td><b>零改动</b>：不加列、不加键 → <code>every_migration_file_is_registered</code>、 blessed 快照、§9 文档双向校验都不用重 bless</td></tr>
+<tr><td class="mono">tests/schema_contract.rs:869-878</td><td>断言 <code>password_hash.starts_with('!')</code>、<code>must_change_pwd==1</code></td><td>保持绿（首启设密走运行时 UPDATE，不回填种子）。新增 <code>tests/auth_contract.rs</code>：内存库跑锁定、占位符设密、改密后哈希可验、返回 JSON 不含 <code>$argon2</code>、被停用者不可登</td></tr>
+</tbody>
+</table>
+
+<h3>前端侧</h3>
+<table>
+<thead><tr><th>文件</th><th>现状</th><th>M10 之后</th></tr></thead>
+<tbody>
+<tr><td class="mono">src/store/session.ts</td><td><code>operator: UserAccount | null</code>，无持久化；<code>can()</code> 只查前端表</td><td>状态改为 <code>status: 'checking'|'anon'|'in'</code> + <code>session: AuthSession | null</code>；<code>can()</code> 语义不变（前端隐藏），新增 <code>useActorId()</code>；<code>setOperator</code> 换成 <code>login/logout/switchOperator</code></td></tr>
+<tr><td class="mono">src/lib/auth.ts</td><td>不存在</td><td>登录专用 IPC 通道。<b>不走 <code>native.ts</code></b>（那份是外设专用），但复用它的降级约定：无 Tauri 通道 → <code>available:false</code> + 原因，界面明说，不装在线</td></tr>
+<tr><td class="mono">src/router.tsx:141-145</td><td><code>loginRoute</code> = <code>Placeholder("口令登录")</code>；全表无 <code>beforeLoad</code>、无 redirect</td><td>换真组件；<code>rootRoute.beforeLoad</code> 守卫 + <code>/login</code> 白名单（hash 路由已是 <code>createHashHistory</code>）</td></tr>
+<tr><td class="mono">src/pages/LoginPage.tsx</td><td>不存在</td><td>新建。用户名+口令+回车提交、Caps Lock 提示、锁定倒计时、首启设密 / <code>must_change_pwd</code> 强改三种态；05 §10-2 要求全程键盘可用</td></tr>
+<tr><td class="mono">AppShell.OperatorFooter（本次话题）</td><td>展开：<code>当前操作员（P0 先以身份切换代替口令登录）</code> + Choose；折叠：头像下拉；在职过滤与 <code>display_name·ROLE</code> 各写一遍</td><td>文案只留「当前操作员」，路线图说明退回代码注释；换成 <code>&lt;OperatorSwitch/&gt;</code>；换人必输口令；旁边一个锁屏按钮</td></tr>
+<tr><td class="mono">components/business/OperatorSwitch.tsx</td><td>不存在，同类逻辑散在 3 处</td><td>单一来源：在职过滤、<code>姓名 · 岗位</code> 格式、空值文案、换人对话框都只在这一个文件里</td></tr>
+<tr><td class="mono">DeviceStatusBar.tsx:168-176</td><td>显示"未选择"，「选择」按钮跳 <code>/masters/staff</code>（员工档案，<b>跳错</b>）；行 153 tooltip 又说"在左侧栏底部切换"；快捷键清单是手抄的</td><td>显示真实姓名+岗位；「选择」改开 <code>OperatorSwitch</code>；快捷键清单抽成常量与 AppShell 注册共用一份</td></tr>
+<tr><td class="mono">SystemPage.tsx:94-172</td><td>第二份 Choose，空值文案 <code>（未署名，只能查询）</code> 与侧栏 <code>— 选择操作员 —</code> 分叉；CallOut 讲 P0 没有口令</td><td>复用 <code>OperatorSwitch</code>；CallOut 改写成"RBAC 与双重校验"的说明，不再讲 P0</td></tr>
+<tr><td class="mono">MastersPage.tsx 员工与岗位</td><td>只有 编辑 / 新增，无口令字段；行 871 注释"本版本没有口令登录"</td><td>加站长专用「重置口令」→ 生成一次性口令、置 <code>must_change_pwd=1</code>（05 §3 行 56 早就写了"表 + 口令重置"）</td></tr>
+<tr><td class="mono">10 处 <code>operator?.id ?? 0</code></td><td>PrintPreview:52、DevicesPage:748、MastersPage:158/447/669/798、OrderDetailPage:96、OrdersPage:232、PartiesPage:140、SettlementDetailPage:62</td><td>全改 <code>useActorId()</code>：未登录时编译期就过不去，<b>审计不再可能出现 0 号</b></td></tr>
+<tr><td class="mono">4 处 <code>operator!.id</code></td><td>WeighPanel:90、IdentityPanel:114、QcPanel:137、SettlePanel:123</td><td>同上去掉 <code>!</code>（现在真为 null 会运行时抛异常，比写 0 更难查）</td></tr>
+<tr><td class="mono">四处授权</td><td><code>voidOrder({authorized_by})</code> 在 mock 里零校验，下拉列站长、<b>可自选自己</b>；补打自动挑站长（<span class="mono">mock/api.ts:1025</span>）；皮重越权用 <code>tare_override.by</code></td><td>改成 <code>auth_verify_supervisor(username, password)</code> 通过才提交，结果与 <code>denied</code> 都写审计；本人授权自己直接拒绝</td></tr>
+<tr><td class="mono">WorkstationPage:155、SettlementDetailPage:85、DevicesPage:176、PartiesPage:439</td><td>各自内联提示"先在左下角选择操作员"来兜住未署名</td><td>守卫保证后删除这些分支（保留权限不足文案，那是两回事）</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">4</span>需要你拍板的 6 件事</h2>
+
+<div class="card">
+<div class="hd"><span class="tag key">D1</span><b>actor_id 由谁提供</b><span class="tag ok">推荐 b</span></div>
+<p>(a) 沿用现状：前端传 <code>operator_id</code>，口令只管界面门。 (b) <b>写命令不收 <code>operator_id</code>，由 Rust 会话注入。</b>
+<span class="sub">影响：02 §11 RBAC 的"后端双重校验"、以及审计能不能归人。现在只有 5 条已注册命令，(b) 的成本≈0；等 24 表业务命令铺开后再改，就要动所有签名。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D2</span><b>会话存哪儿、活多久</b><span class="tag ok">推荐 a</span></div>
+<p>(a) 只存 Rust 内存，<b>重启程序必须重登</b>，换人必输口令。 (b) DPAPI 加密续期 token，重启免密回到上次署名。
+<span class="sub">影响：磅房机常重启/断电，(a) 每天多输几次口令；(b) 少一次输入，但"署名=物理在场的人"这条就不成立了，而单据是要给农户和审计看的。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D3</span><b>初始口令怎么来</b><span class="tag ok">推荐 a</span></div>
+<p>(a) 保持占位符 <code>!set_on_first_run</code>，<b>没有默认口令</b>：首启检测到占位符 → 只开放"设置口令"，不设权限、不设业务页，设成功才建会话；仅在所有账号仍是占位符时可达。 (b) 种子写死一个初始口令（如 <code>banghe@2026</code>）。
+<span class="sub">影响：(b) 会让同行拿到安装包就能登进去（你多次说过这台机器上的东西会被复用），而且 <code>schema_contract.rs:878</code> 的断言会直接红。 (a) 的残余风险是"能物理操作这台机器的人可抢设口令"，靠首启在安装/部署现场完成来兜。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D4</span><b>左下角那块还要不要</b><span class="tag ok">推荐 保留，但降级为换人入口</span></div>
+<p>02 M10 白纸黑字要求"支持在岗切换而不退出程序"，所以下拉不删；删的是"点一下就换人"——换人改为弹出口令框，输入目标账号口令后切会话。同账号的锁屏回来同样要口令。
+<span class="sub">替代：不做下拉、只在 <code>/login</code> 重登。少一个入口，但磅员交接要重启，违反 M10 那句验收。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D5</span><b>浏览器（非 Tauri）里演示怎么办</b><span class="tag ok">推荐 b</span></div>
+<p>守卫一上，纯浏览器打开的演示（现在全站 mock、可发给客户看的那份）会被挡在登录页。 (a) 浏览器直接不给进，只演示打包版。 (b) <b>识别到无 Tauri 通道就显式进「演示模式」</b>：不做口令校验，但页面顶部常驻一条"浏览器演示 · 口令未校验"的横幅，账号也只从 mock 名单取。
+<span class="sub">与 <code>native.ts</code> 的既有纪律一致：可以降级，但不能把降级伪装成真在线。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D6</span><b>口令策略与锁定阈值</b><span class="tag ok">推荐 6 位 / 5 次 / 15 分</span></div>
+<p>最短 6 位、不强制大小写符号（磅房键盘、全键盘流程、操作员文化）、不设有效期、不做历史复用检查；连错 5 次锁 15 分钟，锁定与失败都进 <code>audit_log</code>（<code>result='denied'</code>）。用户不存在也跑一次 argon2 校验拉平时序，错误文案统一"用户名或口令不正确"，防账号枚举。</p>
+</div>
+
+<h2><span class="no">5</span>验收口径（写代码前对着它，不另发明）</h2>
+<ul>
+<li>未登录刷新任意 URL（含 <code>#/orders</code>、<code>#/devices</code>）都落在登录页——对齐 02 M10"未登录不可进入任何业务页"</li>
+<li>错口令 5 次后第 6 次给出"已锁定，剩余 N 分钟"，界面不区分"用户不存在/口令错"</li>
+<li><code>must_change_pwd=1</code> 的账号登录后只能进改密屏，改完才拿到会话</li>
+<li>换人后旧会话立即失效，之后任一写命令用旧 <code>session_id</code> 调用返回拒绝并留 <code>denied</code> 审计</li>
+<li>任何 <code>auth_*</code> 返回值与序列化文本中检索不到 <code>argon2</code> / <code>password_hash</code>（自动化断言，不靠人眼）</li>
+<li>05 §10-2、§10-7 两条：全程键盘完成登录到制单；作废 / 红冲 / 补打 / 皮重越权四处授权均生效并留痕</li>
+<li>全站检索 <code>operator?.id ?? 0</code> 与 <code>operator!</code> 均为 0 命中</li>
+<li><code>cargo test</code>（含新增 <code>auth_contract</code>）全绿，且 <code>schema_contract</code> 13 条不需重 bless</li>
+</ul>
+
+<h2><span class="no">6</span>风险与代价</h2>
+<table>
+<thead><tr><th>风险</th><th>处置</th></tr></thead>
+<tbody>
+<tr><td>argon2 栈不在 Cargo.lock，需联网拉一次</td><td>开发机联网 <code>cargo fetch</code> 后提交 <code>Cargo.lock</code>；磅房机只跑安装包，不现场编译，故与 WebView2 <code>offlineInstaller</code> 那条不冲突</td></tr>
+<tr><td>argon2 的 50–100 ms 校验阻塞命令队列</td><td>必须 <code>spawn_blocking</code>；参数按 OWASP（<code>m=19456KiB, t=2, p=1</code>），不做可配置</td></tr>
+<tr><td>单 <code>Connection</code> + <code>Mutex</code>：登录校验期间业务读被串行化</td><td>本期业务命令还没真库化，无实际影响；真库化时按 <span class="mono">db/mod.rs:55</span> 约定继续 <code>spawn_blocking</code>，口令路径不持锁做哈希（先取 hash、释放锁、再算）</td></tr>
+<tr><td>守卫与"首启无口令"叠加后可能出现启动即卡死在登录页</td><td>登录页显式给出"本机首次使用 → 设置站长口令"入口，<b>绝不</b>做成失败即静默（你反对启动即失败，宁可显式提示）</td></tr>
+<tr><td>mock 与真库并存的过渡态：登录真、业务仍 mock，前端仍传 <code>operator_id</code></td><td>本轮把 10 处 <code>?? 0</code> 与 4 处 <code>operator!</code> 收成 <code>useActorId()</code>，使 mock 也遵守"必须有署名"这条不变式；D1 选 (b) 后，真业务命令上线即沿用会话注入</td></tr>
+</tbody>
+</table>
+
+<p class="foot">本简报只为对齐一次；D1–D6 定了我就按 §3 的表逐文件改，改完交 <code>cargo test</code> + 前端 <code>tsc</code>/<code>build</code> + 一次实跑登录闭环的证据，不做纸面交付。结论回写 03 §9.4 与 05 §3、§6，之后这份文件可以删。</p>
+
+</div>
+</body>
+</html>

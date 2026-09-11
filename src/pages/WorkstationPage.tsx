@@ -15,7 +15,6 @@ import { api } from "@/lib/api";
 import { useSetting, useStaff, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useDeviceStore } from "@/store/device";
-import { useSession } from "@/store/session";
 import { date, weight } from "@/lib/format";
 import { IdentityPanel, TarePanel, draftFromOrder, emptyDraft } from "@/components/workstation/IdentityPanel";
 import type { OrderDraft } from "@/components/workstation/IdentityPanel";
@@ -25,7 +24,7 @@ import { SettlePanel } from "@/components/workstation/SettlePanel";
 import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
 import { PrintPreview } from "@/components/print/PrintPreview";
 import { WeighOrderSheet } from "@/components/print/sheets";
-import { EmptyState, Kbd, PageHeader, CallOut } from "@/components/business/layout";
+import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,7 +32,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function WorkstationPage() {
   const { orderNo } = useSearch({ from: "/workstation" });
   const navigate = useNavigate();
-  const operator = useSession((s) => s.operator);
   const readCard = useDeviceStore((s) => s.idcard.read);
   const names = useStaffNames();
   const { data: staff = [] } = useStaff();
@@ -151,14 +149,6 @@ export function WorkstationPage() {
           </>
         }
       />
-
-      {!operator && (
-        <div className="px-6 pt-3">
-          <CallOut tone="warning" title="尚未选择当前操作员">
-            本版本以「选择操作员」代替登录。请点左下角选择当班人员，否则无法制单、称重与结算。
-          </CallOut>
-        </div>
-      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {isLoading ? (

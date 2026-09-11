@@ -20,7 +20,7 @@ import type { WeighRecord } from "@/mock/types";
 import { INDICATORS, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
 import { useStaffNames, useStation } from "@/hooks/useLookups";
-import { useSession } from "@/store/session";
+import { actorId, useSession } from "@/store/session";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -44,7 +44,6 @@ export function OrderDetailPage() {
   const { orderNo } = useParams({ from: "/orders/$orderNo" });
   const queryClient = useQueryClient();
   const names = useStaffNames();
-  const operator = useSession((s) => s.operator);
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
   const { data: staff = [] } = useQuery({ queryKey: ["staff"], queryFn: () => api.staff() });
@@ -93,7 +92,8 @@ export function OrderDetailPage() {
 
   const voidMut = useMutation({
     mutationFn: () =>
-      api.voidOrder({ order_no: orderNo, reason: voidReason.trim(), operator_id: operator?.id ?? 0, authorized_by: authId ?? 0 }),
+      // authorized_by 仍是「选站长」的 mock id：站长口令授权链路下一轮才接，这里先不动
+      api.voidOrder({ order_no: orderNo, reason: voidReason.trim(), operator_id: actorId(), authorized_by: authId ?? 0 }),
     onSuccess: (o) => {
       if (!o) {
         toast.error("作废失败：未找到该磅单");

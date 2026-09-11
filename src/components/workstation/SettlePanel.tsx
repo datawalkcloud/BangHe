@@ -19,7 +19,7 @@ import type { PaymentMethod } from "@/lib/constants";
 import { PAYMENT_METHOD, TONE_DOT } from "@/lib/constants";
 import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
-import { useSession } from "@/store/session";
+import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
 import { Choose } from "@/components/business/Choose";
 import { MoneyField, MoneyLine, PriceField, WeightField } from "@/components/business/NumField";
@@ -57,7 +57,6 @@ export function SettlePanel({
   allowCredit: boolean;
   onPrint: () => void;
 }) {
-  const operator = useSession((s) => s.operator);
   const can = useSession((s) => s.can);
   const qcClient = useQueryClient();
 
@@ -120,7 +119,7 @@ export function SettlePanel({
         deduction_fee_fen: feeFen,
         pay_now: payNow,
         payment_method: method,
-        settler_id: operator!.id,
+        settler_id: actorId(),
         price_list_id: !deviates && listed ? listed.id : null,
         price_override_reason: deviates ? overrideReason.trim() : null,
         party_signed: signed,
@@ -143,21 +142,19 @@ export function SettlePanel({
 
   const blocked = !order
     ? "尚未制单"
-    : !operator
-      ? "请先选择当前操作员"
-      : !can("settle.create")
-        ? "当前岗位无权结算，需出纳或站长"
-        : preview.blocked
-          ? preview.blocked
-          : priceFenPerTon == null
-            ? "请填写单价，或按 F6 从价目表带出"
-            : deviates && overrideReason.trim().length < 4
-              ? "偏离价目表，必须填写改价事由"
-              : payNow
-                ? null
-                : !allowCredit
-                  ? "站点参数已关闭「允许挂账」，只能当场付清"
-                  : null;
+    : !can("settle.create")
+      ? "当前岗位无权结算，需出纳或站长"
+      : preview.blocked
+        ? preview.blocked
+        : priceFenPerTon == null
+          ? "请填写单价，或按 F6 从价目表带出"
+          : deviates && overrideReason.trim().length < 4
+            ? "偏离价目表，必须填写改价事由"
+            : payNow
+              ? null
+              : !allowCredit
+                ? "站点参数已关闭「允许挂账」，只能当场付清"
+                : null;
 
   function pickFromList() {
     if (!listed) {

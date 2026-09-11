@@ -15,7 +15,7 @@ import type { PaymentMethod } from "@/lib/constants";
 import { PAYMENT_METHOD, PAYMENT_STATUS } from "@/lib/constants";
 import { dateTime, money, orDash, rmbUpper, weight } from "@/lib/format";
 import { useStaffNames, useStation } from "@/hooks/useLookups";
-import { useSession } from "@/store/session";
+import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
@@ -34,7 +34,6 @@ export function SettlementDetailPage() {
   const { settleNo } = useParams({ from: "/settlements/$settleNo" });
   const queryClient = useQueryClient();
   const names = useStaffNames();
-  const operator = useSession((s) => s.operator);
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
 
@@ -59,7 +58,7 @@ export function SettlementDetailPage() {
         settle_no: settleNo,
         amount_fen: Math.round((Number(amountYuan) || 0) * 100),
         method,
-        operator_id: operator?.id ?? 0,
+        operator_id: actorId(),
         trade_no: tradeNo.trim() || null,
       }),
     onSuccess: (s) => {
@@ -82,7 +81,6 @@ export function SettlementDetailPage() {
 
   const amountFen = Math.round((Number(amountYuan) || 0) * 100);
   const payErrors: string[] = [];
-  if (!operator) payErrors.push("请先在左下角选择当前操作员");
   if (amountYuan.trim() === "") payErrors.push("请填写本次付款金额");
   else if (!Number.isFinite(amountFen) || amountFen <= 0) payErrors.push("金额必须是大于 0 的数字");
   else if (amountFen > unpaidFen) payErrors.push(`超出未付余额 ${money(unpaidFen)}`);

@@ -19,7 +19,7 @@ import { PARTY_TYPE } from "@/lib/constants";
 import { maskIdCard, money, orDash, validateIdCard, weight } from "@/lib/format";
 import { useWarehouses } from "@/hooks/useLookups";
 import { useDeviceStore } from "@/store/device";
-import { useSession } from "@/store/session";
+import { actorId } from "@/store/session";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge } from "@/components/business/badges";
@@ -94,7 +94,6 @@ function formOf(p: Party): PartyForm {
 export function PartiesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const operator = useSession((s) => s.operator);
   const readCard = useDeviceStore((s) => s.idcard.read);
   const reading = useDeviceStore((s) => s.idcard.reading);
   const cardError = useDeviceStore((s) => s.idcard.error);
@@ -137,7 +136,7 @@ export function PartiesPage() {
       const yuan = Number(form.creditYuan) || 0;
       return api.saveParty({
         id: form.id ?? undefined,
-        operator_id: operator?.id ?? 0,
+        operator_id: actorId(),
         name: form.name.trim(),
         party_type: form.party_type,
         id_card_no: form.id_card_no.trim().toUpperCase(),
@@ -436,7 +435,7 @@ export function PartiesPage() {
             </Button>
             <Button
               onClick={() => save.mutate()}
-              disabled={errors.length > 0 || save.isPending || !operator}
+              disabled={errors.length > 0 || save.isPending}
             >
               <ContactIcon />
               {save.isPending ? "保存中…" : form.id == null ? "建档" : "保存修改"}

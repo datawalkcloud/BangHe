@@ -226,12 +226,14 @@ export const PRINT_CHANNEL: Record<PrintChannel, string> = {
   raw: "RAW 直连",
 };
 
-export type PaperKind = "A4" | "dot241" | "thermal58";
+export type PaperKind = "A4" | "dot241" | "thermal58" | "thermal80";
 
 export const PAPER: Record<PaperKind, string> = {
   A4: "A4 激光",
   dot241: "241 针式连续纸",
   thermal58: "58 热敏小票",
+  // 现场实机（斯普瑞特 SPRT 80mm）：ESC/POS Font A 实测一行 48 列不折行
+  thermal80: "80 热敏小票",
 };
 
 /* -------------------------------------------------------------------- 通用 */
@@ -251,6 +253,24 @@ export const TONE_DOT: Record<Tone, string> = {
   success: "bg-success",
   warning: "bg-warning",
   danger: "bg-destructive",
+};
+
+/** 状态结果卡的边框 + 底色（与 TONE_BADGE 同语义，只是铺在整块面板上） */
+export const TONE_BOX: Record<Tone, string> = {
+  neutral: "border-border bg-muted/30",
+  info: "border-info/40 bg-info-bg",
+  success: "border-success/40 bg-success-bg",
+  warning: "border-warning/40 bg-warning-bg",
+  danger: "border-destructive/40 bg-destructive/10",
+};
+
+/** 状态结论标题的前景色（与 TONE_BOX 配对使用） */
+export const TONE_TEXT: Record<Tone, string> = {
+  neutral: "text-muted-foreground",
+  info: "text-info",
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-destructive",
 };
 
 export const VARIETY_COLOR: Record<string, string> = {

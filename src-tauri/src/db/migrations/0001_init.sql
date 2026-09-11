@@ -1,0 +1,557 @@
+-- ============================================================================
+-- 0001_init.sql —— 首版建表
+-- 来源：docs/design/03-技术架构与数据模型.md §9（表结构逐条对齐）+ §4.1（磅单状态）
+--       + §9.24（视图）。编号规则见 §3.5，时间格式见 §3.2，枚举见 §3.6。
+--
+-- 约定（改本文件前先读）：
+--   1. 枚举一律 TEXT NOT NULL + CHECK (col IN ('a','b'))，值与 src/lib/constants.ts、
+--      src-tauri/src/domain/enums.rs 三处同源，由 tests/schema_contract.rs 强制校验；
+--      任何一处漏改，CI 直接红。
+--   2. 唯一性优先用 §9「索引」段落里点名的具名索引；文档未点名时才用列内联 UNIQUE，
+--      避免同一列上出现两个唯一索引。
+--   3. §3.4：档案表带 deleted_at（软删除，查询必须带 deleted_at IS NULL）；
+--      单据表（weigh_order / qc_report / settlement / payment_record / print_log /
+--      audit_log / attachment / weigh_record）不设 deleted_at，只走 status 流转。
+--   4. 本脚本在单个事务内执行（db/migrate.rs），失败即整体回滚并中止启动。
+-- ============================================================================
+
+-- --------------------------------------------------------------- 9.1 app_meta
+-- 库级元信息，由迁移执行器写入与维护，业务代码只读。
+CREATE TABLE IF NOT EXISTS app_meta (
+  key   TEXT NOT NULL PRIMARY KEY,  -- schema_version / app_version / installed_at / last_backup_at / data_key_fp
+  value TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------- 9.2 station
+CREATE TABLE IF NOT EXISTS station (
+  id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  code        TEXT    NOT NULL UNIQUE,   -- 2 位站点码，参与单据编号（§3.5）
+  name        TEXT    NOT NULL,          -- 抬头用站名
+  tax_no      TEXT,
+  address     TEXT,
+  phone       TEXT,
+  legal_person TEXT,                     -- 负责人
+  is_active   INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT    NOT NULL
+);
+
+-- ------------------------------------------------------------- 9.3 app_setting
+CREATE TABLE IF NOT EXISTS app_setting (
+  key         TEXT NOT NULL PRIMARY KEY,          -- 首版默认键见 §9.3.1（0002_seed.sql 写入）
+  value_json  TEXT NOT NULL,                      -- JSON 值，serde_json 解析
+  value_type  TEXT NOT NULL CHECK (value_type IN ('string','int','bool','json')),
+  description TEXT,                               -- 界面提示文案
+  updated_at  TEXT,
+  updated_by  INTEGER REFERENCES user_account(id) -- 变更写审计
+);
+
+-- ------------------------------------------------------------ 9.4 user_account
+CREATE TABLE IF NOT EXISTS user_account (
+  id              INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  username        TEXT    NOT NULL UNIQUE,
+  display_name    TEXT    NOT NULL,               -- 单据署名用
+  password_hash   TEXT    NOT NULL,               -- argon2
+  role            TEXT    NOT NULL CHECK (role IN
+                    ('station_master','registrar','weigher','inspector','keeper','cashier','viewer')),
+  phone           TEXT,
+  must_change_pwd INTEGER NOT NULL DEFAULT 0,     -- 首登强改
+  failed_count    INTEGER NOT NULL DEFAULT 0,     -- 连错锁定
+  locked_until    TEXT,
+  is_active       INTEGER NOT NULL DEFAULT 1,     -- 停用后历史署名保留
+  last_login_at   TEXT,
+  created_at      TEXT,
+  updated_at      TEXT,
+  deleted_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_user_role ON user_account(role, is_active);
+
+-- ------------------------------------------------------- 9.5 role_permission
+-- 岗位能力表：P1 启用，首版只建表不灌授权数据（默认授予集需业务确认）。
+CREATE TABLE IF NOT EXISTS role_permission (
+  role       TEXT    NOT NULL,
+  permission TEXT    NOT NULL,   -- order.void / order.reprint / tare.override / price.edit / setting.write / data.export / backup.restore
+  granted    INTEGER NOT NULL,
+  PRIMARY KEY (role, permission)
+);
+
+-- ------------------------------------------------------------------- 9.6 party
+CREATE TABLE IF NOT EXISTS party (
+  id                    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  uid                   TEXT    UNIQUE,                       -- §3.3 全局 id，仅四类表保留
+  code                  TEXT    UNIQUE,                       -- 可选自编户号
+  name                  TEXT    NOT NULL,
+  party_type            TEXT    NOT NULL CHECK (party_type IN
+                          ('farmer','large_grower','broker','cooperative','company')),
+  id_card_no_enc        BLOB,                                 -- AES-GCM 密文（PII），不落明文
+  id_card_no_fp         TEXT,                                 -- 证号 SHA-256，唯一性归并与检索用
+  id_card_verified      INTEGER NOT NULL DEFAULT 0,           -- 1=读卡核验，0=手工录入
+  phone_enc             BLOB,
+  address               TEXT,                                 -- 一般不属高敏，明文书写以便打印
+  photo_attachment_id   INTEGER REFERENCES attachment(id),    -- 身份证照片
+  bank_name             TEXT,
+  bank_account_enc      BLOB,
+  tax_no                TEXT,
+  credit_limit_fen      INTEGER NOT NULL DEFAULT 0,           -- 挂账额度，0=不允许挂账
+  default_warehouse_id  INTEGER REFERENCES warehouse(id),      -- 常用去向，制单默认
+  default_vehicle_no    TEXT,
+  last_tare_01kg        INTEGER,                              -- 最近皮重，异常判定用
+  remark                TEXT,
+  status                TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  created_at            TEXT    NOT NULL,
+  created_by            INTEGER NOT NULL REFERENCES user_account(id),
+  updated_at            TEXT,
+  updated_by            INTEGER REFERENCES user_account(id),
+  deleted_at            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_party_name ON party(name);
+CREATE INDEX IF NOT EXISTS idx_party_type ON party(party_type, status);
+-- 证号哈希唯一（NULL 不参与唯一约束，故用部分索引；同一人多条 NULL 允许）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_party_fp ON party(id_card_no_fp) WHERE id_card_no_fp IS NOT NULL;
+-- phone_enc 为 BLOB，仅按前缀检索；P1 加密后改用检索密文前缀或另建 phone_fp
+CREATE INDEX IF NOT EXISTS idx_party_phone ON party(phone_enc);
+
+-- ---------------------------------------------------------- 9.7 party_contact
+CREATE TABLE IF NOT EXISTS party_contact (
+  id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  party_id    INTEGER NOT NULL REFERENCES party(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL CHECK (kind IN ('contact','bank','vehicle')),
+  value_enc   BLOB    NOT NULL,
+  is_default  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pc_party ON party_contact(party_id, kind);
+-- §9.7「同一往来单位每类只允许一个默认项」
+CREATE UNIQUE INDEX IF NOT EXISTS uk_pc_default ON party_contact(party_id, kind) WHERE is_default = 1;
+
+-- ---------------------------------------------------------- 9.8 grain_variety
+CREATE TABLE IF NOT EXISTS grain_variety (
+  id                           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  code                         TEXT    NOT NULL UNIQUE,   -- YM 玉米 / XM 小麦 / DG 稻谷 / DD 大豆
+  name                         TEXT    NOT NULL,
+  category                     TEXT,                      -- 主粮/杂粮/油料
+  std_moisture_001pct          INTEGER,                   -- 基准水分限量（提示用，不参与计算）
+  std_impurity_001pct          INTEGER,
+  std_unsound_001pct           INTEGER,
+  std_bulk_density             INTEGER,                   -- 容重 g/L
+  reject_moisture_001pct       INTEGER,                   -- 拒收红线（提示）
+  enabled_indicators_json      TEXT    NOT NULL DEFAULT '[]',
+  default_package_deduct_01kg  INTEGER NOT NULL DEFAULT 0, -- 默认袋重（0.1kg/袋，需与袋数相乘）
+  sort_order                   INTEGER NOT NULL DEFAULT 0,
+  is_active                    INTEGER NOT NULL DEFAULT 1, -- 被引用后不可删只可停
+  created_at                   TEXT    NOT NULL,
+  updated_at                   TEXT,
+  deleted_at                   TEXT
+);
+
+-- ------------------------------------------------------- 9.9 warehouse / slot
+CREATE TABLE IF NOT EXISTS warehouse (
+  id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  code        TEXT    NOT NULL UNIQUE,
+  name        TEXT    NOT NULL,
+  kind        TEXT    CHECK (kind IN ('house','barn','shed','silo')),
+  capacity_ton INTEGER,             -- 标称容量（展示与提示，不做结存）
+  is_active   INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT,
+  updated_at  TEXT,
+  deleted_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS storage_slot (
+  id            INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  warehouse_id  INTEGER NOT NULL REFERENCES warehouse(id),
+  code          TEXT    NOT NULL,
+  label         TEXT,
+  is_active     INTEGER NOT NULL DEFAULT 1
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_slot ON storage_slot(warehouse_id, code);
+
+-- ------------------------------------------------------------ 9.10 price_list
+CREATE TABLE IF NOT EXISTS price_list (
+  id                INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  variety_id        INTEGER NOT NULL REFERENCES grain_variety(id),
+  grade             TEXT    NOT NULL,                 -- 一等/二等/三等/四等/等外（见 GRADES）
+  price_fen_per_ton INTEGER NOT NULL,
+  effective_from    TEXT    NOT NULL,                 -- 日期
+  effective_to      TEXT    NOT NULL DEFAULT '9999-12-31',
+  basis             TEXT,                             -- 定价依据（国标/省价/自定）
+  made_by           INTEGER REFERENCES user_account(id),
+  approved_by       INTEGER REFERENCES user_account(id),
+  remark            TEXT,
+  created_at        TEXT    NOT NULL,
+  created_by        INTEGER NOT NULL REFERENCES user_account(id),
+  deleted_at        TEXT
+  -- 生效区间重叠校验在服务层做（SQLite 排除型约束表达力不足），保存冲突即拒绝
+);
+CREATE INDEX IF NOT EXISTS idx_price_lookup ON price_list(variety_id, grade, effective_from, effective_to);
+
+-- ----------------------------------------------------------- 9.11 weigh_order
+CREATE TABLE IF NOT EXISTS weigh_order (
+  id                     INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  uid                    TEXT    UNIQUE,
+  order_no               TEXT    NOT NULL,                 -- 唯一性由 uk_order_no 提供
+  station_id             INTEGER NOT NULL REFERENCES station(id),
+  business_date          TEXT    NOT NULL,                 -- 业务日期（统计归属日）
+  status                 TEXT    NOT NULL CHECK (status IN
+                             ('draft','registered','qc_done','gross_weighed','tare_weighed','reweigh',
+                              'to_settle','settled','paid','archived','voided','reversed','rejected')),
+  party_id               INTEGER NOT NULL REFERENCES party(id),
+  variety_id             INTEGER NOT NULL REFERENCES grain_variety(id),
+  grade                  TEXT,                             -- 等级，来自化验或人工
+  warehouse_id           INTEGER REFERENCES warehouse(id), -- 入仓去向
+  slot_id                INTEGER REFERENCES storage_slot(id),
+  vehicle_no             TEXT,
+  driver_name            TEXT,
+  queue_no               TEXT,                             -- 预留：排队/IC 卡
+  card_no                TEXT,                             -- 预留：IC 卡号
+  gross_weight_01kg      INTEGER,                          -- 毛重（当前采用值）
+  tare_weight_01kg       INTEGER,                          -- 皮重（当前采用值）
+  net_weight_01kg        INTEGER,                          -- 净重 = |毛重 − 皮重|
+  package_deduct_01kg    INTEGER NOT NULL DEFAULT 0,
+  package_count          INTEGER NOT NULL DEFAULT 0,
+  moisture_deduct_01kg   INTEGER NOT NULL DEFAULT 0,       -- 扣水（人工）
+  impurity_deduct_01kg   INTEGER NOT NULL DEFAULT 0,       -- 扣杂（人工）
+  other_deduct_01kg      INTEGER NOT NULL DEFAULT 0,
+  deduct_total_01kg      INTEGER NOT NULL DEFAULT 0,       -- 四项之和，服务层写入
+  settlement_weight_01kg INTEGER,
+  price_fen_per_ton      INTEGER,
+  price_list_id          INTEGER REFERENCES price_list(id), -- 取价来源，改价后置 NULL 并填 reason
+  price_override_reason  TEXT,
+  goods_amount_fen       INTEGER,                          -- 货款 = 结算重量 × 单价
+  deduction_fee_fen      INTEGER NOT NULL DEFAULT 0,       -- 扣款（烘干费/过筛费等）
+  advance_fee_fen        INTEGER NOT NULL DEFAULT 0,       -- 代垫（运费/磅费）
+  payable_amount_fen     INTEGER,                          -- 应付 = 货款 − 扣款 + 补贴
+  subsidy_fen            INTEGER NOT NULL DEFAULT 0,       -- 预留：补贴
+  paid_amount_fen        INTEGER NOT NULL DEFAULT 0,       -- 冗余汇总，由付款流水重算校验
+  payment_status         TEXT    NOT NULL DEFAULT 'unpaid' CHECK (payment_status IN
+                             ('unpaid','partial','paid','not_required')),
+  payment_method         TEXT,                             -- 主渠道，值域 PaymentMethod（无 CHECK，见 tests 提示清单）
+  weight_source          TEXT    NOT NULL DEFAULT 'scale' CHECK (weight_source IN ('scale','manual')),
+  tare_override_by       INTEGER REFERENCES user_account(id), -- 皮重异常放行人
+  tare_override_reason   TEXT,
+  is_manual_pricing      INTEGER NOT NULL DEFAULT 1,       -- 计价方式（首版恒 1）
+  price_plan_id          INTEGER,                          -- 预留：规则引擎方案
+  deduction_detail_json  TEXT    NOT NULL DEFAULT '[]',    -- 预留：梯度扣量明细
+  reversed_order_id      INTEGER REFERENCES weigh_order(id), -- 红冲指向原单
+  reverse_of_id          INTEGER REFERENCES weigh_order(id), -- 被哪张红冲单反指
+  qc_report_id           INTEGER REFERENCES qc_report(id),   -- 当前结算依据的化验单
+  registered_by          INTEGER NOT NULL REFERENCES user_account(id),
+  registered_at          TEXT    NOT NULL,
+  gross_at               TEXT,
+  tare_at                TEXT,
+  qc_at                  TEXT,
+  settled_at             TEXT,
+  paid_at                TEXT,
+  voided_at              TEXT,
+  voided_by              INTEGER REFERENCES user_account(id),
+  void_reason            TEXT,
+  weigher_id             INTEGER REFERENCES user_account(id),  -- 三环节署名（码单必印）
+  inspector_id           INTEGER REFERENCES user_account(id),
+  keeper_id              INTEGER REFERENCES user_account(id),
+  remark                 TEXT,
+  created_at             TEXT    NOT NULL,
+  created_by             INTEGER NOT NULL REFERENCES user_account(id),
+  updated_at             TEXT,
+  updated_by             INTEGER REFERENCES user_account(id),
+  -- §4.3 不变式 3（可入库表达的一半）：货款出现负值即红冲单，必须指向原单。
+  -- 另一半（红冲单与原单必须成对、金额互为相反数）依赖跨行核对，留在服务层强制。
+  CHECK (goods_amount_fen IS NULL OR goods_amount_fen >= 0 OR reversed_order_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_order_no ON weigh_order(order_no);
+CREATE INDEX IF NOT EXISTS idx_order_date_status ON weigh_order(business_date, status);
+CREATE INDEX IF NOT EXISTS idx_order_party_date ON weigh_order(party_id, business_date);
+CREATE INDEX IF NOT EXISTS idx_order_variety_date ON weigh_order(variety_id, business_date);
+CREATE INDEX IF NOT EXISTS idx_order_status ON weigh_order(status) WHERE status NOT IN ('archived','voided');  -- 在途作业看板
+CREATE INDEX IF NOT EXISTS idx_order_settled ON weigh_order(settled_at) WHERE settled_at IS NULL OR payment_status <> 'paid'; -- 挂账清单
+CREATE INDEX IF NOT EXISTS idx_order_reverse ON weigh_order(reversed_order_id) WHERE reversed_order_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_order_manual ON weigh_order(weight_source, business_date) WHERE weight_source = 'manual';
+
+-- ----------------------------------------------------------- 9.12 weigh_record
+CREATE TABLE IF NOT EXISTS weigh_record (
+  id                  INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  order_id            INTEGER NOT NULL REFERENCES weigh_order(id) ON DELETE RESTRICT,
+  seq                 INTEGER NOT NULL,                     -- 单内递增
+  weigh_type          TEXT    NOT NULL CHECK (weigh_type IN ('gross','tare')),
+  weight_01kg         INTEGER NOT NULL,                     -- 本次捕获原始值
+  aligned_weight_01kg INTEGER NOT NULL,                     -- 按分度值取整后的值
+  is_adopted          INTEGER NOT NULL DEFAULT 0,
+  adopt_reason        TEXT,                                 -- 复称替换原因
+  source              TEXT    NOT NULL CHECK (source IN ('scale','manual')),
+  device_id           INTEGER REFERENCES device_config(id), -- 哪台磅
+  raw_frame           TEXT,                                 -- 仪表原始帧（脱敏后存），排障关键
+  stable              INTEGER NOT NULL DEFAULT 1,
+  captured_at         TEXT    NOT NULL,
+  operator_id         INTEGER NOT NULL REFERENCES user_account(id),
+  photo_attachment_id INTEGER REFERENCES attachment(id)     -- 上磅抓拍
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_record ON weigh_record(order_id, seq);
+CREATE INDEX IF NOT EXISTS idx_adopted ON weigh_record(order_id, weigh_type, is_adopted);
+
+-- ------------------------------------------------------------- 9.13 qc_report
+CREATE TABLE IF NOT EXISTS qc_report (
+  id                    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  report_no             TEXT    NOT NULL UNIQUE,            -- 质检单号
+  order_id              INTEGER NOT NULL REFERENCES weigh_order(id),
+  sample_no             TEXT,
+  variety_id            INTEGER NOT NULL REFERENCES grain_variety(id),
+  grade                 TEXT,                               -- 人工判定等级
+  decision              TEXT    NOT NULL CHECK (decision IN ('accept','reject','conditional')),
+  reject_reason         TEXT,
+  moisture_deduct_01kg  INTEGER NOT NULL DEFAULT 0,         -- 化验给出的扣水建议（人工）
+  impurity_deduct_01kg  INTEGER NOT NULL DEFAULT 0,
+  test_method           TEXT    NOT NULL CHECK (test_method IN ('nir','lab','visual')),
+  is_recheck            INTEGER NOT NULL DEFAULT 0,
+  first_report_id       INTEGER REFERENCES qc_report(id),   -- 复检指向首检
+  is_effective          INTEGER NOT NULL DEFAULT 1,         -- §4.3 不变式 7：同单同时刻唯一有效
+  inspector_id          INTEGER NOT NULL REFERENCES user_account(id),
+  inspected_at          TEXT    NOT NULL,
+  retention_no          TEXT,                               -- 留样编号
+  retention_until       TEXT,                               -- 保存期限
+  photo_attachment_id   INTEGER REFERENCES attachment(id),
+  remark                TEXT,
+  created_at            TEXT    NOT NULL,
+  created_by            INTEGER NOT NULL REFERENCES user_account(id)
+);
+CREATE INDEX IF NOT EXISTS idx_qc_order ON qc_report(order_id, is_effective);
+CREATE INDEX IF NOT EXISTS idx_qc_date ON qc_report(inspected_at);
+CREATE INDEX IF NOT EXISTS idx_qc_variety ON qc_report(variety_id, inspected_at);
+-- §4.3 不变式 7：一张磅单同时只允许一张有效化验单
+CREATE UNIQUE INDEX IF NOT EXISTS uk_qc_effective ON qc_report(order_id) WHERE is_effective = 1;
+
+-- --------------------------------------------------------- 9.14 qc_indicator
+CREATE TABLE IF NOT EXISTS qc_indicator (
+  id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  report_id   INTEGER NOT NULL REFERENCES qc_report(id) ON DELETE CASCADE,
+  code        TEXT    NOT NULL,                 -- moisture/impurity/unsound/bulk_density/mold/yellow_grain/odor/head_rice…
+  name        TEXT    NOT NULL,                 -- 中文名快照（字典变更不影响历史）
+  value_num   INTEGER,                          -- 数值（单位由 unit 决定），非数值判定为 NULL
+  value_text  TEXT,                             -- 气味等文本
+  unit        TEXT    NOT NULL CHECK (unit IN ('0.01pct','gL','text')),
+  std_value   INTEGER,                          -- 当时标准值快照，便于规则引擎回溯验证
+  over_std    INTEGER NOT NULL DEFAULT 0,       -- 是否超标准（仅提示色）
+  sort_order  INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_ind ON qc_indicator(report_id, code);
+CREATE INDEX IF NOT EXISTS idx_ind_code_value ON qc_indicator(code, value_num); -- 质量分析统计用
+
+-- ------------------------------------------------------------- 9.15 attachment
+CREATE TABLE IF NOT EXISTS attachment (
+  id               INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  uid              TEXT    UNIQUE,
+  biz_type         TEXT    NOT NULL CHECK (biz_type IN
+                       ('scale_capture','id_card_photo','signature','sample_photo','other')),
+  biz_id           INTEGER,                                 -- 关联单据主键（多态，不设 FK）
+  order_id         INTEGER REFERENCES weigh_order(id),      -- 便于按单清理与统计
+  file_path        TEXT    NOT NULL,                        -- 相对 AppDataDir 的路径
+  file_size        INTEGER NOT NULL,
+  mime             TEXT    NOT NULL DEFAULT 'image/jpeg',
+  width            INTEGER,
+  height           INTEGER,
+  sha256           TEXT    NOT NULL,                        -- 完整性与去重
+  encrypted        INTEGER NOT NULL DEFAULT 0,              -- 身份证照片/签字置 1
+  captured_at      TEXT    NOT NULL,
+  source_device_id INTEGER REFERENCES device_config(id),
+  created_at       TEXT    NOT NULL,
+  created_by       INTEGER NOT NULL REFERENCES user_account(id),
+  accessed_at      TEXT,                                    -- PII 访问审计（最近一次）
+  accessed_by      INTEGER REFERENCES user_account(id)
+);
+CREATE INDEX IF NOT EXISTS idx_att_biz ON attachment(biz_type, biz_id);
+CREATE INDEX IF NOT EXISTS idx_att_order ON attachment(order_id);
+CREATE INDEX IF NOT EXISTS idx_att_sha ON attachment(sha256);
+
+-- ------------------------------------------------------------ 9.16 settlement
+CREATE TABLE IF NOT EXISTS settlement (
+  id                      INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  uid                     TEXT    UNIQUE,
+  settle_no               TEXT    NOT NULL UNIQUE,
+  station_id              INTEGER NOT NULL REFERENCES station(id),
+  party_id                INTEGER NOT NULL REFERENCES party(id),
+  business_date           TEXT    NOT NULL,
+  period_from             TEXT    NOT NULL,          -- 合并结算覆盖的业务日
+  period_to               TEXT    NOT NULL,
+  order_count             INTEGER NOT NULL,
+  total_net_01kg          INTEGER NOT NULL,
+  total_deduct_01kg       INTEGER NOT NULL,
+  total_settle_01kg       INTEGER NOT NULL,
+  total_goods_fen         INTEGER NOT NULL,
+  total_deduction_fen     INTEGER NOT NULL DEFAULT 0,
+  total_advance_fen       INTEGER NOT NULL DEFAULT 0,
+  payable_fen             INTEGER NOT NULL,
+  paid_fen                INTEGER NOT NULL DEFAULT 0,
+  payment_status          TEXT    NOT NULL CHECK (payment_status IN ('unpaid','partial','paid')),
+  main_method             TEXT,
+  payee_name              TEXT,                      -- 收款人可与售粮人不同（代领）
+  payee_account_enc       BLOB,
+  signed_by_party         INTEGER NOT NULL DEFAULT 0,
+  signature_attachment_id INTEGER REFERENCES attachment(id),
+  status                  TEXT    NOT NULL DEFAULT 'normal' CHECK (status IN ('normal','revoked')),
+  settled_at              TEXT    NOT NULL,
+  settler_id              INTEGER NOT NULL REFERENCES user_account(id),
+  remark                  TEXT,
+  created_at              TEXT,
+  created_by              INTEGER REFERENCES user_account(id),
+  updated_at              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_settle_party ON settlement(party_id, business_date);
+CREATE INDEX IF NOT EXISTS idx_settle_status ON settlement(payment_status, business_date); -- 挂账与时效预警
+
+-- ------------------------------------------------------- 9.17 settlement_order
+CREATE TABLE IF NOT EXISTS settlement_order (
+  id                     INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  settlement_id          INTEGER NOT NULL REFERENCES settlement(id) ON DELETE CASCADE,
+  order_id               INTEGER NOT NULL REFERENCES weigh_order(id),
+  goods_amount_fen       INTEGER NOT NULL,           -- 结算时快照（单据后续被红冲仍可核对）
+  price_fen_per_ton      INTEGER NOT NULL,
+  settlement_weight_01kg INTEGER NOT NULL,
+  seq                    INTEGER NOT NULL            -- 明细顺序
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_so_order ON settlement_order(order_id); -- §4.3 不变式 6
+CREATE INDEX IF NOT EXISTS idx_so_settle ON settlement_order(settlement_id);
+
+-- ------------------------------------------------------- 9.18 payment_record
+CREATE TABLE IF NOT EXISTS payment_record (
+  id            INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  pay_no        TEXT    NOT NULL UNIQUE,
+  settlement_id INTEGER REFERENCES settlement(id),
+  order_id      INTEGER REFERENCES weigh_order(id),      -- 支持不合并时按单直接付款
+  amount_fen    INTEGER NOT NULL CHECK (amount_fen > 0),
+  method        TEXT    NOT NULL CHECK (method IN
+                    ('cash','bank','wechat','alipay','transfer','credit_writeoff')),
+  trade_no      TEXT,                                    -- 银行/第三方支付流水号
+  payee_name    TEXT,
+  account_enc   BLOB,
+  paid_at       TEXT    NOT NULL,
+  operator_id   INTEGER NOT NULL REFERENCES user_account(id), -- 出纳
+  voucher_no    TEXT,                                    -- 凭证号（财务深化期用）
+  reversed      INTEGER NOT NULL DEFAULT 0,              -- 冲销标记，不删行
+  remark        TEXT,
+  created_at    TEXT    NOT NULL,
+  created_by    INTEGER NOT NULL REFERENCES user_account(id),
+  -- §9.18：结算单与磅单至少挂一项
+  CHECK (settlement_id IS NOT NULL OR order_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_pay_settle ON payment_record(settlement_id);
+CREATE INDEX IF NOT EXISTS idx_pay_date ON payment_record(paid_at);
+CREATE INDEX IF NOT EXISTS idx_pay_method ON payment_record(method, paid_at); -- 现金/渠道分布统计
+
+-- --------------------------------------------------------------- 9.19 print_log
+CREATE TABLE IF NOT EXISTS print_log (
+  id            INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  doc_type      TEXT    NOT NULL CHECK (doc_type IN
+                    ('weigh_order','quality_report','settlement_voucher','internal_flow','ledger','daily_report')),
+  doc_id        INTEGER NOT NULL,
+  doc_no        TEXT    NOT NULL,                        -- 快照，便于单据删除前审计（实际不删）
+  copies        INTEGER NOT NULL DEFAULT 1,
+  paper         TEXT    NOT NULL,                        -- A4/dot241/thermal58/thermal80（无 CHECK，待 §3.6 拍板）
+  printer_name  TEXT    NOT NULL,
+  channel       TEXT    NOT NULL CHECK (channel IN ('preview','pdf_silent','raw')),
+  is_reprint    INTEGER NOT NULL DEFAULT 0,
+  authorized_by INTEGER REFERENCES user_account(id),     -- 补打授权人
+  result        TEXT    NOT NULL CHECK (result IN ('success','failed')),
+  error_msg     TEXT,
+  rendered_json TEXT,                                    -- 本次打印的数据快照，复现"当初打了什么"
+  printed_at    TEXT    NOT NULL,
+  operator_id   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_print_doc ON print_log(doc_type, doc_id);
+CREATE INDEX IF NOT EXISTS idx_print_date ON print_log(printed_at);
+
+-- ---------------------------------------------------------- 9.20 device_config
+CREATE TABLE IF NOT EXISTS device_config (
+  id          INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  code        TEXT    NOT NULL UNIQUE,                  -- scale1/idcard1/cam1/prn_main
+  name        TEXT    NOT NULL,
+  kind        TEXT    NOT NULL CHECK (kind IN
+                    ('scale','idcard','camera','printer','led','cashbox','signpad')),
+  driver      TEXT    NOT NULL,                         -- yaohua_xk3190/toledo/bridge_exe/hidapi/hikvision_isapi/dahua_cgi/preview/raw_escp/raw_escpos/mock
+  config_json TEXT    NOT NULL DEFAULT '{}',            -- 端口/波特率/地址/账号/URL 模板/纸型边距
+  secret_json TEXT,                                     -- 摄像头口令等，加密存
+  is_enabled  INTEGER NOT NULL DEFAULT 1,
+  is_mock     INTEGER NOT NULL DEFAULT 0,
+  is_default  INTEGER NOT NULL DEFAULT 0,               -- 同类默认设备
+  last_status TEXT    NOT NULL DEFAULT 'unknown' CHECK (last_status IN ('unknown','online','offline','error')),
+  last_ok_at  TEXT,
+  last_err_at TEXT,
+  last_error  TEXT,
+  err_count   INTEGER NOT NULL DEFAULT 0,               -- 连续错误计数
+  created_at  TEXT,
+  updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dev_kind ON device_config(kind, is_enabled);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_dev_default ON device_config(kind) WHERE is_default = 1;
+
+-- --------------------------------------------------------------- 9.21 audit_log
+-- 只插入，不更新不删除；应用不暴露任何删改接口（§9.21 写入规则）。
+CREATE TABLE IF NOT EXISTS audit_log (
+  id            INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  at            TEXT    NOT NULL,
+  actor_id      INTEGER REFERENCES user_account(id),
+  actor_name    TEXT    NOT NULL,                        -- 快照，用户改名/停用不影响
+  action        TEXT    NOT NULL,                        -- login/order.create/order.void/order.reverse/weigh.capture/weigh.manual/tare.override/qc.save/settle.create/settle.revoke/pay.record/price.override/print/reprint/setting.update/export/backup/restore/pii.read
+  entity        TEXT    NOT NULL,                        -- 表名
+  entity_id     INTEGER,
+  entity_no     TEXT,                                    -- 单据号
+  before_json   TEXT,                                    -- 仅记录被改字段的前后值
+  after_json    TEXT,
+  reason        TEXT,                                    -- 需授权操作的强制理由
+  authorized_by INTEGER REFERENCES user_account(id),
+  result        TEXT    NOT NULL DEFAULT 'ok' CHECK (result IN ('ok','denied','error')), -- 越权尝试同样要记
+  error_msg     TEXT,
+  session_id    TEXT,                                    -- 同一次作业串联
+  client_info   TEXT                                     -- 机器名/应用版本
+);
+CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id, at);
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action, at);
+
+-- ----------------------------------------------------------- 9.22 seq_counter
+CREATE TABLE IF NOT EXISTS seq_counter (
+  prefix_key TEXT    NOT NULL PRIMARY KEY,               -- <doc_type>:<station_code>:<YYYYMM>
+  current    INTEGER NOT NULL DEFAULT 0,
+  step       INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT    NOT NULL
+);
+
+-- ------------------------------------------------------- 9.23 stock_movement
+-- 出入库流水：预留，首版不写入。
+CREATE TABLE IF NOT EXISTS stock_movement (
+  id                INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  move_no           TEXT    UNIQUE,
+  kind              TEXT    CHECK (kind IN ('in','out','transfer','loss','adjust')),
+  order_id          INTEGER REFERENCES weigh_order(id),   -- 入库可溯源到磅单
+  party_id          INTEGER REFERENCES party(id),
+  variety_id        INTEGER REFERENCES grain_variety(id),
+  grade             TEXT,
+  from_warehouse_id INTEGER REFERENCES warehouse(id),
+  from_slot_id      INTEGER REFERENCES storage_slot(id),
+  to_warehouse_id   INTEGER REFERENCES warehouse(id),
+  to_slot_id        INTEGER REFERENCES storage_slot(id),
+  weight_01kg       INTEGER NOT NULL,
+  price_fen_per_ton INTEGER,
+  amount_fen        INTEGER,
+  business_date     TEXT    NOT NULL,
+  operated_at       TEXT    NOT NULL,
+  operator_id       INTEGER NOT NULL REFERENCES user_account(id),
+  remark            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_move_slot ON stock_movement(to_slot_id, business_date);
+CREATE INDEX IF NOT EXISTS idx_move_date ON stock_movement(business_date, kind);
+
+-- ------------------------------------------------------------------ 9.24 视图
+-- 在途作业（M1 看板 / 首页告警）
+CREATE VIEW IF NOT EXISTS v_open_order AS
+SELECT o.*, p.name AS party_name, v.name AS variety_name,
+       CAST((julianday('now','localtime') - julianday(COALESCE(o.tare_at, o.gross_at, o.registered_at))) * 24 * 60 AS INTEGER) AS stuck_minutes
+FROM weigh_order o
+JOIN party p ON p.id = o.party_id
+JOIN grain_variety v ON v.id = o.variety_id
+WHERE o.status NOT IN ('archived','voided','reversed','rejected');
+
+-- 挂账清单（F5.3 / F7.4 复用）
+CREATE VIEW IF NOT EXISTS v_payable AS
+SELECT s.id, s.settle_no, s.party_id, p.name, s.payable_fen, s.paid_fen,
+       s.payable_fen - s.paid_fen AS unpaid_fen, s.settled_at,
+       CAST((julianday('now','localtime') - julianday(s.settled_at)) * 24 AS INTEGER) AS unpaid_hours
+FROM settlement s JOIN party p ON p.id = s.party_id
+WHERE s.status = 'normal' AND s.payment_status <> 'paid';

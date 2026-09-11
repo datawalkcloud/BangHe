@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
+import { ThemeProvider } from "next-themes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { router } from "@/router";
+import { DEFAULT_MODE, THEME_MODE_KEY } from "@/lib/theme";
 import "./App.css";
 
 /**
@@ -20,10 +22,20 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delay={400}>
-        <RouterProvider router={router} />
-        <Toaster position="bottom-right" richColors closeButton />
-      </TooltipProvider>
+      {/* 模式（light/dark/system）交给 next-themes：它管 <html> 上的 .dark 类，sonner 也读同一个上下文。
+          色板覆盖不在这里，见 src/store/theme.ts。storageKey 与 bootstrapTheme 共用，首帧不会二次跳变。 */}
+      <ThemeProvider
+        attribute="class"
+        defaultTheme={DEFAULT_MODE}
+        storageKey={THEME_MODE_KEY}
+        enableSystem
+        disableTransitionOnChange
+      >
+        <TooltipProvider delay={400}>
+          <RouterProvider router={router} />
+          <Toaster position="bottom-right" richColors closeButton />
+        </TooltipProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

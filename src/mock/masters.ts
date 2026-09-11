@@ -306,9 +306,10 @@ export const devices: DeviceConfig[] = [
     is_enabled: 1, is_mock: 0, is_default: 0, last_status: "offline", last_ok_at: "3 天前", last_error: "脱机 / 缺纸", err_count: 3,
   },
   {
-    id: 8, code: "prn_ticket", name: "58 热敏小票", kind: "printer", driver: "raw_escpos",
-    config: { paper: "thermal58", width: 384, rawQueue: "GPP-312" },
-    is_enabled: 0, is_mock: 0, is_default: 0, last_status: "unknown", last_ok_at: null, last_error: null, err_count: 0,
+    // 现场实机（2026-09-11 接入）：斯普瑞特 SPRT 80mm，ESC/POS 直写 usbprint.sys，不经打印队列
+    id: 8, code: "prn_ticket", name: "小票机 斯普瑞特 SPRT 80mm", kind: "printer", driver: "escpos_usbprint",
+    config: { paper: "thermal80", cols: 48, vid: "0x0483", pid: "0x5720", transport: "usbprint.sys" },
+    is_enabled: 1, is_mock: 0, is_default: 0, last_status: "unknown", last_ok_at: null, last_error: null, err_count: 0,
   },
   {
     id: 9, code: "led1", name: "户外 LED 显示屏", kind: "led", driver: "mock",
@@ -346,9 +347,9 @@ export const settings: AppSetting[] = [
   {
     key: "print_channel", value: "preview", label: "打印通道", group: "print", kind: "select",
     options: [{ value: "preview", label: "窗口预览" }, { value: "pdf_silent", label: "PDF 静默" }, { value: "raw", label: "RAW 直连" }],
-    hint: "Tauri v2 无静默打印 API，默认走预览窗口",
+    hint: "Tauri v2 没有静默打印 API：A4 与 241 针式默认窗口预览；热敏小票走 ESC/POS 直写 usbprint.sys，不弹对话框",
   },
-  { key: "print_paper", value: "A4", label: "码单纸型", group: "print", kind: "select", options: [{ value: "A4", label: "A4 激光" }, { value: "dot241", label: "241 针式" }, { value: "thermal58", label: "58 热敏" }] },
+  { key: "print_paper", value: "A4", label: "码单纸型", group: "print", kind: "select", options: [{ value: "A4", label: "A4 激光" }, { value: "dot241", label: "241 针式" }, { value: "thermal80", label: "80 热敏" }, { value: "thermal58", label: "58 热敏" }] },
   { key: "print_copies", value: "3", label: "联数（存根/财务/客户）", group: "print", kind: "number" },
   { key: "reprint_need_auth", value: "true", label: "补打需站长授权", group: "print", kind: "bool" },
   { key: "capture_keep_days", value: "365", label: "抓拍留存（天）", group: "retain", kind: "number" },

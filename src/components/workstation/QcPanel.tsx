@@ -16,7 +16,7 @@ import type { GrainVariety, QcReport, WeighOrder } from "@/mock/types";
 import type { Grade, IndicatorMeta, QcDecision, TestMethod } from "@/lib/constants";
 import { GRADES, INDICATORS, QC_DECISION, TEST_METHOD } from "@/lib/constants";
 import { density, fromPercent, percent, weight } from "@/lib/format";
-import { useSession } from "@/store/session";
+import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
 import { Choose } from "@/components/business/Choose";
 import { QcDecisionBadge } from "@/components/business/badges";
@@ -52,7 +52,6 @@ function compare(meta: IndicatorMeta, num: number | null): { over: 0 | 1; text: 
 }
 
 export function QcPanel({ order, variety }: { order: WeighOrder | null; variety: GrainVariety | null }) {
-  const operator = useSession((s) => s.operator);
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
 
@@ -134,7 +133,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
         indicators,
         moisture_deduct_01kg: moistureDeduct,
         impurity_deduct_01kg: impurityDeduct,
-        inspector_id: operator!.id,
+        inspector_id: actorId(),
         reject_reason: decision === "reject" ? rejectReason.trim() : null,
       });
     },
@@ -156,15 +155,13 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
 
   const blocked = !order
     ? "尚未制单，无法录入化验"
-    : !operator
-      ? "请先选择当前操作员"
-      : !can("qc.save")
-        ? "当前岗位无权保存化验，需化验员或站长"
-        : metas.some((m) => m.code === "moisture" && num01("moisture") == null)
-          ? "水分为必检项，不能留空"
-          : decision === "reject" && rejectReason.trim().length < 4
-            ? "拒收必须填写原因（不少于 4 字）"
-            : null;
+    : !can("qc.save")
+      ? "当前岗位无权保存化验，需化验员或站长"
+      : metas.some((m) => m.code === "moisture" && num01("moisture") == null)
+        ? "水分为必检项，不能留空"
+        : decision === "reject" && rejectReason.trim().length < 4
+          ? "拒收必须填写原因（不少于 4 字）"
+          : null;
 
   useHotkey("f5", () => {
     if (!blocked) save.mutate();

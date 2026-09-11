@@ -22,7 +22,7 @@ import { maskIdCard, money, orDash, price as fmtPrice, shiftDay, toKg, todayISO,
 import { downloadCsv, csvName } from "@/lib/csv";
 import { useStaffNames, useVarieties } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
-import { useSession } from "@/store/session";
+import { actorId, useSession } from "@/store/session";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, PaymentStatusBadge, WeightSourceBadge } from "@/components/business/badges";
@@ -229,7 +229,7 @@ export function OrdersPage() {
           printer_name: "HP LaserJet M403d",
           channel: "preview",
           is_reprint: true,
-          operator_id: useSession.getState().operator?.id ?? 0,
+          operator_id: actorId(),
         });
       }
       return list.length;

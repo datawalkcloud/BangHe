@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Rust 编译产物（Tauri 主程序与 tools 下的现场工装）
+src-tauri/target/
+tools/*/target/
+tools/*/*.bin
+
 # 浏览器冒烟测试落在仓库根目录的截图，不属于源码（只匹配根层，不影响 src-tauri/icons）
 /*.png
 /_qa/
@@ -26,3 +31,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+/crates

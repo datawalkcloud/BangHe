@@ -29,7 +29,8 @@ import type {
   Warehouse,
   WeighOrder,
 } from "./types";
-import type { OrderStatus, PaymentMethod } from "@/lib/constants";
+import type { DeviceStatus, OrderStatus, PaperKind, PaymentMethod, PrintChannel } from "@/lib/constants";
+import { stamp, type PrintVerify } from "@/lib/print-guard";
 import {
   ALL_SLOTS,
   parties,
@@ -427,13 +428,21 @@ export const api = {
     return created;
   },
 
-  async saveSetting(key: string, value: string, operator_id: number): Promise<AppSetting[]> {
+  /**
+   * 写站点参数。涉及把单据打到热敏机的选项（打印通道 / 纸型）必须带 `verify`：
+   * 真机测试不通过就拒绝保存；浏览器预览测不了则照写，但审计里明写"未经真机验证"。
+   */
+  async saveSetting(key: string, value: string, operator_id: number, verify: PrintVerify | null = null): Promise<AppSetting[]> {
     await sleep(60);
+    if (verify && verify.mode === "device" && !verify.ok) {
+      throw new Error(`联机测试未通过，参数未保存：${verify.message}`);
+    }
     const s = settings.find((x) => x.key === key);
     if (s) {
       const old = s.value;
       s.value = value;
-      auditMaster("setting.update", "app_setting", key, operator_id, `${old} → ${value}`);
+      const tail = verify === null || verify.mode === "device" ? "" : "（未经真机验证）";
+      auditMaster("setting.update", "app_setting", key, operator_id, `${old} → ${value}${tail}`);
     }
     return settings.slice();
   },
@@ -470,7 +479,10 @@ export const api = {
   /* ------------------------------------------------------------ 设备 */
   async listDevices(): Promise<DeviceConfig[]> {
     await sleep();
-    return devices;
+    // 逐项拷贝再返回：mock 是在内存数组上原地改字段的，直接把同一批对象引用交给
+    // react-query，它做结构比对时会认为"数据没变"而不通知订阅者——联机探测回写后
+    // 卡片的状态灯就不会跟着刷新。
+    return devices.map((d) => ({ ...d }));
   },
 
   /** 设备自检：mock 下恒定返回一次探测结果，界面据此演示"测试面板" */
@@ -487,7 +499,7 @@ export const api = {
     await sleep(60);
     const d = devices.find((x) => x.code === code);
     if (d) d.is_mock = mock ? 1 : 0;
-    return devices.slice();
+    return devices.map((x) => ({ ...x }));
   },
 
   async setDeviceEnabled(code: string, enabled: boolean): Promise<DeviceConfig[]> {
@@ -497,7 +509,76 @@ export const api = {
       d.is_enabled = enabled ? 1 : 0;
       d.last_status = enabled ? "unknown" : "offline";
     }
-    return devices.slice();
+    return devices.map((x) => ({ ...x }));
+  },
+
+  /**
+   * 写设备配置（真实实现即 `device_config.config_json`）。
+   *
+   * 门禁（02 §M9）：改完必须能打通才算配好。桌面端有原生通道时，调用方必须先做一次
+   * 联机测试并把结果传进来——不通过就直接拒绝，不留下"保存了但打不出"的配置；
+   * 浏览器预览测不了，则允许保存但状态停在"未检测"、把原因写进 last_error，
+   * 卡片上表现为黄标，等桌面端验过才转绿。
+   */
+  async updateDeviceConfig(input: {
+    code: string;
+    config: Record<string, string | number | boolean>;
+    operator_id: number;
+    verify: PrintVerify;
+  }): Promise<DeviceConfig> {
+    await sleep(80);
+    const d = devices.find((x) => x.code === input.code);
+    if (!d) throw new Error("设备不存在");
+    if (input.verify.mode === "device" && !input.verify.ok) {
+      throw new Error(`联机测试未通过，配置未保存：${input.verify.message}`);
+    }
+    const old = JSON.stringify(d.config);
+    d.config = { ...d.config, ...input.config };
+    if (input.verify.mode === "device") {
+      d.last_status = "online";
+      d.last_ok_at = stamp();
+      d.last_error = null;
+      d.err_count = 0;
+    } else {
+      d.last_status = "unknown";
+      d.last_error = input.verify.message;
+    }
+    auditMaster(
+      "device.update",
+      "device_config",
+      d.code,
+      input.operator_id,
+      `${old} → ${JSON.stringify(d.config)}${input.verify.mode === "device" ? "" : "（未经真机验证）"}`,
+    );
+    return { ...d };
+  },
+
+  /**
+   * 回写一次真实联机探测的结果（不动配置，只更新状态四字段）。
+   *
+   * 为什么必须有这条：卡片上的状态灯读的是台账 `last_status`，而台账里存的是安装时录入的值。
+   * 不做回写，真机明明在线应答 `DLE EOT`，卡片却会一直停在"未检测"——现场读到的是
+   * "软件没认出这台机"，而不是"这台机没问题"，等于把一个好设备报成了故障。
+   * 真实实现即 `device_config` 的 last_status / last_ok_at / last_error / err_count。
+   */
+  async reportDeviceProbe(
+    code: string,
+    res: { status: DeviceStatus; error: string | null; at: string },
+  ): Promise<DeviceConfig> {
+    await sleep(40);
+    const d = devices.find((x) => x.code === code);
+    if (!d) throw new Error("设备不存在");
+    d.last_status = res.status;
+    // 在线时不残留上一次的告警文案，否则绿标旁边挂着红字，等于没有状态
+    d.last_error = res.status === "online" ? null : res.error;
+    if (res.status === "online") {
+      d.last_ok_at = res.at;
+      d.err_count = 0;
+    } else if (res.status !== "unknown") {
+      // "未检测"是"没问到可信状态"，不是设备故障，不计入错误次数
+      d.err_count += 1;
+    }
+    return { ...d };
   },
 
   /* ------------------------------------------------------------ 报表 */
@@ -929,7 +1010,7 @@ export const api = {
   },
 
   /** 打印留痕：真实实现走三通道，这里只记一条日志 */
-  async logPrint(input: { doc_type: "weigh_order" | "quality_report" | "settlement_voucher"; doc_no: string; paper: "A4" | "dot241" | "thermal58"; printer_name: string; channel: "preview" | "pdf_silent" | "raw"; is_reprint: boolean; operator_id: number }): Promise<void> {
+  async logPrint(input: { doc_type: "weigh_order" | "quality_report" | "settlement_voucher"; doc_no: string; paper: PaperKind; printer_name: string; channel: PrintChannel; is_reprint: boolean; operator_id: number }): Promise<void> {
     await sleep(200);
     const now = localIso(new Date());
     printLogs.push({

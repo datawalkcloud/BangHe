@@ -6,7 +6,7 @@
  *  2. 全局快捷键集中在本文件注册，权限校验在命令层另做（05 §5 要求）
  *  3. 展示模式（F2）为覆盖层，真实实现是独立 Tauri 窗口，这里等价演示给农户核对
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -18,13 +18,11 @@ import { api } from "@/lib/api";
 import { useDeviceStore, useScaleTick } from "@/store/device";
 import { useSession } from "@/store/session";
 import { money, ton, weight } from "@/lib/format";
-import { ROLE } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -37,16 +35,7 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Choose } from "@/components/business/Choose";
+import { OperatorFooter } from "@/components/business/OperatorSwitch";
 import { DeviceStatusBar } from "@/components/business/DeviceStatusBar";
 import { GlobalSearch } from "@/components/business/GlobalSearch";
 import { Kbd } from "@/components/business/layout";
@@ -115,61 +104,6 @@ function Nav() {
   );
 }
 
-function OperatorFooter() {
-  const { data: staff = [] } = useQuery({ queryKey: ["staff"], queryFn: () => api.staff() });
-  const operator = useSession((s) => s.operator);
-  const setOperator = useSession((s) => s.setOperator);
-  const { state } = useSidebar();
-
-  const options = staff.filter((u) => u.is_active === 1).map((u) => ({
-    value: String(u.id),
-    label: `${u.display_name}·${ROLE[u.role]}`,
-  }));
-
-  if (state === "collapsed") {
-    return (
-      <SidebarFooter className="p-2">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="ghost" size="icon-sm" className="text-xs font-semibold">
-                {(operator?.display_name ?? "未").slice(0, 1)}
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>切换操作员</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {staff
-                .filter((u) => u.is_active === 1)
-                .map((u) => (
-                  <DropdownMenuItem key={u.id} onClick={() => setOperator(u)}>
-                    {u.display_name}
-                    <span className="ml-auto text-xs text-muted-foreground">{ROLE[u.role]}</span>
-                  </DropdownMenuItem>
-                ))}
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </SidebarFooter>
-    );
-  }
-
-  return (
-    <SidebarFooter className="gap-1 border-t">
-      <p className="text-xs text-muted-foreground">当前操作员（P0 先以身份切换代替口令登录）</p>
-      <Choose
-        aria-label="当前操作员"
-        size="sm"
-        value={String(operator?.id ?? "")}
-        onChange={(v) => setOperator(staff.find((u) => String(u.id) === v) ?? null)}
-        options={[{ value: "", label: "— 选择操作员 —" }, ...options]}
-      />
-    </SidebarFooter>
-  );
-}
-
 /** F2 展示模式：超大字号重量 + 今日金额，供农户在窗口外核对（05 §4） */
 function DisplayOverlay({ onExit }: { onExit: () => void }) {
   const scale = useDeviceStore((s) => s.scale);
@@ -214,7 +148,45 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [display, setDisplay] = useState(false);
   const navigate = useNavigate();
+  const demo = useSession((s) => s.demo);
   useScaleTick(220);
+
+  /**
+   * 空闲失效（02 §11 M10，具体时长由后端下发）。两条线各管一段：
+   *  - 本地时钟：机器睡了一觉回来，第一眼就该是登录页，不等下一次问后端；
+   *  - `auth_touch`：真正说了算的是 Rust 里的 last_seen，只有动过键盘/鼠标才算"有人在用"，
+   *    所以定时器本身不会把会话续下去。
+   */
+  const touched = useRef(false);
+  const lastBeatAt = useRef(Date.now());
+  useEffect(() => {
+    const mark = () => {
+      touched.current = true;
+    };
+    window.addEventListener("pointerdown", mark, true);
+    window.addEventListener("keydown", mark, true);
+    const timer = window.setInterval(() => {
+      const s = useSession.getState();
+      if (s.phase !== "in" || s.demo) return;
+      const ttl = (s.session?.idleTtlSecs ?? 0) * 1000;
+      if (ttl > 0 && Date.now() - lastBeatAt.current > ttl) {
+        s.expire("已超过约定时长无操作，请重新登录");
+        void navigate({ to: "/login" });
+        return;
+      }
+      if (!touched.current) return;
+      touched.current = false;
+      void s.beat().then((alive) => {
+        if (alive) lastBeatAt.current = Date.now();
+        else void navigate({ to: "/login" });
+      });
+    }, 60_000);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("pointerdown", mark, true);
+      window.removeEventListener("keydown", mark, true);
+    };
+  }, [navigate]);
 
   const toggleSidebar = useCallback(() => setCollapsed((c) => !c), []);
 
@@ -274,6 +246,12 @@ export function AppShell() {
           onOpenSearch={() => setSearchOpen(true)}
           onToggleDisplay={() => setDisplay((d) => !d)}
         />
+        {demo && (
+          <div className="border-b bg-warning/10 px-4 py-1.5 text-xs text-warning">
+            浏览器演示模式：没有原生通道，<b>口令不做校验</b>，数据全是模拟。真实登录、真库与外设都要用桌面版（
+            <span className="font-mono">npm run tauri dev</span>）。
+          </div>
+        )}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <Outlet />
         </div>

@@ -11,14 +11,14 @@ import { Link } from "@tanstack/react-router";
 import { KeyboardIcon, VolumeXIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDeviceStore } from "@/store/device";
-import { useSession } from "@/store/session";
+import { useActor, useSession } from "@/store/session";
 import { weight } from "@/lib/format";
 import { DEVICE_STATUS } from "@/lib/constants";
-import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dot } from "@/components/business/badges";
+import { operatorLabel } from "@/components/business/OperatorSwitch";
 import { cn } from "cn";
 import type { DeviceStatus } from "@/lib/constants";
 
@@ -69,7 +69,7 @@ export function DeviceStatusBar() {
   const printer = useDeviceStore((s) => s.printer);
   const mockOff = useDeviceStore((s) => s.mockOff);
   const setMockOff = useDeviceStore((s) => s.setMockOff);
-  const operator = useSession((s) => s.operator);
+  const actor = useActor();
   // 底栏这个开关与设备中心页的总开关改的是同一个 mockOff，得用同一个权限门禁，
   // 否则只在一处设限制等于没设
   const canManage = useSession((s) => s.can("device.manage"));
@@ -150,7 +150,7 @@ export function DeviceStatusBar() {
           </TooltipTrigger>
           <TooltipContent side="top">
             关掉后四类外设全部离线，用于验收"无外设也能手工完成一车闭环"（05 §10-1）
-            {!canManage && <p className="text-muted-foreground">改动需 device.manage（仅站长），在左侧栏底部切换操作员</p>}
+            {!canManage && <p className="text-muted-foreground">改动需 device.manage（仅站长）。当前账号不够，用左侧栏底部「换人」以站长口令重新登录</p>}
           </TooltipContent>
         </Tooltip>
         <Separator orientation="vertical" className="h-4" />
@@ -167,13 +167,8 @@ export function DeviceStatusBar() {
         <Separator orientation="vertical" className="h-4" />
         <span className="text-xs text-muted-foreground">
           当前操作员：
-          <span className="text-foreground">{operator ? `${operator.display_name}` : "未选择"}</span>
+          <span className="text-foreground">{actor ? operatorLabel(actor) : "—"}</span>
         </span>
-        {!operator && (
-          <Button size="xs" variant="outline" render={<Link to="/masters/$section" params={{ section: "staff" }} />}>
-            选择
-          </Button>
-        )}
       </span>
     </footer>
   );

@@ -19,9 +19,9 @@ import type { AppSetting, GrainVariety, PriceList, UserAccount, Warehouse } from
 import type { Grade, Role } from "@/lib/constants";
 import { GRADES, INDICATORS, ROLE } from "@/lib/constants";
 import { fromPercent, orDash, percent, price as fmtPrice, fromYuanPerTon, todayISO, weight } from "@/lib/format";
+import { needsPrintVerify, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import { useStaff, useVarieties, useWarehouses, usePrices, useSettings } from "@/hooks/useLookups";
-import { PERMISSIONS } from "@/store/session";
-import { useSession } from "@/store/session";
+import { PERMISSIONS, actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge } from "@/components/business/badges";
@@ -142,7 +142,6 @@ function varietyForm(v?: GrainVariety): VarietyForm {
 function VarietiesSection() {
   const { data: rows = [] } = useVarieties();
   const queryClient = useQueryClient();
-  const operator = useSession((s) => s.operator);
   const can = useSession((s) => s.can);
   const editable = can("setting.write");
 
@@ -154,7 +153,7 @@ function VarietiesSection() {
     mutationFn: () =>
       api.saveVariety({
         id: form.id ?? undefined,
-        operator_id: operator?.id ?? 0,
+        operator_id: actorId(),
         code: form.code.trim().toUpperCase(),
         name: form.name.trim(),
         category: form.category.trim(),
@@ -416,7 +415,7 @@ function PricesSection() {
   const { data: rows = [] } = usePrices();
   const { data: varieties = [] } = useVarieties();
   const queryClient = useQueryClient();
-  const operator = useSession((s) => s.operator);
+  const actor = useActor();
   const can = useSession((s) => s.can);
   const editable = can("price.edit");
   // 用 todayISO 而不是 toISOString().slice(0,10)：后者在 UTC+8 的早上八点前会返回昨天，“当前生效”就判错了
@@ -443,7 +442,7 @@ function PricesSection() {
     mutationFn: () =>
       api.savePrice({
         id: form.id ?? undefined,
-        operator_id: operator?.id ?? 0,
+        operator_id: actorId(),
         variety_id: Number(form.varietyId),
         grade: form.grade,
         price_fen_per_ton: fromYuanPerTon(form.yuanPerTon),
@@ -548,7 +547,7 @@ function PricesSection() {
       />
       {!editable && (
         <CallOut tone="neutral" title="当前岗位不能调价">
-          调价权限只给站长（`price.edit`）。你现在是 {operator ? operator.role : "未选择操作员"}，只能查看。
+          调价权限只给站长（`price.edit`）。你现在是 {actor ? actor.role : "—"}，只能查看。
         </CallOut>
       )}
       <DataTable
@@ -651,7 +650,6 @@ const SETTING_GROUP: Record<AppSetting["group"], string> = {
 function SettingsSection() {
   const { data: rows = [] } = useSettings();
   const can = useSession((s) => s.can);
-  const operator = useSession((s) => s.operator);
   const queryClient = useQueryClient();
   const editable = can("setting.write");
 
@@ -661,13 +659,24 @@ function SettingsSection() {
     return Array.from(map.entries());
   }, [rows]);
 
-  const save = useMutation({
-    mutationFn: (v: { key: string; value: string }) => api.saveSetting(v.key, v.value, operator?.id ?? 0),
-    onSuccess: () => {
+  const save = useMutation<{ rows: unknown; verify: PrintVerify | null }, Error, { key: string; value: string }>({
+    mutationFn: async (v) => {
+      // 只有"会把单据打到热敏机"的选项需要验一次，改联数这种不必拿设备状态卡用户
+      const verify = needsPrintVerify(v.key, v.value) ? await verifyReceiptPrinter() : null;
+      const rows = await api.saveSetting(v.key, v.value, actorId(), verify);
+      return { rows, verify };
+    },
+    onSuccess: ({ verify }, v) => {
       void queryClient.invalidateQueries({ queryKey: ["settings"] });
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
+      if (verify?.mode === "none") {
+        toast.warning(`${v.key} 已保存，但${verify.message}`);
+      } else if (verify) {
+        toast.success(`${v.key} 已保存（联机测试通过：${verify.message}）`);
+      }
     },
-    onError: () => toast.error("保存失败"),
+    // 门禁拒绝时必须把原因原样递到眼前，只说"保存失败"会让人以为软件坏了
+    onError: (e: Error) => toast.error(e.message),
   });
 
   if (!editable) {
@@ -771,7 +780,7 @@ interface StaffForm {
 function StaffSection() {
   const { data: rows = [] } = useStaff();
   const queryClient = useQueryClient();
-  const operator = useSession((s) => s.operator);
+  const actor = useActor();
   const can = useSession((s) => s.can);
   const editable = can("setting.write");
 
@@ -783,7 +792,7 @@ function StaffSection() {
     mutationFn: () =>
       api.saveStaff({
         id: form.id ?? undefined,
-        operator_id: operator?.id ?? 0,
+        operator_id: actorId(),
         username: form.username.trim(),
         display_name: form.display_name.trim(),
         role: form.role,
@@ -807,7 +816,7 @@ function StaffSection() {
       cell: (u) => (
         <span className="flex items-center gap-1.5">
           <span className="font-medium">{u.display_name}</span>
-          {operator?.id === u.id && <ToneBadge tone="info">当前值班</ToneBadge>}
+          {actor?.id === u.id && <ToneBadge tone="info">当前值班</ToneBadge>}
         </span>
       ),
       sortValue: (u) => u.display_name,
@@ -856,7 +865,7 @@ function StaffSection() {
   return (
     <div className="flex flex-col gap-3">
       <SectionBar
-        note="本版本没有口令登录，用「选择操作员」把身份写进所有留痕字段；P1 上登录后这套署名机制不变。"
+        note="身份来源已从「选择操作员」换成口令登录：制单 / 称重 / 化验 / 结算的留痕一律署名当前登录人，署名机制未变，只是拿人的入口换了。"
         action={
           <Button
             size="sm"

@@ -17,7 +17,7 @@ import { api } from "@/lib/api";
 import type { UserAccount, WeighOrder } from "@/mock/types";
 import { dateTime, fromKg, nowLocalISO, toKg, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
-import { useSession } from "@/store/session";
+import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
 import { WeightDisplay } from "@/components/business/WeightDisplay";
 import { NumField } from "@/components/business/NumField";
@@ -58,7 +58,6 @@ export function WeighPanel({
 }) {
   const scale = useDeviceStore((s) => s.scale);
   const setCamera = useDeviceStore((s) => s.setCamera);
-  const operator = useSession((s) => s.operator);
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
 
@@ -87,7 +86,7 @@ export function WeighPanel({
         weigh_type: args.weigh_type,
         weight_01kg: args.weight_01kg,
         source: args.source,
-        operator_id: operator!.id,
+        operator_id: actorId(),
         raw_frame: args.source === "scale" ? `=W${(args.weight_01kg / 10).toFixed(1)}kg ST` : undefined,
         has_photo: cameraOnline,
         tare_override: args.override ?? null,
@@ -116,10 +115,6 @@ export function WeighPanel({
   function submit(type: "gross" | "tare", value01kg: number, source: "scale" | "manual") {
     if (!order) {
       toast.error("尚未制单，无法捕获读数");
-      return;
-    }
-    if (!operator) {
-      toast.error("请先选择当前操作员");
       return;
     }
     if (!can("weigh.capture")) {

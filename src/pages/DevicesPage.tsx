@@ -23,17 +23,21 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { nativePrinter, toNativePaper, type NativePaper, type NativePrinterDevice, type NativePrinterStatus } from "@/lib/native";
+import { PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import type { DeviceConfig } from "@/mock/types";
-import type { DeviceKind } from "@/lib/constants";
-import { DEVICE_KIND, DEVICE_STATUS, ROLE, TONE_DOT } from "@/lib/constants";
+import type { DeviceKind, DeviceStatus, Tone } from "@/lib/constants";
+import { DEVICE_KIND, DEVICE_STATUS, ROLE, TONE_BOX, TONE_DOT, TONE_TEXT } from "@/lib/constants";
 import { orDash, weight } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
-import { useSession } from "@/store/session";
+import { actorId, useActor, useSession } from "@/store/session";
 import { useDeviceStore, useScaleTick } from "@/store/device";
 import { DeviceStatusLight, Dot, ToneBadge } from "@/components/business/badges";
+import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -42,15 +46,16 @@ import { cn } from "cn";
 /** 卡片的分组顺序：地磅排第一，它是现场最高频的故障源 */
 const KIND_ORDER: DeviceKind[] = ["scale", "idcard", "camera", "printer", "led", "cashbox", "signpad"];
 
-/** 每类设备在台账里最值得露一眼的寻址参数 */
-const PRIMARY_CFG_KEY: Partial<Record<DeviceKind, string>> = {
-  scale: "port",
-  idcard: "port",
-  camera: "host",
-  printer: "rawQueue",
-  led: "host",
-  cashbox: "port",
-  signpad: "vid",
+/** 每类设备在台账里最值得露一眼的寻址参数（按优先级取第一个存在的键） */
+const PRIMARY_CFG_KEY: Partial<Record<DeviceKind, string[]>> = {
+  scale: ["port"],
+  idcard: ["port"],
+  camera: ["host"],
+  // 热敏走 VID/PID 直写 usbprint.sys，针式走队列名，A4 走预览窗口
+  printer: ["vid", "rawQueue", "queue"],
+  led: ["host"],
+  cashbox: ["port"],
+  signpad: ["vid"],
 };
 
 const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
@@ -66,7 +71,7 @@ const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
 export function DevicesPage() {
   const queryClient = useQueryClient();
   const can = useSession((s) => s.can);
-  const operator = useSession((s) => s.operator);
+  const actor = useActor();
   const mockOff = useDeviceStore((s) => s.mockOff);
   const setMockOff = useDeviceStore((s) => s.setMockOff);
 
@@ -168,7 +173,7 @@ export function DevicesPage() {
               </Button>
             }
           >
-            {operator ? `「${operator.display_name} · ${ROLE[operator.role]}」` : "未选择操作员"}没有 device.manage（仅站长可启用/停用设备、切换 Mock、动总开关）。点卡片标题仍能联机测试、看状态与原始帧——排障不需要权限，改配置才需要。要动手请在左侧栏底部「当前操作员」切到站长。
+            {actor ? `「${actor.displayName} · ${ROLE[actor.role]}」` : "—"}没有 device.manage（仅站长可启用/停用设备、切换 Mock、动总开关）。点卡片标题仍能联机测试、看状态与原始帧——排障不需要权限，改配置才需要。要动手得用站长账号：换人走左侧栏底部「当前操作员」入口，切换需要口令。
           </CallOut>
         )}
 
@@ -220,10 +225,12 @@ export function DevicesPage() {
           <DeviceTable devices={devices} onSelect={(c) => setSelected(c)} />
         </section>
 
-        <CallOut className="mt-4" tone="info" title="配置写入与帧模板编辑尚未开放">
-          这里的开关只改「启用 / Mock」两个标志位。串口参数、帧模板、判稳阈值的写入要走
-          device_config.config_json 的完整校验（保存前必须联机测试通过，02 §M9），
-          该接口在 Rust 侧与通用帧解析器一并实现；上方「导出配置」给出的是可核对的完整快照。
+        <CallOut className="mt-4" tone="info" title="已开放：小票机配置写入；仍未开放：地磅串口参数与帧模板">
+          小票机（ESC/POS 直连）的 VID / PID / 纸宽在右侧面板「配置…」里改，
+          <span className="font-medium">保存前必须先联机测试通过</span>（02 §M9）：改任一字段旧的测试结果立即作废，
+          测不过就不写入；浏览器预览问不到设备时允许保存，但状态标成"未检测 · 未经真机验证"，不会伪装成在线。
+          串口参数、帧模板、判稳阈值的写入仍要走 device_config.config_json 的完整校验（保存前同样必须联机测试通过），
+          该接口随 Rust 侧通用帧解析器一并实现；上方「导出配置」给出的是可核对的完整快照。
         </CallOut>
         {mockCount > 0 && <p className="pb-2 text-xs text-muted-foreground">另有 {mockCount} 台设备处于 Mock 模式。</p>}
       </div>
@@ -341,14 +348,22 @@ function TestPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
         <DeviceStatusLight status={d.last_status} label={DEVICE_STATUS[d.last_status].label} />
       </div>
 
-      <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending || mockOff}>
-        {testing.isPending ? "正在握手…" : "联机测试"}
-      </Button>
+      <div className="flex flex-col gap-2">
+        {d.kind === "printer" && (d.driver === "escpos_usbprint" || d.driver === "raw_escpos") ? (
+          <p className="text-xs text-muted-foreground">
+            这台机的联机测试在下方小票机面板里，走真设备状态查询（<span className="font-mono">DLE EOT</span>），不用这里的模拟探测。
+          </p>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending || mockOff}>
+            {testing.isPending ? "正在握手…" : "联机测试"}
+          </Button>
+        )}
+      </div>
       {mockOff && <p className="text-xs text-muted-foreground">Mock 总开关关闭期间不做任何真实探测。</p>}
 
       {result && (
-        <div className={cn("flex flex-col gap-0.5 border p-2 text-xs", result.ok ? "border-success/40 bg-success-bg" : "border-destructive/40 bg-destructive/10")}>
-          <span className={cn("font-medium", result.ok ? "text-success" : "text-destructive")}>{result.ok ? "测试通过" : "测试失败"}</span>
+        <div className={cn("flex flex-col gap-0.5 border p-2 text-xs", TONE_BOX[result.ok ? "success" : "danger"])}>
+          <span className={cn("font-medium", TONE_TEXT[result.ok ? "success" : "danger"])}>{result.ok ? "测试通过" : "测试失败"}</span>
           <span className="text-muted-foreground">{result.message}</span>
           <span className="tnum text-muted-foreground">
             {result.at} · 耗时 {result.elapsedMs} ms
@@ -367,7 +382,7 @@ function TestPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
       {d.kind === "scale" && <ScalePanel mockOff={mockOff} />}
       {d.kind === "idcard" && <IdCardPanel mockOff={mockOff} />}
       {d.kind === "camera" && <CameraPanel />}
-      {d.kind === "printer" && <PrinterPanel mockOff={mockOff} />}
+      {d.kind === "printer" && <PrinterPanel key={d.code} d={d} mockOff={mockOff} />}
       {(d.kind === "led" || d.kind === "cashbox" || d.kind === "signpad") && (
         <CallOut tone="neutral" title="该外设为后续期实现">
           LED 播报、钱箱联动、签名板在 02 §M9 里标为 P2，首版不接线；这里保留卡片是为了现场清点硬件时知道有没有插对。
@@ -550,27 +565,437 @@ function CameraPanel() {
 
 /* ------------------------------------------------------------ 打印机 */
 
-function PrinterPanel({ mockOff }: { mockOff: boolean }) {
-  const printer = useDeviceStore((s) => s.printer);
+/** 一次联机探测的结论：状态灯 + 一句人话 + 实际设备名，工作台 store 与设备台账共用同一份 */
+interface LiveProbe {
+  status: DeviceStatus;
+  error: string | null;
+  name: string;
+  at: string;
+}
+
+/**
+ * 把设备回的状态翻成台账四态。口径只写这一次，卡片、面板、工作台不会出现三种说法。
+ *
+ * 关键是"只有类驱动状态字"这一档必须落在**未检测**而不是在线或故障：usbprint.sys 上
+ * `DLE EOT` 不回话很常见，而那位状态字的位定义各厂商不一致（本机实测纸是满的时它也置纸位），
+ * 拿它报绿是骗人，拿它报缺纸是冤枉现场——只能承认"设备在，但状态没问到可信的"。
+ */
+function liveOf(p: {
+  data?: { device: NativePrinterDevice; status: NativePrinterStatus };
+  error: unknown;
+  isError: boolean;
+}): LiveProbe | null {
+  const at = stamp();
+  if (p.isError) {
+    // 枚举不到或打不开设备：这台机此刻真的不在，不是"没测"
+    return { status: "offline", error: p.error instanceof Error ? p.error.message : String(p.error), name: "", at };
+  }
+  const s = p.data?.status;
+  if (!s) return null;
+  const name = p.data!.device.label;
+  if (!s.responding) {
+    return s.source === "ioctl"
+      ? { status: "unknown", error: null, name, at }
+      : { status: "offline", error: s.note || "设备未应答状态查询", name, at };
+  }
+  if (!s.online) return { status: "error", error: "打印机未联机（检查脱机键、上盖与纸卷）", name, at };
+  if (!s.paperAdequate) return { status: "error", error: "纸将尽或缺纸", name, at };
+  return { status: "online", error: null, name, at };
+}
+
+function PrinterPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
+  const queryClient = useQueryClient();
+  const setPrinter = useDeviceStore((s) => s.setPrinter);
+  const escpos = d.driver === "escpos_usbprint" || d.driver === "raw_escpos";
+  const paper = toNativePaper(d.config.paper == null ? "thermal80" : String(d.config.paper));
+  const [pickedPath, setPickedPath] = useState<string | null>(null);
+
+  const devices = useQuery({
+    queryKey: ["printer", "usbprint-devices"],
+    enabled: escpos && !mockOff,
+    retry: 0,
+    queryFn: async () => {
+      const r = await nativePrinter.list();
+      if (!r.available) throw new Error(r.error);
+      if (r.error) throw new Error(r.error);
+      return r.data ?? [];
+    },
+  });
+
+  // 台账里的 VID/PID 只代表"上次现场用的是哪台"，一切以枚举结果为准：
+  // 换 USB 口或换机后枚举可能不同，此时按实际枚举打，而不是瘫在一条旧配置上。
+  const known = useMemo(() => {
+    const vid = parseHex(d.config.vid);
+    const pid = parseHex(d.config.pid);
+    return vid !== null && pid !== null ? { vid, pid } : null;
+  }, [d.config.vid, d.config.pid]);
+
+  const list = devices.data ?? [];
+  let picked: NativePrinterDevice | null = list.length > 0 ? list[0] : null;
+  if (known !== null) {
+    picked = list.find((x) => x.vendorId === known.vid && x.productId === known.pid) ?? picked;
+  }
+  if (pickedPath !== null) {
+    picked = list.find((x) => x.devicePath === pickedPath) ?? picked;
+  }
+
+  const probe = useQuery({
+    queryKey: ["printer", "status", picked?.vendorId ?? null, picked?.productId ?? null],
+    enabled: escpos && !mockOff && picked !== null,
+    retry: 0,
+    queryFn: async () => {
+      const r = await nativePrinter.status({
+        vid: picked?.vendorId ?? undefined,
+        pid: picked?.productId ?? undefined,
+      });
+      if (!r.available) throw new Error(r.error);
+      if (r.error) throw new Error(r.error);
+      return r.data!;
+    },
+  });
+
+  // 探测结论：store 与台账都从这里取，不再各判一遍。
+  // 依赖只列 data/error/isError——react-query 每次渲染都返回新的 result 对象，
+  // 直接依赖 probe 会让 live 每次换身份，下面的回写 effect 就会无限触发。
+  const live = useMemo(
+    () => liveOf({ data: probe.data, error: probe.error, isError: probe.isError }),
+    [probe.data, probe.error, probe.isError],
+  );
+
+  const selfTest = useMutation({
+    mutationFn: async () => {
+      const r = await nativePrinter.selfTest({
+        vid: picked?.vendorId ?? undefined,
+        pid: picked?.productId ?? undefined,
+        paper,
+      });
+      if (!r.available) throw new Error(r.error);
+      if (r.error) throw new Error(r.error);
+      return r.data!;
+    },
+    onSuccess: (out) => {
+      if (out.ok) toast.success(`自检票已送出（${out.device} · ${out.elapsedMs} ms）`);
+      else toast.error(`自检失败：${out.error ?? "未知原因"}`);
+      void queryInvalidate();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  function queryInvalidate() {
+    // 打完票状态可能变化（缺纸、故障），把状态卡刷新一遍
+    return probe.refetch();
+  }
+
+  useEffect(() => {
+    if (!live) return;
+    setPrinter({ status: live.status, name: live.name, lastError: live.error });
+  }, [live, setPrinter]);
+
+  // 台账的状态灯读的是 last_status，而它只有安装时录入的值：不回写，真机明明在线应答，
+  // 卡片也会一直挂着"未检测"，现场读到的是"软件没认出这台机"。
+  const report = useMutation({
+    mutationFn: (p: LiveProbe) => api.reportDeviceProbe(d.code, p),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["devices"] }),
+    onError: (e: Error) => toast.error(`状态回写失败：${e.message}`),
+  });
+  useEffect(() => {
+    if (!live) return;
+    if (live.status === d.last_status && (live.error ?? null) === (d.last_error ?? null)) return;
+    report.mutate(live);
+  }, [live, d.last_status, d.last_error, report.mutate]);
+
+  /* ------------------------------------------- 配置写入：改任一项，上一次联机测试立即作废 */
+
+  const can = useSession((s) => s.can);
+  const [cfgOpen, setCfgOpen] = useState(false);
+  const [draft, setDraft] = useState({
+    vid: String(d.config.vid ?? ""),
+    pid: String(d.config.pid ?? ""),
+    paper,
+  });
+  const [verify, setVerify] = useState<PrintVerify | null>(null);
+
+  function editDraft(patch: Partial<typeof draft>) {
+    setDraft((x) => ({ ...x, ...patch }));
+    // 参数一变，之前的"测试通过"就不作数了：否则存进去的是从没验过的配置
+    setVerify(null);
+  }
+
+  const testDraft = useMutation({
+    mutationFn: () =>
+      verifyReceiptPrinter({
+        vid: parseHex(draft.vid) ?? undefined,
+        pid: parseHex(draft.pid) ?? undefined,
+        paper: draft.paper,
+      }),
+    onSuccess: (v) => {
+      setVerify(v);
+      if (v.mode === "device" && v.ok) toast.success(`联机测试通过：${v.message}`);
+      else if (v.mode === "device") toast.error(v.message);
+      else toast.warning(v.message);
+    },
+    onError: (e: Error) => setVerify({ mode: "device", ok: false, at: "", message: e.message }),
+  });
+
+  const saveCfg = useMutation({
+    mutationFn: () => {
+      if (!verify) throw new Error("请先联机测试：配置必须验证过才允许保存（02 §M9）");
+      if (verify.mode === "device" && !verify.ok) throw new Error(`联机测试未通过：${verify.message}`);
+      const paperKind = draft.paper === "p80" ? "thermal80" : "thermal58";
+      return api.updateDeviceConfig({
+        code: d.code,
+        operator_id: actorId(),
+        verify,
+        config: {
+          paper: paperKind,
+          cols: PAPER_COLS[draft.paper],
+          vid: draft.vid.trim(),
+          pid: draft.pid.trim(),
+        },
+      });
+    },
+    onSuccess: (saved) => {
+      void queryClient.invalidateQueries({ queryKey: ["devices"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      setCfgOpen(false);
+      toast.success(
+        saved.last_status === "online"
+          ? `${saved.name} 配置已保存并通过联机测试`
+          : `${saved.name} 配置已保存，但${saved.last_error ?? "未经真机验证"}`,
+      );
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  if (!escpos) {
+    return (
+      <div className="flex flex-col gap-2">
+        <SectionTitle>窗口预览通道（通道 A）</SectionTitle>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={mockOff}
+          onClick={() => {
+            toast.info("已调用系统打印对话框，请在其中确认打印机与纸型");
+            window.print();
+          }}
+        >
+          <PrinterIcon />
+          打开打印对话框
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          A4 与 241 针式仍走窗口预览：Tauri v2 没有静默打印 API，这条通道一定能用，但每单需人工点一次确认（04 文档 H4）。
+          热敏小票不走这条路——它由 ESC/POS 直写设备，不弹对话框。
+        </p>
+      </div>
+    );
+  }
+
+  const st = probe.data?.status;
+  // 配色跟着台账四态走：卡片是灰是绿，面板就是灰是绿，不会出现两处各说一套
+  const tone: Tone = live ? DEVICE_STATUS[live.status].tone : "neutral";
+  const headline = st?.responding
+    ? st.online
+      ? "设备在线并应答 ESC/POS"
+      : "设备在线但未联机"
+    : st?.source === "ioctl"
+      ? "设备已连接（仅类驱动应答，未回 ESC/POS 状态）"
+      : "设备未应答状态查询";
+
   return (
     <div className="flex flex-col gap-2">
-      <SectionTitle>打印测试页</SectionTitle>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={mockOff}
-        onClick={() => {
-          toast.info("已调用系统打印对话框，请在其中确认打印机与纸型");
-          window.print();
+      <SectionTitle extra={<span className="text-xs text-muted-foreground">ESC/POS 直写 usbprint.sys，不经打印队列</span>}>
+        小票机自检（{paper === "p80" ? "80mm / 48 列" : "58mm / 32 列"}）
+      </SectionTitle>
+
+      {devices.isPending && <p className="text-xs text-muted-foreground">正在枚举 usbprint 设备…</p>}
+      {devices.isError && (
+        <CallOut tone="danger" title="拿不到设备清单">
+          {(devices.error as Error).message}
+        </CallOut>
+      )}
+      {!devices.isPending && !devices.isError && list.length === 0 && (
+        <CallOut tone="warning" title="没有枚举到 usbprint 设备">
+          按顺序排查：打印机是否开机 → USB 线是否插到位 → 设备管理器里该设备是否显示为「USB 打印支持」。
+          若显示为厂商私有驱动，直写通道就用不了，需先在「站点参数」把这台机改回窗口预览通道。
+        </CallOut>
+      )}
+
+      {list.length > 0 && (
+        <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          直连设备（{list.length} 台）
+          <Choose
+            size="sm"
+            aria-label="小票机设备"
+            value={picked?.devicePath ?? ""}
+            onChange={setPickedPath}
+            options={list.map((x) => ({ value: x.devicePath, label: x.label }))}
+          />
+        </Label>
+      )}
+
+      {probe.isError && (
+        <CallOut tone="danger" title="状态查询失败">
+          {(probe.error as Error).message}
+        </CallOut>
+      )}
+      {st && (
+        <div className={cn("flex flex-col gap-1 border p-2 text-xs", TONE_BOX[tone])}>
+          <div className="flex items-center justify-between">
+            <span className={cn("font-medium", TONE_TEXT[tone])}>{headline}</span>
+            <Button size="xs" variant="ghost" onClick={() => void probe.refetch()} disabled={probe.isFetching}>
+              {probe.isFetching ? "查询中…" : "重查"}
+            </Button>
+          </div>
+          <InfoGrid
+            cols={2}
+            items={[
+              { label: "状态来源", value: <span className="tnum">{st.source}</span> },
+              // 没有 ESC/POS 应答时绝不替打印机断言纸量：类驱动状态字的纸位各厂商不一致
+              { label: "纸量", value: st.source === "escpos" ? (st.paperAdequate ? "充足" : "缺纸 / 将尽") : "未确认" },
+              { label: "原始状态字节", value: <span className="tnum">{st.rawByte === null ? "—" : `0x${st.rawByte.toString(16).toUpperCase().padStart(2, "0")}`}</span> },
+              { label: "类驱动状态字", value: <span className="tnum">{st.ioctl === null ? "—" : `0x${st.ioctl.toString(16).toUpperCase().padStart(8, "0")}`}</span> },
+            ]}
+          />
+          {st.note && <span className="text-muted-foreground">{st.note}</span>}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" disabled={mockOff || picked === null || selfTest.isPending} onClick={() => selfTest.mutate()}>
+          <PrinterIcon />
+          {selfTest.isPending ? "正在送出…" : "打印自检票"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={mockOff || !can("device.manage")}
+          onClick={() => setCfgOpen(true)}
+        >
+          配置…
+        </Button>
+      </div>
+      {mockOff && <p className="text-xs text-muted-foreground">Mock 总开关关闭期间不允许写设备配置，也不做真实探测。</p>}
+      {!can("device.manage") && <p className="text-xs text-muted-foreground">改设备配置需要站长岗位（device.manage）；这里置灰是权限不足，不是设备问题。</p>}
+      {selfTest.data && (
+        <div className={cn("flex flex-col gap-0.5 border p-2 text-xs", TONE_BOX[selfTest.data.ok ? "success" : "danger"])}>
+          <span className={cn("font-medium", TONE_TEXT[selfTest.data.ok ? "success" : "danger"])}>
+            {selfTest.data.ok ? "已提交设备" : "打印失败"}
+          </span>
+          <span className="text-muted-foreground">
+            设备 {selfTest.data.device || "—"} · 目标 {picked?.label ?? "—"} · 纸宽 {paper === "p80" ? "80mm" : "58mm"}
+          </span>
+          <span className="tnum text-muted-foreground">耗时 {selfTest.data.elapsedMs} ms</span>
+          {selfTest.data.error && <span className="text-destructive">{selfTest.data.error}</span>}
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        自检票一次判读四件事：RAW 字节是否直达（通道）、中文是否清晰（内置 GBK 字库）、
+        那条分隔线是否折行（栅格列数）、末尾有没有切痕（切刀）。工装
+        <span className="font-mono"> tools/escpos-probe</span> 与这张票同源同码，两边打出来必然一致。
+      </p>
+
+      <Dialog
+        open={cfgOpen}
+        onOpenChange={(v) => {
+          setCfgOpen(v);
+          if (!v) setVerify(null);
         }}
       >
-        <PrinterIcon />
-        打印一页测试
-      </Button>
-      <p className="text-xs text-muted-foreground">
-        当前打印机：{printer.name || "未设置"}；{printer.lastError ? `最近错误：${printer.lastError}` : "无错误记录"}。
-        码单/质检单/结算凭证的真实打印在工作台与详情页，走窗口预览、PDF 静默、RAW 直连三通道之一。
-      </p>
+        <DialogContent className="max-w-[560px] gap-0 p-0">
+          <DialogHeader className="border-b px-4 py-3">
+            <DialogTitle className="text-sm">小票机配置 · {d.code}</DialogTitle>
+            <DialogDescription className="text-xs">
+              保存前必须先联机测试通过（02 §M9）。改动任意一项，上一次测试结果即刻作废——存进去的必须是刚验过的那套参数。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-3 px-4 py-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                VID（留空＝用枚举到的第一台）
+                <Input
+                  value={draft.vid}
+                  className="tnum h-8 font-mono text-sm"
+                  placeholder="0x0483"
+                  onChange={(e) => editDraft({ vid: e.target.value })}
+                />
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                PID
+                <Input
+                  value={draft.pid}
+                  className="tnum h-8 font-mono text-sm"
+                  placeholder="0x5720"
+                  onChange={(e) => editDraft({ pid: e.target.value })}
+                />
+              </Label>
+            </div>
+
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              纸宽
+              <Choose
+                size="sm"
+                aria-label="纸宽"
+                className="w-48"
+                value={draft.paper}
+                onChange={(v) => editDraft({ paper: v as NativePaper })}
+                options={[
+                  { value: "p80", label: `80mm（一行 ${PAPER_COLS.p80} 列）` },
+                  { value: "p58", label: `58mm（一行 ${PAPER_COLS.p58} 列）` },
+                ]}
+              />
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              栅格 {PAPER_COLS[draft.paper]} 列由纸宽决定，票面排版按这一列数分行；改错纸宽不会报错，只会把行打折。
+              本机 80mm 的 48 列是实机打一行分隔线验证过的。
+            </p>
+
+            <div
+              className={cn(
+                "border p-2 text-xs",
+                verify === null
+                  ? "border-dashed text-muted-foreground"
+                  : verify.mode === "device" && !verify.ok
+                    ? "border-destructive/40 bg-destructive/10"
+                    : "border-success/40 bg-success-bg",
+              )}
+            >
+              {verify === null ? (
+                <>尚未测试。点「联机测试」问一次设备状态（只发状态查询，不出纸）。</>
+              ) : (
+                <>
+                  <span className="font-medium">
+                    {verify.mode === "none" ? "未经真机验证" : verify.ok ? "联机测试通过" : "联机测试未通过"}
+                  </span>
+                  <span className="ml-1">{verify.message}</span>
+                  {verify.mode === "none" && (
+                    <p className="mt-1 text-muted-foreground">
+                      这样保存的配置会标成"未检测"，等桌面端验过才转绿——不允许把没验过的配置显示成在线。
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="mx-0 flex items-center gap-2 border-t px-4 py-3 sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => testDraft.mutate()}
+              disabled={testDraft.isPending || saveCfg.isPending}
+            >
+              {testDraft.isPending ? "正在握手…" : "联机测试"}
+            </Button>
+            <Button
+              onClick={() => saveCfg.mutate()}
+              disabled={verify === null || (verify.mode === "device" && !verify.ok) || saveCfg.isPending}
+            >
+              {saveCfg.isPending ? "保存中…" : "保存配置"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -600,9 +1025,9 @@ function DeviceTable({ devices, onSelect }: { devices: DeviceConfig[]; onSelect:
         header: "关键参数",
         // 只展一个寻址参数：整排 JSON 铺进表格既读不动又把列宽撑到 1800px，完整配置在右侧面板看
         cell: (d) => {
-          const k = PRIMARY_CFG_KEY[d.kind];
-          const v = k ? d.config[k] : undefined;
-          return <span className="font-mono text-[11px] text-muted-foreground">{v === undefined ? "—" : `${k}=${v}`}</span>;
+          const keys = PRIMARY_CFG_KEY[d.kind] ?? [];
+          const k = keys.find((key) => d.config[key] !== undefined);
+          return <span className="font-mono text-[11px] text-muted-foreground">{k === undefined ? "—" : `${k}=${d.config[k]}`}</span>;
         },
       },
     ],

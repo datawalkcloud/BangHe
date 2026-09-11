@@ -1,11 +1,13 @@
 /**
- * 系统与审计（05 §3 `/system/$section`，四分区均为 P1，先把界面立起来）。
+ * 系统与审计（05 §3 `/system/$section`，五分区均为 P1，先把界面立起来）。
  *
  * 分区的存在理由各不相同：
  * - users：P0 没有口令，只能"选择操作员"，但署名机制必须现在就与 P1 一致（actor_id 不变）；
  * - audit：迎检第一张表。谁、什么时候、对哪张单、做了什么、谁授权的，五件事缺一不可；
  * - backup：把"留存年限 / 备份份数"这类硬指标做成页面可见的自查，而不是写在文档里没人看；
- * - shift：日结前得先知道还有什么没闭环，否则封账等于把窟窿埋进历史。
+ * - shift：日结前得先知道还有什么没闭环，否则封账等于把窟窿埋进历史；
+ * - appearance：显示模式与色板是**本机**偏好（磅房里每台屏的光照不一样），
+ *   所以它既不需要站长权限，也不写审计、不进站点参数——与上面四个分区正好相反。
  *
  * 与仓房分区同样的处理：没有接口的动作一律标只读并写明原因，绝不做只弹 toast 的假按钮。
  */
@@ -21,26 +23,28 @@ import { ROLE } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, shiftDay, todayISO, weight } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
 import { useHotkey } from "@/hooks/useHotkey";
-import { useSession } from "@/store/session";
-import { PERMISSIONS } from "@/store/session";
+import { PERMISSIONS, useActor, useSession } from "@/store/session";
 import { useSetting, useStaff, useStation } from "@/hooks/useLookups";
 import { StatCard } from "@/components/business/StatCard";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
+import { ThemeSettingsPanel } from "@/components/business/ThemeSettingsPanel";
+import { OperatorPanel } from "@/components/business/OperatorSwitch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "cn";
 
-export type SystemSection = "users" | "audit" | "backup" | "shift";
+export type SystemSection = "users" | "audit" | "backup" | "shift" | "appearance";
 
 const SECTIONS: { key: SystemSection; label: string; desc: string }[] = [
   { key: "users", label: "登录与权限", desc: "当前操作员与岗位可见范围" },
   { key: "audit", label: "操作审计", desc: "关键动作留痕，迎检必查" },
   { key: "backup", label: "备份与恢复", desc: "留存参数自查与体检" },
   { key: "shift", label: "日结交班", desc: "封账前的挂起清单" },
+  { key: "appearance", label: "外观与主题", desc: "显示模式与色板，只影响本机" },
 ];
 
 export function SystemPage({ section }: { section: SystemSection }) {
@@ -76,6 +80,7 @@ export function SystemPage({ section }: { section: SystemSection }) {
         {section === "audit" && <AuditSection />}
         {section === "backup" && <BackupSection />}
         {section === "shift" && <ShiftSection />}
+        {section === "appearance" && <ThemeSettingsPanel />}
       </div>
     </div>
   );
@@ -93,9 +98,9 @@ function permissionsOf(role: Role): string[] {
 
 function UsersSection() {
   const { data: staff = [] } = useStaff();
-  const operator = useSession((s) => s.operator);
-  const setOperator = useSession((s) => s.setOperator);
-  const active = staff.filter((u) => u.is_active === 1);
+  const actor = useActor();
+  // 空闲失效时长由后端随会话下发，这里只换算成分钟，不在前端抄一份常量
+  const idleMinutes = Math.round((useSession((s) => s.session?.idleTtlSecs) ?? 0) / 60);
 
   const columns = useMemo<Column<UserAccount>[]>(
     () => [
@@ -106,7 +111,7 @@ function UsersSection() {
           <span className="flex flex-wrap items-center gap-1.5">
             <span className="font-medium">{u.display_name}</span>
             <span className="tnum text-xs text-muted-foreground">{u.username}</span>
-            {operator?.id === u.id && <ToneBadge tone="info">当前</ToneBadge>}
+            {actor?.id === u.id && <ToneBadge tone="info">当前</ToneBadge>}
           </span>
         ),
         sortValue: (u) => u.display_name,
@@ -121,54 +126,41 @@ function UsersSection() {
         cell: (u) => (u.is_active === 1 ? <ToneBadge tone="success">在职</ToneBadge> : <ToneBadge tone="neutral">已停用</ToneBadge>),
       },
     ],
-    [operator?.id],
+    [actor?.id],
   );
 
   return (
     <div className="flex flex-col gap-3">
       <div className="grid items-start gap-3 lg:grid-cols-[22rem_minmax(0,1fr)]">
-        <section className="flex flex-col gap-2 border bg-card p-3">
-          <SectionTitle>切换当前操作员</SectionTitle>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            作业署名
-            <Choose
-              value={operator ? String(operator.id) : ""}
-              onChange={(v) => {
-                const next = active.find((u) => String(u.id) === v) ?? null;
-                setOperator(next);
-                toast.info(next ? `此后所有写操作记在「${next.display_name}」名下` : "已退出署名");
-              }}
-              options={[{ value: "", label: "（未署名，只能查询）" }, ...active.map((u) => ({ value: String(u.id), label: `${u.display_name} · ${ROLE[u.role]}` }))]}
-              aria-label="当前操作员"
-            />
-          </Label>
-          {operator ? (
+        <section className="flex flex-col gap-3 border bg-card p-3">
+          <OperatorPanel />
+          {actor && (
             <div className="flex flex-col gap-1 text-xs">
               <p className="text-muted-foreground">
-                岗位 <span className="text-foreground">{ROLE[operator.role]}</span>，可见 {permissionsOf(operator.role).length} 项写操作。
+                岗位 <span className="text-foreground">{ROLE[actor.role]}</span>，可见 {permissionsOf(actor.role).length} 项写操作。
               </p>
               <p className="flex flex-wrap gap-1">
-                {permissionsOf(operator.role).map((p) => (
+                {permissionsOf(actor.role).map((p) => (
                   <span key={p} className="border bg-muted/40 px-1 font-mono text-[10px] text-muted-foreground">
                     {p}
                   </span>
                 ))}
               </p>
             </div>
-          ) : (
-            <p className="text-xs text-destructive">未署名时所有写操作按钮都会被禁用。</p>
           )}
         </section>
 
-        <CallOut tone="warning" title="P0 阶段没有口令，换人只要点一下下拉框">
-          这不是可以上线的状态。它的唯一目的是在没有登录模块时让"署名"这条链路先跑通：
-          写操作一律携带 operator_id，审计与报表按它归人。P1 上口令后 actor_id 机制完全不变（05 §3 末），
-          所以这里的界面与数据结构都不会浪费。口令重置、账号新增在
+        <CallOut title="口令与会话都在本机校验，问不到会话就当作没登录">
+          登录、设口令、重置与授权全部走桌面端的 <span className="font-mono">auth.rs</span>：
+          argon2id 校验、连错若干次临时锁定并在登录页倒计时、无操作
+          <span className="tnum"> {idleMinutes} </span>
+          分钟后需重新登录；会话只存内存，重启程序必须重登。未登录进不了任何业务页，
+          写操作的署名由这个会话给出，而不是前端传进来的 id。新增账号与重置他人口令在
           <Link to="/masters/$section" params={{ section: "staff" }} className="underline">
             {" "}
             基础档案 → 员工与岗位
           </Link>
-          ；改口令需要 device.manage 之外的独立授权接口，当前未提供。
+          （仅站长）。浏览器预览没有原生通道，属演示模式：只认在职名单、不校验口令。
         </CallOut>
       </div>
 
@@ -203,6 +195,7 @@ const AUDIT_ACTION: Record<string, string> = {
   "price.create": "新增价目",
   "price.update": "调价",
   "setting.update": "改站点参数",
+  "device.update": "改设备配置",
   "staff.create": "新增员工",
   "staff.update": "修改员工",
 };
@@ -221,6 +214,7 @@ const AUDIT_ENTITY: Record<string, string> = {
   grain_variety: "品种",
   price_list: "价目",
   app_setting: "站点参数",
+  device_config: "设备配置",
   user_account: "员工",
 };
 

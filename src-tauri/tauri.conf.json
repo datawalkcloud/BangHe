@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "banghe",
+  "productName": "邦禾粮站收粮系统",
+  "mainBinaryName": "banghe",
   "version": "0.1.0",
   "identifier": "cn.datawalk.bh",
   "build": {
@@ -12,9 +13,13 @@
   "app": {
     "windows": [
       {
-        "title": "banghe",
-        "width": 800,
-        "height": 600
+        "title": "邦禾粮站收粮系统",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1280,
+        "minHeight": 760,
+        "resizable": true,
+        "maximized": true
       }
     ],
     "security": {
@@ -23,13 +28,37 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "邦禾",
+    "copyright": "© 邦禾",
+    "category": "Business",
+    "shortDescription": "粮站收粮过磅管理系统",
+    "longDescription": "单机版粮站收粮过磅：制单、称重、化验、计价结算、付款、台账报表与小票打印，全部离线可用。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      },
+      "wix": {
+        "language": ["zh-CN"]
+      },
+      "nsis": {
+        "template": null,
+        "headerImage": null,
+        "sidebarImage": null,
+        "installerIcon": "icons/icon.ico",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }
