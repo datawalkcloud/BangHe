@@ -3,7 +3,7 @@
  *
  * 这里只是 **Rust 会话的一份投影**：谁是当前操作员、他的岗位是什么、能不能做某事，
  * 真相在 `src-tauri/src/auth.rs` 里的那个 `Option<Session>`。前端这份丢了刷新一下
- * 就能用 `restore()` 拿回来（WebView 刷新、HMR 都不必重打口令）。
+ * 就能用 `restore()` 拿回来（WebView 刷新、HMR 都不必重打密码）。
  *
  * 两条不能弯的：
  *  1. 未登录拿不到署名。`actorId()` 在没有会话时**抛错**而不是回 0——
@@ -34,6 +34,8 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "reprint": ["station_master"],
   "setting.write": ["station_master"],
   "data.export": ["station_master", "cashier", "viewer", "keeper"],
+  "backup.manage": ["station_master", "cashier"],
+  "backup.restore": ["station_master"],
   "device.manage": ["station_master"],
 };
 
@@ -42,12 +44,12 @@ type Phase =
   | "checking"
   /** 未登录 / 会话已过期 */
   | "out"
-  /** 有会话，但可能仍被要求先设口令 */
+  /** 有会话，但可能仍被要求先设密码 */
   | "in";
 
 interface SessionState {
   phase: Phase;
-  /** 浏览器预览：口令不校验，界面必须显式挂横幅 */
+  /** 浏览器预览：密码不校验，界面必须显式挂横幅 */
   demo: boolean;
   session: AuthSession | null;
   /** 上一次动作的回执文案（登录失败原因、锁定倒计时等），由登录页消费后清空 */
@@ -87,7 +89,7 @@ export const useSession = create<SessionState>((set, get) => ({
       booted = (async () => {
         const r = await auth.restore();
         if (r.channel === "native" && r.error) {
-          // 问不到会话就当没登录：宁可多要一次口令，也不猜一个身份出来
+          // 问不到会话就当没登录：宁可多要一次密码，也不猜一个身份出来
           set({ phase: "out", session: null, demo: false, notice: r.error });
           return;
         }
@@ -143,7 +145,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setPassword: async (old, fresh) => {
     const r = await auth.setPassword(old, fresh);
-    const outcome: ActionOutcome = r.data ?? { ok: false, error: r.error ?? "设置口令未完成" };
+    const outcome: ActionOutcome = r.data ?? { ok: false, error: r.error ?? "设置密码未完成" };
     if (outcome.ok) {
       const s = get().session;
       if (s) set({ session: { ...s, actor: { ...s.actor, mustChangePwd: false } } });

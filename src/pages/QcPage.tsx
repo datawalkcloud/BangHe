@@ -22,6 +22,7 @@ import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { QcDecisionBadge, ToneBadge } from "@/components/business/badges";
 import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
+import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -78,9 +79,9 @@ export function QcPage() {
         key: "order_no",
         header: "磅单号",
         cell: (q) => (
-          <Link to="/orders/$orderNo" params={{ orderNo: q.order_no }} className="tnum underline underline-offset-2">
+          <QuickDetailLink type="order" id={q.order_no} className="tnum font-medium text-primary">
             {q.order_no}
-          </Link>
+          </QuickDetailLink>
         ),
       },
       { key: "sample_no", header: "样品号", cell: (q) => <span className="tnum text-xs">{q.sample_no}</span> },

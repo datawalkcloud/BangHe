@@ -1,9 +1,18 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod idcard;
 mod printer;
 
 pub mod auth;
+pub mod dashboard;
 pub mod db;
 pub mod domain;
+pub mod ledger;
+pub mod masters;
+pub mod orders;
+pub mod prefs;
+pub mod reports;
+pub mod settlements;
+pub mod system;
 
 use tauri::Manager;
 
@@ -66,7 +75,59 @@ pub fn run() {
             auth::auth_logout,
             auth::auth_change_password,
             auth::auth_reset_password,
-            auth::auth_verify_supervisor
+            auth::auth_verify_supervisor,
+            masters::master_station,
+            masters::master_varieties,
+            masters::master_warehouses,
+            masters::master_slots,
+            masters::master_prices,
+            masters::master_staff,
+            masters::master_save_variety,
+            masters::master_save_warehouse,
+            masters::master_save_slot,
+            masters::master_save_price,
+            masters::master_save_staff,
+            masters::master_settings,
+            masters::master_save_setting,
+            dashboard::dashboard_data,
+            orders::party_list,
+            orders::party_get,
+            orders::party_save,
+            orders::order_get,
+            orders::order_open,
+            orders::order_list,
+            orders::order_create,
+            orders::order_capture,
+            orders::qc_save,
+            orders::qc_list,
+            orders::order_settle,
+            orders::print_log_add,
+            orders::order_void,
+            orders::settlement_of_order,
+            reports::report_daily,
+            reports::settlement_list,
+            ledger::report_ledger,
+            ledger::report_quality,
+            ledger::report_parties,
+            ledger::report_staff,
+            settlements::settlement_get,
+            settlements::settlement_pending,
+            settlements::settlement_credits,
+            settlements::payment_add,
+            idcard::idcard_status,
+            idcard::idcard_read,
+            idcard::ic_read,
+            system::audit_list,
+            system::backup_status,
+            system::backup_run,
+            system::backup_verify,
+            system::backup_reveal,
+            system::db_health,
+            system::restore_preflight,
+            system::restore_apply,
+            system::app_restart,
+            prefs::prefs_read,
+            prefs::prefs_write
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

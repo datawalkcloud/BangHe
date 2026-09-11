@@ -127,3 +127,67 @@ export const nativePrinter = {
   weighTicket: (ticket: ReceiptTicket) =>
     call<NativePrintOutcome>("print_weigh_ticket", { ticket }),
 };
+
+/* ------------------------------------------------------------------ *
+ * 身份证 / IC 卡读卡器（精伦 Routon iDR，走 routon-idr 封装）
+ * 与 Rust `idcard::{ReaderStatus, IdCardInfo, IcCardInfo, IcBlock}` 对齐（camelCase）。
+ * ------------------------------------------------------------------ */
+
+/** 读卡器连接状态 */
+export interface NativeReaderStatus {
+  connected: boolean;
+  samId: string | null;
+  fingerprint: boolean;
+  error: string | null;
+}
+
+/** 一张身份证的结构化信息（含可选照片绝对路径） */
+export interface NativeIdCardInfo {
+  ok: boolean;
+  name: string;
+  gender: string;
+  nation: string;
+  birth: string;
+  idNumber: string;
+  address: string;
+  agency: string;
+  validFrom: string;
+  validTo: string;
+  photoPath: string | null;
+  error: string | null;
+}
+
+/** 一个 Mifare 数据块 */
+export interface NativeIcBlock {
+  sector: number;
+  block: number;
+  ok: boolean;
+  hex: string;
+  error: string | null;
+}
+
+/** IC（Mifare）卡读取结果 */
+export interface NativeIcCardInfo {
+  ok: boolean;
+  kindCode: number;
+  kindLabel: string;
+  sn: string;
+  blocks: NativeIcBlock[];
+  error: string | null;
+}
+
+export const nativeIdcard = {
+  /** 读卡器是否在线 + SAM 号（设备中心状态灯） */
+  status: () => call<NativeReaderStatus>("idcard_status"),
+
+  /** 读身份证；withPhoto=true 时把照片写到应用缓存目录并回传绝对路径 */
+  read: (withPhoto = false) =>
+    call<NativeIdCardInfo>("idcard_read", { withPhoto }),
+
+  /** 读 Mifare IC 卡：卡号 + 指定块。keyHex 为 12 位十六进制，默认出厂 FFFFFFFFFFFF */
+  icRead: (opts?: { keyHex?: string; blocks?: [number, number][] }) =>
+    call<NativeIcCardInfo>("ic_read", {
+      keyHex: opts?.keyHex ?? null,
+      blocks: opts?.blocks ?? null,
+    }),
+};

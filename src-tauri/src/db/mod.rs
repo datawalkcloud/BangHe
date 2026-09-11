@@ -84,6 +84,13 @@ impl Db {
     }
 }
 
+/// 锁内执行一小段。命令侧把连接句柄 [`Db::shared`] 出来、在 `spawn_blocking` 里
+/// 分几段取锁时用（argon2 这类重活要在两次取锁之间跑，见 `crate::auth` 模块头）。
+pub fn locked<T>(pool: &Arc<Mutex<Connection>>, f: impl FnOnce(&Connection) -> T) -> T {
+    let conn = pool.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    f(&conn)
+}
+
 /// 打开（必要时创建）站点库并完成启动迁移。
 pub fn open_and_migrate(app_dir: &Path, app_version: &str) -> Result<(Db, Report), MigrateError> {
     std::fs::create_dir_all(app_dir)?;

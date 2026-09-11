@@ -22,9 +22,17 @@ import { ACCENT_THEMES, BASE_THEMES, type ThemePreset, type ThemeTokens } from "
 export type ThemeMode = "light" | "dark" | "system";
 
 /** accent 为 "default" 时只跟基础色板，不叠加主题色 */
+export type ThemeStyle = "vega" | "nova" | "maia" | "lyra" | "mira" | "luma" | "sera" | "rhea";
+export type RadiusStyle = "default" | "none";
+export type MenuStyle = "default" | "solid";
+
 export interface ThemePalette {
   base: string;
   accent: string;
+  style: ThemeStyle;
+  radius: RadiusStyle;
+  chart: string;
+  menu: MenuStyle;
 }
 
 /** next-themes 的 storageKey 必须用同一个值，改这里要同步改 App.tsx */
@@ -38,7 +46,28 @@ export const THEME_STYLE_ID = "banghe-theme";
  * 但仍提供深色——夜班与遮阳棚下更省力；跟随系统给两面班的人。
  */
 export const DEFAULT_MODE: ThemeMode = "light";
-export const DEFAULT_PALETTE: ThemePalette = { base: "neutral", accent: "default" };
+export const DEFAULT_PALETTE: ThemePalette = { base: "neutral", accent: "default", style: "maia", radius: "default", chart: "default", menu: "default" };
+
+export const THEME_STYLES: readonly { value: ThemeStyle; label: string; shadow: string; surface: string }[] = [
+  { value: "vega", label: "Vega", shadow: "0 1px 3px color-mix(in oklch, var(--foreground) 12%, transparent)", surface: "var(--card)" },
+  { value: "nova", label: "Nova", shadow: "0 0 0 1px color-mix(in oklch, var(--border) 72%, transparent)", surface: "color-mix(in oklch, var(--card) 94%, var(--background))" },
+  { value: "maia", label: "Maia", shadow: "none", surface: "transparent" },
+  { value: "lyra", label: "Lyra", shadow: "0 2px 5px color-mix(in oklch, var(--foreground) 10%, transparent)", surface: "var(--card)" },
+  { value: "mira", label: "Mira", shadow: "0 0 0 1px color-mix(in oklch, var(--primary) 22%, transparent)", surface: "var(--card)" },
+  { value: "luma", label: "Luma", shadow: "0 2px 8px color-mix(in oklch, var(--foreground) 9%, transparent)", surface: "color-mix(in oklch, var(--card) 90%, var(--background))" },
+  { value: "sera", label: "Sera", shadow: "0 0 0 1px color-mix(in oklch, var(--border) 50%, transparent)", surface: "var(--muted)" },
+  { value: "rhea", label: "Rhea", shadow: "0 3px 10px color-mix(in oklch, var(--foreground) 12%, transparent)", surface: "var(--card)" },
+];
+
+export const RADIUS_STYLES: readonly { value: RadiusStyle; label: string; hint: string; radius: string }[] = [
+  { value: "default", label: "默认", hint: "跟随组件样式", radius: "0.625rem" },
+  { value: "none", label: "无", hint: "直角边框", radius: "0" },
+];
+
+export const MENU_STYLES: readonly { value: MenuStyle; label: string }[] = [
+  { value: "default", label: "默认 / 实色" },
+  { value: "solid", label: "实色" },
+];
 
 export const THEME_MODES: readonly { value: ThemeMode; label: string; hint: string }[] = [
   { value: "light", label: "浅色", hint: "出厂默认，强光下最清楚" },
@@ -71,13 +100,26 @@ export function resolveTokens(p: ThemePalette): { light: ThemeTokens; dark: Them
 
 /** 是否等价于内置默认（默认时不注入任何样式，让 App.css 说话） */
 export function isDefaultPalette(p: ThemePalette): boolean {
-  return p.base === DEFAULT_PALETTE.base && p.accent === DEFAULT_PALETTE.accent;
+  return p.base === DEFAULT_PALETTE.base && p.accent === DEFAULT_PALETTE.accent && p.style === DEFAULT_PALETTE.style && p.radius === DEFAULT_PALETTE.radius && p.chart === DEFAULT_PALETTE.chart && p.menu === DEFAULT_PALETTE.menu;
 }
 
-function toDecls(tokens: ThemeTokens): string {
+export function resolveAppearanceVars(palette: ThemePalette): ThemeTokens {
+  const style = THEME_STYLES.find((item) => item.value === palette.style) ?? THEME_STYLES[0];
+  const radius = RADIUS_STYLES.find((item) => item.value === palette.radius) ?? RADIUS_STYLES[0];
+  return {
+    "component-shadow": style.shadow,
+    "component-surface": style.surface,
+    "radius": radius.radius,
+  };
+}
+
+function toDecls(tokens: ThemeTokens, palette: ThemePalette): string {
+  const chart = palette.chart === "default" ? null : findAccent(palette.chart).light;
+  const menu = palette.menu === "solid" ? [`  --sidebar-accent: var(--sidebar-primary);`, `  --sidebar-accent-foreground: var(--sidebar-primary-foreground);`, `  --sidebar-active-fg: var(--sidebar-primary-foreground);`] : [];
   return Object.entries(tokens)
     .filter(([k]) => k !== "radius")
     .map(([k, v]) => `  --${k}: ${v};`)
+    .concat(Object.entries(resolveAppearanceVars(palette)).map(([key, value]) => `  --${key}: ${value};`), ...menu, ...(chart ? [1, 2, 3, 4, 5].map((index) => `  --chart-color-${index}: ${chart[`chart-${index}`]};`) : []))
     .join("\n");
 }
 
@@ -94,7 +136,7 @@ function toDecls(tokens: ThemeTokens): string {
  */
 export function paletteToCss(p: ThemePalette, selectors: { root: string; dark: string } = { root: ":root", dark: ".dark" }): string {
   const { light, dark } = resolveTokens(p);
-  return `${selectors.root} {\n${toDecls(light)}\n}\n\n${selectors.dark} {\n${toDecls(dark)}\n}`;
+  return `${selectors.root} {\n${toDecls(light, p)}\n}\n\n${selectors.dark} {\n${toDecls(dark, p)}\n}`;
 }
 
 /** 注入专用：与样式插入顺序无关 */
@@ -167,7 +209,11 @@ export function readPalette(): ThemePalette {
     const base = typeof v.base === "string" && BASE_THEMES.some((t) => t.key === v.base) ? v.base : DEFAULT_PALETTE.base;
     const accent =
       typeof v.accent === "string" && ACCENT_COLOR_THEMES.some((t) => t.key === v.accent) ? v.accent : DEFAULT_PALETTE.accent;
-    return { base, accent };
+    const style = THEME_STYLES.some((item) => item.value === v.style) ? v.style! : DEFAULT_PALETTE.style;
+    const radius = RADIUS_STYLES.some((item) => item.value === v.radius) ? v.radius! : DEFAULT_PALETTE.radius;
+    const chart = typeof v.chart === "string" && ACCENT_COLOR_THEMES.some((item) => item.key === v.chart) ? v.chart : DEFAULT_PALETTE.chart;
+    const menu = v.menu === "solid" ? v.menu : DEFAULT_PALETTE.menu;
+    return { base, accent, style, radius, chart, menu };
   } catch {
     return { ...DEFAULT_PALETTE };
   }

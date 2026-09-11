@@ -22,7 +22,7 @@ import { Choose } from "@/components/business/Choose";
 import { QcDecisionBadge } from "@/components/business/badges";
 import { NumField, WeightField } from "@/components/business/NumField";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -150,7 +150,8 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
       qc.invalidateQueries({ queryKey: ["qc-list"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
-    onError: () => toast.error("保存化验失败，可重试；已录入内容不会丢"),
+    // 拒收理由、重复录入等闸门原因要原样送到化验员眼前
+    onError: (e: Error) => toast.error(`保存化验失败：${e.message || "可重试；已录入内容不会丢"}`),
   });
 
   const blocked = !order
@@ -168,27 +169,33 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
     else toast.error(blocked);
   });
 
+  /** 品种的国标基准可以是"尚未核定"（真库种子留空），此时不能渲染成一串破折号 */
+  const standards =
+    variety == null
+      ? "未选品种"
+      : variety.std_moisture_001pct == null && variety.std_impurity_001pct == null
+        ? `${variety.name} · 尚未核定国标基准（基础档案 › 品种与指标）`
+        : `${variety.name} · 基准 水分 ${percent(variety.std_moisture_001pct, "")}／杂质 ${percent(variety.std_impurity_001pct, "")}`;
+
   return (
-    <Card size="sm" className="min-w-0">
-      <CardHeader className="flex-row items-center justify-between border-b">
-        <CardTitle className="text-sm">④ 化验区</CardTitle>
-        <span className="text-xs text-muted-foreground">
-          {variety ? `${variety.name} · 基准 水分 ${percent(variety.std_moisture_001pct, "")}／杂质 ${percent(variety.std_impurity_001pct, "")}` : "未选品种"}
-        </span>
+    <Card size="sm" className="min-w-0 py-0 gap-0">
+      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
+        <CardTitle className="text-xs font-semibold">④ 化验区</CardTitle>
+        <CardAction className="self-center text-xs text-muted-foreground">{standards}</CardAction>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2.5">
-        <div className="grid grid-cols-2 gap-2">
+      <CardContent className="flex flex-col gap-1.5 p-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
           {metas.map((m) => {
             const cmp = m.unit === "text" ? { over: 0 as const, text: null } : compare(m, num01(m.code));
             if (m.unit === "text") {
               return (
-                <Label key={m.code} className="flex flex-col gap-1 text-xs text-muted-foreground">
+                <Label key={m.code} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
                   {m.name}
                   <Input
                     value={buf[m.code] ?? ""}
                     onChange={(e) => setBuf((b) => ({ ...b, [m.code]: e.target.value }))}
                     placeholder="正常 / 无异味"
-                    className="h-8 text-sm"
+                    className="h-8 text-xs"
                   />
                 </Label>
               );
@@ -196,7 +203,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             return (
               <NumField
                 key={m.code}
-                label={`${m.name}${m.std != null ? `（基准 ${m.unit === "gL" ? density(m.std) : percent(m.std, "")}）` : ""}`}
+                label={`${m.name}${m.std != null ? `(${m.unit === "gL" ? density(m.std) : percent(m.std, "")})` : ""}`}
                 text={buf[m.code] ?? ""}
                 onText={(t) => setBuf((b) => ({ ...b, [m.code]: t }))}
                 unit={m.unit === "gL" ? "g/L" : "%"}
@@ -208,12 +215,9 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             );
           })}
         </div>
-        <p className="text-xs text-muted-foreground">
-          箭头只做超基准提示，不自动换算扣量；水分/杂质增扣量的规则引擎本版本未实现（02 §F4.4）。
-        </p>
 
-        <div className="grid grid-cols-3 gap-2">
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             等级
             <Choose
               aria-label="等级"
@@ -222,7 +226,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
               options={[{ value: "", label: "未定级" }, ...GRADES.map((g) => ({ value: g, label: g }))]}
             />
           </Label>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             判定
             <Choose
               aria-label="判定"
@@ -231,7 +235,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
               options={(Object.keys(QC_DECISION) as QcDecision[]).map((k) => ({ value: k, label: QC_DECISION[k].label }))}
             />
           </Label>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             检测方法
             <Choose
               aria-label="检测方法"
@@ -240,20 +244,15 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
               options={(Object.keys(TEST_METHOD) as TestMethod[]).map((k) => ({ value: k, label: TEST_METHOD[k] }))}
             />
           </Label>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
           <WeightField
             label="扣水"
             value01kg={moistureDeduct || null}
             onChange={(v) => setMoistureDeduct(v ?? 0)}
-            hint="人工确定，可零"
           />
           <WeightField
             label="扣杂"
             value01kg={impurityDeduct || null}
             onChange={(v) => setImpurityDeduct(v ?? 0)}
-            hint="人工确定，可零"
           />
         </div>
 
@@ -261,7 +260,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
             拒收原因
             <Textarea
-              rows={2}
+              rows={1.5}
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               placeholder="如：霉变粒超标且气味异常，现场退粮"
@@ -270,13 +269,13 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
           </Label>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 border-t pt-2">
-          <Button size="sm" onClick={() => save.mutate()} disabled={!!blocked || save.isPending}>
+        <div className="flex flex-wrap items-center gap-1.5 border-t pt-1.5">
+          <Button size="sm" onClick={() => save.mutate()} disabled={!!blocked || save.isPending} className="h-8">
             保存化验（F5）
           </Button>
           {blocked && <span className="text-xs text-warning">{blocked}</span>}
           {existing && (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
               已有化验单 {existing.report_no}
               <QcDecisionBadge decision={existing.decision} />
               <span className="tnum">扣水 {weight(existing.moisture_deduct_01kg)}</span>
@@ -284,7 +283,6 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             </span>
           )}
         </div>
-        {existing && <p className="text-xs text-muted-foreground">再次保存将生成复检单，首检单保留备查。</p>}
       </CardContent>
     </Card>
   );

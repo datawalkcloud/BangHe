@@ -2,9 +2,13 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "display"],
   "permissions": [
     "core:default",
+    "core:window:allow-create",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
     "opener:default"
   ]
 }

@@ -31,7 +31,7 @@ type SettlePayStatus = "unpaid" | "partial" | "paid";
 export function SettlementsPage() {
   const navigate = useNavigate();
   const names = useStaffNames();
-  const allowCredit = useSetting("allow_credit").bool;
+  const allowCredit = useSetting("settlement_allow_part_pay").bool;
 
   const [status, setStatus] = useState<SettlePayStatus | "all">("all");
   const [kw, setKw] = useState("");

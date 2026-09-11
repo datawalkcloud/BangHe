@@ -232,6 +232,7 @@ dependencies = [
  "argon2",
  "chrono",
  "regex",
+ "routon-idr",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3069,6 +3070,12 @@ dependencies = [
  "wasm-streams",
  "web-sys",
 ]
+
+[[package]]
+name = "routon-idr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0371ff261d1987d4cc906e87ad65a6363a293699e99981f5400cca6a03961205"
 
 [[package]]
 name = "rsqlite-vfs"

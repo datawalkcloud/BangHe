@@ -8,7 +8,7 @@
  */
 import { useCallback, useMemo } from "react";
 import { useTheme } from "next-themes";
-import { DEFAULT_MODE, readMode, type ThemeMode } from "@/lib/theme";
+import { DEFAULT_MODE, readMode, type MenuStyle, type RadiusStyle, type ThemeMode, type ThemeStyle } from "@/lib/theme";
 import { usePaletteIsDefault, useThemeStore } from "@/store/theme";
 
 export interface ThemeConfig {
@@ -21,6 +21,14 @@ export interface ThemeConfig {
   accent: string;
   setBase: (id: string) => void;
   setAccent: (id: string) => void;
+  style: ThemeStyle;
+  setStyle: (style: ThemeStyle) => void;
+  radius: RadiusStyle;
+  setRadius: (style: RadiusStyle) => void;
+  chart: string;
+  setChart: (color: string) => void;
+  menu: MenuStyle;
+  setMenu: (style: MenuStyle) => void;
   /** 模式与色板一起回到出厂值 */
   reset: () => void;
   /** 是否完全等同默认主题（决定"重置"按钮灰不灰、以及"当前为默认"提示） */
@@ -37,6 +45,14 @@ export function useThemeConfig(): ThemeConfig {
   const accent = useThemeStore((s) => s.accent);
   const setBase = useThemeStore((s) => s.setBase);
   const setAccent = useThemeStore((s) => s.setAccent);
+  const style = useThemeStore((s) => s.style);
+  const setStyle = useThemeStore((s) => s.setStyle);
+  const radius = useThemeStore((s) => s.radius);
+  const setRadius = useThemeStore((s) => s.setRadius);
+  const chart = useThemeStore((s) => s.chart);
+  const setChart = useThemeStore((s) => s.setChart);
+  const menu = useThemeStore((s) => s.menu);
+  const setMenu = useThemeStore((s) => s.setMenu);
   const resetPalette = useThemeStore((s) => s.resetPalette);
   const paletteIsDefault = usePaletteIsDefault();
 
@@ -58,9 +74,17 @@ export function useThemeConfig(): ThemeConfig {
       accent,
       setBase,
       setAccent,
+      style,
+      setStyle,
+      radius,
+      setRadius,
+      chart,
+      setChart,
+      menu,
+      setMenu,
       reset,
       isDefault: mode === DEFAULT_MODE && paletteIsDefault,
     }),
-    [mode, resolvedMode, setMode, base, accent, setBase, setAccent, reset, paletteIsDefault],
+    [mode, resolvedMode, setMode, base, accent, setBase, setAccent, style, setStyle, radius, setRadius, chart, setChart, menu, setMenu, reset, paletteIsDefault],
   );
 }

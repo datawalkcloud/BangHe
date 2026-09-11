@@ -150,7 +150,7 @@ export function DeviceStatusBar() {
           </TooltipTrigger>
           <TooltipContent side="top">
             关掉后四类外设全部离线，用于验收"无外设也能手工完成一车闭环"（05 §10-1）
-            {!canManage && <p className="text-muted-foreground">改动需 device.manage（仅站长）。当前账号不够，用左侧栏底部「换人」以站长口令重新登录</p>}
+            {!canManage && <p className="text-muted-foreground">改动需 device.manage（仅站长）。当前账号不够，用左侧栏底部「换人」以站长密码重新登录</p>}
           </TooltipContent>
         </Tooltip>
         <Separator orientation="vertical" className="h-4" />

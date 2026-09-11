@@ -180,11 +180,11 @@ export const api = {
   },
 
   /* ---------------------------------------------------------- 售粮人 */
-  async listParties(keyword = "", type?: Party["party_type"]): Promise<Party[]> {
+  async listParties(keyword = "", type?: Party["party_type"] | "all"): Promise<Party[]> {
     await sleep();
     const kw = keyword.trim().toLowerCase();
     return parties.filter((p) => {
-      if (type && p.party_type !== type) return false;
+      if (type && type !== "all" && p.party_type !== type) return false;
       if (!kw) return true;
       return `${p.name} ${p.code} ${p.id_card_no} ${p.phone} ${p.default_vehicle_no ?? ""}`.toLowerCase().includes(kw);
     });
@@ -374,11 +374,11 @@ export const api = {
       code: input.code,
       name: input.name,
       category: input.category ?? "其他",
-      std_moisture_001pct: input.std_moisture_001pct ?? 1400,
-      std_impurity_001pct: input.std_impurity_001pct ?? 100,
-      std_unsound_001pct: input.std_unsound_001pct ?? 500,
-      std_bulk_density: input.std_bulk_density ?? 720,
-      reject_moisture_001pct: input.reject_moisture_001pct ?? 1800,
+      std_moisture_001pct: input.std_moisture_001pct ?? null,
+      std_impurity_001pct: input.std_impurity_001pct ?? null,
+      std_unsound_001pct: input.std_unsound_001pct ?? null,
+      std_bulk_density: input.std_bulk_density ?? null,
+      reject_moisture_001pct: input.reject_moisture_001pct ?? null,
       enabled_indicators: input.enabled_indicators ?? ["moisture", "impurity"],
       default_package_deduct_01kg: input.default_package_deduct_01kg ?? 0,
       sort_order: input.sort_order ?? varieties.length + 1,

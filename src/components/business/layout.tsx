@@ -18,9 +18,9 @@ export function PageHeader({
   tabs?: ReactNode;
 }) {
   return (
-    <div className="flex shrink-0 flex-col gap-2 border-b bg-background px-6">
+    <div className="flex shrink-0 flex-col gap-1 border-b bg-background px-3">
       {/* 用 min-h 而不是 h：窄窗口下标题与操作按钮会 flex-wrap 换行，固定高度会让溢出部分压到下方内容上 */}
-      <div className="flex min-h-14 flex-wrap items-center justify-between gap-2 py-1.5">
+      <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 py-1">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold">{title}</h1>
           {description && <p className="truncate text-xs text-muted-foreground">{description}</p>}

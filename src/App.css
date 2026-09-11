@@ -15,6 +15,7 @@
     --color-sidebar-accent: var(--sidebar-accent);
     --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
     --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-active-fg: var(--sidebar-active-fg);
     --color-sidebar-foreground: var(--sidebar-foreground);
     --color-sidebar: var(--sidebar);
     --color-chart-5: var(--chart-5);
@@ -74,12 +75,15 @@
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
     --radius: 0;
+    --component-shadow: none;
+    --component-surface: transparent;
     --sidebar: oklch(0.985 0 0);
     --sidebar-foreground: oklch(0.145 0 0);
     --sidebar-primary: oklch(0.205 0 0);
     --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent: oklch(0.90 0 0);
     --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-active-fg: var(--sidebar-primary);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
 }
@@ -114,6 +118,7 @@
     --sidebar-primary-foreground: oklch(0.985 0 0);
     --sidebar-accent: oklch(0.269 0 0);
     --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-active-fg: var(--sidebar-accent-foreground);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
 }
@@ -165,6 +170,18 @@
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
   }
+}
+
+button[data-slot="button"],
+input[data-slot="input"],
+textarea[data-slot="textarea"],
+[data-slot="tabs-trigger"] {
+  box-shadow: var(--component-shadow);
+}
+
+input[data-slot="input"],
+textarea[data-slot="textarea"] {
+  background-color: var(--component-surface);
 }
 
 /* 打印：仅保留打印容器内容，纸型与边距由具体模板覆盖 */

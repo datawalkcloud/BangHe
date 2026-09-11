@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { DisplayWindowApp } from "@/components/business/DisplayView";
 import { bootstrapTheme } from "@/lib/theme";
 
 /**
@@ -9,8 +10,8 @@ import { bootstrapTheme } from "@/lib/theme";
  */
 bootstrapTheme();
 
+const isDisplayWindow = new URLSearchParams(window.location.search).get("display") === "1";
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  <React.StrictMode>{isDisplayWindow ? <DisplayWindowApp /> : <App />}</React.StrictMode>,
 );

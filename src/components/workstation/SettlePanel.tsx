@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { GrainVariety, PriceList, QcReport, WeighOrder } from "@/mock/types";
 import type { PaymentMethod } from "@/lib/constants";
-import { PAYMENT_METHOD, TONE_DOT } from "@/lib/constants";
+import { PAYMENT_METHOD } from "@/lib/constants";
 import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
 import { actorId, useSession } from "@/store/session";
@@ -25,11 +25,10 @@ import { Choose } from "@/components/business/Choose";
 import { MoneyField, MoneyLine, PriceField, WeightField } from "@/components/business/NumField";
 import { PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "cn";
 
 /** 从价目表取现行价：先按品种+等级精确命中，命不中退回同品种最近生效的一条 */
 function lookupPrice(prices: PriceList[], varietyId: number, grade: string | null, date: string): PriceList | null {
@@ -137,7 +136,8 @@ export function SettlePanel({
       qcClient.invalidateQueries({ queryKey: ["dashboard"] });
       onPrint();
     },
-    onError: () => toast.error("结算失败，请重试；已录入内容不会丢"),
+    // 同称重：改价事由缺失、重复结算等闸门原因要原样送到磅员眼前
+    onError: (e: Error) => toast.error(`结算失败：${e.message || "请重试；已录入内容不会丢"}`),
   });
 
   const blocked = !order
@@ -172,20 +172,20 @@ export function SettlePanel({
     else toast.error(blocked);
   });
 
-  const photos = order?.photos ?? [];
-
   return (
-    <Card size="sm" className="min-w-0">
-      <CardHeader className="flex-row items-center justify-between border-b">
-        <CardTitle className="text-sm">⑤ 结算与打印</CardTitle>
-        {settled ? (
-          <ToneBadge tone="success">已结算</ToneBadge>
-        ) : (
-          <span className="text-xs text-muted-foreground">未结算，以下为重算预览</span>
-        )}
+    <Card size="sm" className="min-w-0 py-0 gap-0">
+      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
+        <CardTitle className="text-xs font-semibold">⑤ 结算与打印</CardTitle>
+        <CardAction className="self-center">
+          {settled ? (
+            <ToneBadge tone="success">已结算</ToneBadge>
+          ) : (
+            <span className="text-[11px] text-muted-foreground">未结算，以下为重算预览</span>
+          )}
+        </CardAction>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2.5">
-        <div className="flex flex-col gap-1">
+      <CardContent className="flex flex-col gap-1.5 p-2">
+        <div className="flex flex-col gap-0.5">
           <PriceField
             label="单价"
             valueFenPerTon={priceFenPerTon}
@@ -193,52 +193,52 @@ export function SettlePanel({
             disabled={settled}
             hint={deviates ? "已偏离价目表现行价" : undefined}
           />
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">
-              {listed ? `价目表：${listed.grade} · ${money(listed.price_fen_per_ton)}/吨 · 至 ${listed.effective_to}` : "价目表无现行价"}
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[11px] text-muted-foreground truncate">
+              {listed ? `价目表：${listed.grade} · ${money(listed.price_fen_per_ton)}/吨` : "价目表无现行价"}
             </span>
-            <Button size="xs" variant="outline" onClick={pickFromList} disabled={settled || !listed}>
+            <Button size="xs" variant="outline" onClick={pickFromList} disabled={settled || !listed} className="h-5 px-1.5 text-[10px] shrink-0">
               从价目带出（F6）
             </Button>
           </div>
           {deviates && (
-            <Label className="flex flex-col gap-1 text-xs text-warning">
+            <Label className="flex flex-col gap-0.5 text-xs text-warning">
               改价事由（迎检必查）
               <Input
                 value={overrideReason}
                 onChange={(e) => setOverrideReason(e.target.value)}
                 placeholder="如：水分超基准 1.2%，议价下调 40 元/吨"
-                className="h-8 border-warning/50 text-sm"
+                className="h-7 border-warning/50 text-xs"
                 disabled={settled}
               />
             </Label>
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-2 border-y py-2.5">
-          <WeightField label="袋重" value01kg={pkg || null} onChange={(v) => setPkg(v ?? 0)} disabled={settled} hint="含包装、绳网" />
-          <WeightField label="扣水" value01kg={moisture || null} onChange={(v) => setMoisture(v ?? 0)} disabled={settled} hint="化验员给定" />
+        <div className="grid grid-cols-2 gap-1 border-y py-1">
+          <WeightField label="袋重（含绳网）" value01kg={pkg || null} onChange={(v) => setPkg(v ?? 0)} disabled={settled} />
+          <WeightField label="扣水（化验）" value01kg={moisture || null} onChange={(v) => setMoisture(v ?? 0)} disabled={settled} />
           <WeightField label="扣杂" value01kg={impurity || null} onChange={(v) => setImpurity(v ?? 0)} disabled={settled} />
-          <WeightField label="其他扣" value01kg={other || null} onChange={(v) => setOther(v ?? 0)} disabled={settled} hint="如损耗、代扣" />
+          <WeightField label="其他扣" value01kg={other || null} onChange={(v) => setOther(v ?? 0)} disabled={settled} />
           <div className="col-span-2">
-            <MoneyField label="费用扣款" valueFen={feeFen} onChange={setFeeFen} disabled={settled} hint="卸车费、袋钱等，非重量扣" />
+            <MoneyField label="费用扣款（卸车费、袋钱等）" valueFen={feeFen} onChange={setFeeFen} disabled={settled} />
           </div>
         </div>
 
-        <div className="flex flex-col gap-1 bg-muted/25 p-2">
+        <div className="flex flex-col gap-0.5 bg-muted/25 p-1.5 text-xs">
           <div className="flex items-baseline justify-between">
-            <span className="text-xs text-muted-foreground">扣重合计</span>
-            <span className="tnum text-sm">{weight(settled ? order!.deduct_total_01kg : preview.deductTotal01kg)}</span>
+            <span className="text-muted-foreground">扣重合计</span>
+            <span className="tnum">{weight(settled ? order!.deduct_total_01kg : preview.deductTotal01kg)}</span>
           </div>
           <div className="flex items-baseline justify-between">
-            <span className="text-sm font-semibold">结算重量</span>
-            <span className="tnum text-xl font-bold">
+            <span className="font-semibold">结算重量</span>
+            <span className="tnum text-base font-bold">
               {weight(settled ? order!.settlement_weight_01kg : preview.settlementWeight01kg)}
+              <span className="ml-1 text-xs font-normal text-muted-foreground">
+                （{ton(settled ? order!.settlement_weight_01kg : preview.settlementWeight01kg)}）
+              </span>
             </span>
           </div>
-          <span className="tnum text-right text-xs text-muted-foreground">
-            {ton(settled ? order!.settlement_weight_01kg : preview.settlementWeight01kg)}
-          </span>
           <MoneyLine
             label="货款"
             valueFen={settled ? order!.goods_amount_fen : preview.goodsAmountFen}
@@ -254,9 +254,9 @@ export function SettlePanel({
         </div>
 
         {!settled && (
-          <div className="flex flex-col gap-2">
-            <div className="grid grid-cols-2 items-end gap-2">
-              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <div className="flex flex-col gap-1">
+            <div className="grid grid-cols-2 items-end gap-1.5">
+              <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
                 支付方式
                 <Choose
                   aria-label="支付方式"
@@ -268,14 +268,14 @@ export function SettlePanel({
                     .map((k) => ({ value: k, label: PAYMENT_METHOD[k] }))}
                 />
               </Label>
-              <div className="flex flex-col gap-1.5 pb-0.5">
-                <Label className="flex items-center gap-2 text-xs">
+              <div className="flex flex-col gap-1 pb-0.5 text-xs">
+                <Label className="flex items-center gap-1 text-xs">
                   <Checkbox checked={payNow} onCheckedChange={(v) => setPayNow(v === true)} disabled={!allowCredit} />
                   当场已付
                 </Label>
-                <Label className="flex items-center gap-2 text-xs">
+                <Label className="flex items-center gap-1 text-xs">
                   <Checkbox checked={signed} onCheckedChange={(v) => setSigned(v === true)} />
-                  售粮人已签字（纸质拍照）
+                  售粮人已签字
                 </Label>
               </div>
             </div>
@@ -286,45 +286,28 @@ export function SettlePanel({
           </div>
         )}
 
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1">
           <Button
-            size="lg"
+            size="default"
             onClick={() => (settled ? onPrint() : settle.mutate())}
             disabled={settled ? false : !!blocked || settle.isPending}
+            className="h-8 text-xs"
           >
             <PrinterIcon />
             {settled ? "打印码单（F9）" : "结算并打印码单（F10）"}
           </Button>
           {blocked && !settled && <p className="text-xs text-warning">{blocked}</p>}
           {settled && order && (
-            <div className="flex flex-wrap items-center gap-2 border-t pt-2 text-xs">
+            <div className="flex flex-wrap items-center gap-1 border-t pt-1 text-xs">
               <PaymentStatusBadge status={order.payment_status} />
               <span className="tnum text-muted-foreground">已付 {money(order.paid_amount_fen)}</span>
               {order.payable_amount_fen != null && order.payable_amount_fen - order.paid_amount_fen > 0 && (
                 <ToneBadge tone="warning">未付 {money(order.payable_amount_fen - order.paid_amount_fen)}</ToneBadge>
               )}
-              <span className="text-muted-foreground">付款走「结算中心 / 付款与挂账」</span>
             </div>
           )}
         </div>
 
-        <div className="border-t pt-2">
-          <p className="mb-1 text-xs text-muted-foreground">
-            抓拍：{photos.length > 0 ? `${photos.length} 张` : "无（摄像机离线或未触发，磅单将标「无抓拍」）"}
-          </p>
-          {photos.length > 0 && (
-            <div className="grid grid-cols-3 gap-1">
-              {photos.map((p) => (
-                <div key={p.id} className="flex flex-col gap-0.5">
-                  <div className={cn("flex h-12 items-end p-1 text-[10px] text-white/90", TONE_DOT[p.missing ? "danger" : "neutral"])}>
-                    {p.missing ? "缺失" : p.label}
-                  </div>
-                  <span className="tnum truncate text-[10px] text-muted-foreground">{p.captured_at.slice(5, 16).replace("T", " ")}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </CardContent>
     </Card>
   );

@@ -1,14 +1,14 @@
-//! 口令登录与会话（docs/design/02 §11 M10、05 §3 末尾、03 §9.4）
+//! 密码登录与会话（docs/design/02 §11 M10、05 §3 末尾、03 §9.4）
 //!
 //! 四条硬规矩，写在这里以免散到别处：
-//!  1. **口令校验只发生在 Rust 侧**。`password_hash` 永不进任何命令返回值——
+//!  1. **密码校验只发生在 Rust 侧**。`password_hash` 永不进任何命令返回值——
 //!     WebView 能按 F12 改前端状态，改不了这里。
 //!  2. **业务失败不抛异常**（照 [`printer`] 的约定）：回 `ok=false` + 一句人话原因。
 //!     登录失败在磅房是高频事件，弹栈没有意义，操作员也看不懂。
 //!  3. **耗时活在 [`spawn_blocking`](tauri::async_runtime::spawn_blocking) 里跑**，
 //!     并且一次校验分三段：锁内取数 → **锁外**算 argon2 → 锁内落结论。
 //!     argon2 单次 50–100 ms，持锁计算会让后面的业务命令在单连接上排队（03 §1.2）。
-//!  4. **文案不区分"用户不存在"与"口令错"**，且账号不存在时也照跑一次假哈希，
+//!  4. **文案不区分"用户不存在"与"密码错"**，且账号不存在时也照跑一次假哈希，
 //!     否则响应时间的快慢本身就能把在职登录名枚举出来。
 //!
 //! 会话寿命（2026-09-11 定）：**不设总时长上限，但空闲满 [`IDLE_TTL_SECS`] 即失效**；
@@ -26,7 +26,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::db::migrate::now_iso;
-use crate::db::Db;
+use crate::db::{locked, Db};
 
 /// 无操作多久后登录失效。业务上要"不退出就一直用"，但挡不住人离开磅房机后被接手，
 /// 折中成 1 小时空闲失效。做成设置项要新增 `app_setting` 键（牵动 03 §9.3.1 与 seed
@@ -52,28 +52,28 @@ fn lockout_active() -> bool {
     !LOCKOUT_DISABLED.load(Ordering::Relaxed)
 }
 
-/// 最短口令。磅房全键盘作业、操作员以年龄偏大的站长为主，不叠复杂度规则——
+/// 最短密码。磅房全键盘作业、操作员以年龄偏大的站长为主，不叠复杂度规则——
 /// 强行大写加符号只会换来贴在显示器边框上的便利贴。
 pub const PWD_MIN_LEN: usize = 6;
 
-/// 未设口令的标记值，与 `0002_seed.sql` 里 admin 的占位符逐字一致。
+/// 未设密码的标记值，与 `0002_seed.sql` 里 admin 的占位符逐字一致。
 /// 它**不是**合法的 argon2 串，所以直接翻库也看不出哪个账号能登进去。
 pub const PWD_UNSET: &str = "!set_on_first_run";
 
-/// 装机初始口令：**仅**对 `password_hash` 仍是 [`PWD_UNSET`] 的账号有效，
+/// 装机初始密码：**仅**对 `password_hash` 仍是 [`PWD_UNSET`] 的账号有效，
 /// 且登录后强制改密（见 [`conclude`] 里的 `must_change_pwd`），改完这条路即永久关闭。
 /// 于是"预留超管"与"新员工首次登录"共用一条规则，库里永远不需要写死哈希
 /// （`tests/schema_contract.rs` 断言种子哈希以 `!` 开头，正是为守住这点）。
 ///
-/// 风险要说清楚：初始口令在二进制里，`strings` 翻得出来，属于"保密即安全"。
-/// 收紧办法是把装机口令改成安装时随机生成、抄在装机单上的一次性值——
+/// 风险要说清楚：初始密码在二进制里，`strings` 翻得出来，属于"保密即安全"。
+/// 收紧办法是把装机密码改成安装时随机生成、抄在装机单上的一次性值——
 /// 改动只落在 [`bootstrap_password`] 这一处。
 pub fn bootstrap_password() -> &'static str {
     "banghe@2026"
 }
 
-/// 口令错与"用户不存在"逐字相同（规矩 4）。测试也引用这一份，避免文案分叉。
-pub const NO_DETAIL: &str = "用户名或口令不正确";
+/// 密码错与"用户不存在"逐字相同（规矩 4）。测试也引用这一份，避免文案分叉。
+pub const NO_DETAIL: &str = "用户名或密码不正确";
 
 /// `audit_log.entity`，03 §9.21：只插入，不暴露任何删改接口
 const AUDIT_ENTITY: &str = "user_account";
@@ -120,7 +120,7 @@ pub struct LoginOutcome {
     pub ok: bool,
     pub error: Option<String>,
     pub session: Option<Session>,
-    /// 该账号还是占位哈希 ⇒ 前端把界面切成"设置口令"
+    /// 该账号还是占位哈希 ⇒ 前端把界面切成"设置密码"
     pub needs_password_setup: Option<bool>,
     /// 剩余可试次数，作为独立数值下发，不拼进文案
     pub attempts_left: Option<i64>,
@@ -205,7 +205,7 @@ pub fn hash_password(plain: &str) -> Result<String, String> {
         // 随机盐由 password-hash 自己生成（getrandom 特征），不必手传
         .hash_password(plain.as_bytes())
         .map(|h| h.to_string())
-        .map_err(|e| format!("生成口令哈希失败：{e}"))
+        .map_err(|e| format!("生成密码哈希失败：{e}"))
 }
 
 /// 校验。存储值不是合法 PHC 串（例如仍是占位符）时回 `false` 而不是报错——
@@ -228,7 +228,7 @@ fn new_session_id() -> String {
 /// 解析库里的 ISO 8601 时间。
 ///
 /// 两处的失败方向**故意不同，别"统一"掉**：
-/// - 锁定时间解析失败 ⇒ 视为未锁定（放行到口令校验，后面还有 argon2 兜底）；
+/// - 锁定时间解析失败 ⇒ 视为未锁定（放行到密码校验，后面还有 argon2 兜底）；
 /// - 会话时间解析失败 ⇒ 视为已失效（宁可让磅员重登一次，也不发一个来源不明的会话）。
 fn parse_iso(value: &str) -> Option<DateTime<Local>> {
     DateTime::parse_from_rfc3339(value)
@@ -362,7 +362,7 @@ fn precheck(conn: &Connection, username: &str, kind: Kind, session_id: Option<&s
             if parse_iso(raw).map(|until| until > now).unwrap_or(false) {
                 // 锁定有效期内不再校验、也不再累加计数——否则一次锁定能被无限续期
                 return Pending::Done(LoginOutcome::denied_locked(
-                    format!("口令连错 {MAX_FAILED} 次，账号已锁定，请稍后再试"),
+                    format!("密码连错 {MAX_FAILED} 次，账号已锁定，请稍后再试"),
                     Some(raw.clone()),
                 ));
             }
@@ -403,7 +403,7 @@ fn conclude(
 ) -> LoginOutcome {
     let (account, is_unset) = match pending {
         Pending::Done(outcome) => return outcome,
-        // 账号不存在：结论与"口令错"逐字相同
+        // 账号不存在：结论与"密码错"逐字相同
         Pending::Burn => return LoginOutcome::denied(NO_DETAIL),
         Pending::Await { account, is_unset } => (account, is_unset),
     };
@@ -425,14 +425,14 @@ fn conclude(
         ) {
             return LoginOutcome::denied(format!("记录失败次数时出错：{e}"));
         }
-        audit(conn, Some(account.id), &account.display_name, kind.action(), Some(account.id), Some("口令不正确"), false, session_id);
+        audit(conn, Some(account.id), &account.display_name, kind.action(), Some(account.id), Some("密码不正确"), false, session_id);
         return LoginOutcome {
             error: Some(if locking {
-                format!("口令连错 {MAX_FAILED} 次，账号锁定 {LOCK_MINUTES} 分钟")
+                format!("密码连错 {MAX_FAILED} 次，账号锁定 {LOCK_MINUTES} 分钟")
             } else {
                 NO_DETAIL.to_string()
             }),
-            // 占位符账号即使口令错，也要让界面停在"设置口令"那一步
+            // 占位符账号即使密码错，也要让界面停在"设置密码"那一步
             needs_password_setup: if is_unset { Some(true) } else { None },
             attempts_left: Some((MAX_FAILED - failed).max(0)),
             locked_until: if locking { locked_until } else { None },
@@ -476,14 +476,14 @@ fn conclude(
         &actor.display_name,
         kind.action(),
         Some(actor.id),
-        if is_unset { Some("使用装机初始口令") } else { None },
+        if is_unset { Some("使用装机初始密码") } else { None },
         true,
         session.as_ref().map(|s| s.session_id.as_str()).or(session_id),
     );
 
     LoginOutcome {
         ok: true,
-        error: if is_unset { Some("该账号尚未设置口令，请先设置登录口令".to_string()) } else { None },
+        error: if is_unset { Some("该账号尚未设置密码，请先设置登录密码".to_string()) } else { None },
         session,
         needs_password_setup: Some(is_unset),
         attempts_left: Some(MAX_FAILED),
@@ -512,10 +512,10 @@ pub fn authenticate(conn: &Connection, username: &str, password: &str, kind: Kin
 
 pub fn change_password(conn: &Connection, actor: &AuthProfile, old: &str, new: &str) -> ActionOutcome {
     if new.chars().count() < PWD_MIN_LEN {
-        return ActionOutcome { ok: false, error: Some(format!("口令至少 {PWD_MIN_LEN} 位")) };
+        return ActionOutcome { ok: false, error: Some(format!("密码至少 {PWD_MIN_LEN} 位")) };
     }
     if new == PWD_UNSET || new == bootstrap_password() {
-        return ActionOutcome { ok: false, error: Some("不能沿用装机初始口令，请另设一个".into()) };
+        return ActionOutcome { ok: false, error: Some("不能沿用装机初始密码，请另设一个".into()) };
     }
     let stored: String = match conn.query_row(
         "SELECT password_hash FROM user_account WHERE id = ?1 AND deleted_at IS NULL",
@@ -531,7 +531,7 @@ pub fn change_password(conn: &Connection, actor: &AuthProfile, old: &str, new: &
         verify_password(old, &stored)
     };
     if !old_ok {
-        audit(conn, Some(actor.id), &actor.display_name, "password.change", Some(actor.id), Some("改密时原口令不正确"), false, None);
+        audit(conn, Some(actor.id), &actor.display_name, "password.change", Some(actor.id), Some("改密时原密码不正确"), false, None);
         return ActionOutcome { ok: false, error: Some(NO_DETAIL.to_string()) };
     }
     let hashed = match hash_password(new) {
@@ -546,16 +546,16 @@ pub fn change_password(conn: &Connection, actor: &AuthProfile, old: &str, new: &
             audit(conn, Some(actor.id), &actor.display_name, "password.change", Some(actor.id), None, true, None);
             ActionOutcome { ok: true, error: None }
         }
-        Err(e) => ActionOutcome { ok: false, error: Some(format!("写入口令失败：{e}")) },
+        Err(e) => ActionOutcome { ok: false, error: Some(format!("写入密码失败：{e}")) },
     }
 }
 
-/// 站长把某账号打回"待设口令"（现场两件事：员工忘口令、新账号首登）。
-/// 打回后该账号只能用装机初始口令进一次，且必须改密。
+/// 站长把某账号打回"待设密码"（现场两件事：员工忘密码、新账号首登）。
+/// 打回后该账号只能用装机初始密码进一次，且必须改密。
 pub fn reset_password(conn: &Connection, actor: &AuthProfile, target: i64) -> ActionOutcome {
     if actor.role != "station_master" {
-        audit(conn, Some(actor.id), &actor.display_name, "password.reset", Some(target), Some("非站长尝试重置口令"), false, None);
-        return ActionOutcome { ok: false, error: Some("只有站长可以重置他人口令".into()) };
+        audit(conn, Some(actor.id), &actor.display_name, "password.reset", Some(target), Some("非站长尝试重置密码"), false, None);
+        return ActionOutcome { ok: false, error: Some("只有站长可以重置他人密码".into()) };
     }
     let denied = |e: String| ActionOutcome { ok: false, error: Some(e) };
     let name: Option<String> = conn
@@ -574,7 +574,7 @@ pub fn reset_password(conn: &Connection, actor: &AuthProfile, target: i64) -> Ac
     ) {
         Ok(0) => denied("账号未发生改动".into()),
         Ok(_) => {
-            audit(conn, Some(actor.id), &actor.display_name, "password.reset", Some(target), Some(&format!("重置「{name}」口令为待设置")), true, None);
+            audit(conn, Some(actor.id), &actor.display_name, "password.reset", Some(target), Some(&format!("重置「{name}」密码为待设置")), true, None);
             ActionOutcome { ok: true, error: None }
         }
         Err(e) => denied(format!("重置失败：{e}")),
@@ -609,10 +609,12 @@ fn handles(app: &AppHandle) -> Result<(Arc<Mutex<Connection>>, Store), String> {
     Ok((database.shared(), auth.store()))
 }
 
-/// 锁内执行一小段（argon2 之类重活已经在锁外做完时用不到它）
-fn locked<T>(pool: &Arc<Mutex<Connection>>, f: impl FnOnce(&Connection) -> T) -> T {
-    let conn = pool.lock().unwrap_or_else(|p| p.into_inner());
-    f(&conn)
+/// 当前登录人，供其它命令模块在 Rust 侧判岗位（`masters` 的档案写入就用它）。
+/// 会话是**权限的最后一道闸**：前端的 `can()` 只管按钮显隐（05 §5），改不动这里。
+/// 已过空闲时限的会话同样在这里就地清掉，口径与 [`auth_session`] 一致。
+pub fn current_actor(app: &AppHandle) -> Option<AuthProfile> {
+    let store = app.try_state::<AuthState>()?.store();
+    live(&store).map(|session| session.actor)
 }
 
 #[tauri::command]
@@ -634,7 +636,7 @@ pub async fn auth_login(app: AppHandle, username: String, password: String) -> R
     Ok(outcome)
 }
 
-/// 取回当前会话：WebView 刷新/HMR 后 JS 状态全丢，靠这条恢复，不必重打口令。
+/// 取回当前会话：WebView 刷新/HMR 后 JS 状态全丢，靠这条恢复，不必重打密码。
 /// 已过空闲时限的会话在这里就地清掉。
 #[tauri::command]
 pub async fn auth_session(app: AppHandle) -> Result<Option<Session>, String> {
@@ -688,7 +690,7 @@ pub async fn auth_logout(app: AppHandle) -> Result<ActionOutcome, String> {
         .map_err(|e| format!("登出任务失败：{e}"))
 }
 
-/// 设置 / 修改自己的口令。`mustChangePwd` 的账号在改完之前拿不到业务权限（前端守卫负责挡）。
+/// 设置 / 修改自己的密码。`mustChangePwd` 的账号在改完之前拿不到业务权限（前端守卫负责挡）。
 #[tauri::command]
 pub async fn auth_change_password(app: AppHandle, old: String, new: String) -> Result<ActionOutcome, String> {
     let (pool, store) = handles(&app)?;
@@ -721,7 +723,7 @@ pub async fn auth_reset_password(app: AppHandle, target: i64) -> Result<ActionOu
 }
 
 /// 破坏性操作的站长授权（作废 / 红冲 / 补打 / 皮重越权，05 §10-7）。
-/// 只回答"这个口令是不是某个在职站长的"，**不发会话**，也不动最后登录时间。
+/// 只回答"这个密码是不是某个在职站长的"，**不发会话**，也不动最后登录时间。
 #[tauri::command]
 pub async fn auth_verify_supervisor(app: AppHandle, username: String, password: String) -> Result<ActionOutcome, String> {
     let (pool, store) = handles(&app)?;

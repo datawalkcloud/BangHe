@@ -70,11 +70,13 @@ export interface GrainVariety {
   code: string;
   name: string;
   category: string;
-  std_moisture_001pct: number;
-  std_impurity_001pct: number;
-  std_unsound_001pct: number;
-  std_bulk_density: number;
-  reject_moisture_001pct: number;
+  /** 五项国标基准在库里可空：种子刻意留 NULL 等现场按标准填（0002_seed 的口径）。
+   *  界面一律走 `percent()` / `density()`，没填显示"—"，不能显示成"规定就是 0.00%"。 */
+  std_moisture_001pct: number | null;
+  std_impurity_001pct: number | null;
+  std_unsound_001pct: number | null;
+  std_bulk_density: number | null;
+  reject_moisture_001pct: number | null;
   enabled_indicators: string[];
   default_package_deduct_01kg: number;
   sort_order: number;
@@ -85,8 +87,9 @@ export interface Warehouse {
   id: ID;
   code: string;
   name: string;
-  kind: "house" | "barn" | "shed" | "silo";
-  capacity_ton: number;
+  /** 类型与容量都可为 NULL（历史/手工建行），界面显示"—"，合计按 0 计 */
+  kind: "house" | "barn" | "shed" | "silo" | null;
+  capacity_ton: number | null;
   is_active: 0 | 1;
   slots: StorageSlot[];
 }
@@ -95,6 +98,7 @@ export interface StorageSlot {
   id: ID;
   warehouse_id: ID;
   code: string;
+  /** 库里 label 为空时后端回落成货位编码，界面拿到的永远是可显示的串 */
   label: string;
   is_active: 0 | 1;
 }
@@ -107,7 +111,8 @@ export interface PriceList {
   effective_from: string;
   effective_to: string;
   basis: string;
-  made_by: ID;
+  /** NULL 只可能是直接翻库留下的脏行 */
+  made_by: ID | null;
   approved_by: ID | null;
   remark: string | null;
 }
@@ -364,7 +369,7 @@ export interface AppSetting {
   key: string;
   value: string;
   label: string;
-  group: "doc" | "weigh" | "settle" | "print" | "retain";
+  group: "doc" | "weigh" | "settle" | "print" | "retain" | "other";
   kind: "text" | "number" | "bool" | "select";
   options?: { value: string; label: string }[];
   hint?: string;
@@ -431,6 +436,19 @@ export interface Dashboard {
   byVariety: { variety_code: string; variety_name: string; net_01kg: number; goods_fen: number }[];
   byPartyType: { type: PartyType; label: string; orders: number; net_01kg: number }[];
   hourCurve: { hour: number; orders: number }[];
+  /**
+   * 看板设备面板：桌面端来自真库 `device_config`（启用设备），与上方告警同源。
+   * 设备中心整模块换真库前，页面不再借道 `listDevices`（mock），
+   * 避免出现"面板一套设备、告警另一套"的分裂口径。
+   */
+  devices: {
+    code: string;
+    name: string;
+    kind: DeviceKind;
+    is_enabled: 0 | 1;
+    last_status: DeviceStatus;
+    last_error: string | null;
+  }[];
 }
 
 export interface DailyReport {

@@ -8,6 +8,7 @@
  * 这是 05 §10-1「无外设也要能完成闭环」的硬要求。
  */
 import { useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CreditCardIcon, SearchIcon, UserRoundPlusIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -18,10 +19,11 @@ import { maskIdCard, ton, validateIdCard, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
 import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
+import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -122,7 +124,8 @@ export function IdentityPanel({
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       onCreated(o.order_no);
     },
-    onError: () => toast.error("取号失败，请检查档案与品种是否齐全"),
+    // 真库闸门回的是人话（"该售粮人档案不存在或已删除，请先建档"），要原样送到磅员眼前
+    onError: (e: Error) => toast.error(`取号失败：${e.message || "请检查档案与品种是否齐全"}`),
   });
 
   const blocked = !can("order.create")
@@ -135,56 +138,58 @@ export function IdentityPanel({
           ? "该档案身份证号校验位不通过，请到农户档案更正"
           : null;
 
-  const slotPool = slots.filter((s) => draft.warehouseId == null || s.warehouse_id === draft.warehouseId);
+  /** 停用只挡住新单：制单下拉一律排除 is_active = 0 的档案，历史磅单上仍按当时快照显示 */
+  const activeVarieties = varieties.filter((v) => v.is_active !== 0);
+  const activeWarehouses = warehouses.filter((w) => w.is_active !== 0);
+  const activeSlots = slots.filter((s) => s.is_active !== 0);
+  const slotPool = activeSlots.filter((s) => draft.warehouseId == null || s.warehouse_id === draft.warehouseId);
 
   if (order) {
     return (
-      <Card size="sm">
-        <CardHeader className="border-b">
-          <CardTitle className="flex items-center gap-2 text-sm">
+      <Card size="sm" className="py-0 gap-0">
+        <CardHeader className="border-b py-1 px-2.5">
+          <CardTitle className="flex items-center gap-2 text-xs font-semibold">
             ① 身份与制单
             <OrderStatusBadge status={order.status} />
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-2.5">
+        <CardContent className="flex flex-col gap-1.5 p-2">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-base font-semibold">{order.party_name}</span>
+            <span className="text-sm font-semibold">{order.party_name}</span>
             <span className="tnum text-xs text-muted-foreground">{order.order_no}</span>
           </div>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
-            <dt className="text-xs text-muted-foreground">证号</dt>
-            <dd className="tnum">{maskIdCard(order.id_card_no)}</dd>
-            <dt className="text-xs text-muted-foreground">身份</dt>
-            <dd>{PARTY_TYPE[order.party_type]}</dd>
-            <dt className="text-xs text-muted-foreground">品种</dt>
-            <dd>
-              {order.variety_name}
-              {order.grade ? <span className="ml-1 text-xs text-muted-foreground">{order.grade}</span> : null}
-            </dd>
-            <dt className="text-xs text-muted-foreground">车牌</dt>
-            <dd className="tnum">{order.vehicle_no ?? "—"}</dd>
-            <dt className="text-xs text-muted-foreground">去向</dt>
-            <dd>
-              {order.warehouse_name ?? "—"}
-              {order.slot_label ? ` / ${order.slot_label}` : ""}
-            </dd>
-            <dt className="text-xs text-muted-foreground">制单</dt>
-            <dd className="text-xs text-muted-foreground">
-              {order.registered_at.slice(0, 16).replace("T", " ")}
-            </dd>
-          </dl>
-          {order.remark && <p className="border-t pt-2 text-xs text-muted-foreground">备注：{order.remark}</p>}
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Button size="sm" variant="outline" onClick={onNewOrder} disabled={!can("order.create")}>
+          <div className="flex flex-col gap-0.5 text-xs">
+            <p className="flex flex-wrap items-baseline gap-x-2.5">
+              <span className="text-muted-foreground">证号 <span className="tnum text-foreground">{maskIdCard(order.id_card_no)}</span></span>
+              <span className="text-muted-foreground">{PARTY_TYPE[order.party_type]}</span>
+            </p>
+            <p className="text-muted-foreground">
+              品种 <span className="text-foreground">{order.variety_name}</span>
+              {order.grade ? <span className="text-foreground">{order.grade}</span> : null}
+            </p>
+            <p className="text-muted-foreground">
+              车牌 <span className="tnum text-foreground">{order.vehicle_no ?? "—"}</span> · 去向{" "}
+              <span className="text-foreground">
+                {order.warehouse_name ?? "—"}
+                {order.slot_label ? ` / ${order.slot_label}` : ""}
+              </span>
+            </p>
+            <p className="text-muted-foreground">
+              制单 <span className="tnum text-foreground">{order.registered_at.slice(5, 16).replace("T", " ")}</span>
+            </p>
+          </div>
+          {order.remark && <p className="border-t pt-1 text-xs text-muted-foreground">备注：{order.remark}</p>}
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            <Button size="sm" variant="outline" onClick={onNewOrder} disabled={!can("order.create")} className="h-7 text-xs">
               <UserRoundPlusIcon />
               新建下一单（F7）
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setPickerOpen(true)}>
+            <Button size="sm" variant="outline" onClick={() => setPickerOpen(true)} className="h-7 text-xs">
               <CreditCardIcon />
               读卡换人（F8）
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">{ORDER_HINT[order.status]}</p>
+          <p className="text-[11px] text-muted-foreground">{ORDER_HINT[order.status]}</p>
         </CardContent>
 
         <PartyPicker
@@ -198,26 +203,23 @@ export function IdentityPanel({
   }
 
   return (
-    <Card size="sm">
-      <CardHeader className="border-b">
-        <CardTitle className="text-sm">① 身份与制单</CardTitle>
+    <Card size="sm" className="py-0 gap-0">
+      <CardHeader className="border-b py-1 px-2.5">
+        <CardTitle className="text-xs font-semibold">① 身份与制单</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={() => void read()} disabled={reading || !can("order.create")}>
+      <CardContent className="flex flex-col gap-1.5 p-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button size="sm" onClick={() => void read()} disabled={reading || !can("order.create")} className="h-7 text-xs">
             <CreditCardIcon />
             {reading ? "读卡中…" : "读卡（F8）"}
           </Button>
-          <Button size="sm" variant="outline" onClick={() => setPickerOpen(true)}>
+          <Button size="sm" variant="outline" onClick={() => setPickerOpen(true)} className="h-7 text-xs">
             <SearchIcon />
             搜档案
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">
-          {mockOff ? "读卡器已断开（Mock 关闭），请改用搜档案手工确定售粮人。" : "读卡后自动带出姓名、证号与默认车牌，焦点跳到品种。"}
-        </p>
 
-        <div className="border bg-muted/30 p-2">
+        <div className="border bg-muted/30 p-1.5">
           {draft.party ? (
             <div className="flex flex-col gap-0.5">
               <div className="flex items-baseline justify-between gap-2">
@@ -233,12 +235,12 @@ export function IdentityPanel({
               </span>
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">尚未确定售粮人</p>
+            <p className="text-xs text-muted-foreground">尚未确定售粮人（支持读卡或搜档案）</p>
           )}
         </div>
 
-        <div className="grid gap-2">
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        <div className="grid gap-1">
+          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             收购品种
             <Choose
               aria-label="收购品种"
@@ -247,21 +249,21 @@ export function IdentityPanel({
               onChange={(v) => onDraft({ varietyId: v ? Number(v) : null })}
               options={[
                 { value: "", label: "请选择…" },
-                ...varieties.map((v) => ({ value: String(v.id), label: v.name })),
+                ...activeVarieties.map((v) => ({ value: String(v.id), label: v.name })),
               ]}
             />
           </Label>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             车牌号
             <Input
               value={draft.vehicleNo}
               onChange={(e) => onDraft({ vehicleNo: e.target.value.toUpperCase() })}
               placeholder="如 豫A12345，农用车可留空"
-              className="h-8"
+              className="h-7 text-xs"
             />
           </Label>
-          <div className="grid grid-cols-2 gap-2">
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <div className="grid grid-cols-2 gap-1.5">
+            <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
               入库仓房
               <Choose
                 aria-label="仓房"
@@ -269,11 +271,11 @@ export function IdentityPanel({
                 onChange={(v) => onDraft({ warehouseId: v ? Number(v) : null, slotId: null })}
                 options={[
                   { value: "", label: "未定" },
-                  ...warehouses.map((w) => ({ value: String(w.id), label: w.name })),
+                  ...activeWarehouses.map((w) => ({ value: String(w.id), label: w.name })),
                 ]}
               />
             </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
               货位
               <Choose
                 aria-label="货位"
@@ -286,20 +288,20 @@ export function IdentityPanel({
               />
             </Label>
           </div>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             备注
             <Textarea
-              rows={2}
+              rows={1}
               value={draft.remark}
               onChange={(e) => onDraft({ remark: e.target.value })}
-              placeholder="如：带皮带、卸货慢、需复检"
-              className="min-h-0 text-sm"
+              placeholder="如：带皮带、需复检"
+              className="min-h-[28px] py-0.5 text-xs"
             />
           </Label>
         </div>
 
-        <div className="flex flex-col gap-1.5 border-t pt-2">
-          <Button size="sm" onClick={() => create.mutate()} disabled={!!blocked || create.isPending}>
+        <div className="flex flex-col gap-1 border-t pt-1">
+          <Button size="sm" onClick={() => create.mutate()} disabled={!!blocked || create.isPending} className="h-7 text-xs">
             取号并制单（F7）
           </Button>
           {blocked && <p className="text-xs text-warning">{blocked}</p>}
@@ -329,10 +331,12 @@ const ORDER_HINT: Record<WeighOrder["status"], string> = {
 };
 
 /**
- * ② 历史皮重。
+ * ② 皮重参考。
  *
  * 只做"显示 + 偏差警示"，绝不拿历史值去替代实测皮重（03 §4.2）；
  * 偏差超容差时整块转警示态，真正的授权拦截发生在称重捕获那一步。
+ * 磅员要的是"差多少、有没有超"，所以最近一次／均值／容差／偏差压成一行，
+ * 近 5 次明细以数字串保留在同一行内，完整历史看农户档案页。
  */
 export function TarePanel({
   recent,
@@ -341,6 +345,7 @@ export function TarePanel({
   tolerancePct,
   currentTare01kg,
   alert,
+  partyId,
 }: {
   recent: { date: string; tare_01kg: number; source: string }[];
   last01kg: number | null;
@@ -348,43 +353,45 @@ export function TarePanel({
   tolerancePct: number;
   currentTare01kg: number | null;
   alert: boolean;
+  partyId: number | null;
 }) {
   const diff = currentTare01kg != null && mean01kg != null ? currentTare01kg - mean01kg : null;
   return (
-    <Card size="sm" className={cn(alert && "ring-warning/60")}>
-      <CardHeader className="border-b">
-        <CardTitle className="flex items-center justify-between gap-2 text-sm">
-          ② 历史皮重
+    <Card size="sm" className={cn("py-0 gap-0", alert && "ring-warning/60")}>
+      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
+        <CardTitle className="text-xs font-semibold">② 皮重参考</CardTitle>
+        <CardAction className="self-center">
           {alert ? <ToneBadge tone="warning">偏差超容差</ToneBadge> : <ToneBadge tone="neutral">参考值</ToneBadge>}
-        </CardTitle>
+        </CardAction>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <div className="flex items-baseline justify-between">
-          <span className="text-xs text-muted-foreground">最近一次</span>
-          <span className="tnum text-lg font-semibold">{weight(last01kg)}</span>
-        </div>
-        <div className="flex items-baseline justify-between">
-          <span className="text-xs text-muted-foreground">近 5 次均值</span>
-          <span className="tnum text-lg">{mean01kg == null ? "—" : `${weight(mean01kg, false)}（${ton(mean01kg)}）`}</span>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          容差 ±{tolerancePct}%{diff != null ? ` · 当前偏差 ${diff > 0 ? "+" : ""}${weight(diff, false)}` : ""}
+      <CardContent className="flex flex-col gap-1 p-2">
+        <p className="flex flex-wrap items-baseline gap-x-2.5 text-xs">
+          <span className="text-muted-foreground">
+            最近一次 <span className="tnum text-sm font-semibold text-foreground">{weight(last01kg)}</span>
+          </span>
+          <span className="text-muted-foreground">
+            近 5 次均值{" "}
+            <span className="tnum text-sm">{mean01kg == null ? "—" : `${weight(mean01kg, false)}（${ton(mean01kg)}）`}</span>
+          </span>
+          <span className="text-muted-foreground">容差 ±{tolerancePct}%</span>
+          {diff != null && (
+            <span className={cn("tnum", alert ? "font-semibold text-warning" : "text-muted-foreground")}>
+              当前偏差 {diff > 0 ? "+" : ""}
+              {weight(diff, false)}
+            </span>
+          )}
         </p>
-        {recent.length > 0 ? (
-          <ul className="flex flex-col gap-0.5 border-t pt-1.5">
-            {recent.map((r, i) => (
-              <li key={i} className="flex items-baseline justify-between text-xs">
-                <span className="text-muted-foreground">{r.date}</span>
-                <span className={cn("tnum", r.source === "manual" && "text-warning")}>
-                  {weight(r.tare_01kg)}
-                  {r.source === "manual" && "（手录）"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="border-t pt-1.5 text-xs text-muted-foreground">暂无历史，首次过磅后自动累积。</p>
-        )}
+        <p className="text-xs text-muted-foreground">
+          {recent.length === 0
+            ? "暂无历史，首次过磅后自动累积。"
+            : `近 5 次 ${recent.map((r) => `${weight(r.tare_01kg, false)}${r.source === "manual" ? "手" : ""}`).join(" / ")} kg`}
+          {partyId != null && (
+            <QuickDetailLink type="party" id={partyId} className="ml-1 text-primary">
+              档案明细
+            </QuickDetailLink>
+          )}
+        </p>
+        {alert && <p className="text-xs text-warning">捕获皮重时会拦下要求站长授权；历史值只作参考，不替代实测。</p>}
       </CardContent>
     </Card>
   );

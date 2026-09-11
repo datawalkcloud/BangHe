@@ -4,7 +4,7 @@
  * 出纳每天两件事：把今天的付款流水核对一遍，以及把挂账催回来。
  * 所以这页把「流水」和「挂账」并排，而不是一层一层的标签页。
  *
- * 挂账逾期口径来自站点参数 payment_due_days（analytics 里同样用它算 due_date），
+ * 挂账逾期口径来自站点参数 payment_due_warn_hours（analytics 里同样用它算 due_date），
  * 界面不自己减天数，避免与报表口径不一致（02 §F5.4）。
  */
 import { useMemo, useState } from "react";
@@ -24,6 +24,7 @@ import { BarList, StatCard } from "@/components/business/StatCard";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
+import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,8 +33,9 @@ import { cn } from "cn";
 export function PaymentsPage() {
   const names = useStaffNames();
   const can = useSession((s) => s.can);
-  const dueDays = useSetting("payment_due_days").num;
-  const allowCredit = useSetting("allow_credit").bool;
+  /** 库里存小时（72 = 3 天），页面与 analytics 的 due_date 都按天算，除一次就够 */
+  const dueDays = useSetting("payment_due_warn_hours").num / 24;
+  const allowCredit = useSetting("settlement_allow_part_pay").bool;
 
   const [from, setFrom] = useState(shiftDay(todayISO(), -13));
   const [to, setTo] = useState(todayISO());
@@ -76,13 +78,13 @@ export function PaymentsPage() {
         header: "关联单据",
         cell: (p) =>
           p.settle_no ? (
-            <Link to="/settlements/$settleNo" params={{ settleNo: p.settle_no }} className="tnum underline underline-offset-2">
+            <QuickDetailLink type="settlement" id={p.settle_no} className="tnum font-medium text-primary">
               {p.settle_no}
-            </Link>
+            </QuickDetailLink>
           ) : p.order_no ? (
-            <Link to="/orders/$orderNo" params={{ orderNo: p.order_no }} className="tnum underline underline-offset-2">
+            <QuickDetailLink type="order" id={p.order_no} className="tnum font-medium text-primary">
               {p.order_no}
-            </Link>
+            </QuickDetailLink>
           ) : (
             "—"
           ),
@@ -194,13 +196,13 @@ export function PaymentsPage() {
                   <ul className="flex flex-col gap-2">
                     {credits.map((c) => (
                       <li key={c.settlement.settle_no} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                        <Link
-                          to="/settlements/$settleNo"
-                          params={{ settleNo: c.settlement.settle_no }}
-                          className="tnum font-medium underline underline-offset-2"
+                        <QuickDetailLink
+                          type="settlement"
+                          id={c.settlement.settle_no}
+                          className="tnum font-medium text-primary"
                         >
                           {c.settlement.settle_no}
-                        </Link>
+                        </QuickDetailLink>
                         <span className="text-xs text-muted-foreground">{c.settlement.payee_name}</span>
                         <span className="tnum">{money(c.unpaid_fen)}</span>
                         <span className="tnum text-xs text-muted-foreground">到期 {c.due_date}</span>

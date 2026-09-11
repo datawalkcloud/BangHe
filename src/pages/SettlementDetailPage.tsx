@@ -19,6 +19,7 @@ import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
+import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { MoneyLine } from "@/components/business/NumField";
 import { PrintPreview } from "@/components/print/PrintPreview";
 import { SettlementVoucherSheet } from "@/components/print/sheets";
@@ -76,7 +77,7 @@ export function SettlementDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       void queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
-    onError: () => toast.error("登记失败，请重试"),
+    onError: (e) => toast.error(e instanceof Error && e.message ? e.message : "登记失败，请重试"),
   });
 
   const amountFen = Math.round((Number(amountYuan) || 0) * 100);
@@ -122,9 +123,9 @@ export function SettlementDetailPage() {
       key: "order_no",
       header: "磅单号",
       cell: (o) => (
-        <Link to="/orders/$orderNo" params={{ orderNo: o.order_no }} className="tnum underline underline-offset-2">
+        <QuickDetailLink type="order" id={o.order_no} className="tnum font-medium text-primary">
           {o.order_no}
-        </Link>
+        </QuickDetailLink>
       ),
     },
     { key: "date", header: "业务日期", cell: (o) => <span className="tnum">{o.business_date}</span> },

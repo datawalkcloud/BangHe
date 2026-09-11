@@ -23,6 +23,7 @@ import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { StatCard } from "@/components/business/StatCard";
+import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "cn";
@@ -31,7 +32,7 @@ export function PartyDetailPage() {
   const { id } = useParams({ from: "/parties/$id" });
   const partyId = Number(id);
   const readCard = useDeviceStore((s) => s.idcard.read);
-  const tolerancePct = useSetting("tare_tolerance_ratio").num;
+  const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ["party", partyId],
@@ -89,9 +90,9 @@ export function PartyDetailPage() {
       key: "order_no",
       header: "磅单号",
       cell: (r) => (
-        <Link to="/orders/$orderNo" params={{ orderNo: r.order_no }} className="tnum underline underline-offset-2">
+        <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-primary">
           {r.order_no}
-        </Link>
+        </QuickDetailLink>
       ),
     },
     { key: "date", header: "业务日期", cell: (r) => <span className="tnum">{r.business_date}</span>, sortValue: (r) => r.business_date },

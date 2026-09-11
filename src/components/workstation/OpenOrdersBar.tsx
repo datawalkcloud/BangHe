@@ -33,11 +33,11 @@ export function OpenOrdersBar({
     .sort((a, b) => (a.registered_at < b.registered_at ? -1 : a.registered_at > b.registered_at ? 1 : 0));
 
   return (
-    <div className="flex shrink-0 items-stretch gap-2 border-t bg-muted/30 px-6 py-2">
+    <div className="flex shrink-0 items-stretch gap-1.5 border-t bg-muted/30 px-2 py-1">
       <span className="flex shrink-0 items-center text-xs font-medium text-muted-foreground">
         在途作业 {data.length} 张
       </span>
-      <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-0.5">
+      <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto pb-0.5">
         {isLoading && <span className="self-center text-xs text-muted-foreground">读取中…</span>}
         {!isLoading && sorted.length === 0 && (
           <span className="self-center text-xs text-muted-foreground">当前没有在途磅单</span>

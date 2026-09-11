@@ -7,9 +7,15 @@
  * 当前为模拟流：真实实现由 Rust 侧 `DeviceHub` 以 tauri event `device://scale`
  * 推送解析后的通用帧（04 文档 §4），前端只做订阅，判稳逻辑留在 Rust。
  * 这里把判稳放前端是为了在没有 Rust 的情况下也能演示"不稳定 → 稳定 → 可捕获"。
+ *
+ * 身份证阅读器已经走真机：Rust `idcard.rs` 加载 64 位 Sdtapi.dll 直调精伦设备，
+ * 本 store 只负责把 `nativeIdcard` 的两个命令（status / read）收成一份界面状态，
+ * 让设备中心、工作台 F8、档案页读卡看到的是同一个读卡器、同一句失败原因。
  */
 import { create } from "zustand";
 import { useEffect } from "react";
+import { api } from "@/lib/api";
+import { nativeIdcard, runningInTauri } from "@/lib/native";
 import type { DeviceStatus } from "@/lib/constants";
 import { ACTIVE_PARTIES } from "@/mock/masters";
 
@@ -34,13 +40,54 @@ export interface ScaleState {
   tick: () => void;
 }
 
+/** 一次真机探测的结论，与 Rust `idcard::ReaderStatus` 对齐（设备中心状态灯的数据源） */
+export interface ReaderProbe {
+  status: DeviceStatus;
+  connected: boolean;
+  /** 安全模块 SAM 序列号：只有设备真被打开成功才有，是"在线"的凭据而非界面猜测 */
+  samId: string | null;
+  fingerprint: boolean;
+  error: string | null;
+  /** 本地探测时刻，界面据此说明这条结论是哪来的、还新不新 */
+  at: string;
+}
+
+/**
+ * 一次读卡的结果。
+ *
+ * 明文只在内存，界面必须走 maskIdCard；`party_id` 是拿证号回查档案得到的，
+ * 真机上"读到证号"和"系统里有这个人"是两件事，所以它可以是 null。
+ */
+export interface IdCardResult {
+  party_id: number | null;
+  name: string;
+  id_card_no: string;
+  address: string;
+  /** 出生日期 CCYYMMDD（与卡片芯片一致） */
+  born: string;
+  sex: string;
+  nation: string;
+  agency: string;
+  valid_from: string;
+  valid_to: string;
+  photo_path: string | null;
+  /** false = 演示卡（浏览器预览或台账把这台机切了 Mock），不能当真机读数用 */
+  real: boolean;
+}
+
 export interface IdCardState {
   status: DeviceStatus;
+  probing: boolean;
   reading: boolean;
-  /** 读卡结果，明文只在内存，界面必须走 maskIdCard */
-  last: { party_id: number; name: string; id_card_no: string; address: string; born: string; sex: string } | null;
+  reader: ReaderProbe | null;
+  last: IdCardResult | null;
   error: string | null;
-  read: () => Promise<void>;
+  /** 台账里这台阅读器处于 Mock 模式：读卡回演示卡，不碰真设备 */
+  mocked: boolean;
+  setMocked: (v: boolean) => void;
+  /** 打开设备问一次 SAM，判断"这台机此刻在不在" */
+  probe: () => Promise<ReaderProbe | null>;
+  read: (opts?: { photo?: boolean }) => Promise<void>;
   clear: () => void;
 }
 

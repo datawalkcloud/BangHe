@@ -29,6 +29,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": {
+      "resources/sdtapi/*": "sdtapi/"
+    },
     "publisher": "磅禾",
     "copyright": "© 磅禾",
     "category": "Business",

@@ -26,6 +26,7 @@ import { BarList, MiniBars, RatioBar, SplitBar, StatCard } from "@/components/bu
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
+import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -227,9 +228,9 @@ function LedgerReport() {
         key: "no",
         header: "磅单号",
         cell: (r) => (
-          <Link to="/orders/$orderNo" params={{ orderNo: r.order_no }} className="tnum underline underline-offset-2">
+          <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-primary">
             {r.order_no}
-          </Link>
+          </QuickDetailLink>
         ),
         sortValue: (r) => r.order_no,
       },
@@ -736,9 +737,9 @@ function PartyRankReport() {
         key: "name",
         header: "售粮人",
         cell: (r) => (
-          <Link to="/parties/$id" params={{ id: String(r.party_id) }} className="font-medium underline underline-offset-2">
+          <QuickDetailLink type="party" id={r.party_id} className="font-medium text-primary">
             {r.name}
-          </Link>
+          </QuickDetailLink>
         ),
         sortValue: (r) => r.name,
       },

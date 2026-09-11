@@ -6,7 +6,7 @@
  * 伪装成"已登录的真实账号"。
  *
  * 浏览器里仍然可以演示（发给客户看的那份）：此时 `channel === "demo"`，
- * 口令不做任何校验。界面必须把它显式挂出来（横幅在 `AppShell` 顶部），不许静悄悄。
+ * 密码不做任何校验。界面必须把它显式挂出来（横幅在 `AppShell` 顶部），不许静悄悄。
  *
  * 类型与 `src-tauri/src/auth.rs` 逐字段对齐（Rust 侧 `rename_all = "camelCase"`）。
  */
@@ -62,18 +62,17 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<A
   }
 }
 
-/** 与 Rust 侧 `bootstrap_password()` 对齐的装机初始口令。
- *  前端只**展示**它出现在哪一步（首启设置口令界面的提示），不参与校验：
+/** 与 Rust 侧 `bootstrap_password()` 对齐的装机初始密码。
+ *  前端只**展示**它出现在哪一步（首启设置密码界面的提示），不参与校验：
  *  真正的判定在 Rust，改这里不会让任何账号变得可登录。 */
-export const BOOTSTRAP_HINT = "首次使用请先输入装机时交付的初始口令，再设一个本站自己的";
+export const BOOTSTRAP_HINT = "首次使用请先输入装机时交付的初始密码，再设一个本站自己的";
 
 // ------------------------------------------------------------------- 演示模式
 
-/** 浏览器演示：认 mock 在职名单，不校验口令。
- *  演示模式会明确说明口令不校验，但登录失败仍使用与桌面端一致的通用提示。 */
-async function demoSignIn(username: string): Promise<LoginOutcome> {
+/** 浏览器演示：自动取一名在职站长，不校验任何账号或密码。 */
+async function demoSignIn(): Promise<LoginOutcome> {
   const staff = await api.staff();
-  const hit = staff.find((u) => u.username === username && u.is_active === 1);
+  const hit = staff.find((u) => u.is_active === 1 && u.role === "station_master") ?? staff.find((u) => u.is_active === 1);
   if (!hit) {
     return { ok: false, error: "账号或密码错误", session: null, needsPasswordSetup: null, attemptsLeft: null, lockedUntil: null };
   }
@@ -95,21 +94,23 @@ async function demoSignIn(username: string): Promise<LoginOutcome> {
 }
 
 function demoUnsupported(): AuthCall<never> {
-  return { channel: "demo", error: "浏览器演示模式没有真实口令，改密与授权均不可用" };
+  return { channel: "demo", error: "浏览器演示模式没有真实密码，改密与授权均不可用" };
 }
 
 // ----------------------------------------------------------------------- 通道
 
 /** WebView 刷新 / HMR 后 JS 状态全丢，用这条问后端"我还在登录态里吗" */
 export async function restore(): Promise<AuthCall<AuthSession | null>> {
-  if (!runningInTauri()) return { channel: "demo", data: null };
+  if (!runningInTauri()) {
+    const outcome = await demoSignIn();
+    return { channel: "demo", data: outcome.session, error: outcome.error ?? undefined };
+  }
   return invoke<AuthSession | null>("auth_session");
 }
 
 export async function signIn(username: string, password: string): Promise<AuthCall<LoginOutcome>> {
   if (!runningInTauri()) {
-    if (!username.trim()) return { channel: "demo", error: "请输入登录名" };
-    return { channel: "demo", data: await demoSignIn(username.trim()) };
+    return { channel: "demo", data: await demoSignIn() };
   }
   return invoke<LoginOutcome>("auth_login", { username, password });
 }
@@ -125,7 +126,7 @@ export async function beat(): Promise<AuthCall<boolean>> {
   return invoke<boolean>("auth_touch");
 }
 
-/** 首启设置口令与日常改密共用：`old` 在首启时就是装机初始口令 */
+/** 首启设置密码与日常改密共用：`old` 在首启时就是装机初始密码 */
 export async function setPassword(old: string, fresh: string): Promise<AuthCall<ActionOutcome>> {
   if (!runningInTauri()) return demoUnsupported();
   return invoke<ActionOutcome>("auth_change_password", { old, new: fresh });

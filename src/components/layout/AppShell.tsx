@@ -1,5 +1,5 @@
 /**
- * 应用骨架（05 §2）：Menubar 顶 + Sidebar 左（240/56）+ 页面区 + 底部设备状态条。
+ * 应用骨架（05 §2）：顶栏工具条 + Sidebar 左（240/56）+ 页面区 + 底部设备状态条。
  *
  * 三条硬约束在代码里的落点：
  *  1. 设备状态条常驻不可隐藏——它挂在 SidebarProvider 之外，侧栏折叠不影响它
@@ -12,11 +12,9 @@ import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { PanelLeftCloseIcon } from "lucide-react";
 import { api } from "@/lib/api";
-import { useDeviceStore, useScaleTick } from "@/store/device";
+import { useScaleTick } from "@/store/device";
 import { useSession } from "@/store/session";
-import { money, ton, weight } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
   SidebarContent,
@@ -35,10 +33,13 @@ import {
 import { OperatorFooter } from "@/components/business/OperatorSwitch";
 import { DeviceStatusBar } from "@/components/business/DeviceStatusBar";
 import { GlobalSearch } from "@/components/business/GlobalSearch";
-import { Kbd } from "@/components/business/layout";
-import { AppMenubar } from "@/components/layout/AppMenubar";
+import { QuickDetailSheet } from "@/components/business/QuickDetailSheet";
+import { AppTopbar } from "@/components/layout/AppTopbar";
 import { NAV_FLAT, NAV_GROUPS, isNavActive } from "@/components/layout/app-nav";
 import { cn } from "cn";
+import { DisplayView } from "@/components/business/DisplayView";
+import { runningInTauri } from "@/lib/native";
+import { toast } from "sonner";
 
 /** 侧栏展开 240 / 折叠 56（05 §7.3），覆盖 shadcn 默认的 256/68 */
 const SIDEBAR_STYLE = { "--sidebar-width": "240px", "--sidebar-width-icon": "56px" } as CSSProperties;
@@ -48,8 +49,9 @@ function Brand() {
   const { state } = useSidebar();
   return (
     <SidebarHeader className="gap-0">
-      <div className="flex h-12 items-center gap-2 px-3">
-        <img src="/logo.png" alt="磅禾" className="size-8 shrink-0 object-contain" />
+      {/* 折叠态栏宽 56，logo 放大到 40 并居中，避免 32px 在窄栏里显得过小 */}
+      <div className={cn("flex h-12 items-center gap-2", state === "expanded" ? "px-3" : "justify-center")}>
+        <img src="/logo.png" alt="磅禾" className={cn("shrink-0 object-contain", state === "expanded" ? "size-8" : "size-10")} />
         {state === "expanded" && (
           <span className="flex min-w-0 flex-col leading-tight">
             <span className="truncate text-sm font-semibold">{st?.name ?? "磅禾粮站"}</span>
@@ -99,45 +101,6 @@ function Nav() {
   );
 }
 
-/** F2 展示模式：超大字号重量 + 今日金额，供农户在窗口外核对（05 §4） */
-function DisplayOverlay({ onExit }: { onExit: () => void }) {
-  const scale = useDeviceStore((s) => s.scale);
-  const { data } = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: () => api.dashboard(),
-    staleTime: 30_000,
-  });
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-background px-8">
-      <p className="text-2xl font-medium text-muted-foreground">{data?.today ? "今日收购合计" : "加载中…"}</p>
-      <p className="tnum text-center text-[clamp(72px,14vw,220px)] leading-none font-bold tabular-nums">
-        {weight(scale.weight01kg)}
-      </p>
-      <p className={cn("text-lg", scale.stable ? "text-success" : "text-warning")}>
-        {scale.connected ? (scale.stable ? "● 读数稳定" : "○ 读数变动中，请等车辆停稳") : "— 仪表离线 —"}
-      </p>
-      <Separator className="w-1/3" />
-      <div className="flex flex-wrap items-baseline justify-center gap-x-10 gap-y-2 text-center">
-        <p className="text-lg text-muted-foreground">
-          今日 <span className="tnum text-3xl font-semibold text-foreground">{data?.today.orders ?? 0}</span> 车次
-        </p>
-        <p className="text-lg text-muted-foreground">
-          <span className="tnum text-3xl font-semibold text-foreground">{ton(data?.today.net_01kg ?? 0)}</span>
-        </p>
-        <p className="text-lg text-muted-foreground">
-          金额 <span className="tnum text-3xl font-semibold text-foreground">{money(data?.today.goods_fen ?? 0)}</span>
-        </p>
-      </div>
-      <p className="mt-6 text-sm text-muted-foreground">
-        <Kbd>Esc</Kbd> 退出展示模式
-      </p>
-      <Button variant="outline" size="sm" className="absolute top-4 right-4" onClick={onExit}>
-        退出
-      </Button>
-    </div>
-  );
-}
-
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -184,13 +147,45 @@ export function AppShell() {
   }, [navigate]);
 
   const toggleSidebar = useCallback(() => setCollapsed((c) => !c), []);
+  const toggleDisplay = useCallback(async () => {
+    if (!runningInTauri()) {
+      setDisplay((d) => !d);
+      return;
+    }
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      let existing: Awaited<ReturnType<typeof WebviewWindow.getByLabel>> | null = null;
+      try {
+        existing = await WebviewWindow.getByLabel("display");
+      } catch {
+        // 首次打开时窗口不存在，继续创建即可。
+      }
+      if (existing) {
+        await existing.show();
+        await existing.setFocus();
+        return;
+      }
+      const displayWindow = new WebviewWindow("display", {
+        url: new URL("/?display=1", window.location.origin).toString(),
+        title: "磅禾展示模式",
+        fullscreen: true,
+        decorations: false,
+        resizable: true,
+      });
+      await displayWindow.once("tauri://error", (event) => console.error("展示窗口创建失败", event));
+      await displayWindow.show();
+      await displayWindow.setFocus();
+    } catch (error) {
+      toast.error(`无法打开展示窗口：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, []);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       // F 区与 Ctrl 组合键必须 preventDefault，否则 WebView 抢去做浏览器默认行为
       if (e.key === "F2") {
         e.preventDefault();
-        setDisplay((d) => !d);
+        void toggleDisplay();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
@@ -220,7 +215,7 @@ export function AppShell() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate, toggleSidebar]);
+  }, [navigate, toggleDisplay, toggleSidebar]);
 
   return (
     <SidebarProvider
@@ -236,14 +231,14 @@ export function AppShell() {
         <SidebarRail />
       </Sidebar>
       <SidebarInset className="flex h-svh min-w-0 flex-1 flex-col overflow-hidden">
-        <AppMenubar
+        <AppTopbar
           onToggleSidebar={toggleSidebar}
           onOpenSearch={() => setSearchOpen(true)}
-          onToggleDisplay={() => setDisplay((d) => !d)}
+          onToggleDisplay={() => void toggleDisplay()}
         />
         {demo && (
           <div className="border-b bg-warning/10 px-4 py-1.5 text-xs text-warning">
-            浏览器演示模式：没有原生通道，<b>口令不做校验</b>，数据全是模拟。真实登录、真库与外设都要用桌面版（
+            浏览器演示模式：没有原生通道，<b>密码不做校验</b>，数据全是模拟。真实登录、真库与外设都要用桌面版（
             <span className="font-mono">npm run tauri dev</span>）。
           </div>
         )}
@@ -252,8 +247,9 @@ export function AppShell() {
         </div>
         <DeviceStatusBar />
       </SidebarInset>
-      {display && <DisplayOverlay onExit={() => setDisplay(false)} />}
+      {display && <DisplayView onExit={() => setDisplay(false)} />}
       <GlobalSearch open={searchOpen} onOpenChange={setSearchOpen} />
+      <QuickDetailSheet />
     </SidebarProvider>
   );
 }

@@ -8,11 +8,15 @@
  * 界面显示成"已经改了"，顺序是 写 → 应用 → 更新状态，状态更新是最后一步。
  */
 import { create } from "zustand";
-import { applyPalette, DEFAULT_PALETTE, isDefaultPalette, readPalette, writePalette, type ThemePalette } from "@/lib/theme";
+import { applyPalette, DEFAULT_PALETTE, isDefaultPalette, readPalette, writePalette, type MenuStyle, type RadiusStyle, type ThemePalette, type ThemeStyle } from "@/lib/theme";
 
 interface ThemeStore extends ThemePalette {
   setBase: (base: string) => void;
   setAccent: (accent: string) => void;
+  setStyle: (style: ThemeStyle) => void;
+  setRadius: (radius: RadiusStyle) => void;
+  setChart: (chart: string) => void;
+  setMenu: (menu: MenuStyle) => void;
   /** 回到内置默认主题：撤掉注入样式，界面重新由 App.css 决定 */
   resetPalette: () => void;
 }
@@ -25,12 +29,16 @@ function commit(next: ThemePalette) {
 
 export const useThemeStore = create<ThemeStore>((set, get) => ({
   ...readPalette(),
-  setBase: (base) => set(commit({ base, accent: get().accent })),
-  setAccent: (accent) => set(commit({ base: get().base, accent })),
+  setBase: (base) => set(commit({ ...get(), base })),
+  setAccent: (accent) => set(commit({ ...get(), accent })),
+  setStyle: (style) => set(commit({ ...get(), style })),
+  setRadius: (radius) => set(commit({ ...get(), radius })),
+  setChart: (chart) => set(commit({ ...get(), chart })),
+  setMenu: (menu) => set(commit({ ...get(), menu })),
   resetPalette: () => set(commit({ ...DEFAULT_PALETTE })),
 }));
 
 /** 当前是否已是默认色板（界面用它决定"重置"按钮灰不灰） */
 export function usePaletteIsDefault(): boolean {
-  return useThemeStore((s) => isDefaultPalette({ base: s.base, accent: s.accent }));
+  return useThemeStore((s) => isDefaultPalette({ base: s.base, accent: s.accent, style: s.style, radius: s.radius, chart: s.chart, menu: s.menu }));
 }

@@ -17,6 +17,7 @@ import { useSession } from "@/store/session";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { QcDecisionBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
+import { useQuickDetail } from "@/components/business/QuickDetailSheet";
 import { PrintPreview } from "@/components/print/PrintPreview";
 import { QcReportSheet } from "@/components/print/sheets";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,8 @@ export function QcDetailPage() {
     queryFn: () => (data ? api.getOrder(data.report.order_no) : Promise.resolve(null)),
     enabled: !!data,
   });
+
+  const openQuickDetail = useQuickDetail((s) => s.open);
 
   if (isLoading) {
     return (
@@ -91,7 +94,7 @@ export function QcDetailPage() {
               <ArrowLeftIcon />
               返回台账
             </Button>
-            <Button size="sm" render={<Link to="/orders/$orderNo" params={{ orderNo: report.order_no }} />}>
+            <Button size="sm" onClick={() => openQuickDetail("order", report.order_no)}>
               对应磅单
             </Button>
             <Button size="sm" variant="outline" disabled={!can("print") || !station} onClick={() => setPrintOpen(true)}>

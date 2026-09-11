@@ -79,6 +79,18 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0004_fix_station_brand.sql",
         sql: include_str!("migrations/0004_fix_station_brand.sql"),
     },
+    Migration {
+        name: "0005_fix_view_timezone.sql",
+        sql: include_str!("migrations/0005_fix_view_timezone.sql"),
+    },
+    Migration {
+        name: "0006_settings_parity.sql",
+        sql: include_str!("migrations/0006_settings_parity.sql"),
+    },
+    Migration {
+        name: "0007_user_preference.sql",
+        sql: include_str!("migrations/0007_user_preference.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

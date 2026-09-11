@@ -1,6 +1,6 @@
-//! 口令登录与会话的行为守卫（docs/design/02 §11 M10）
+//! 密码登录与会话的行为守卫（docs/design/02 §11 M10）
 //!
-//! 这里守的是**纸面单测抓不到的那类错**：文案泄露账号是否存在、初始口令改密后还能用、
+//! 这里守的是**纸面单测抓不到的那类错**：文案泄露账号是否存在、初始密码改密后还能用、
 //! 授权把别人的"最后登录时间"改了、会话哈希混进返回值。不连真库，全部走内存库 +
 //! 真实迁移脚本，所以 `0003_seed_superadmin.sql` 有没有生效、超管能不能登，是在这里验的。
 //!
@@ -85,8 +85,8 @@ fn superadmin_is_seeded_and_usable_only_via_install_bootstrap() {
     assert_eq!(text_of(&conn, "superadmin", "role").as_deref(), Some("station_master"));
 
     let outcome = login(&conn, "superadmin", auth::bootstrap_password());
-    assert!(outcome.ok, "装机初始口令应能登入预留超管：{:?}", outcome.error);
-    assert_eq!(outcome.needs_password_setup, Some(true), "必须把界面切到设置口令");
+    assert!(outcome.ok, "装机初始密码应能登入预留超管：{:?}", outcome.error);
+    assert_eq!(outcome.needs_password_setup, Some(true), "必须把界面切到设置密码");
     let session = outcome.session.expect("登录成功应发会话");
     assert!(session.actor.must_change_pwd, "首启账号的会话必须带强改标记");
     assert_eq!(session.idle_ttl_secs, IDLE_TTL_SECS, "失效时长由后端下发，前端不抄常量");
@@ -95,7 +95,7 @@ fn superadmin_is_seeded_and_usable_only_via_install_bootstrap() {
 #[test]
 fn admin_seed_still_ships_without_a_usable_hash() {
     let conn = db();
-    // schema_contract 已经在结构上钉过一次，这里钉的是行为：占位符不是口令
+    // schema_contract 已经在结构上钉过一次，这里钉的是行为：占位符不是密码
     assert!(text_of(&conn, "admin", "password_hash").unwrap().starts_with('!'));
     let wrong = login(&conn, "admin", "");
     assert!(!wrong.ok);
@@ -127,9 +127,9 @@ fn lockout_kicks_in_at_threshold_and_blocks_the_right_password() {
     assert_eq!(number_of(&conn, "superadmin", "failed_count"), MAX_FAILED);
     assert!(text_of(&conn, "superadmin", "locked_until").is_some(), "到阈值必须写下解除时间");
 
-    // 锁定期内连正确口令都不给进，且不再累加计数（否则一次锁定能被无限续期）
+    // 锁定期内连正确密码都不给进，且不再累加计数（否则一次锁定能被无限续期）
     let blocked = login(&conn, "superadmin", auth::bootstrap_password());
-    assert!(!blocked.ok, "锁定期内正确口令也必须拒");
+    assert!(!blocked.ok, "锁定期内正确密码也必须拒");
     assert!(blocked.locked_until.is_some(), "要回解除时间给界面倒计时");
     assert_eq!(number_of(&conn, "superadmin", "failed_count"), MAX_FAILED, "锁定期内不累加");
 }
@@ -143,7 +143,7 @@ fn disabled_account_is_refused_by_name_not_by_password() {
     assert!(outcome.error.as_deref().unwrap().contains("已停用"), "停用要给明确原因：{:?}", outcome.error);
 }
 
-// ----------------------------------------------------------- 改密与初始口令退场
+// ----------------------------------------------------------- 改密与初始密码退场
 
 #[test]
 fn changing_password_retires_the_bootstrap_route() {
@@ -159,11 +159,11 @@ fn changing_password_retires_the_bootstrap_route() {
     assert_eq!(number_of(&conn, "superadmin", "must_change_pwd"), 0, "改完即清强改标记");
 
     let after = login(&conn, "superadmin", auth::bootstrap_password());
-    assert!(!after.ok, "装机初始口令在改密后必须永久失效");
+    assert!(!after.ok, "装机初始密码在改密后必须永久失效");
     let reuse = login(&conn, "superadmin", "banghe-2026");
     assert!(reuse.ok);
     assert_eq!(reuse.session.expect("正常会话").actor.must_change_pwd, false);
-    assert_eq!(reuse.needs_password_setup, Some(false), "已是正式口令，不该再切设置口令界面");
+    assert_eq!(reuse.needs_password_setup, Some(false), "已是正式密码，不该再切设置密码界面");
 }
 
 #[test]
@@ -175,11 +175,11 @@ fn password_rules_reject_short_and_bootstrap_values() {
     assert!(short.error.unwrap().contains(&PWD_MIN_LEN.to_string()), "要说出长度要求");
 
     let same = change_password(&conn, &actor, auth::bootstrap_password(), auth::bootstrap_password());
-    assert!(!same.ok, "不许把初始口令原样再设一遍");
+    assert!(!same.ok, "不许把初始密码原样再设一遍");
 
     let wrong_old = change_password(&conn, &actor, "not-the-old-one", "brand-new-1");
     assert!(!wrong_old.ok);
-    assert_eq!(wrong_old.error.as_deref(), Some(NO_DETAIL), "原口令错也不给细节");
+    assert_eq!(wrong_old.error.as_deref(), Some(NO_DETAIL), "原密码错也不给细节");
     assert_eq!(
         text_of(&conn, "superadmin", "password_hash").as_deref(),
         Some(PWD_UNSET),
@@ -201,7 +201,7 @@ fn only_station_master_may_reset_others() {
     let worker = number_of(&conn, "worker", "id");
     let done = reset_password(&conn, &master, worker);
     assert!(done.ok, "站长重置应成功：{:?}", done.error);
-    assert_eq!(text_of(&conn, "worker", "password_hash").as_deref(), Some(PWD_UNSET), "重置即打回待设口令");
+    assert_eq!(text_of(&conn, "worker", "password_hash").as_deref(), Some(PWD_UNSET), "重置即打回待设密码");
     assert_eq!(number_of(&conn, "worker", "must_change_pwd"), 1, "重置后必须强制改密");
     let ghost = reset_password(&conn, &master, 999_999);
     assert!(!ghost.ok, "不存在的账号要拒绝，不能回 ok");

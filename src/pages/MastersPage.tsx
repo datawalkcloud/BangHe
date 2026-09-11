@@ -18,8 +18,9 @@ import { api } from "@/lib/api";
 import type { AppSetting, GrainVariety, PriceList, UserAccount, Warehouse } from "@/mock/types";
 import type { Grade, Role } from "@/lib/constants";
 import { GRADES, INDICATORS, ROLE } from "@/lib/constants";
-import { fromPercent, orDash, percent, price as fmtPrice, fromYuanPerTon, todayISO, weight } from "@/lib/format";
+import { density, fromPercent, orDash, percent, price as fmtPrice, fromYuanPerTon, todayISO, weight } from "@/lib/format";
 import { needsPrintVerify, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
+import { SETTINGS_GROUP } from "@/lib/settings-catalog";
 import { useStaff, useVarieties, useWarehouses, usePrices, useSettings } from "@/hooks/useLookups";
 import { PERMISSIONS, actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
@@ -106,17 +107,19 @@ interface VarietyForm {
 }
 
 function varietyForm(v?: GrainVariety): VarietyForm {
+  // 空表单不再预填基准值：以前只是演示数据无所谓，现在点保存是真落库的，
+  // 一套编出来的"国标限量"进了档案就会出现在化验提示和定级参考里。
   if (!v)
     return {
       id: null,
       code: "",
       name: "",
-      category: "小麦",
-      moisture: "12.5",
-      impurity: "1.0",
-      unsound: "5.0",
-      bulkDensity: "750",
-      rejectMoisture: "18.0",
+      category: "主粮",
+      moisture: "",
+      impurity: "",
+      unsound: "",
+      bulkDensity: "",
+      rejectMoisture: "",
       package01kg: 0,
       indicators: ["moisture", "impurity"],
       sortOrder: "",
@@ -127,16 +130,27 @@ function varietyForm(v?: GrainVariety): VarietyForm {
     code: v.code,
     name: v.name,
     category: v.category,
-    moisture: String(v.std_moisture_001pct / 100),
-    impurity: String(v.std_impurity_001pct / 100),
-    unsound: String(v.std_unsound_001pct / 100),
-    bulkDensity: String(v.std_bulk_density),
-    rejectMoisture: String(v.reject_moisture_001pct / 100),
+    // NULL 回填成空串而不是 0：打开编辑框就该看得出"这项还没定"
+    moisture: pctText(v.std_moisture_001pct),
+    impurity: pctText(v.std_impurity_001pct),
+    unsound: pctText(v.std_unsound_001pct),
+    bulkDensity: v.std_bulk_density == null ? "" : String(v.std_bulk_density),
+    rejectMoisture: pctText(v.reject_moisture_001pct),
     package01kg: v.default_package_deduct_01kg,
     indicators: v.enabled_indicators.slice(),
     sortOrder: String(v.sort_order),
     active: v.is_active === 1,
   };
+}
+
+/** 0.01% 存、% 录：NULL ↔ 空串，两边都只在这一处换算 */
+function pctText(v001pct: number | null): string {
+  return v001pct == null ? "" : String(v001pct / 100);
+}
+
+/** 空串和 0 一律按"没填"落 NULL——0.00% 的水分基准不是国标，是占位符 */
+function pctOrNull(text: string): number | null {
+  return fromPercent(text) || null;
 }
 
 function VarietiesSection() {
@@ -157,11 +171,11 @@ function VarietiesSection() {
         code: form.code.trim().toUpperCase(),
         name: form.name.trim(),
         category: form.category.trim(),
-        std_moisture_001pct: fromPercent(form.moisture),
-        std_impurity_001pct: fromPercent(form.impurity),
-        std_unsound_001pct: fromPercent(form.unsound),
-        std_bulk_density: Number(form.bulkDensity) || 0,
-        reject_moisture_001pct: fromPercent(form.rejectMoisture),
+        std_moisture_001pct: pctOrNull(form.moisture),
+        std_impurity_001pct: pctOrNull(form.impurity),
+        std_unsound_001pct: pctOrNull(form.unsound),
+        std_bulk_density: Number(form.bulkDensity) || null,
+        reject_moisture_001pct: pctOrNull(form.rejectMoisture),
         default_package_deduct_01kg: form.package01kg ?? 0,
         enabled_indicators: form.indicators,
         sort_order: Number(form.sortOrder) || rows.length + 1,
@@ -193,7 +207,7 @@ function VarietiesSection() {
     { key: "m", header: "水分基准", align: "right", cell: (v) => <span className="tnum">{percent(v.std_moisture_001pct)}</span> },
     { key: "i", header: "杂质基准", align: "right", cell: (v) => <span className="tnum">{percent(v.std_impurity_001pct)}</span> },
     { key: "u", header: "不完善粒", align: "right", cell: (v) => <span className="tnum">{percent(v.std_unsound_001pct)}</span> },
-    { key: "d", header: "容重基准", align: "right", cell: (v) => <span className="tnum">{v.std_bulk_density} g/L</span> },
+    { key: "d", header: "容重基准", align: "right", cell: (v) => <span className="tnum">{density(v.std_bulk_density)}</span> },
     { key: "r", header: "拒收水分", align: "right", cell: (v) => <span className="tnum text-destructive">{percent(v.reject_moisture_001pct)}</span> },
     { key: "pk", header: "默认扣包", align: "right", cell: (v) => <span className="tnum">{weight(v.default_package_deduct_01kg)}</span> },
     {
@@ -251,7 +265,9 @@ function VarietiesSection() {
         <DialogContent className="max-w-[640px]">
           <DialogHeader>
             <DialogTitle className="text-sm">{form.id == null ? "新增品种" : `编辑品种 ${form.name}`}</DialogTitle>
-            <DialogDescription className="text-xs">停用品种不影响历史磅单，只挡住新单。</DialogDescription>
+            <DialogDescription className="text-xs">
+              停用品种不影响历史磅单，只挡住新单。国标基准留空即"本站尚未核定"，不会写 0 进库。
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="品种编码 *">
@@ -335,15 +351,93 @@ function VarietiesSection() {
 
 /* ---------------------------------------------------------------- 仓房 */
 
-const WAREHOUSE_KIND: Record<Warehouse["kind"], string> = {
-  house: "库房",
-  barn: "仓棚",
-  shed: "简易罩棚",
-  silo: "立筒仓",
-};
+/** 与 Rust 侧 `WarehouseKind::VALUES`（domain/enums.rs §9.9）逐字一致 */
+const WAREHOUSE_KINDS = [
+  { value: "house", label: "库房" },
+  { value: "barn", label: "仓棚" },
+  { value: "shed", label: "简易罩棚" },
+  { value: "silo", label: "立筒仓" },
+];
+
+/** 读回来的类型可能为空（建仓房时没填）或不在值域内（将来扩了枚举），都不能崩 */
+function kindLabel(kind: string | null): string {
+  if (kind == null) return "—";
+  return WAREHOUSE_KINDS.find((k) => k.value === kind)?.label ?? kind;
+}
+
+interface WarehouseForm {
+  id: number | null;
+  code: string;
+  name: string;
+  kind: string;
+  capacity: string;
+  active: boolean;
+}
+
+interface SlotForm {
+  id: number | null;
+  warehouse_id: number;
+  warehouseName: string;
+  code: string;
+  label: string;
+  active: boolean;
+}
 
 function WarehousesSection() {
   const { data: rows = [] } = useWarehouses();
+  const queryClient = useQueryClient();
+  const can = useSession((s) => s.can);
+  const editable = can("setting.write");
+
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<WarehouseForm | null>(null);
+  const [slotOpen, setSlotOpen] = useState(false);
+  const [slotForm, setSlotForm] = useState<SlotForm | null>(null);
+
+  /** 仓房/货位两张表被工作台的去向下拉、库存占用一起读，保存后要一并失效 */
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["warehouses"] });
+    void queryClient.invalidateQueries({ queryKey: ["slots"] });
+    void queryClient.invalidateQueries({ queryKey: ["audits"] });
+  };
+
+  const saveWarehouse = useMutation({
+    mutationFn: () =>
+      api.saveWarehouse({
+        id: form?.id ?? undefined,
+        operator_id: actorId(),
+        code: (form?.code ?? "").trim().toUpperCase(),
+        name: (form?.name ?? "").trim(),
+        kind: form?.kind ?? "house",
+        // 空着是"容量尚未核定"（NULL），填 0 是一句"这处不许存粮"，两者不能混
+        capacity_ton: Number(form?.capacity) || null,
+        is_active: form?.active ? 1 : 0,
+      }),
+    onSuccess: (w) => {
+      toast.success(`仓房「${w.name}」已保存`);
+      setOpen(false);
+      refresh();
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  });
+
+  const saveSlot = useMutation({
+    mutationFn: () =>
+      api.saveSlot({
+        id: slotForm?.id ?? undefined,
+        operator_id: actorId(),
+        warehouse_id: slotForm?.warehouse_id ?? 0,
+        code: (slotForm?.code ?? "").trim().toUpperCase(),
+        label: (slotForm?.label ?? "").trim(),
+        is_active: slotForm?.active ? 1 : 0,
+      }),
+    onSuccess: (s) => {
+      toast.success(`货位「${s.label || s.code}」已保存`);
+      setSlotOpen(false);
+      refresh();
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  });
 
   const columns: Column<Warehouse>[] = [
     { key: "code", header: "编码", cell: (w) => <span className="tnum font-medium">{w.code}</span>, sortValue: (w) => w.code },
@@ -358,32 +452,133 @@ function WarehousesSection() {
       ),
       sortValue: (w) => w.name,
     },
-    { key: "kind", header: "类型", cell: (w) => WAREHOUSE_KIND[w.kind] },
-    { key: "cap", header: "容量", align: "right", cell: (w) => <span className="tnum">{w.capacity_ton} 吨</span>, sortValue: (w) => w.capacity_ton },
+    { key: "kind", header: "类型", cell: (w) => kindLabel(w.kind) },
+    {
+      key: "cap",
+      header: "容量",
+      align: "right",
+      cell: (w) => <span className="tnum">{w.capacity_ton == null ? "—" : `${w.capacity_ton} 吨`}</span>,
+      sortValue: (w) => w.capacity_ton ?? 0,
+    },
     { key: "slots", header: "货位数", align: "right", cell: (w) => <span className="tnum">{w.slots.length}</span> },
     {
       key: "slotList",
       header: "货位",
+      cell: (w) =>
+        w.slots.length === 0 ? (
+          <span className="text-xs text-muted-foreground">尚无货位</span>
+        ) : (
+          <span className="flex flex-wrap items-center gap-1">
+            {w.slots.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                disabled={!editable}
+                title={editable ? "点击改名或停用" : undefined}
+                className={
+                  s.is_active === 1
+                    ? "border bg-muted/40 px-1.5 py-0.5 text-xs hover:bg-muted disabled:hover:bg-muted/40"
+                    : "border border-dashed px-1.5 py-0.5 text-xs text-muted-foreground line-through"
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSlotForm({
+                    id: s.id,
+                    warehouse_id: w.id,
+                    warehouseName: w.name,
+                    code: s.code,
+                    label: s.label,
+                    active: s.is_active === 1,
+                  });
+                  setSlotOpen(true);
+                }}
+              >
+                {s.label || s.code}
+              </button>
+            ))}
+          </span>
+        ),
+    },
+    {
+      key: "op",
+      header: "操作",
       cell: (w) => (
-        <span className="text-xs text-muted-foreground">
-          {w.slots.filter((s) => s.is_active === 1).map((s) => s.label).join("、") || "无启用货位"}
+        <span className="flex items-center gap-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setForm({
+                id: w.id,
+                code: w.code,
+                name: w.name,
+                kind: w.kind ?? "house",
+                capacity: w.capacity_ton == null ? "" : String(w.capacity_ton),
+                active: w.is_active === 1,
+              });
+              setOpen(true);
+            }}
+          >
+            编辑
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSlotForm({ id: null, warehouse_id: w.id, warehouseName: w.name, code: "", label: "", active: true });
+              setSlotOpen(true);
+            }}
+          >
+            加货位
+          </Button>
         </span>
       ),
     },
   ];
 
+  const whErrors: string[] = [];
+  if (form && !form.code.trim()) whErrors.push("编码必填，如 CW01");
+  if (form && !form.name.trim()) whErrors.push("名称必填");
+  const slotErrors: string[] = [];
+  if (slotForm && !slotForm.code.trim()) slotErrors.push("货位编码必填，如 C01-01");
+
   return (
     <div className="flex flex-col gap-3">
-      <SectionBar note="仓房与货位是粮食去向的落点：一张磅单必须能回答「这批粮压在哪个货位」。" />
-      <CallOut tone="info" title="本分区在当前 mock 层是只读的">
-        仓房/货位的增删改涉及容量与库存占用校验，接口尚未提供（Rust 侧与 03 §5 一并实现）。
-        这里先呈现结构与数量，工作台与档案页的"默认仓房"下拉读取的就是这张表。
-      </CallOut>
+      <SectionBar
+        note="仓房与货位是粮食去向的落点：一张磅单必须能回答「这批粮压在哪个货位」。停用只挡住新单，历史磅单上的货位照旧可查。"
+        action={
+          <Button
+            size="sm"
+            disabled={!editable}
+            onClick={() => {
+              setForm({ id: null, code: "", name: "", kind: "house", capacity: "", active: true });
+              setOpen(true);
+            }}
+          >
+            {editable ? <PlusIcon /> : <LockIcon />}
+            新增仓房
+          </Button>
+        }
+      />
+      {!editable && (
+        <CallOut tone="neutral" title="当前岗位只能查看">
+          仓房、货位的增改属基础档案写入，需站长岗位（02 §11 权限矩阵）。
+        </CallOut>
+      )}
       <DataTable
         columns={columns}
         rows={rows}
         rowKey={(w) => w.id}
-        empty={<EmptyState title="还没有仓房档案" description="请在 Rust 侧初始化仓房数据。" />}
+        empty={
+          <EmptyState
+            title="还没有仓房档案"
+            description={editable ? "点右上「新增仓房」建第一处，再给它加货位；建完即时落库。" : "请以站长身份登录后维护仓房与货位。"}
+          />
+        }
       />
       <InfoGrid
         cols={4}
@@ -391,9 +586,129 @@ function WarehousesSection() {
           { label: "仓房总数", value: String(rows.length) },
           { label: "启用", value: String(rows.filter((w) => w.is_active === 1).length) },
           { label: "货位总数", value: String(rows.reduce((n, w) => n + w.slots.length, 0)) },
-          { label: "核定总容量", value: `${rows.reduce((n, w) => n + w.capacity_ton, 0)} 吨` },
+          { label: "核定总容量", value: `${rows.reduce((n, w) => n + (w.capacity_ton ?? 0), 0)} 吨` },
         ]}
       />
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">{form?.id == null ? "新增仓房" : `编辑仓房 ${form?.name}`}</DialogTitle>
+            <DialogDescription className="text-xs">容量留空表示尚未核定；容量 0 表示该处不允许存粮。</DialogDescription>
+          </DialogHeader>
+          {form && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="仓房编码 *">
+                <Input
+                  value={form.code}
+                  onChange={(e) => setForm({ ...form, code: e.target.value })}
+                  placeholder="如 CW01"
+                  className="tnum text-sm"
+                />
+              </Field>
+              <Field label="仓房名称 *">
+                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="text-sm" />
+              </Field>
+              <Field label="类型">
+                <Choose
+                  aria-label="仓房类型"
+                  value={form.kind}
+                  onChange={(v) => setForm({ ...form, kind: v })}
+                  options={WAREHOUSE_KINDS}
+                />
+              </Field>
+              <Field label="核定容量（吨）">
+                <Input
+                  value={form.capacity}
+                  onChange={(e) => setForm({ ...form, capacity: e.target.value })}
+                  inputMode="numeric"
+                  className="tnum text-sm"
+                />
+              </Field>
+              <Label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
+                <Switch checked={form.active} onCheckedChange={(v) => setForm({ ...form, active: v === true })} aria-label="启用仓房" />
+                启用（停用后不可再作为新单去向）
+              </Label>
+            </div>
+          )}
+          {whErrors.length > 0 && (
+            <CallOut tone="warning" title="还不能保存">
+              <ul className="list-disc pl-4">
+                {whErrors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            </CallOut>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              取消
+            </Button>
+            <Button disabled={whErrors.length > 0 || saveWarehouse.isPending} onClick={() => saveWarehouse.mutate()}>
+              {saveWarehouse.isPending ? "保存中…" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={slotOpen} onOpenChange={setSlotOpen}>
+        <DialogContent className="max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">
+              {slotForm?.id == null ? `新增货位 · ${slotForm?.warehouseName}` : `编辑货位 ${slotForm?.code}`}
+            </DialogTitle>
+            <DialogDescription className="text-xs">货位编码在同一仓房内唯一；简称用于磅单与看板显示，留空则用编码。</DialogDescription>
+          </DialogHeader>
+          {slotForm && (
+            <div className="grid gap-3">
+              <Field label="所属仓房">
+                <Input value={slotForm.warehouseName} readOnly className="text-sm" />
+              </Field>
+              <Field label="货位编码 *">
+                <Input
+                  value={slotForm.code}
+                  onChange={(e) => setSlotForm({ ...slotForm, code: e.target.value })}
+                  placeholder="如 C01-01"
+                  className="tnum text-sm"
+                />
+              </Field>
+              <Field label="货位简称">
+                <Input
+                  value={slotForm.label}
+                  onChange={(e) => setSlotForm({ ...slotForm, label: e.target.value })}
+                  placeholder="如 1号仓东列"
+                  className="text-sm"
+                />
+              </Field>
+              <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Switch
+                  checked={slotForm.active}
+                  onCheckedChange={(v) => setSlotForm({ ...slotForm, active: v === true })}
+                  aria-label="启用货位"
+                />
+                启用
+              </Label>
+            </div>
+          )}
+          {slotErrors.length > 0 && (
+            <CallOut tone="warning" title="还不能保存">
+              <ul className="list-disc pl-4">
+                {slotErrors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            </CallOut>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setSlotOpen(false)}>
+              取消
+            </Button>
+            <Button disabled={slotErrors.length > 0 || saveSlot.isPending} onClick={() => saveSlot.mutate()}>
+              {saveSlot.isPending ? "保存中…" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -414,12 +729,16 @@ interface PriceForm {
 function PricesSection() {
   const { data: rows = [] } = usePrices();
   const { data: varieties = [] } = useVarieties();
+  const { data: staff = [] } = useStaff();
   const queryClient = useQueryClient();
   const actor = useActor();
   const can = useSession((s) => s.can);
   const editable = can("price.edit");
   // 用 todayISO 而不是 toISOString().slice(0,10)：后者在 UTC+8 的早上八点前会返回昨天，“当前生效”就判错了
   const today = todayISO();
+
+  /** 价目只存 user_account.id（§9.10）。查不到名字说明账号已删，退回显示 id */
+  const staffName = (id: number | null) => (id == null ? "—" : staff.find((u) => u.id === id)?.display_name ?? `#${id}`);
 
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<PriceForm>(() => emptyPrice());
@@ -503,8 +822,8 @@ function PricesSection() {
       cell: (p) => (today >= p.effective_from && today <= p.effective_to ? <ToneBadge tone="success">生效中</ToneBadge> : <span className="text-xs text-muted-foreground">—</span>),
     },
     { key: "basis", header: "定价依据", cell: (p) => <span className="block max-w-[18rem] truncate text-xs">{orDash(p.basis)}</span> },
-    { key: "made", header: "制单", cell: (p) => <span className="text-xs">{`#${p.made_by}`}</span> },
-    { key: "approved", header: "审批", cell: (p) => <span className="text-xs">{p.approved_by == null ? "—" : `#${p.approved_by}`}</span> },
+    { key: "made", header: "制单", cell: (p) => <span className="text-xs">{staffName(p.made_by)}</span> },
+    { key: "approved", header: "审批", cell: (p) => <span className="text-xs">{staffName(p.approved_by)}</span> },
     {
       key: "op",
       header: "操作",
@@ -639,14 +958,6 @@ function PricesSection() {
 
 /* ---------------------------------------------------------------- 参数 */
 
-const SETTING_GROUP: Record<AppSetting["group"], string> = {
-  doc: "单证与编号",
-  weigh: "过磅计量",
-  settle: "结算与付款",
-  print: "打印与联次",
-  retain: "留样与数据保留",
-};
-
 function SettingsSection() {
   const { data: rows = [] } = useSettings();
   const can = useSession((s) => s.can);
@@ -693,7 +1004,7 @@ function SettingsSection() {
       {groups.map(([group, items]) => (
         <section key={group} className="border bg-card">
           <header className="flex items-center justify-between border-b px-3 py-2">
-            <span className="text-sm font-semibold">{SETTING_GROUP[group]}</span>
+            <span className="text-sm font-semibold">{SETTINGS_GROUP[group]}</span>
             <span className="text-xs text-muted-foreground">{items.length} 项</span>
           </header>
           <ul className="divide-y">
@@ -865,7 +1176,7 @@ function StaffSection() {
   return (
     <div className="flex flex-col gap-3">
       <SectionBar
-        note="身份来源已从「选择操作员」换成口令登录：制单 / 称重 / 化验 / 结算的留痕一律署名当前登录人，署名机制未变，只是拿人的入口换了。"
+        note="身份来源已从「选择操作员」换成密码登录：制单 / 称重 / 化验 / 结算的留痕一律署名当前登录人，署名机制未变，只是拿人的入口换了。"
         action={
           <Button
             size="sm"
@@ -933,7 +1244,9 @@ function StaffSection() {
         <DialogContent className="max-w-[480px]">
           <DialogHeader>
             <DialogTitle className="text-sm">{form.id == null ? "新增员工" : `编辑员工 ${form.display_name}`}</DialogTitle>
-            <DialogDescription className="text-xs">登录名唯一，停用后不能再用该身份制单，但历史留痕保持不变。</DialogDescription>
+            <DialogDescription className="text-xs">
+              登录名唯一，停用后不能再用该身份制单，但历史留痕保持不变。新员工首次登录用装机初始密码，进去后被强制改密，此后只有本人知道。
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
             <Field label="登录名 *">

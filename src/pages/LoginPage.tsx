@@ -1,9 +1,9 @@
 /**
- * 登录与首启设口令（02 §11 M10、05 §3 `/login`）。
+ * 登录与首启设密码（02 §11 M10、05 §3 `/login`）。
  *
  * 一个页面三种态，切换只看数据、不看按钮名字：
- *   signin  输入登录名与口令
- *   setup   账号还是装机初始口令 / mustChangePwd → 先设自己的口令才能进业务页
+ *   signin  输入登录名与密码
+ *   setup   账号还是装机初始密码 / mustChangePwd → 先设自己的密码才能进业务页
  *   locked  连错到达阈值 → 给倒计时，不让人反复试
  *
  * 三条现场约束：
@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Kbd } from "@/components/business/layout";
 
-/** 口令最短位数与 Rust 侧同源约定（`auth::PWD_MIN_LEN`） */
+/** 密码最短位数与 Rust 侧同源约定（`auth::PWD_MIN_LEN`） */
 const PWD_MIN_LEN = 6;
 
 function useCountdown(iso: string | null): number {
@@ -46,16 +46,19 @@ function useCountdown(iso: string | null): number {
   return left;
 }
 
+const DEV_LOGIN_USERNAME = "admin";
+const DEV_LOGIN_PASSWORD = "admin123";
+
 export function LoginPage() {
   const navigate = useNavigate();
   const session = useSession();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState(() => (import.meta.env.DEV ? DEV_LOGIN_USERNAME : ""));
+  const [password, setPassword] = useState(() => (import.meta.env.DEV ? DEV_LOGIN_PASSWORD : ""));
   const [fresh, setFresh] = useState("");
   const [again, setAgain] = useState("");
   const [capsOn, setCapsOn] = useState(false);
   const [busy, setBusy] = useState(false);
-  /** setup 态需要知道"刚才是用哪条口令进来的"：首启时那就是装机初始口令 */
+  /** setup 态需要知道"刚才是用哪条密码进来的"：首启时那就是装机初始密码 */
   const [oldPassword, setOldPassword] = useState("");
   const [result, setResult] = useState<LoginOutcome | null>(null);
   const firstField = useRef<HTMLInputElement>(null);
@@ -67,15 +70,19 @@ export function LoginPage() {
   const mode: "signin" | "setup" = mustSetup || result?.needsPasswordSetup === true ? "setup" : "signin";
 
   useEffect(() => {
+    if (import.meta.env.DEV && !username && !password) {
+      setUsername(DEV_LOGIN_USERNAME);
+      setPassword(DEV_LOGIN_PASSWORD);
+    }
     firstField.current?.focus();
-  }, [mode]);
+  }, [mode, password, username]);
 
   const error = result?.error ?? session.notice;
 
   /**
-   * 界面上那一栏此刻显示的就是要交上去的"旧口令"：`mustSetup` 决定它读哪份 state
+   * 界面上那一栏此刻显示的就是要交上去的"旧密码"：`mustSetup` 决定它读哪份 state
    * （见下面输入框的 `value`）。只认这一份，别再去兜 `oldPassword || password`——
-   * 那样会出现"框里是空的、提交上去的却是上一次登录遗留的口令"这种暗坑。
+   * 那样会出现"框里是空的、提交上去的却是上一次登录遗留的密码"这种暗坑。
    */
   const current = mustSetup ? oldPassword : password;
 
@@ -88,10 +95,10 @@ export function LoginPage() {
     setResult(outcome);
     setBusy(false);
     if (outcome.ok && outcome.session?.actor.mustChangePwd) {
-      // 后端对装机初始口令登录会直接建会话并置 mustChangePwd，于是切到"当前口令"这一支；
-      // 刚在登录表单敲进去的就是当前口令，带过去免得再输一遍、也免得按钮因空字段而点不动
+      // 后端对装机初始密码登录会直接建会话并置 mustChangePwd，于是切到"当前密码"这一支；
+      // 刚在登录表单敲进去的就是当前密码，带过去免得再输一遍、也免得按钮因空字段而点不动
       setOldPassword(password);
-      // 这条登录回执（"该账号尚未设置口令…"）只给 signin 态看，setup 态另有提示。就地清掉，
+      // 这条登录回执（"该账号尚未设置密码…"）只给 signin 态看，setup 态另有提示。就地清掉，
       // 否则改密成功那一刻 mustChangePwd 转 false、mode 会闪回 signin，把这条旧回执当错误红一下（一闪而过）
       session.setNotice(null);
     } else if (outcome.ok) {
@@ -103,7 +110,7 @@ export function LoginPage() {
     e?.preventDefault();
     if (busy) return;
     if (fresh !== again) {
-      setResult({ ok: false, error: "两次输入的口令不一致", session: null, needsPasswordSetup: true, attemptsLeft: null, lockedUntil: null });
+      setResult({ ok: false, error: "两次输入的密码不一致", session: null, needsPasswordSetup: true, attemptsLeft: null, lockedUntil: null });
       return;
     }
     setBusy(true);
@@ -111,21 +118,21 @@ export function LoginPage() {
 
     /*
      * 改密这条命令只认 Rust 内存里那条会话，而 setup 态有两条来路、会话在不在两说：
-     *  - 装机初始口令敲错：占位符账号即使命令失败也把界面停在设置步，此时后端压根没建会话；
-     *  - 初始口令验过了：会话在，只是还欠一次改密。
-     * 没会话硬去改密，只会回一句"登录已失效，请重新登录"——那既不是真正的原因（口令输错了），
+     *  - 装机初始密码敲错：占位符账号即使命令失败也把界面停在设置步，此时后端压根没建会话；
+     *  - 初始密码验过了：会话在，只是还欠一次改密。
+     * 没会话硬去改密，只会回一句"登录已失效，请重新登录"——那既不是真正的原因（密码输错了），
      * 也没给操作员留退路（再点多少次都是这句）。所以先按来路把会话补上 / 验真，再谈改密。
      */
     if (!useSession.getState().session) {
       const login = await session.signIn(username.trim(), current);
       if (!login.ok || !login.session) {
-        // 初始口令没过：退回登录态，让"用户名或口令不正确（还可试 N 次）"照 signin 那一支显示出来
+        // 初始密码没过：退回登录态，让"用户名或密码不正确（还可试 N 次）"照 signin 那一支显示出来
         setResult({ ...login, needsPasswordSetup: null });
         setBusy(false);
         return;
       }
       // 验过了，mustSetup 即将转真、那一栏改读 oldPassword：把刚成功的这条带过去，
-      // 免得下面万一改密失败（新口令不合规等），那栏看起来像是被清空了
+      // 免得下面万一改密失败（新密码不合规等），那栏看起来像是被清空了
       setOldPassword(current);
     } else if (!(await session.beat())) {
       // 表单在磅房机上挂过一夜：本地这份投影还在，后端那条会话早按空闲失效清了。
@@ -140,21 +147,22 @@ export function LoginPage() {
       session.setNotice(null);
       await navigate({ to: "/" });
     } else {
-      setResult({ ok: false, error: outcome.error ?? "设置口令未完成", session: null, needsPasswordSetup: true, attemptsLeft: null, lockedUntil: null });
+      setResult({ ok: false, error: outcome.error ?? "设置密码未完成", session: null, needsPasswordSetup: true, attemptsLeft: null, lockedUntil: null });
     }
     setBusy(false);
   }
 
-  /** 新口令够长、两次一致、且那一栏里确实有"要交上去的旧口令" */
+  /** 新密码够长、两次一致、且那一栏里确实有"要交上去的旧密码" */
   const setupReady = !busy && !!current && fresh.length >= PWD_MIN_LEN && fresh === again;
 
   return (
     <div className="flex h-svh w-full items-center justify-center overflow-auto bg-muted/30 p-6">
       <Card className="w-full max-w-sm">
-        <CardHeader>
+        <CardHeader className="justify-items-center text-center">
+          <img src="/logo.png" alt="磅禾" className="size-14 object-contain" />
           <CardTitle className="text-base">{station?.name ?? "磅禾粮站"}</CardTitle>
           <CardDescription>
-            {mode === "signin" ? "收粮计量结算系统 · 请登录后继续" : "首次使用请先设置本站登录口令"}
+            {mode === "signin" ? "收粮计量结算系统 · 请登录后继续" : "首次使用请先设置本站登录密码"}
           </CardDescription>
         </CardHeader>
 
@@ -177,8 +185,8 @@ export function LoginPage() {
               <AlertCircleIcon />
               <AlertTitle>账号已临时锁定</AlertTitle>
               <AlertDescription>
-                连错口令次数已达上限，请 <span className="tnum font-semibold">{Math.ceil(lockedLeft / 60)}</span> 分钟后再试。
-                <span className="mt-1 block text-xs">找站长在「基础档案 → 员工与岗位」里重置口令也可以。</span>
+                连错密码次数已达上限，请 <span className="tnum font-semibold">{Math.ceil(lockedLeft / 60)}</span> 分钟后再试。
+                <span className="mt-1 block text-xs">找站长在「基础档案 → 员工与岗位」里重置密码也可以。</span>
               </AlertDescription>
             </Alert>
           )}
@@ -206,7 +214,7 @@ export function LoginPage() {
                 />
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                口令
+                密码
                 <Input
                   type="password"
                   className="text-base"
@@ -216,7 +224,7 @@ export function LoginPage() {
                   onKeyUp={(e) => setCapsOn(e.getModifierState?.("CapsLock") ?? false)}
                 />
               </Label>
-              {capsOn && <p className="text-xs text-warning">大写锁定已开启，口令很可能输错了。</p>}
+              {capsOn && <p className="text-xs text-warning">大写锁定已开启，密码很可能输错了。</p>}
               <Button type="submit" disabled={busy || lockedLeft > 0 || !username.trim()} className="mt-1 w-full">
                 <LogInIcon data-slot="icon" />
                 {busy ? "校验中…" : "登录"}
@@ -228,10 +236,10 @@ export function LoginPage() {
           ) : (
             <form onSubmit={submitSetup} className="flex flex-col gap-3">
               <p className="text-xs text-muted-foreground">
-                {mustSetup ? "为安全起见需要改一次口令。" : BOOTSTRAP_HINT}
+                {mustSetup ? "为安全起见需要改一次密码。" : BOOTSTRAP_HINT}
               </p>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                {mustSetup ? "当前口令" : "装机初始口令"}
+                {mustSetup ? "当前密码" : "装机初始密码"}
                 <Input
                   ref={mustSetup ? undefined : firstField}
                   type="password"
@@ -243,7 +251,7 @@ export function LoginPage() {
                 />
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                新口令（至少 {PWD_MIN_LEN} 位）
+                新密码（至少 {PWD_MIN_LEN} 位）
                 <Input
                   type="password"
                   className="text-base"
@@ -263,13 +271,13 @@ export function LoginPage() {
                   onChange={(e) => setAgain(e.target.value)}
                 />
               </Label>
-              {capsOn && <p className="text-xs text-warning">大写锁定已开启，口令很可能输错了。</p>}
+              {capsOn && <p className="text-xs text-warning">大写锁定已开启，密码很可能输错了。</p>}
               <Button type="submit" disabled={!setupReady} className="mt-1 w-full">
                 <KeyRoundIcon data-slot="icon" />
                 {busy ? "保存中…" : "设置并进入"}
               </Button>
-              {/* 还没验过口令的这一支留条退路：想换个人登录、或本来就知道自己的口令，不该被扣在这屏。
-                  已登录待改密（mustSetup）不给退——口令没设，回去也只是再被守卫弹回来。 */}
+              {/* 还没验过密码的这一支留条退路：想换个人登录、或本来就知道自己的密码，不该被扣在这屏。
+                  已登录待改密（mustSetup）不给退——密码没设，回去也只是再被守卫弹回来。 */}
               {!mustSetup && (
                 <button
                   type="button"

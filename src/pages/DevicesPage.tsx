@@ -33,9 +33,8 @@ import { orDash, weight } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
 import { actorId, useActor, useSession } from "@/store/session";
 import { useDeviceStore, useScaleTick } from "@/store/device";
-import { DeviceStatusLight, Dot, ToneBadge } from "@/components/business/badges";
+import { DeviceStatusLight, ToneBadge } from "@/components/business/badges";
 import { Choose } from "@/components/business/Choose";
-import { DataTable, type Column } from "@/components/business/DataTable";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -46,18 +45,6 @@ import { cn } from "cn";
 
 /** 卡片的分组顺序：地磅排第一，它是现场最高频的故障源 */
 const KIND_ORDER: DeviceKind[] = ["scale", "idcard", "camera", "printer", "led", "cashbox", "signpad"];
-
-/** 每类设备在台账里最值得露一眼的寻址参数（按优先级取第一个存在的键） */
-const PRIMARY_CFG_KEY: Partial<Record<DeviceKind, string[]>> = {
-  scale: ["port"],
-  idcard: ["port"],
-  camera: ["host"],
-  // 热敏走 VID/PID 直写 usbprint.sys，针式走队列名，A4 走预览窗口
-  printer: ["vid", "rawQueue", "queue"],
-  led: ["host"],
-  cashbox: ["port"],
-  signpad: ["vid"],
-};
 
 const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
   scale: UsbIcon,
@@ -342,7 +329,7 @@ export function DevicesPage() {
               </Button>
             }
           >
-            {actor ? `「${actor.displayName} · ${ROLE[actor.role]}」` : "—"}没有 device.manage（仅站长可启用/停用设备、切换 Mock、动总开关）。点卡片标题仍能联机测试、看状态与原始帧——排障不需要权限，改配置才需要。要动手得用站长账号：换人走左侧栏底部「当前操作员」入口，切换需要口令。
+            {actor ? `「${actor.displayName} · ${ROLE[actor.role]}」` : "—"}没有 device.manage（仅站长可启用/停用设备、切换 Mock、动总开关）。点卡片标题仍能联机测试、看状态与原始帧——排障不需要权限，改配置才需要。要动手得用站长账号：换人走左侧栏底部「当前操作员」入口，切换需要密码。
           </CallOut>
         )}
 
@@ -397,13 +384,6 @@ export function DevicesPage() {
             </div>
           </div>
         )}
-
-        <section className="mt-4 flex flex-col gap-2">
-          <SectionTitle extra={<span className="text-xs text-muted-foreground">Mock 标记用于培训与演示，正式收粮前应全部关闭</span>}>
-            设备台账
-          </SectionTitle>
-          <DeviceTable devices={devices} onSelect={(c) => setSelected(c)} />
-        </section>
 
         <CallOut className="mt-4" tone="info" title="已开放：小票机配置写入；仍未开放：地磅串口参数与帧模板">
           小票机（ESC/POS 直连）的 VID / PID / 纸宽在右侧面板「配置…」里改，
@@ -1285,52 +1265,5 @@ function PrinterPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-/* ------------------------------------------------------------ 设备台账 */
-
-function DeviceTable({ devices, onSelect }: { devices: DeviceConfig[]; onSelect: (code: string) => void }) {
-  const columns = useMemo<Column<DeviceConfig>[]>(
-    () => [
-      { key: "code", header: "编码", cell: (d) => <span className="tnum">{d.code}</span>, sortValue: (d) => d.code },
-      { key: "name", header: "名称", cell: (d) => d.name, sortValue: (d) => d.name },
-      { key: "kind", header: "类型", cell: (d) => DEVICE_KIND[d.kind] },
-      { key: "driver", header: "驱动 / 协议", cell: (d) => <span className="text-xs text-muted-foreground">{d.driver}</span> },
-      { key: "status", header: "状态", cell: (d) => <DeviceStatusLight status={d.last_status} label={DEVICE_STATUS[d.last_status].label} /> },
-      {
-        key: "enabled",
-        header: "启用",
-        cell: (d) => (d.is_enabled === 1 ? <Dot tone="success" /> : <Dot tone="neutral" />),
-      },
-      { key: "mock", header: "Mock", cell: (d) => (d.is_mock === 1 ? <ToneBadge tone="warning">是</ToneBadge> : <span className="text-xs text-muted-foreground">否</span>) },
-      { key: "default", header: "默认", cell: (d) => (d.is_default === 1 ? <ToneBadge tone="info">默认</ToneBadge> : <span className="text-xs text-muted-foreground">—</span>) },
-      { key: "ok", header: "最后成功", cell: (d) => <span className="text-xs">{orDash(d.last_ok_at)}</span> },
-      { key: "err", header: "错误次数", align: "right", cell: (d) => <span className={cn("tnum", d.err_count > 0 && "text-destructive")}>{d.err_count}</span>, sortValue: (d) => d.err_count },
-      { key: "lastError", header: "最后错误", cell: (d) => <span className="text-xs text-destructive">{orDash(d.last_error)}</span> },
-      {
-        key: "cfg",
-        header: "关键参数",
-        // 只展一个寻址参数：整排 JSON 铺进表格既读不动又把列宽撑到 1800px，完整配置在右侧面板看
-        cell: (d) => {
-          const keys = PRIMARY_CFG_KEY[d.kind] ?? [];
-          const k = keys.find((key) => d.config[key] !== undefined);
-          return <span className="font-mono text-[11px] text-muted-foreground">{k === undefined ? "—" : `${k}=${d.config[k]}`}</span>;
-        },
-      },
-    ],
-    [],
-  );
-
-  return (
-    <DataTable
-      columns={columns}
-      rows={devices}
-      rowKey={(d) => d.code}
-      onRowClick={(d) => onSelect(d.code)}
-      dense
-      empty={<EmptyState title="没有登记任何设备" description="真实部署时由安装人员按现场硬件录入。" />}
-      toolbar={<span className="text-xs text-muted-foreground">点任意一行在右侧打开它的测试面板。</span>}
-    />
   );
 }

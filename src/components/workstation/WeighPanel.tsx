@@ -23,7 +23,8 @@ import { WeightDisplay } from "@/components/business/WeightDisplay";
 import { NumField } from "@/components/business/NumField";
 import { ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -109,7 +110,8 @@ export function WeighPanel({
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["party", o.party_id] });
     },
-    onError: () => toast.error("捕获失败，请重试；读数未丢，仪表仍在推送"),
+    // Rust 闸门回的是人话（"本单当前为 settled，不能再称重"），吞掉就没法排障了
+    onError: (e: Error) => toast.error(`捕获失败：${e.message || "请重试；读数未丢，仪表仍在推送"}`),
   });
 
   function submit(type: "gross" | "tare", value01kg: number, source: "scale" | "manual") {
@@ -162,41 +164,77 @@ export function WeighPanel({
   const tolerance01kg = mean01kg == null ? null : Math.round((mean01kg * tolerancePct) / 100);
   const liveDiff = pending && mean01kg != null ? pending.weight_01kg - mean01kg : null;
   const records = order?.records ?? [];
+  const lastRecord = records[records.length - 1];
 
   return (
-    <Card size="sm" className="min-w-0">
-      <CardHeader className="flex-row items-center justify-between border-b">
-        <CardTitle className="text-sm">③ 称重区</CardTitle>
-        <span className="text-xs text-muted-foreground">
-          分度 {weight(scaleDivision01kg, false)} · {scalePort} · {cameraOnline ? "抓拍就绪" : "摄像机离线，磅单将标「无抓拍」"}
-        </span>
+    <Card size="sm" className="min-w-0 py-0 gap-0">
+      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
+        <CardTitle className="text-xs font-semibold">③ 称重区</CardTitle>
+        <CardAction className="flex items-center gap-1.5 self-center text-xs text-muted-foreground">
+          分度 {weight(scaleDivision01kg, false)} · {scalePort}
+          {!cameraOnline && <ToneBadge tone="danger">无抓拍</ToneBadge>}
+        </CardAction>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex flex-col gap-1.5 p-2">
         <div
           className={cn(
-            "border bg-muted/20 px-4 py-3 transition-colors",
+            "flex flex-col sm:flex-row items-stretch justify-between gap-2 border bg-muted/20 p-2 transition-colors",
             flash && "border-success bg-success-bg",
             !scale.connected && "bg-muted/50",
           )}
         >
-          <WeightDisplay value01kg={scale.connected ? scale.weight01kg : null} stable={scale.stable} connected={scale.connected} />
+          {/* 左侧：地磅实时读数 */}
+          <div className="flex min-w-0 flex-1 flex-col justify-between">
+            <span className="text-[11px] font-medium text-muted-foreground">地磅实时读数</span>
+            <WeightDisplay
+              value01kg={scale.connected ? scale.weight01kg : null}
+              stable={scale.stable}
+              connected={scale.connected}
+              size="xl"
+            />
+          </div>
+
+          {/* 右侧：本单已取重量明细 */}
+          <div className="flex shrink-0 min-w-[130px] flex-col justify-center gap-1 border-t sm:border-l sm:border-t-0 pt-1.5 sm:pt-0 sm:pl-2.5">
+            <span className="text-[11px] font-medium text-muted-foreground border-b pb-0.5">本单实测重量</span>
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-muted-foreground">毛重</span>
+              <span className="tnum font-semibold text-foreground">
+                {order?.gross_weight_01kg != null ? weight(order.gross_weight_01kg) : "待捕获"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-muted-foreground">皮重</span>
+              <span className="tnum font-semibold text-foreground">
+                {order?.tare_weight_01kg != null ? weight(order.tare_weight_01kg) : "待捕获"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2 text-xs border-t pt-0.5">
+              <span className="font-semibold text-foreground">净重</span>
+              <span className="tnum font-bold text-primary text-sm">
+                {order?.net_weight_01kg != null ? weight(order.net_weight_01kg) : "—"}
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-1.5">
           <Button
-            size="lg"
+            size="default"
             variant={next === "gross" ? "default" : "outline"}
             onClick={() => captureLive("gross")}
             disabled={!order || !scale.connected || !scale.stable || capture.isPending}
+            className="h-8 text-xs"
           >
             捕获毛重
             <kbd className="ml-1 text-[10px] opacity-70">空格</kbd>
           </Button>
           <Button
-            size="lg"
+            size="default"
             variant={next === "tare" ? "default" : "outline"}
             onClick={() => captureLive("tare")}
             disabled={!order || !scale.connected || !scale.stable || capture.isPending}
+            className="h-8 text-xs"
           >
             捕获皮重
             <kbd className="ml-1 text-[10px] opacity-70">P</kbd>
@@ -210,16 +248,7 @@ export function WeighPanel({
           <p className="text-xs text-warning">读数未稳定（窗口内波动超容差），捕获按钮已锁定。</p>
         )}
 
-        <div className="grid grid-cols-3 gap-x-3 gap-y-1 border-y py-2 text-sm">
-          <span className="text-xs text-muted-foreground">毛重</span>
-          <span className="text-xs text-muted-foreground">皮重</span>
-          <span className="text-xs text-muted-foreground">净重</span>
-          <span className="tnum font-semibold">{weight(order?.gross_weight_01kg)}</span>
-          <span className="tnum font-semibold">{weight(order?.tare_weight_01kg)}</span>
-          <span className="tnum font-semibold">{weight(order?.net_weight_01kg)}</span>
-        </div>
-
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <Label className="flex items-center justify-between gap-2 text-xs">
             <span className="flex items-center gap-1.5">
               <PenLineIcon className="size-3.5" />
@@ -228,7 +257,7 @@ export function WeighPanel({
             <Switch checked={manual} onCheckedChange={(v) => setManual(v === true)} size="sm" />
           </Label>
           {manual && (
-            <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2 border bg-muted/20 p-2">
+            <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-1.5 border bg-muted/20 p-2">
               <NumField label="毛重" text={manualGross == null ? "" : String(toKg(manualGross))} onText={(t) => setManualGross(t.trim() === "" ? null : fromKg(t))} unit="kg" decimals={1} />
               <NumField label="皮重" text={manualTare == null ? "" : String(toKg(manualTare))} onText={(t) => setManualTare(t.trim() === "" ? null : fromKg(t))} unit="kg" decimals={1} />
               <div className="flex gap-1">
@@ -249,7 +278,7 @@ export function WeighPanel({
                   录皮重
                 </Button>
               </div>
-              <p className="col-span-3 text-xs text-warning">
+              <p className="col-span-3 text-[11px] text-warning">
                 手录必须有原因并在磅单上永久标记，事后由站长在审计日志里逐条核对。
               </p>
             </div>
@@ -257,41 +286,23 @@ export function WeighPanel({
         </div>
 
         {records.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <p className="text-xs font-medium text-muted-foreground">称重轨迹（每次捕获都留痕，含原始帧）</p>
-            <table className="w-full border text-xs">
-              <thead className="bg-muted/50 text-muted-foreground">
-                <tr>
-                  <th className="border px-1.5 py-1 text-left">次</th>
-                  <th className="border px-1.5 py-1 text-left">项</th>
-                  <th className="border px-1.5 py-1 text-right">读数</th>
-                  <th className="border px-1.5 py-1 text-left">来源</th>
-                  <th className="border px-1.5 py-1 text-left">时间</th>
-                  <th className="border px-1.5 py-1 text-left">原始帧</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((r) => (
-                  <tr key={r.id} className={cn(r.source === "manual" && "bg-warning-bg")}>
-                    <td className="tnum border px-1.5 py-1">{r.seq}</td>
-                    <td className="border px-1.5 py-1">{r.weigh_type === "gross" ? "毛重" : "皮重"}</td>
-                    <td className="tnum border px-1.5 py-1 text-right">{weight(r.weight_01kg)}</td>
-                    <td className="border px-1.5 py-1">{r.source === "scale" ? "地磅" : "手录"}</td>
-                    <td className="tnum border px-1.5 py-1">{dateTime(r.captured_at).slice(5)}</td>
-                    <td className="border px-1.5 py-1 font-mono text-[10px] text-muted-foreground">
-                      {r.raw_frame ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <p className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-muted-foreground">
+            <span>
+              称重轨迹 {records.length} 次
+              {records.some((r) => r.source === "manual") && <span className="text-warning">（含手录）</span>}
+            </span>
+            <span className="tnum">
+              最近 {lastRecord.weigh_type === "gross" ? "毛重" : "皮重"} {weight(lastRecord.weight_01kg)} ·{" "}
+              {dateTime(lastRecord.captured_at).slice(5)}
+              {lastRecord.source === "scale" ? " 地磅" : " 手录"}
+            </span>
+          </p>
         )}
 
         {order?.tare_override_by != null && (
-          <div className="border border-warning bg-warning-bg p-2 text-xs">
+          <div className="border border-warning bg-warning-bg p-1.5 text-xs">
             <ToneBadge tone="warning">皮重超容差放行</ToneBadge>
-            <p className="mt-1">
+            <p className="mt-0.5">
               授权人 {staff.find((u) => u.id === order.tare_override_by)?.display_name ?? `#${order.tare_override_by}`} ·
               事由：{order.tare_override_reason ?? "—"}
             </p>
@@ -299,19 +310,25 @@ export function WeighPanel({
         )}
 
         {/* mock 专用：没有真车，用这组按钮把"上磅/下磅"演出来 */}
-        <div className="flex flex-wrap items-end gap-2 border-t pt-2">
-          <span className="flex items-center gap-1 pb-1.5 text-xs text-muted-foreground">
-            <KeyboardIcon className="size-3.5" />
-            演示（真实环境由车辆上下磅驱动）
+        <div className="flex flex-wrap items-center gap-1.5 border-t pt-1.5 text-[11px]">
+          <span className="flex items-center gap-1 text-muted-foreground">
+            <KeyboardIcon className="size-3" />
+            演示
           </span>
-          <NumField label="模拟载重" text={simKg} onText={setSimKg} unit="kg" decimals={0} className="w-32" size="sm" />
-          <Button size="sm" variant="outline" onClick={() => scale.driveOn(Number(simKg) || 0)}>
+          <Input
+            aria-label="模拟载重"
+            value={simKg}
+            onChange={(e) => setSimKg(e.target.value)}
+            className="tnum h-7 w-20 text-xs px-1.5"
+          />
+          <span className="text-muted-foreground">kg</span>
+          <Button size="xs" variant="outline" onClick={() => scale.driveOn(Number(simKg) || 0)} className="h-7 text-xs">
             <CarFrontIcon />
-            开上磅
+            上磅
           </Button>
-          <Button size="sm" variant="outline" onClick={() => scale.driveOff()}>
+          <Button size="xs" variant="outline" onClick={() => scale.driveOff()} className="h-7 text-xs">
             <CarIcon />
-            开下磅
+            下磅
           </Button>
         </div>
       </CardContent>

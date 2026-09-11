@@ -20,7 +20,9 @@ import { cn } from "cn";
 
 export function DashboardPage() {
   const { data, isPending } = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard() });
-  const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices() });
+  // 设备面板随看板一起取（桌面端 = 真库 device_config，与下方离线告警同源），
+  // 不再单独 query mock 的 listDevices。
+  const devices = data?.devices ?? [];
 
   const offline = devices.filter((d) => d.is_enabled === 1 && d.last_status !== "online");
 

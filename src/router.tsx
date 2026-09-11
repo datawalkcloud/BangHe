@@ -42,7 +42,7 @@ import { DevicesPage } from "@/pages/DevicesPage";
 import { SystemPage, type SystemSection } from "@/pages/SystemPage";
 import { useSession } from "@/store/session";
 
-/** 会话状态 → 能不能进业务页。`mustChangePwd` 视同未登录：进了也只能看，不如先把口令设了 */
+/** 会话状态 → 能不能进业务页。`mustChangePwd` 视同未登录：进了也只能看，不如先把密码设了 */
 async function guard() {
   await useSession.getState().boot();
   const { session } = useSession.getState();
@@ -162,11 +162,12 @@ const systemRoute = createRoute({
   },
 });
 
-/** 已登录就别在登录页杵着；但"必须先设口令"的情况要留在原地（LoginPage 自己判断渲染哪一态） */
+/** 已登录就别在登录页杵着；但"必须先设密码"的情况要留在原地（LoginPage 自己判断渲染哪一态） */
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  beforeLoad: () => {
+  beforeLoad: async () => {
+    await useSession.getState().boot();
     const { session, phase } = useSession.getState();
     if (phase === "in" && session && !session.actor.mustChangePwd) {
       throw redirect({ to: "/" });

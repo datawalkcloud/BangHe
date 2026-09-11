@@ -25,6 +25,9 @@ serde_json = "1"
 # 小票机（斯普瑞特 SPRT 80mm）走 ESC/POS RAW：设备访问与票面排版都在 ticket-core，
 # 与 tools/escpos-probe 共用同一份实现，避免"工装能打对、软件打错"这类无法归因的分叉
 ticket-core = { path = "../crates/ticket-core" }
+# 精伦(Routon) iDR 身份证 / Mifare IC 卡读卡器封装（零依赖，加载 32/64 位 Sdtapi.dll）。
+# BangHe 是 64 位 Tauri 应用，加载 64 位版 Sdtapi.dll（见 resources/sdtapi/），in-process 直调。
+routon-idr = "0.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "0.11.0"
 thiserror = "2.0.20"

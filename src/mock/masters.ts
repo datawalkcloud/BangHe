@@ -13,6 +13,7 @@ import type {
   Warehouse,
 } from "./types";
 import type { Grade, PartyType, Role } from "@/lib/constants";
+import { demoSettings } from "@/lib/settings-catalog";
 import { addDays, atTime, dateKey, makeIdCard, makePlate, mulberry32, pad, todayBase } from "./rng";
 
 export const TODAY = todayBase();
@@ -293,7 +294,7 @@ export const devices: DeviceConfig[] = [
   {
     id: 5, code: "cam2", name: "卸粮口（大华 CGI）", kind: "camera", driver: "dahua_cgi",
     config: { host: "192.168.1.65", user: "admin", snapshotUrl: "/cgi-bin/snapshot.cgi?channel=1" },
-    is_enabled: 1, is_mock: 0, is_default: 0, last_status: "error", last_ok_at: "昨天 17:20", last_error: "HTTP 401 口令已变更", err_count: 7,
+    is_enabled: 1, is_mock: 0, is_default: 0, last_status: "error", last_ok_at: "昨天 17:20", last_error: "HTTP 401 密码已变更", err_count: 7,
   },
   {
     id: 6, code: "prn_main", name: "码单打印机 HP LaserJet M403d", kind: "printer", driver: "preview",
@@ -328,35 +329,14 @@ export const defaultDevice = (kind: DeviceConfig["kind"]) =>
 
 /* ------------------------------------------------------------- 系统参数 */
 
-export const settings: AppSetting[] = [
-  { key: "station_name", value: station.name, label: "站点名称", group: "doc", kind: "text", hint: "打印抬头第一行" },
-  { key: "doc_no_prefix_BD", value: "BD", label: "磅单前缀", group: "doc", kind: "text" },
-  { key: "doc_no_seq_len", value: "6", label: "流水号位数", group: "doc", kind: "number", hint: "按站点+前缀+年月归零重排" },
-  { key: "scale_division_01kg", value: "100", label: "地磅分度值（0.1kg）", group: "weigh", kind: "number", hint: "100 即 10 kg" },
-  {
-    key: "weight_rounding_mode", value: "nearest_div", label: "读数对齐方式", group: "weigh", kind: "select",
-    options: [{ value: "floor", label: "向下取整" }, { value: "half_up", label: "四舍五入" }, { value: "nearest_div", label: "就近分度" }],
-  },
-  { key: "stable_window_ms", value: "1500", label: "判稳窗口（毫秒）", group: "weigh", kind: "number" },
-  { key: "stable_tolerance_01kg", value: "50", label: "判稳波动容差（0.1kg）", group: "weigh", kind: "number" },
-  { key: "tare_tolerance_ratio", value: "5", label: "皮重偏差容差（%）", group: "weigh", kind: "number", hint: "超出即弹授权框" },
-  { key: "open_order_alert_minutes", value: "30", label: "在途停留提醒（分钟）", group: "weigh", kind: "number" },
-  { key: "settle_merge_by_day", value: "true", label: "同人同日合并结算", group: "settle", kind: "bool" },
-  { key: "payment_due_days", value: "3", label: "付款时效（天）", group: "settle", kind: "number", hint: "超期进入看板告警" },
-  { key: "allow_credit", value: "true", label: "允许挂账", group: "settle", kind: "bool" },
-  {
-    key: "print_channel", value: "preview", label: "打印通道", group: "print", kind: "select",
-    options: [{ value: "preview", label: "窗口预览" }, { value: "pdf_silent", label: "PDF 静默" }, { value: "raw", label: "RAW 直连" }],
-    hint: "Tauri v2 没有静默打印 API：A4 与 241 针式默认窗口预览；热敏小票走 ESC/POS 直写 usbprint.sys，不弹对话框",
-  },
-  { key: "print_paper", value: "A4", label: "码单纸型", group: "print", kind: "select", options: [{ value: "A4", label: "A4 激光" }, { value: "dot241", label: "241 针式" }, { value: "thermal80", label: "80 热敏" }, { value: "thermal58", label: "58 热敏" }] },
-  { key: "print_copies", value: "3", label: "联数（存根/财务/客户）", group: "print", kind: "number" },
-  { key: "reprint_need_auth", value: "true", label: "补打需站长授权", group: "print", kind: "bool" },
-  { key: "capture_keep_days", value: "365", label: "抓拍留存（天）", group: "retain", kind: "number" },
-  { key: "retention_sample_days", value: "30", label: "留样保存（天）", group: "retain", kind: "number" },
-  { key: "pii_mask_id_card", value: "true", label: "界面掩码身份证号", group: "retain", kind: "bool" },
-  { key: "backup_keep_count", value: "14", label: "备份保留份数", group: "retain", kind: "number" },
-];
+/**
+ * 演示值取自 `src/lib/settings-catalog.ts` 那份目录，不再手写一遍。
+ * 键名与单位口径统一到 03 §9.3.1 之后，mock 再自带一套字典就是第二套事实——
+ * 桌面端读库、浏览器读目录，两边共用的只能是这一份。
+ */
+export const settings: AppSetting[] = demoSettings().map((s) =>
+  s.key === "station_name" ? { ...s, value: station.name } : s,
+);
 
 export function settingValue(key: string, fallback = ""): string {
   return settings.find((s) => s.key === key)?.value ?? fallback;

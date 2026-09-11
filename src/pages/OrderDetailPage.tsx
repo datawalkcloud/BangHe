@@ -92,7 +92,7 @@ export function OrderDetailPage() {
 
   const voidMut = useMutation({
     mutationFn: () =>
-      // authorized_by 仍是「选站长」的 mock id：站长口令授权链路下一轮才接，这里先不动
+      // authorized_by 是真库在职站长的 id，Rust 侧验岗；站长的密码复核还没接（02 §11 要求二次确认）
       api.voidOrder({ order_no: orderNo, reason: voidReason.trim(), operator_id: actorId(), authorized_by: authId ?? 0 }),
     onSuccess: (o) => {
       if (!o) {
@@ -105,7 +105,9 @@ export function OrderDetailPage() {
       setVoidAuth("");
       invalidate();
     },
-    onError: () => toast.error("作废失败，请重试"),
+    // 真库把"为什么不能废"说得很具体（已结算/已挂结算单/授权人不是在职站长），
+    // 固定文案会把原因吞掉——磅员站在磅房门口只看到"请重试"是最坏的结果
+    onError: (e: Error) => toast.error(e.message || "作废失败，请重试"),
   });
 
   if (isLoading) {

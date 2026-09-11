@@ -17,7 +17,7 @@ import type {
 } from "./types";
 import type { PartyType, Tone } from "@/lib/constants";
 import { GRADES, PARTY_TYPE, PAYMENT_METHOD } from "@/lib/constants";
-import { CASHIERS, HISTORY_DAYS, INSPECTORS, REGISTRARS, STATION_MASTER_ID, TODAY, WEIGHERS, devices, partyOf, settings, userName, varietySpec } from "./masters";
+import { CASHIERS, HISTORY_DAYS, INSPECTORS, REGISTRARS, STATION_MASTER_ID, TODAY, WEIGHERS, devices, partyOf, settingValue, userName, varietySpec } from "./masters";
 import { durationText, money } from "@/lib/format";
 import { addDays, dateKey } from "./rng";
 import { orders, payments, printLogs, qcOf, settlements } from "./orders";
@@ -58,8 +58,8 @@ const OPEN = new Set(["draft", "registered", "qc_done", "gross_weighed", "tare_w
 
 export function buildDashboard(): Dashboard {
   const tk = todayKey();
-  const dueDays = Number(settings.find((s) => s.key === "payment_due_days")!.value);
-  const alertMinutes = Number(settings.find((s) => s.key === "open_order_alert_minutes")!.value);
+  const dueDays = Number(settingValue("payment_due_warn_hours")) / 24;
+  const alertMinutes = Number(settingValue("open_order_alert_minutes"));
 
   const todayRows = orders.filter((o) => o.business_date === tk);
   const s = sumW(todayRows.filter(stat2));
@@ -167,6 +167,11 @@ export function buildDashboard(): Dashboard {
     byVariety,
     byPartyType: Array.from(typeAgg.entries()).map(([type, v]) => ({ type, label: PARTY_TYPE[type], ...v })),
     hourCurve,
+    // 设备面板与上方"离线告警"同源（都取 mock devices），与真库实现同形状：
+    // 只投影页面用到的台账字段，不带 config/driver 等配置细节。
+    devices: devices.map(({ code, name, kind, is_enabled, last_status, last_error }) => ({
+      code, name, kind, is_enabled, last_status, last_error,
+    })),
   };
 }
 
@@ -390,13 +395,14 @@ function userRole(id: number) {
 }
 
 export function creditRows() {
+  const dueDays = Number(settingValue("payment_due_warn_hours")) / 24;
   return settlements
     .filter((s) => s.payment_status !== "paid" && s.status === "normal")
     .map((s) => ({
       settlement: s,
       unpaid_fen: s.payable_fen - s.paid_fen,
-      due_date: dateKey(addDays(new Date(`${s.business_date}T00:00:00`), Number(settings.find((x) => x.key === "payment_due_days")!.value))),
-      overdue_days: Math.max(0, Math.floor((Date.now() - new Date(`${s.business_date}T00:00:00`).getTime()) / 86400000) - Number(settings.find((x) => x.key === "payment_due_days")!.value)),
+      due_date: dateKey(addDays(new Date(`${s.business_date}T00:00:00`), dueDays)),
+      overdue_days: Math.max(0, Math.floor((Date.now() - new Date(`${s.business_date}T00:00:00`).getTime()) / 86400000) - dueDays),
     }))
     .sort((a, b) => b.overdue_days - a.overdue_days);
 }
