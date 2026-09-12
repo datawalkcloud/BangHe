@@ -507,7 +507,7 @@ fn every_migration_file_is_registered() {
     }
 }
 
-/// §9 的 25 张表 ⇄ 实际建出来的 25 张表，一张都不许多/少
+/// §9 的 26 张表 ⇄ 实际建出来的 26 张表，一张都不许多/少
 #[test]
 fn doc_section9_table_set_matches_database() {
     let doc = parse_doc();
@@ -519,7 +519,7 @@ fn doc_section9_table_set_matches_database() {
         declared, actual,
         "§9 声明的表与实际库不一致（左=文档 右=实际）。schema_migration 已由执行器建，不参与比对"
     );
-    assert_eq!(declared.len(), 25, "§9 应当是 25 张表");
+    assert_eq!(declared.len(), 26, "§9 应当是 26 张表");
 }
 
 /// 剥掉部分索引写法带来的 `WHERE ...` 尾巴：`UNIQUE WHERE NOT NULL` 描述的是

@@ -1,0 +1,48 @@
+﻿diff --git a/src/components/ui/data-table.tsx b/src/components/ui/data-table.tsx
+index 3b931d1..a2d4ad7 100644
+--- a/src/components/ui/data-table.tsx
++++ b/src/components/ui/data-table.tsx
+@@ -1,20 +1,23 @@
+ /**
+- * 鍒楄〃琛ㄦ牸鈥斺€攕hadcn DataTable 褰㈡€併€?+ * 鍒楄〃琛ㄦ牸鈥斺€攕hadcn UI 瑙嗚 + TanStack Table v9 headless 寮曟搸銆?  *
+- * 寮曟搸鏄?@tanstack/react-table v9锛屽瑙備笌浜や簰浠嶇劧璧?components/ui/table 閭ｅ嚑涓師璇紝
+- * 涔熷氨鏄?shadcn 瀹樻柟 DataTable 鐨勯厤鏂癸紙鍒楀畾涔?+ flexRender + 鍒嗛〉/鍕鹃€夌姸鎬佺敱 table 瀹炰緥鎸佹湁锛夈€?- * 瀹冨拰 business/DataTable.tsx 鐨勫垪濂戠害锛圕olumn<T>锛夋槸涓€鏍风殑锛岃皟鐢ㄦ柟鍙崲涓€琛?import 灏辫兘鍒囪繃鏉ャ€?+ * 寮曟搸璧?@tanstack/react-table v9 鐨?useTable + tableFeatures锛歷9 鎶?v8 鐨?+ * useReactTable 鏀瑰悕 useTable銆佹妸琛屾ā鍨嬫敼鎴愭樉寮忔敞鍐岀殑 features锛坒eatures 蹇呴』
++ * 鍦ㄦā鍧椾綔鐢ㄥ煙涓€娆℃€ц閰嶏紝鏀捐繘缁勪欢閲屼細鏁存５缂撳瓨浣滃簾锛夛紝鎶?flexRender 鏀跺洖鎴愪簡
++ * table.FlexRender锛涘垪瀹氫箟涔熺敱 ColumnDef<TData, TValue> 鏀剁揣鎴?ColumnDef<typeof
++ * features, T>銆傝繖涓夋潯鍙樺寲缁熶竴璁板湪杩欓噷锛屾柟渚垮悗缁?review 鏃朵竴鐪煎榻愩€?  *
+- * 鎶?v8 鐨勪緥瀛愪細鐩存帴缂栬瘧涓嶈繃锛寁9 鏈変笁澶勫樊鍒細
+- *  1. useReactTable 鈫?useTable锛屼笖娌℃湁 getCoreRowModel() 杩欑被鍙傛暟浜嗭紝
+- *     琛屾ā鍨嬫敼鎴愭樉寮忔敞鍐岋細tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel() })锛?- *  2. 琛屾ā鍨?slot 蹇呴』鍜屽畠鐨?feature 鎴愬鍑虹幇鈥斺€斿彧鍐?sortedRowModel 浼氬湪 tableFeatures 澶勬姤缂哄墠缃紱
+- *  3. 娌℃湁 flexRender 瀵煎嚭锛屾覆鏌撴敼鐢?table.FlexRender銆?+ * 瑙嗚闆朵欢鍏ㄩ儴璧?shadcn锛氳〃澶存帓搴忔寜閽槸 components/ui/button锛坴ariant=ghost锛夈€?+ * 琛ㄥご鍗曞厓鏍艰蛋 components/ui/table 鐨?TableHeader/TableHead/...銆佹瘡椤垫潯鏁拌蛋
++ * 椤圭洰鍐呯殑 ui/native-select锛屽垎椤垫寚绀哄櫒璧?ui/pagination銆?+ *
++ * 涓?05 搂6.3 鐨勫绾︼細鍒楀畾涔夋部鐢?Column<T>锛坘ey/header/cell/sortValue/align/...锛夛紝
++ * 璋冪敤鏂瑰彧鎹竴琛?import 灏辫兘鍒囪繃鏉ャ€?  *
+  * 鍒绘剰淇濈暀鐨勬棫琛屼负锛堢鎴跨幇鍦虹湡鍦ㄧ敤锛屼笉鏄缇庡彇鑸嶏級锛?  *  - 琛ㄥご sticky + 涓嶉€忔槑搴曡壊锛?- *  - 鎺掑簭鍙湪 闄嶅簭 鈫?鍗囧簭 涔嬮棿缈伙紝涓嶅嚭鐜般€屽彇娑堟帓搴忋€嶏紝涓旈鐐逛负闄嶅簭锛?- *  - 绌哄€兼亽鎺掓渶鍚庯紙sortUndefined:"last" 鍦?desc 涓嬩笉浼氳鍙栧弽锛岃 createSortedRowModel 鐨?compareRows锛夛紱
++ *  - 鎺掑簭鍙湪銆岄檷搴?鈫?鍗囧簭銆嶄箣闂寸炕锛屼笉鍑虹幇銆屽彇娑堟帓搴忋€嶏紝涓旈鐐瑰嵆闄嶅簭锛?+ *  - 绌哄€兼亽鎺掓渶鍚庯紙sortUndefined:"last" 閰嶅悎 compareValues 鍏滃簳锛夛紱
+  *  - 銆屽叏閫夈€嶆槸鍏ㄩ噺绛涢€夌粨鏋滆€屼笉鏄綋鍓嶉〉锛坱oggleAllRowsSelected 璧?pre-grouped 琛屾ā鍨嬶級銆?  */
+ "use client"
+@@ -336,11 +339,13 @@ export function DataTable<T extends RowData>({
+                       )}
+                     >
+                       {header.column.getCanSort() ? (
+-                        <button
++                        <Button
+                           type="button"
++                          variant="ghost"
++                          size="sm"
+                           onClick={header.column.getToggleSortingHandler()}
+                           className={cn(
+-                            "inline-flex items-center gap-1 hover:text-foreground",
++                            "h-7 -mx-1.5 gap-1 rounded-sm px-1.5 font-medium hover:bg-transparent hover:text-foreground",
+                             col?.align === "right" && "flex-row-reverse",
+                             sorted && "text-foreground",
+                           )}
+@@ -353,7 +358,7 @@ export function DataTable<T extends RowData>({
+                           ) : (
+                             <ArrowUpDownIcon className="size-3.5 opacity-40" />
+                           )}
+-                        </button>
++                        </Button>
+                       ) : (
+                         content
+                       )}

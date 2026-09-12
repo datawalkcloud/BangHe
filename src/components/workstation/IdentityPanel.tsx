@@ -6,9 +6,12 @@
  *
  * 读卡是可选路径：阅读器离线（mockOff）时必须能搜档案或手工输入，
  * 这是 05 §10-1「无外设也要能完成闭环」的硬要求。
+ *
+ * **流转卡不是可选的**（06 §4.0）：站点参数「制单必须绑卡」默认开着，点「取号并制单」
+ * 先弹刷卡框，读到一张可用的空闲卡才取号——读不到卡这张单就制不成。关掉该参数
+ * （或本站压根不用流转卡）才回到"无卡制单、事后靠后台监听发卡"。
  */
 import { useEffect, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDownIcon, ChevronRightIcon, CreditCardIcon, SearchIcon, UserRoundPlusIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -17,10 +20,14 @@ import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/
 import { PARTY_TYPE, ROLE } from "@/lib/constants";
 import { maskIdCard, ton, validateIdCard, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
+import { useSetting } from "@/hooks/useLookups";
 import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
+import { CardScanDialog } from "@/components/business/CardScanDialog";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
+import { CardBindDialog } from "@/components/workstation/CardBindDialog";
+import { QuickPartyDialog } from "@/components/workstation/QuickPartyDialog";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -80,15 +87,25 @@ export function IdentityPanel({
   const can = useSession((s) => s.can);
   const mockOff = useDeviceStore((s) => s.mockOff);
   const reading = useDeviceStore((s) => s.reader.idcard.reading);
-  const cardError = useDeviceStore((s) => s.reader.idcard.error);
-  const read = useDeviceStore((s) => s.reader.idcard.read);
   const lastCard = useDeviceStore((s) => s.reader.idcard.last);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** 「请放卡」监听弹窗：点读卡不再一次性点读，而是开弹窗连续寻卡（与档案页读卡建档同一套） */
+  const [scanOpen, setScanOpen] = useState(false);
+  /** 读卡读到的是没建过档的人：就地弹「无档案 · 快捷登记」，不把磅员赶回档案页重走一遍 */
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  /** 「制单请放流转卡」弹窗：点「取号并制单」时卡还没就位就弹它（06 §4.0） */
+  const [bindOpen, setBindOpen] = useState(false);
+  /** 这次制单要绑的卡（刷到才非空）。绑卡与取号同一次事务，所以它只在号取成之前存在 */
+  const [cardNo, setCardNo] = useState<string | null>(null);
   /** 去向默认折起来：多数站点制单时不登记仓房/货位，不该占住磅员的主视线 */
   const [destOpen, setDestOpen] = useState(false);
   const qc = useQueryClient();
 
-  // 读卡结果回填：命中档案就带出姓名/证号/默认车牌，未命中提示去建档
+  // 本站制单是否必须先刷一张流转卡。库里没这个键时按"强制"走，与 create_order 的默认值同一口径
+  const flowOn = (useSetting("card_flow_mode").raw ?? "auto") !== "off";
+  const requireCard = flowOn && useSetting("card_required_on_create").raw !== "false";
+
+  // 读卡结果回填：命中档案就带出姓名/证号/默认车牌，未命中就地开快捷登记框
   useEffect(() => {
     if (!lastCard) return;
     // 一律以证号为准：party_id 只是真机回查档案的附带结果，演示卡那个是 mock 序号，
@@ -97,7 +114,9 @@ export function IdentityPanel({
       parties.find((x) => x.id_card_no.trim().toUpperCase() === lastCard.id_card_no) ??
       (lastCard.real ? parties.find((x) => x.id === lastCard.party_id) : undefined);
     if (!hit) {
-      toast.warning(`读到证号 ${maskIdCard(lastCard.id_card_no)}（${lastCard.name}），但系统内没有对应档案，请先建档`);
+      // 只报一条 toast 等于把人赶回档案页：农户还站在读卡器前，姓名/证号/住址其实已经读到了。
+      // 弹窗里补个电话就能建档，建好直接选为本单售粮人（02 §F1.1「无档案时不出现两次以上的手工输入」）
+      setEnrollOpen(true);
       return;
     }
     // 读卡不能成为绕过停用的后门：停用档案只挡新单，历史磅单照旧可查
@@ -111,12 +130,9 @@ export function IdentityPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastCard]);
 
-  useEffect(() => {
-    if (cardError) toast.error(cardError);
-  }, [cardError]);
-
   const create = useMutation({
-    mutationFn: () =>
+    // 卡号走 mutation 变量：刷卡弹窗的回调里 setCardNo 还没生效，闭包会拿到上一张
+    mutationFn: (card: string | null) =>
       api.createOrder({
         party_id: draft.party!.id,
         variety_id: draft.varietyId!,
@@ -124,19 +140,25 @@ export function IdentityPanel({
         warehouse_id: draft.warehouseId,
         slot_id: draft.slotId,
         remark: draft.remark.trim() || null,
+        card_no: card,
         registered_by: actorId(),
         // 外设关掉后只能手录，来源标记必须诚实（05 §6.1）
         weight_source: mockOff ? "manual" : "scale",
       }),
     onSuccess: (o) => {
-      toast.success(`已取号 ${o.order_no}`);
+      toast.success(o.card_no ? `已取号 ${o.order_no} · 已绑卡 ${o.card_no}` : `已取号 ${o.order_no}`);
+      setCardNo(null);
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["open-orders"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["cards"] });
       onCreated(o.order_no);
     },
     // 真库闸门回的是人话（"该售粮人档案不存在或已删除，请先建档"），要原样送到磅员眼前
-    onError: (e: Error) => toast.error(`取号失败：${e.message || "请检查档案与品种是否齐全"}`),
+    onError: (e: Error) => {
+      setCardNo(null); // 被服务端拦下的卡不许原地重试，重新刷一张（并发下它可能刚被别人发走）
+      toast.error(`取号失败：${e.message || "请检查档案与品种是否齐全"}`);
+    },
   });
 
   const blocked = !can("order.create")
@@ -148,6 +170,16 @@ export function IdentityPanel({
         : draft.party && !validateIdCard(draft.party.id_card_no)
           ? "该档案身份证号校验位不通过，请到农户档案更正"
           : null;
+
+  /** 「取号并制单」：本站要求绑卡而卡还没就位时先弹刷卡框，读到可用的卡由弹窗直接落这一单（06 §4.0） */
+  const submit = () => {
+    if (blocked) return;
+    if (requireCard && !cardNo) {
+      setBindOpen(true);
+      return;
+    }
+    create.mutate(cardNo);
+  };
 
   /** 停用只挡住新单：制单下拉一律排除 is_active = 0 的档案，历史磅单上仍按当时快照显示 */
   const activeVarieties = varieties.filter((v) => v.is_active !== 0);
@@ -167,9 +199,9 @@ export function IdentityPanel({
     const orderDestination = [order.warehouse_name, order.slot_label].filter(Boolean).join(" / ");
     return (
       <Card size="sm" className="py-0 gap-0">
-        <CardHeader className="border-b py-1 px-2.5">
+        <CardHeader className="card-header-compact border-b px-2.5">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold">
-            ① 身份与制单
+            身份与制单
             <OrderStatusBadge status={order.status} />
           </CardTitle>
         </CardHeader>
@@ -223,14 +255,19 @@ export function IdentityPanel({
 
   return (
     <Card size="sm" className="py-0 gap-0">
-      <CardHeader className="border-b py-1 px-2.5">
-        <CardTitle className="text-xs font-semibold">① 身份与制单</CardTitle>
+      <CardHeader className="card-header-compact border-b px-2.5">
+        <CardTitle className="text-xs font-semibold">身份与制单</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 p-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
             size="sm"
-            onClick={() => void read()}
+            onClick={() => {
+              // 清掉上一轮读卡在 store 里的残留（last/error 都长存不清）：
+              // 不清的话弹窗一挂载就会把旧卡当"刚读到"回填、把旧错误当新故障重放
+              useDeviceStore.getState().reader.idcard.clear();
+              setScanOpen(true);
+            }}
             disabled={reading || mockOff || !can("order.create")}
             className="h-7 text-xs"
           >
@@ -241,10 +278,25 @@ export function IdentityPanel({
             <SearchIcon />
             搜档案
           </Button>
+          {/* 无外设 / 证号在档案里录错时的那条路：手录一张新档案，不用离开制单去档案页
+              （05 §4.0 的"手录证号建档"、mockOff 提示语都靠这个按钮兑现） */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              useDeviceStore.getState().reader.idcard.clear();
+              setEnrollOpen(true);
+            }}
+            disabled={!can("order.create")}
+            className="h-7 text-xs"
+          >
+            <UserRoundPlusIcon />
+            新档案
+          </Button>
         </div>
         {mockOff && (
           <p className="text-xs text-muted-foreground">
-            外设总开关已关闭，读卡不可用：请点「搜档案」选人，或手工录入证号后新建档案。
+            外设总开关已关闭，读卡不可用：请点「搜档案」选人，或点「新档案」手工录入证号建档。
           </p>
         )}
 
@@ -358,7 +410,28 @@ export function IdentityPanel({
         </div>
 
         <div className="flex flex-col gap-1 border-t pt-1">
-          <Button size="sm" onClick={() => create.mutate()} disabled={!!blocked || create.isPending} className="h-7 text-xs">
+          {cardNo ? (
+            <p className="flex items-center justify-between gap-1.5 text-xs">
+              <span className="min-w-0 truncate text-muted-foreground">
+                流转卡 <span className="tnum text-foreground">{cardNo}</span> · 随本单一起绑上
+              </span>
+              <button type="button" onClick={() => setBindOpen(true)} className="shrink-0 text-primary hover:underline">
+                换卡
+              </button>
+            </p>
+          ) : requireCard ? (
+            <p className="text-[11px] text-muted-foreground">本站制单要绑流转卡：点下面的按钮会提示把 IC 卡贴到感应区</p>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setBindOpen(true)}
+              disabled={!!blocked}
+              className="self-start text-[11px] text-muted-foreground enabled:hover:text-foreground enabled:hover:underline disabled:opacity-50"
+            >
+              想顺手把卡也发了？刷一张 IC 卡（选填）
+            </button>
+          )}
+          <Button size="sm" onClick={submit} disabled={!!blocked || create.isPending} className="h-7 text-xs">
             取号并制单（F7）
           </Button>
           {blocked && <p className="text-xs text-warning">{blocked}</p>}
@@ -366,6 +439,46 @@ export function IdentityPanel({
       </CardContent>
 
       <PartyPicker open={pickerOpen} onOpenChange={setPickerOpen} onPick={(p) => onDraft({ party: p, vehicleNo: p.default_vehicle_no ?? draft.vehicleNo })} />
+
+      {/* 读卡弹窗：开着就连续寻卡，读到卡由上方 lastCard 副作用带出档案并自动关窗。
+          退路是「搜档案」——复用同一个 PartyPicker，读不出卡也能继续制单 */}
+      <CardScanDialog
+        open={scanOpen}
+        onOpenChange={setScanOpen}
+        scene="order"
+        onManualEntry={() => setPickerOpen(true)}
+      />
+
+      {/* 制单绑卡（06 §4.0）：读到一张在册、空闲、没挂着未完成单的卡才算就位，随即取号写单 */}
+      <CardBindDialog
+        open={bindOpen}
+        onOpenChange={setBindOpen}
+        required={requireCard}
+        onPicked={(sn) => {
+          setBindOpen(false);
+          setCardNo(sn);
+          // 强制绑卡的站点：卡一就位就把这单制掉，省一次点击（弹窗文案就是这么说的）
+          if (requireCard) create.mutate(sn);
+        }}
+        onSkip={() => {
+          setBindOpen(false);
+          submit(); // 走同一条校验：选填入口可能在售粮人还没选定时就开着
+        }}
+      />
+
+      {/* 读到没建过档的证号：就地快捷登记，建好直接选为本单售粮人（02 §F1.1）。
+          关框即清掉这张卡：不清的话下次点「制单」会拿这张旧卡再弹一遍，等于替上一个人建档 */}
+      <QuickPartyDialog
+        open={enrollOpen}
+        onOpenChange={(v) => {
+          setEnrollOpen(v);
+          if (!v) useDeviceStore.getState().reader.idcard.clear();
+        }}
+        card={lastCard}
+        parties={parties}
+        onEnrolled={(p) => onDraft({ party: p, vehicleNo: draft.vehicleNo || p.default_vehicle_no || "" })}
+        onSearchParty={() => setPickerOpen(true)}
+      />
     </Card>
   );
 }
@@ -391,7 +504,7 @@ const ORDER_HINT: Record<WeighOrder["status"], string> = {
  * ② 皮重参考。
  *
  * 只做"显示 + 偏差警示"，绝不拿历史值去替代实测皮重（03 §4.2）；
- * 偏差超容差时整块转警示态，真正的授权拦截发生在称重捕获那一步。
+ * 偏差超容差时整块转警示态，捕获那一步只给警告并照常入账（磅单留醒目提醒）。
  * 磅员要的是"差多少、有没有超"，所以最近一次／均值／容差／偏差压成一行，
  * 近 5 次明细以数字串保留在同一行内，完整历史看农户档案页。
  */
@@ -415,8 +528,8 @@ export function TarePanel({
   const diff = currentTare01kg != null && mean01kg != null ? currentTare01kg - mean01kg : null;
   return (
     <Card size="sm" className={cn("py-0 gap-0", alert && "ring-warning/60")}>
-      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
-        <CardTitle className="text-xs font-semibold">② 皮重参考</CardTitle>
+      <CardHeader className="card-header-compact grid-cols-[1fr_auto] items-center border-b px-2.5">
+        <CardTitle className="text-xs font-semibold">皮重参考</CardTitle>
         <CardAction className="self-center">
           {alert ? <ToneBadge tone="warning">偏差超容差</ToneBadge> : <ToneBadge tone="neutral">参考值</ToneBadge>}
         </CardAction>
@@ -448,7 +561,7 @@ export function TarePanel({
             </QuickDetailLink>
           )}
         </p>
-        {alert && <p className="text-xs text-warning">捕获皮重时会拦下要求站长授权；历史值只作参考，不替代实测。</p>}
+        {alert && <p className="text-xs text-warning">捕获时会给出超差警告并照常入账，磅单上留醒目提醒；历史值只作参考，不替代实测。</p>}
       </CardContent>
     </Card>
   );

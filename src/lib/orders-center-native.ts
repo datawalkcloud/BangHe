@@ -1,13 +1,16 @@
 /**
  * 磅单中心补口的原生通道（05 §3 `/orders/$orderNo`；02 §7 M2 / §F2.3）。
  *
- * 只有两个函数，因为磅单中心的读路径已经被 `orders-native.ts` 整体接上了真库
+ * 只有三个函数，因为磅单中心的读路径已经被 `orders-native.ts` 整体接上了真库
  * （`listOrders` / `getOrder` / `logPrint`，以及详情要的 `getParty` / `listQc`）。
- * 这里补的是那一份里没有、后端也刚新增的两条命令：
+ * 这里补的是那一份里没有、后端也刚新增的三条命令：
  *  - `voidOrder` → `order_void`：mock 的作废谁点都放行，真库补上「未到 settled 才能作废 /
  *    原因不少于 6 字 / 授权人必须是在职站长 / 已挂结算单的先拦住」，并写 `order.void` 审计。
  *  - `settlementOfOrderNo` → `settlement_of_order`：mock 每次都能按单号查到结算单，真库此前
  *    只在结算命令的返回值里给过一次，详情页刷新一下就再也拿不到「所属结算单」的跳转。
+ *  - `assignOrderDestination` → `order_assign_destination`：去向在制单时选填（03 §9.9），
+ *    粮真进了仓由值仓事后补一笔。岗位闸门在 Rust 的 KEEPER_ROLES，署名写进 `keeper_id`，
+ *    改派写 `order.destination` 审计；只选货位时按货位反查仓房，mock 同规则。
  *
  * 为什么不并进 `orders-native.ts`：同一批后端命令、两个并行改动面，写进同一个文件必然互相覆盖。
  * 收口时把两份展开合成一份即可，命令名与字段完全同源。
@@ -28,6 +31,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 export type VoidOrderInput = Parameters<typeof mock.voidOrder>[0];
+export type AssignDestinationInput = Parameters<typeof mock.assignOrderDestination>[0];
 
 export const ordersCenterApi = {
   settlementOfOrderNo: (no: string): Promise<Settlement | null> =>
@@ -35,4 +39,8 @@ export const ordersCenterApi = {
 
   voidOrder: (input: VoidOrderInput): Promise<WeighOrder | null> =>
     runningInTauri() ? call("order_void", { input }) : mock.voidOrder(input),
+
+  /** 补录/改派入仓去向（03 §9.9 选填 ⇒ 事后由值仓登记），闸门在 Rust 的 KEEPER_ROLES */
+  assignOrderDestination: (input: AssignDestinationInput): Promise<WeighOrder | null> =>
+    runningInTauri() ? call("order_assign_destination", { input }) : mock.assignOrderDestination(input),
 };

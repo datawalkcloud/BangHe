@@ -207,6 +207,26 @@ export const nativePrinter = {
         openDrawer: opts?.openDrawer ?? false,
       },
     }),
+
+  /**
+   * 队列直打（A4 激光 / 241 针式，无预览）：同一份行序列交过来，Rust 用 GDI 画进
+   * Windows 打印队列。**没有 paper 参数是刻意的**——纸型、托盘、方向全随打印机自身配置，
+   * 程序不越权替现场选纸。
+   *
+   * `printer` 缺省 = 系统默认打印机；传台账里登记的队列名（设备中心「本机打印机队列」
+   * 回填的 `rawQueue`）则指哪台打哪台。ok=true 只代表"任务已进队列"，不代表纸已出。
+   */
+  receiptToQueue: (
+    lines: NativePrintLine[],
+    opts?: { printer?: string | null; copies?: number },
+  ) =>
+    call<NativePrintOutcome>("print_receipt_queue", {
+      input: {
+        lines,
+        printer: opts?.printer ?? null,
+        copies: opts?.copies ?? null,
+      },
+    }),
 };
 
 /* ------------------------------------------------------------------ *

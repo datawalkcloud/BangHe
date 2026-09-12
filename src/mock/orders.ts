@@ -2,7 +2,7 @@
  * 交易数据生成：磅单、称重轨迹、化验单、结算单、付款流水、打印留痕、审计日志。
  *
  * 覆盖的异常样本（05 §10 验收清单要求逐一可查）：
- *   作废 / 红冲（负值抵消）/ 手录称重 / 皮重异常授权放行 / 化验拒收 /
+ *   作废 / 红冲（负值抵消）/ 手录称重 / 皮重偏差超容差警示 / 化验拒收 /
  *   挂账未付与超期 / 打印失败 / 抓拍缺失 / 越权尝试被拒 / 复检覆盖首检
  *
  * 界面**不做**任何自动扣量与定等计算（02 §F4.4 计价引擎暂缓），
@@ -287,7 +287,14 @@ function genDay(dayOffset: number, count: number): void {
     }
 
     const drift = party.last_tare_01kg && hasTare ? Math.abs(tare - party.last_tare_01kg) / party.last_tare_01kg : 0;
-    const tareOverride = hasTare && drift > 0.08 && chance(0.55);
+    // 超容差不再走授权放行：只留一条警示（文案与 Rust capture 自动生成的同式）
+    const tareWarn = hasTare && drift > 0.08 && chance(0.55);
+    const tareWarnText =
+      party.last_tare_01kg && tareWarn
+        ? `实测皮重 ${(tare / 10).toFixed(1)}kg，较最近历史皮重 ${(party.last_tare_01kg / 10).toFixed(1)}kg 偏差 ${
+            tare >= party.last_tare_01kg ? "+" : "-"
+          }${(drift * 100).toFixed(1)}%，超出容差 3.00%`
+        : null;
 
     const grossAt = records.find((x) => x.weigh_type === "gross" && x.is_adopted === 1)?.captured_at ?? null;
     const tareAt = records.find((x) => x.weigh_type === "tare" && x.is_adopted === 1)?.captured_at ?? null;
@@ -335,8 +342,8 @@ function genDay(dayOffset: number, count: number): void {
       payment_status: paymentStatus,
       payment_method: payMethod,
       weight_source: manualWeigh ? "manual" : "scale",
-      tare_override_by: tareOverride ? STATION_MASTER_ID : null,
-      tare_override_reason: tareOverride ? `实测皮重与档案偏差 ${(drift * 100).toFixed(1)}%，超出容差 5%，站长授权放行` : null,
+      tare_override_by: null,
+      tare_override_reason: tareWarnText,
       is_manual_pricing: 1,
       reversed_order_id: null,
       reverse_of_id: null,
@@ -430,7 +437,7 @@ function genDay(dayOffset: number, count: number): void {
 
     /* ------------------------------------------------------------ 审计 */
     pushAudit(regAt, registeredBy, "order.create", orderNo, null, null);
-    if (tareOverride && tareAt) pushAudit(tareAt, weigherId, "tare.override", orderNo, order.tare_override_reason, userName(STATION_MASTER_ID));
+    if (tareWarn && tareAt) pushAudit(tareAt, weigherId, "tare.override", orderNo, order.tare_override_reason, null);
     if (manualWeigh && grossAt) pushAudit(grossAt, weigherId, "weigh.manual", orderNo, "仪表通讯中断，改为人工读数录入", userName(STATION_MASTER_ID));
     if (overridden && settledAt) pushAudit(settledAt, weigherId, "price.override", orderNo, "站长口头调价，未走价目表", userName(STATION_MASTER_ID));
     if (status === "voided" && order.voided_at) pushAudit(order.voided_at, registeredBy, "order.void", orderNo, order.void_reason, userName(STATION_MASTER_ID));
@@ -612,7 +619,9 @@ export function buildTimeline(o: WeighOrder): TimelineEvent[] {
       r.source === "manual" ? "手录" : r.adopt_reason ?? (r.is_adopted ? null : "已被复称替换"),
     );
   }
-  if (o.tare_override_by) add(o.tare_at, "tare.override", "皮重异常授权放行", userName(o.tare_override_by), "warning", o.tare_override_reason);
+  if (o.tare_override_reason) {
+    add(o.tare_at, "tare.override", "皮重偏差超容差", userName(o.tare_override_by ?? o.weigher_id), "warning", o.tare_override_reason);
+  }
   const stl = settlementOfOrder(o.id);
   if (o.settled_at) add(o.settled_at, "settle.create", "生成结算单", userName(stl?.settler_id ?? null), "info", stl?.settle_no);
   if (o.paid_at) add(o.paid_at, "pay.record", "付款登记", userName(o.registered_by), "success", o.payment_method ?? undefined);

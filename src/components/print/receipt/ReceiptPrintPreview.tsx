@@ -26,6 +26,7 @@ export function ReceiptPrintPreview({
   context,
   isReprint = false,
   docNo,
+  onPrinted,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -34,6 +35,8 @@ export function ReceiptPrintPreview({
   isReprint?: boolean;
   /** 不传则按上下文自动推导（order_no / report_no / settle_no / pay_no / 日期） */
   docNo?: string;
+  /** 出纸并留痕成功后回调，调用方用它刷新"这张票打过几次" */
+  onPrinted?: () => void;
 }) {
   const tpl = useReceiptTemplate(scenario);
   // 站点级实测列数；null = 按纸型标称。见 store.ts 的说明
@@ -85,6 +88,7 @@ export function ReceiptPrintPreview({
       paper={paper}
       onPaperChange={setPaper}
       onPrint={handlePrint}
+      onPrinted={onPrinted}
     >
       <PaperFrame paper={paper}>
         <ReceiptDocument template={tpl} paperOverride={paper} context={{ ...context, reprint: isReprint }} />

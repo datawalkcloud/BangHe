@@ -75,11 +75,37 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
   },
   {
     key: "tare_tolerance_pct", demo: "300", label: "皮重偏差容差（0.01%）", group: "weigh", kind: "number",
-    hint: "300 即 ±3.00%，超出弹站长授权框",
+    hint: "300 即 ±3.00%，超出仍正常捕获，只在磅单上醒目警示",
   },
   { key: "open_order_alert_minutes", demo: "30", label: "在途停留提醒（分钟）", group: "weigh", kind: "number" },
   { key: "capture_on_gross", demo: "true", label: "毛重抓拍", group: "weigh", kind: "bool" },
   { key: "capture_on_tare", demo: "true", label: "皮重抓拍", group: "weigh", kind: "bool" },
+  {
+    key: "card_flow_mode", demo: "auto", label: "流转卡模式（06 篇）", group: "weigh", kind: "select",
+    options: [
+      { value: "auto", label: "启用：后台听 IC、刷卡推进" },
+      { value: "off", label: "不启用：工作台一律手点" },
+    ],
+    hint: "auto＝制单发卡后靠刷 IC 卡推进毛重/皮重/结算；off＝该站不用流转卡，读卡器故障时的退路",
+  },
+  {
+    key: "card_pool_warn_free", demo: "5", label: "空闲卡预警阈值（张）", group: "weigh", kind: "number",
+    hint: "空闲卡低于此值时看板与卡池页黄色提示",
+  },
+  {
+    key: "card_release_on_terminal", demo: "true", label: "终态自动回收卡", group: "weigh", kind: "bool",
+    hint: "置 false 则结算/作废后仍需人工刷卡退卡才回池（要逐张点收卡的站点）",
+  },
+  {
+    key: "card_swipe_debounce_ms", demo: "1500", label: "刷卡去抖窗口（毫秒）", group: "weigh", kind: "number",
+    hint: "同一张卡重复命中只算一刷，防止卡不动被循环读到把单推到结算",
+  },
+  // 演示值取 false 是例外（库里默认 true）：浏览器预览压根没有 IC 通道，
+  // 按库里的强制口径演示里连单都制不出来。桌面端读库里真值，不受这行影响。
+  {
+    key: "card_required_on_create", demo: "false", label: "制单必须绑卡", group: "weigh", kind: "bool",
+    hint: "点「取号并制单」先弹框刷 IC 卡，读不到卡这张单制不成；关掉才允许无卡制单、事后靠监听发卡",
+  },
 
   { key: "settlement_allow_part_pay", demo: "true", label: "允许挂账（部分付款）", group: "settle", kind: "bool" },
   {

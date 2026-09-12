@@ -501,7 +501,8 @@ pub fn build_staff_load(conn: &Connection, from: &str, to: &str) -> Result<Vec<S
                            AND o.voided_at IS NOT NULL) AS voids,
                        (SELECT COUNT(*) FROM weigh_order o
                          WHERE o.business_date BETWEEN ?1 AND ?2
-                           AND o.tare_override_by = u.id) AS overrides,
+                           AND o.tare_override_reason IS NOT NULL
+                           AND o.weigher_id = u.id) AS overrides,
                        (SELECT COUNT(*) FROM print_log pl
                          WHERE pl.operator_id = u.id AND pl.is_reprint = 1
                            AND substr(pl.printed_at, 1, 10) BETWEEN ?1 AND ?2) AS reprints

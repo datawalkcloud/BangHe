@@ -370,7 +370,7 @@ export function buildStaffLoad(from: string, to: string): StaffLoadRow[] {
       const owned = orders.filter((o) => o.business_date >= from && o.business_date <= to && (o.weigher_id === id || o.registered_by === id));
       const manual = owned.filter((o) => o.weight_source === "manual").length;
       const voids = owned.filter((o) => o.status === "voided" && o.voided_at && o.registered_by === id).length;
-      const overrides = orders.filter((o) => o.business_date >= from && o.business_date <= to && o.tare_override_by === id).length;
+      const overrides = orders.filter((o) => o.business_date >= from && o.business_date <= to && o.tare_override_reason != null && o.weigher_id === id).length;
       const reprints = printLogs.filter((p) => p.is_reprint === 1 && p.operator_id === id && p.printed_at.slice(0, 10) >= from && p.printed_at.slice(0, 10) <= to).length;
       return {
         user_id: id,

@@ -179,8 +179,8 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
 
   return (
     <Card size="sm" className="min-w-0 py-0 gap-0">
-      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
-        <CardTitle className="text-xs font-semibold">④ 化验区</CardTitle>
+      <CardHeader className="card-header-compact grid-cols-[1fr_auto] items-center border-b px-2.5">
+        <CardTitle className="text-xs font-semibold">化验区</CardTitle>
         <CardAction className="self-center text-xs text-muted-foreground">{standards}</CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 p-2">

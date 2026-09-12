@@ -39,19 +39,14 @@ const DETAIL_TABLE =
 输出顺序影响；而把覆盖写在单元格 `className` 上只能靠 `tailwind-merge` 的同组覆盖，遇到
 不同组（如 `p-3` vs `py-1.5`）会失效。
 
-## 类型检查现状（重要）
+## 类型检查现状（2026-09-12 更新：已干净）
 
-**项目当前不 typecheck 干净**：`npx tsc --noEmit` 稳定剩约 **41 条既存错误**，集中在
-`business/QuickDetailSheet.tsx`（详情渲染字段与 `mock/types`、`mock/api` 失配，如
-`summary` / `recentOrders` / `items` / `settlement.settlement`），另有 2 条未用 `Link` 导入
-（`workstation/IdentityPanel.tsx`、`pages/PaymentsPage.tsx`）。这是长期存在的欠账，**不是
-新改坏了的信号**。
+**项目当前 typecheck 干净**：`npx tsc --noEmit --incremental false -p tsconfig.json` 连续多轮验证
+exit=0、零输出（2026-09-12 三次）。早先"41 条既存错误、对照 `tsc-out.txt` 基线"的说法已过时，
+基线欠账已清，见到任何 tsc 报错都应视为新引入的问题并当场修掉。
 
-判断「本次有没有引入新错误」的正确做法：
-
-1. 与仓库根目录的 `tsc-out.txt`（作者自己存的基线）**逐条比对**；
-2. 命令固定用 `npx tsc --noEmit --incremental false -p tsconfig.json` —— 不加
-   `--incremental false` 时会吃到 `tsconfig.tsbuildinfo` 的增量，输出不可信。
+命令固定用 `npx tsc --noEmit --incremental false -p tsconfig.json` —— 不加
+`--incremental false` 时会吃到 `tsconfig.tsbuildinfo` 的增量，输出不可信。
 
 `package.json` 的 `tsc` 开了 `noUnusedLocals` + `noUnusedParameters`，
 **删掉某段 JSX 后一定要检查它消掉的局部变量/导入是否变成未使用**，否则会新增 TS6133。

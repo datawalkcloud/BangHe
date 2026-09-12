@@ -59,9 +59,9 @@ export function CameraPanel({
 
   return (
     <Card size="sm" className="min-w-0 py-0 gap-0">
-      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
+      <CardHeader className="card-header-compact grid-cols-[1fr_auto] items-center border-b px-2.5">
         <CardTitle className="flex min-w-0 items-center gap-1.5 text-xs font-semibold">
-          <span className="shrink-0">③′ 过磅画面</span>
+          <span className="shrink-0">过磅画面</span>
           {cameras.length > 1 && (
             <span className="flex shrink-0 items-center gap-0.5">
               {cameras.map((c) => (

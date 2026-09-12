@@ -38,8 +38,9 @@ import { qcApi } from "@/lib/qc-native";
 import { devicesApi } from "@/lib/devices-native";
 import { paymentsApi } from "@/lib/payments-native";
 import { searchApi } from "@/lib/search-native";
+import { cardsApi } from "@/lib/cards-native";
 
-export const api = { ...mockApi, ...mastersApi, ...dashboardApi, ...ordersApi, ...ordersCenterApi, ...reportsApi, ...systemApi, ...settlementsApi, ...ledgerApi, ...prefsApi, ...qcApi, ...devicesApi, ...paymentsApi, ...searchApi };
+export const api = { ...mockApi, ...mastersApi, ...dashboardApi, ...ordersApi, ...ordersCenterApi, ...reportsApi, ...systemApi, ...settlementsApi, ...ledgerApi, ...prefsApi, ...qcApi, ...devicesApi, ...paymentsApi, ...searchApi, ...cardsApi };
 
 export type Api = typeof api;
 export type { OrderRow, PartyDetail } from "@/mock/api";

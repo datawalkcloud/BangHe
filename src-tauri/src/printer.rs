@@ -28,7 +28,7 @@ pub struct PrintOutcome {
 }
 
 impl PrintOutcome {
-    fn failed(started: Instant, reason: String) -> Self {
+    pub(crate) fn failed(started: Instant, reason: String) -> Self {
         Self {
             ok: false,
             device: String::new(),
@@ -101,8 +101,9 @@ pub async fn printer_list_queues() -> Result<Vec<WindowsPrinter>, String> {
 }
 
 /// Windows：EnumPrintersW(level 2) 两段式取回全部本地/连接打印机。
+/// `queue_print` 解析「默认打印机」时也走这里，枚举口径全项目只有一份。
 #[cfg(target_os = "windows")]
-fn list_queues_blocking() -> Result<Vec<WindowsPrinter>, String> {
+pub(crate) fn list_queues_blocking() -> Result<Vec<WindowsPrinter>, String> {
     use windows::core::PCWSTR;
     use windows::Win32::Graphics::Printing::{
         EnumPrintersW, PRINTER_ATTRIBUTE_DEFAULT, PRINTER_ATTRIBUTE_NETWORK,
@@ -144,7 +145,7 @@ fn list_queues_blocking() -> Result<Vec<WindowsPrinter>, String> {
 /// `PWSTR` 是以 NUL 结尾的 UTF-16。各版本 windows-core 的 `to_string()` 可用性不一，
 /// 这里版本无关地自己走到结束符，读到异常长度即止，绝不让一次扫描把界面卡死。
 #[cfg(target_os = "windows")]
-fn wide_to_string(p: windows::core::PWSTR) -> String {
+pub(crate) fn wide_to_string(p: windows::core::PWSTR) -> String {
     let ptr = p.0 as *const u16;
     if ptr.is_null() {
         return String::new();

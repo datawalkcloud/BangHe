@@ -4,12 +4,12 @@
  * 只放"高频、非服务端状态"——设备读数、判稳、抓拍中、桥接进程存活。
  * 业务数据一律走 react-query，不进这里（05 §8）。
  *
- * 读数流有两条路（04 §2、§4），由 `useScaleTick` 按运行环境自动选：
- *  - 桌面端：订阅 Rust 的 tauri event `device://scale`，切帧/取数/判稳全在 `scale.rs` 做完，
- *    这里只把可用的结论落成界面状态。**台账里没登记真磅就是"离线 + 一句原因"**，
- *    绝不拿模拟抖动顶上——过磅是要结算的，假读数比没读数危险得多。
- *  - 浏览器预览：没有串口通道，`tick()` 用随机抖动演示"不稳定 → 稳定 → 可捕获"，
- *    并把 `source` 标成 `"demo"`，界面据此说明这条读数是哪来的。
+ * 读数流有两条路（04 §2、§4），由 `useScaleTick` 按运行环境与台账自动选：
+ *  - 桌面端且台账里生效的那台磅是真机：订阅 Rust 的 tauri event `device://scale`，切帧/取数/判稳
+ *    全在 `scale.rs` 做完，这里只把可用的结论落成界面状态。**台账里既没登记真磅、也没登记 Mock 磅
+ *    就是"离线 + 一句原因"**，绝不拿模拟抖动顶上——过磅是要结算的，假读数比没读数危险得多。
+ *  - 浏览器预览，或台账里生效的磅被标成 Mock（模拟器）：没有/不该碰串口，`tick()` 用随机抖动演示
+ *    "不稳定 → 稳定 → 可捕获"，并把 `source` 标成 `"demo"`，界面据此说明这条读数是哪来的。
  *
  * 读卡器已经走真机：Rust `idcard.rs` 加载 64 位 Sdtapi.dll 直调精伦 iDR，一台机承担身份证
  * 与 IC（Mifare）两条介质通道（能读哪几条由 `lib/card-reader` 的登记表决定）。本 store 只把
@@ -17,19 +17,24 @@
  * 档案页读卡看到的是同一台读卡器、同一句失败原因。
  */
 import { create } from "zustand";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { nativeIdcard, runningInTauri } from "@/lib/native";
 import { nativeScale, subscribeScale, type ScaleReading } from "@/lib/scale-native";
 import type { DeviceStatus } from "@/lib/constants";
 import { ACTIVE_PARTIES } from "@/mock/masters";
 
-/** 判稳窗口与容差取自站点参数，默认 1500 ms / 5.0 kg（= 50 个 0.1kg） */
+/** 判稳窗口与分度取自站点参数；演示/Mock 心跳的"多久算稳"改由下面的 STABLE_DELAY_MS 决定（按时间停稳，不再按容差） */
 const WINDOW = 5;
-const TOLERANCE = 50;
 const DIVISION = 100; // 10 kg 分度
 
-/** 读数出处：`live` = Rust 串口线程解析出的真帧，`demo` = 浏览器预览的模拟心跳 */
+/** 演示/ Mock 心跳：上磅（或下磅）后过这么久才判稳，模拟车辆停稳的过程 */
+const STABLE_DELAY_MS = 5000;
+/** 停稳前的初始抖动幅度（0.1kg 单位，300=30kg），在停稳窗口内线性收敛到 0，让读数"先跳后定" */
+const SETTLE_SPREAD = 300;
+
+/** 读数出处：`live` = Rust 串口线程解析出的真帧，`demo` = 浏览器预览或台账 Mock 磅的模拟心跳 */
 export type ScaleSource = "live" | "demo";
 
 export interface ScaleState {
@@ -39,9 +44,20 @@ export interface ScaleState {
   weight01kg: number;
   /** 车上"真值"，用于生成抖动 */
   setpoint01kg: number;
+  /**
+   * 演示/Mock 心跳的"判稳到点"时刻（epoch ms）：上磅/下磅时置为 now + STABLE_DELAY_MS，
+   * 心跳在此之前持续抖动并判为不稳定，到点后锁定为稳定读数。null = 已停稳 / 直接稳定。
+   */
+  settleAt: number | null;
   samples: number[];
   stable: boolean;
   source: ScaleSource;
+  /**
+   * 台账里"生效的那台磅"被标成了 Mock（模拟器）：桌面端据此改走演示心跳，而不是去开一个
+   * 根本不存在/不该碰的串口。由 `useScaleTick` 跟着设备清单算出并写回，界面用它把读数出处
+   * 说清楚（"台账 Mock 模拟" ≠ "浏览器演示"）。
+   */
+  mocked: boolean;
   /** 原帧的可读形式：`weigh_record.raw_frame` 落库用它（迎检要能对回原始报文）；模拟流没有，回 null */
   rawFrame: string | null;
   /** 最近一次失败原因的中文短句（台账没登记磅 / 串口打不开 / 帧解析失败），界面直接显示这一句 */
@@ -51,6 +67,11 @@ export interface ScaleState {
   /** 手动把车开上磅 / 开下磅（演示用） */
   driveOn: (kg: number) => void;
   driveOff: () => void;
+  /**
+   * Mock 模式手输重量：把读数**直接**写成输入值并对齐分度、标记为稳定，不依赖演示心跳的抖动收敛。
+   * 台账把这台磅标成模拟器时，工作台用它让操作员输入一个确切重量后照常捕获（空格/P）。
+   */
+  setDemoWeight: (kg: number) => void;
   setConnected: (v: boolean) => void;
   tick: () => void;
 }
@@ -131,9 +152,19 @@ export interface IdCardChannel {
 /** 介质通道二：IC（Mifare）卡，只读 */
 export interface IcChannel {
   reading: boolean;
+  /** watch 循环在跑：工作台默认常听，弹窗要读身份证时挂起 */
+  watching: boolean;
+  /** 监听期间最近一轮"没寻到卡/密钥不对"的原因，只给编排器当进度提示，不进设备告警 */
+  watchNote: string | null;
   last: IcCardResult | null;
   error: string | null;
-  read: (opts?: { keyHex?: string; blocks?: [number, number][] }) => Promise<void>;
+  read: (opts?: { keyHex?: string; blocks?: [number, number][] }) => Promise<IcCardResult | null>;
+  /**
+   * 连续监听：**新的一刷**（换了一张卡，或天线空过一次之后再放上）才返回那张卡；
+   * 设备故障、或被 `stopWatch` 打断返回 null。卡压在感应区不动不算第二刷（见 `icPresentSn`）。
+   */
+  watch: () => Promise<IcCardResult | null>;
+  stopWatch: () => void;
   clear: () => void;
 }
 
@@ -165,6 +196,13 @@ export interface DeviceHubState {
   /** Mock 总开关：关掉后所有外设不可用，用来验收"无外设也能完成闭环"（05 §10-1） */
   mockOff: boolean;
   setMockOff: (v: boolean) => void;
+  /**
+   * 制单/登记弹窗正占用身份证通道（06 §1.2 设备互斥）：IC 常听循环据此让出读卡器。
+   * 原先「弹窗让位」由各父页面各自 pause；顶部工具条也能开这张弹窗后，标记收进弹窗自己维护，
+   * 父页面不必再各自记得。
+   */
+  regHolding: boolean;
+  setRegHolding: (v: boolean) => void;
   setScale: (patch: Partial<ScaleState>) => void;
   /** Rust `device://scale` 的一帧落成界面状态（判稳已在后端做完，这里不再二次加工） */
   applyScaleFrame: (r: ScaleReading) => void;
@@ -177,14 +215,17 @@ const initialScale: ScaleState = {
   onScale: false,
   weight01kg: 0,
   setpoint01kg: 0,
+  settleAt: null,
   samples: [],
   stable: true,
   source: "demo",
+  mocked: false,
   rawFrame: null,
   error: null,
   at: null,
   driveOn: () => {},
   driveOff: () => {},
+  setDemoWeight: () => {},
   setConnected: () => {},
   tick: () => {},
 };
@@ -225,6 +266,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * 新的再起，手里那条还在轮，真机上就是两条循环抢同一把设备锁。
  */
 let cardWatchEpoch = 0;
+/** IC 通道的监听任期号，与身份证通道各一条：两条通道共用一台读卡器，靠调用方（编排器/弹窗）
+ *  先 stopWatch 一条再起另一条来互斥，epoch 只负责让"手里那条"在被打断后干净退出。 */
+let icWatchEpoch = 0;
+
+/**
+ * IC 监听"此刻天线上压着的那张卡"——边沿触发的依据（06 §4.2 防连击）。
+ *
+ * 真机上卡往感应区一放就不动，循环会一轮轮读到**同一个 sn**：不去重就是每张外来卡
+ * 一个红框刷屏，而只按时间窗口去重又挡不住"毛重捕完 1.5 s 后同一张没挪窝的卡把皮重也捕了"
+ * （净重 0，直接算错钱）。所以一刷的判据用物理边沿：**换卡**或**天线空过一次后再放上**才算新命中。
+ * 复位只靠空读，`stopWatch` 不清——弹窗让位再回来时，压在下面的同一张卡不该再算一刷。
+ */
+let icPresentSn: string | null = null;
 
 /**
  * 证号 → 售粮人档案。
@@ -242,10 +296,47 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
     ...initialScale,
     driveOn: (kg: number) =>
       set((s) => ({
-        scale: { ...s.scale, onScale: true, setpoint01kg: Math.round(kg * 10), stable: false },
+        scale: {
+          ...s.scale,
+          onScale: true,
+          setpoint01kg: Math.round(kg * 10),
+          stable: false,
+          samples: [],
+          settleAt: Date.now() + STABLE_DELAY_MS,
+        },
       })),
     driveOff: () =>
-      set((s) => ({ scale: { ...s.scale, onScale: false, setpoint01kg: 0, stable: false, samples: [] } })),
+      set((s) => ({
+        scale: {
+          ...s.scale,
+          onScale: false,
+          setpoint01kg: 0,
+          stable: false,
+          samples: [],
+          settleAt: Date.now() + STABLE_DELAY_MS,
+        },
+      })),
+    setDemoWeight: (kg: number) =>
+      set((s) => {
+        const sp = Math.max(0, Math.round(kg * 10));
+        const aligned = Math.round(sp / DIVISION) * DIVISION;
+        return {
+          scale: {
+            ...s.scale,
+            // 直接给定一个稳定读数：connected 拉回 true、判稳窗口填满对齐值，并把 settleAt 置空，
+            // 让心跳"就地锁定"而不是再抖起来——手输的重量能立刻显示并被捕获。
+            connected: true,
+            source: "demo",
+            onScale: sp > 0,
+            setpoint01kg: sp,
+            settleAt: null,
+            weight01kg: aligned,
+            samples: Array.from({ length: WINDOW }, () => aligned),
+            stable: true,
+            error: null,
+          },
+        };
+      }),
     setConnected: (v: boolean) => set((s) => ({ scale: { ...s.scale, connected: v, stable: v ? s.scale.stable : false } })),
     tick: () => {
       const s = get().scale;
@@ -254,23 +345,36 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
         return;
       }
       const base = s.onScale ? s.setpoint01kg : 0;
-      // 上磅初期波动大，逐渐收敛到分度值的半格以内
-      const spread = s.onScale ? Math.max(6, Math.round(s.setpoint01kg * 0.0012)) : 4;
-      const jitter = Math.round((Math.random() - 0.5) * 2 * spread);
+      const now = Date.now();
+      // 已停稳（settleAt 为空）或到点：读数锁定到分度对齐值并停住，判稳通过、可捕获
+      if (s.settleAt == null || now >= s.settleAt) {
+        const aligned = Math.round(base / DIVISION) * DIVISION;
+        set({
+          scale: {
+            ...s,
+            samples: Array.from({ length: WINDOW }, () => aligned),
+            source: "demo",
+            weight01kg: aligned,
+            stable: true,
+          },
+        });
+        return;
+      }
+      // 停稳窗口内：抖动幅度随剩余时间线性收敛到 0（先跳后定），期间一律判为不稳定
+      const remain = s.settleAt - now;
+      const decay = remain / STABLE_DELAY_MS; // 1 → 0
+      const spread = Math.round(SETTLE_SPREAD * decay);
+      const jitter = spread > 0 ? Math.round((Math.random() - 0.5) * 2 * spread) : 0;
       const raw = Math.max(0, base + jitter);
       const samples = [...s.samples.slice(-(WINDOW - 1)), raw];
-      const min = Math.min(...samples);
-      const max = Math.max(...samples);
-      const stable = samples.length >= WINDOW && max - min <= TOLERANCE;
-      const aligned = Math.round(raw / DIVISION) * DIVISION;
       set({
         scale: {
           ...s,
           samples,
           // 显式标回 demo：一旦从真帧流切回模拟心跳，界面不能还挂着"live"说这是仪表读数
           source: "demo",
-          weight01kg: stable ? aligned : raw,
-          stable,
+          weight01kg: raw,
+          stable: false,
         },
       });
     },
@@ -453,15 +557,22 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
     /* ---------------------------------------------- 通道二：IC（Mifare） */
     ic: {
       reading: false,
+      watching: false,
+      watchNote: null,
       last: null,
       error: null,
       read: async (opts) => {
         const st = get();
         const patchIc = (p: Partial<IcChannel>) =>
           set((s) => ({ reader: { ...s.reader, ic: { ...s.reader.ic, ...p } } }));
+        /** 监听中每轮"没寻到卡/密钥不对"是常态：只报进度，别举到设备告警，好让 watch 继续轮 */
+        const softFail = (reason: string) => {
+          if (get().reader.ic.watching) patchIc({ reading: false, watchNote: reason });
+          else patchIc({ reading: false, last: null, error: reason });
+        };
         if (st.mockOff) {
           patchIc({ reading: false, last: null, error: "外设总开关已关闭，IC 卡通道不可用" });
-          return;
+          return null;
         }
         // IC 通道没有可演示的假卡：宁可不给结果，也不凭空编一个卡号和块数据出来
         if (st.reader.mocked || !runningInTauri()) {
@@ -472,13 +583,13 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
               ? "这台读卡器在台账里是 Mock，IC 通道不给演示数据"
               : "当前是浏览器预览，没有原生设备通道；请用「npm run tauri dev」启动桌面端后重试",
           });
-          return;
+          return null;
         }
         patchIc({ reading: true, error: null });
         const res = await nativeIdcard.icRead(opts);
         if (!res.available) {
           patchIc({ reading: false, last: null, error: res.error });
-          return;
+          return null;
         }
         const d = res.data;
         if (res.error || !d) {
@@ -492,33 +603,69 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
               ic: { ...s.reader.ic, reading: false, last: null, error: err },
             },
           }));
-          return;
+          return null;
         }
         if (!d.ok) {
           // 没寻到卡、密钥不对都不算设备故障（设备刚应答过），只送原因
-          patchIc({ reading: false, last: null, error: d.error ?? "未找到 IC 卡，或扇区密钥不是出厂密钥" });
-          return;
+          softFail(d.error ?? "未找到 IC 卡，或扇区密钥不是出厂密钥");
+          return null;
         }
+        const result: IcCardResult = {
+          kind_code: d.kindCode,
+          kind_label: d.kindLabel,
+          sn: d.sn,
+          blocks: d.blocks.map((b) => ({ sector: b.sector, block: b.block, ok: b.ok, hex: b.hex, error: b.error })),
+          at: clock(),
+        };
         set((s) => ({
           reader: {
             ...s.reader,
             status: "online",
-            ic: {
-              ...s.reader.ic,
-              reading: false,
-              error: null,
-              last: {
-                kind_code: d.kindCode,
-                kind_label: d.kindLabel,
-                sn: d.sn,
-                blocks: d.blocks.map((b) => ({ sector: b.sector, block: b.block, ok: b.ok, hex: b.hex, error: b.error })),
-                at: clock(),
-              },
-            },
+            ic: { ...s.reader.ic, reading: false, error: null, watchNote: null, last: result },
           },
         }));
+        return result;
       },
-      clear: () => set((s) => ({ reader: { ...s.reader, ic: { ...s.reader.ic, last: null, error: null } } })),
+      watch: async () => {
+        const patchIc = (p: Partial<IcChannel>) =>
+          set((s) => ({ reader: { ...s.reader, ic: { ...s.reader.ic, ...p } } }));
+        // 一台读卡器同一时刻只跑一条循环；已在监听就退让，避免重复挂载互相抢设备锁
+        if (get().reader.ic.watching) return null;
+        const epoch = ++icWatchEpoch;
+        patchIc({ watching: true, watchNote: null, error: null });
+        for (;;) {
+          // 发卡/定位只需卡号，传空 blocks 跳过密钥认证读块（06 §6.1）
+          const hit = await get().reader.ic.read({ blocks: [] });
+          if (epoch !== icWatchEpoch) return null;
+          if (hit) {
+            // 芯片串可能带填充空格，比对用归一后的串，否则同一张卡会被当成两张、又开始刷屏
+            const sn = hit.sn.trim().toUpperCase();
+            // 还是天线上那张卡＝同一次压卡，不算新一刷：继续轮，等它挪开或换卡（06 §4.2）
+            if (sn === icPresentSn) {
+              await sleep(CARD_WATCH_GAP_MS);
+              if (epoch !== icWatchEpoch || !get().reader.ic.watching) return null;
+              continue;
+            }
+            icPresentSn = sn;
+            patchIc({ watching: false, watchNote: null });
+            return hit;
+          }
+          // 空读＝天线上当前的卡已经拿走：边沿复位，下一次放卡才算新的一刷
+          icPresentSn = null;
+          // error 只剩设备级故障（"没卡"走 watchNote）——继续轮没意义也只会刷屏
+          if (get().reader.ic.error) {
+            patchIc({ watching: false });
+            return null;
+          }
+          await sleep(CARD_WATCH_GAP_MS);
+          if (epoch !== icWatchEpoch || !get().reader.ic.watching) return null;
+        }
+      },
+      stopWatch: () => {
+        icWatchEpoch += 1; // 让在飞那条循环作废，不等下一轮 read 回来才收手
+        set((s) => ({ reader: { ...s.reader, ic: { ...s.reader.ic, watching: false, watchNote: null } } }));
+      },
+      clear: () => set((s) => ({ reader: { ...s.reader, ic: { ...s.reader.ic, last: null, error: null, watchNote: null } } })),
     },
   },
   camera: { status: "online", lastCaptureAt: null, busy: false },
@@ -532,6 +679,8 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
       camera: { ...s.camera, status: v ? "offline" : "online" },
       printer: { ...s.printer, status: v ? "offline" : "online" },
     })),
+  regHolding: false,
+  setRegHolding: (v) => set({ regHolding: v }),
   setScale: (patch) => set((s) => ({ scale: { ...s.scale, ...patch } })),
   applyScaleFrame: (r) => {
     // 关掉外设总开关时丢弃在途帧：读线程可能还挂在串口上，但"无外设闭环"的验收不该看到读数
@@ -560,16 +709,47 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
 /**
  * 地磅读数心跳：桌面端订 Rust 的 `device://scale` 真帧，浏览器预览跑前端模拟。
  *
- * 三点约定：
+ * 四条约定：
  *  - `AppShell`、副屏、设备中心三处共用本 hook，所以串口只开一次（反复 start/stop 会丢帧）；
  *    读线程的归宿是 `RunEvent::Exit`，组件卸载只掉订阅、不关端口。
- *  - 台账里没登记可用的真磅 → 状态灯灰着并说明原因，**不退化成模拟流**。
+ *  - 台账里生效的那台磅被标成 **Mock** → 与浏览器预览同路，走 `tick()` 演示心跳（能"上磅/下磅"、
+ *    会走数），不再去开一个不该碰的串口。这与设备中心 `demoMode = is_mock===1 || ...` 的判据一致；
+ *    之前只按 `runningInTauri()` 二选一，导致 `npm run tauri dev` 下登记的 Mock 磅永远"没有读数"。
+ *  - 台账里既没有真磅也没有 Mock 磅（压根没登记）→ 状态灯灰着并说明原因，**不退化成模拟流**
+ *    （过磅要结算，凭空抖动比没读数危险）。
  *  - `mockOff` 走 selector 进依赖：一关开关就掉订阅，剩下的在途帧也被 `applyScaleFrame` 丢弃。
  */
 export function useScaleTick(intervalMs = 220): void {
-  const live = runningInTauri() && !useDeviceStore((s) => s.mockOff);
+  const mockOff = useDeviceStore((s) => s.mockOff);
+  const setScale = useDeviceStore((s) => s.setScale);
+
+  // 台账清单：跟着设备中心的改动走，改了 Mock/启用/默认立刻重算（副屏是独立 webview，也各自查一遍）
+  const { data: devices, isFetched } = useQuery({
+    queryKey: ["devices"],
+    queryFn: () => api.listDevices(),
+  });
+  // 生效磅是不是被标成 Mock：只在"没有可用真磅、却有一台启用的 Mock 磅"时成立——
+  // 有真磅就仍用真磅（openRealScale 只挑 is_mock===0），不因为并存一台 Mock 就退化成演示。
+  const scaleMocked = useMemo(() => {
+    const scales = (devices ?? []).filter((d) => d.kind === "scale" && d.is_enabled === 1);
+    return !scales.some((d) => d.is_mock === 0) && scales.some((d) => d.is_mock === 1);
+  }, [devices]);
+
+  // 把结论落进 store，界面据此把读数出处说清楚（"台账 Mock 模拟" ≠ "浏览器演示"）
   useEffect(() => {
-    if (!live) {
+    setScale({ mocked: scaleMocked });
+  }, [scaleMocked, setScale]);
+
+  const demo = !runningInTauri() || mockOff || scaleMocked;
+  // 桌面端要等台账查清楚再决定：否则会在"其实该走演示"的情况下先闪一下真磅开口/离线
+  const ready = !runningInTauri() || mockOff || isFetched;
+
+  useEffect(() => {
+    if (!ready) return;
+    if (demo) {
+      // 从真磅失败态（connected=false）切回演示心跳时，先把在线拉回 true，否则 tick 会把读数清零、永远不走数。
+      // mockOff 例外：那是"无外设闭环"验收，保持离线、只留手录。
+      if (!mockOff) useDeviceStore.getState().setScale({ connected: true, source: "demo" });
       const id = window.setInterval(() => useDeviceStore.getState().scale.tick(), intervalMs);
       return () => window.clearInterval(id);
     }
@@ -581,7 +761,7 @@ export function useScaleTick(intervalMs = 220): void {
     );
     void openRealScale();
     return unsubscribe;
-  }, [live, intervalMs]);
+  }, [ready, demo, mockOff, intervalMs]);
 }
 
 /** 已发起过开口的标记：三处挂载共用一条流，失败时放开以便下一次挂载重试（配置改对不必重启） */

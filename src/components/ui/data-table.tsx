@@ -1,21 +1,31 @@
 /**
- * 列表表格——shadcn DataTable 形态。
+ * 列表表格——shadcn DataTable（v9）+ shadcn UI 视觉。
  *
- * 引擎是 @tanstack/react-table v9，外观与交互仍然走 components/ui/table 那几个原语，
- * 也就是 shadcn 官方 DataTable 的配方（列定义 + flexRender + 分页/勾选状态由 table 实例持有）。
- * 它和 business/DataTable.tsx 的列契约（Column<T>）是一样的，调用方只换一行 import 就能切过来。
+ * 引擎走 @tanstack/react-table v9 的 useTable + tableFeatures，结构与
+ * https://ui.shadcn.com/docs/components/base/data-table 文档一致：
+ *  - features 在模块作用域里一次装配（rowSortingFeature + sortedRowModel、
+ *    rowPaginationFeature + paginatedRowModel、rowSelectionFeature），三者
+ *    必须配对出现在同一处；放进组件体会整棵行模型缓存作废；
+ *  - 字符串列排序注册 sortFns: { text: sortFn_text, alphanumeric:
+ *    sortFn_alphanumeric }，列定义里走 sortFn: "text"/"alphanumeric" 字符串键；
+ *    数字列保留 inline numeric comparator（features 内置的 numeric fn 不暴露
+ *    sortFn_basic，inline 写法与 05 §6.1「数字比大小」一一对应）；
+ *  - 渲染走 <table.FlexRender header={..} /> 与 <table.FlexRender cell={..} />，
+ *    这是 v9 把 flexRender 收回到 table 实例后的写法（import 已不再需要
+ *    flexRender）；
+ *  - 表头排序按钮用 <Button variant="ghost"> + lucide 图标，
+ *    ArrowUpDown/ArrowUp/ArrowDown 与文档示例一致。
  *
- * 抄 v8 的例子会直接编译不过，v9 有三处差别：
- *  1. useReactTable → useTable，且没有 getCoreRowModel() 这类参数了，
- *     行模型改成显式注册：tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel() })；
- *  2. 行模型 slot 必须和它的 feature 成对出现——只写 sortedRowModel 会在 tableFeatures 处报缺前置；
- *  3. 没有 flexRender 导出，渲染改用 table.FlexRender。
- *
- * 刻意保留的旧行为（磅房现场真在用，不是审美取舍）：
- *  - 表头 sticky + 不透明底色；
- *  - 排序只在 降序 ↔ 升序 之间翻，不出现「取消排序」，且首点为降序；
- *  - 空值恒排最后（sortUndefined:"last" 在 desc 下不会被取反，见 createSortedRowModel 的 compareRows）；
- *  - 「全选」是全量筛选结果而不是当前页（toggleAllRowsSelected 走 pre-grouped 行模型）。
+ * 项目层保留的不变量（磅房现场真在用，不是审美取舍）：
+ *  - 表头 sticky + 不透明底色，半透明底会让正文透上来糊掉列名；
+ *  - 排序只在「降序 ↔ 升序」之间翻，不出现「取消排序」，且首点即降序
+ *    （useTable 上 sortDescFirst + enableSortingRemoval:false）；
+ *  - 空值恒排最后（sortUndefined:"last"）；
+ *  - 「全选」是全量筛选结果而不是当前页（toggleAllRowsSelected 走
+ *    pre-grouped 行模型）；
+ *  - 沿用 Column<T> 契约（key/header/cell/sortValue/align/footer/title/...），
+ *    调用方一行 import 不动；为不破坏 Parties 等调用方，列定义中实际行类型
+ *    由 Row<typeof features, T> 推断，不暴露给业务。
  */
 "use client"
 
@@ -26,13 +36,14 @@ import {
   rowPaginationFeature,
   rowSelectionFeature,
   rowSortingFeature,
+  sortFn_alphanumeric,
+  sortFn_text,
   tableFeatures,
   useTable,
   type ColumnDef,
   type PaginationState,
   type RowData,
   type RowSelectionState,
-  type Row,
   type SortingState,
   type Updater,
 } from "@tanstack/react-table"
@@ -82,6 +93,7 @@ export interface Column<T> {
 /**
  * 行模型必须在模块作用域一次性装配好：放进组件体内每次渲染都会重建 features，
  * 连带把整棵行模型的缓存作废。sortedRowModel 一定要跟 rowSortingFeature 一起给。
+ * sortFns 注册到 features 是 v9 的官方方式——列定义里写 sortFn: "text" 即可引用。
  */
 const features = tableFeatures({
   rowSortingFeature,
@@ -89,6 +101,10 @@ const features = tableFeatures({
   rowPaginationFeature,
   paginatedRowModel: createPaginatedRowModel(),
   rowSelectionFeature,
+  sortFns: {
+    text: sortFn_text,
+    alphanumeric: sortFn_alphanumeric,
+  },
 })
 
 type ColDef<T extends RowData> = ColumnDef<typeof features, T>
@@ -98,13 +114,21 @@ const PAGE_SIZES = [50, 100, 200] as const
 /** data 为空时别每次都现造一个 []：TanStack 把引用变化当数据变更，会整棵行模型重算 */
 const EMPTY_ROWS: never[] = []
 
-/** 与 05 §6.1 一致：数字比大小，其余按中文排序；空值位置交给 sortUndefined 处理 */
-function compareValues(
-  a: number | string | null | undefined,
-  b: number | string | null | undefined,
-): number {
-  if (typeof a === "number" && typeof b === "number") return a - b
-  return String(a).localeCompare(String(b), "zh-CN")
+/**
+ * 决定某列走 sortFn_text 还是 inline numeric：从第一行非空值看 sortValue 的返回类型。
+ * 全空时落到 text（拼音/中文 locale 排序是无害的默认值）。结果会进
+ * columnDefs 的依赖，所以 rows 一变会重新判定——只是 O(n) 扫一次，开销可忽略。
+ */
+function sortKind<T extends RowData>(
+  rows: T[],
+  get: (row: T) => number | string | null | undefined,
+): "numeric" | "text" {
+  for (const r of rows) {
+    const v = get(r)
+    if (v == null) continue
+    return typeof v === "number" ? "numeric" : "text"
+  }
+  return "text"
 }
 
 /**
@@ -227,29 +251,36 @@ export function DataTable<T extends RowData>({
 
     for (const c of columns) {
       const get = c.sortValue
-      if (get) {
-        defs.push({
-          id: c.key,
-          header: () => c.header,
-          cell: (ctx) => c.cell(ctx.row.original, ctx.row.index),
-          // accessorFn 只是为了给 sortUndefined 取值用（它读的是 row.getValue）；
-          // 真正的比较口径由 sortFn 决定：字符串按中文排，数字按数值排。
-          accessorFn: (row: T) => get(row),
-          sortUndefined: "last",
-          sortFn: (a: Row<typeof features, T>, b: Row<typeof features, T>) =>
-            compareValues(get(a.original), get(b.original)),
-        })
-      } else {
+      if (!get) {
         defs.push({
           id: c.key,
           header: () => c.header,
           cell: (ctx) => c.cell(ctx.row.original, ctx.row.index),
           enableSorting: false,
         })
+        continue
       }
+      const accessorFn = (row: T) => get(row)
+      const kind = sortKind(rows, get)
+      /**
+       * 文本列走 features 注册的 sortFn_text（v9 内置、locale-aware，
+       * 对中文 CJK 友好）；数字列保留 inline 数比较，与 05 §6.1「数字比大小」
+       * 一致。sortUndefined:"last" 让 null/undefined 始终排最后，
+       * 与列是否提供 sortValue 无关。
+       */
+      defs.push({
+        id: c.key,
+        header: () => c.header,
+        cell: (ctx) => c.cell(ctx.row.original, ctx.row.index),
+        accessorFn,
+        sortUndefined: "last",
+        ...(kind === "numeric"
+          ? { sortFn: (a, b) => Number(get(a.original)) - Number(get(b.original)) }
+          : { sortFn: "text" }),
+      })
     }
     return defs
-  }, [columns, selectable])
+  }, [columns, selectable, rows])
 
   /**
    * 列号 → 原始列配置：表头/单元格的类名、title、合计都从这里取，避免再给 meta 定一套类型。
@@ -336,11 +367,13 @@ export function DataTable<T extends RowData>({
                       )}
                     >
                       {header.column.getCanSort() ? (
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="sm"
                           onClick={header.column.getToggleSortingHandler()}
                           className={cn(
-                            "inline-flex items-center gap-1 hover:text-foreground",
+                            "h-7 -mx-1.5 gap-1 rounded-sm px-1.5 font-medium hover:bg-transparent hover:text-foreground",
                             col?.align === "right" && "flex-row-reverse",
                             sorted && "text-foreground",
                           )}
@@ -353,7 +386,7 @@ export function DataTable<T extends RowData>({
                           ) : (
                             <ArrowUpDownIcon className="size-3.5 opacity-40" />
                           )}
-                        </button>
+                        </Button>
                       ) : (
                         content
                       )}

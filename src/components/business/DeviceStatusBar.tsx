@@ -179,7 +179,7 @@ export function DeviceStatusBar() {
           <TooltipContent side="top">
             <p className="font-medium">主要快捷键</p>
             <p className="text-muted-foreground">空格 捕获 · F7 下一单 · F8 读卡 · F5 化验 · F6 带价</p>
-            <p className="text-muted-foreground">F10 结算打印 · F2 展示模式 · Ctrl+K 检索 · Ctrl+B 折叠侧栏</p>
+            <p className="text-muted-foreground">F9 打码单 · F10 扫码结算 · F2 展示模式 · Ctrl+K 检索 · Ctrl+B 折叠侧栏</p>
           </TooltipContent>
         </Tooltip>
         <Separator orientation="vertical" className="h-4" />

@@ -6,22 +6,23 @@
  *   基本信息 → 重量轨迹（含被弃用的读数）→ 化验指标 → 结算明细
  *   → 附件墙 → 打印记录 → 全链路时间轴
  *
- * 页面上唯一的写操作是「作废」，且必须站长授权 + 事由留痕；
+ * 页面上只有两处写操作：「作废」必须站长授权 + 事由留痕；「入仓去向」由值仓事后补录
+ *  （制单时选填，见 03 §9.9），改派写 order.destination 审计、署名进 keeper_id。
  * 红冲（ reversals ）在 mock 层没有对应接口，因此这里只给出跳转与说明，
  * 绝不伪装成已完成的操作（02 §F6.3 要求红冲另立新单，接口未实现）。
  */
 import { useMemo, useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangleIcon, ArrowLeftIcon, FlaskConicalIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
+import { AlertTriangleIcon, ArrowLeftIcon, FlaskConicalIcon, MapPinIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
 import { INDICATORS, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
-import { useStaffNames, useStation } from "@/hooks/useLookups";
+import { useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
@@ -31,6 +32,9 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { Choose } from "@/components/business/Choose";
 import { MoneyLine } from "@/components/business/NumField";
@@ -64,6 +68,10 @@ export function OrderDetailPage() {
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voidAuth, setVoidAuth] = useState("");
+  /** 去向弹窗：Choose 的 value 一律是字符串，"" 表示"未定"（清空也是合法写入） */
+  const [destOpen, setDestOpen] = useState(false);
+  const [destWh, setDestWh] = useState("");
+  const [destSlot, setDestSlot] = useState("");
 
   const { data: order, isLoading } = useQuery({
     queryKey: ["order", orderNo],
@@ -85,6 +93,9 @@ export function OrderDetailPage() {
     queryFn: () => (order ? api.getParty(order.party_id) : Promise.resolve(null)),
     enabled: !!order,
   });
+  /** 去向候选（停用的仓房/货位不出列，与工作台同一口径） */
+  const { data: warehouses = [] } = useWarehouses();
+  const { data: slots = [] } = useSlots();
 
   const qc = useMemo(
     () => (order?.qc_report_id != null ? (qcRows.find((r) => r.id === order.qc_report_id) ?? null) : null),
@@ -120,6 +131,35 @@ export function OrderDetailPage() {
     // 真库把"为什么不能废"说得很具体（已结算/已挂结算单/授权人不是在职站长），
     // 固定文案会把原因吞掉——磅员站在磅房门口只看到"请重试"是最坏的结果
     onError: (e: Error) => toast.error(e.message || "作废失败，请重试"),
+  });
+
+  /** 打开时以本单现状为准：不预先清空，改派与补录走同一个入口 */
+  const openDest = () => {
+    setDestWh(String(order?.warehouse_id ?? ""));
+    setDestSlot(String(order?.slot_id ?? ""));
+    setDestOpen(true);
+  };
+
+  const destMut = useMutation({
+    mutationFn: () =>
+      api.assignOrderDestination({
+        order_no: orderNo,
+        warehouse_id: destWh ? Number(destWh) : null,
+        slot_id: destSlot ? Number(destSlot) : null,
+        operator_id: actorId(),
+      }),
+    onSuccess: (o) => {
+      if (!o) {
+        toast.error("登记失败：未找到该磅单");
+        return;
+      }
+      const now = [o.warehouse_name, o.slot_label].filter(Boolean).join(" / ");
+      toast.success(now ? `去向已登记：${now}` : "本单去向已清空");
+      setDestOpen(false);
+      invalidate();
+    },
+    // 真库说的是人话（"货位「C01-03」不在该仓房下"），固定文案会把原因吞掉
+    onError: (e: Error) => toast.error(e.message || "去向登记失败，请重试"),
   });
 
   if (isLoading) {
@@ -159,6 +199,11 @@ export function OrderDetailPage() {
   const locked = order.status === "voided" || order.status === "rejected";
   const manual = order.weight_source === "manual";
   const statusDesc = ORDER_STATUS[order.status].desc;
+  /** 停用只挡住新指定，历史单据上的去向照旧显示（与工作台同一口径） */
+  const activeWarehouses = warehouses.filter((w) => w.is_active !== 0);
+  const slotPool = slots
+    .filter((s) => s.is_active !== 0)
+    .filter((s) => !destWh || s.warehouse_id === Number(destWh));
 
   const recordCols: Column<WeighRecord>[] = [
     { key: "seq", header: "序号", cell: (r) => <span className="tnum">{r.seq}</span> },
@@ -259,9 +304,9 @@ export function OrderDetailPage() {
               仪表通讯异常时允许手录，但必须事后补上传仪表打印小票照片。迎检时此标记会作为重点核查项。
             </CallOut>
           )}
-          {order.tare_override_by != null && (
-            <CallOut tone="warning" title="皮重偏差超容差，经授权放行">
-              授权人 {names(order.tare_override_by)}；事由：{orDash(order.tare_override_reason)}
+          {order.tare_override_reason && (
+            <CallOut tone="warning" title="皮重偏差超容差（数据有效，醒目标记）" icon={<AlertTriangleIcon />}>
+              {order.tare_override_reason}；本单已按现场读数捕获，请核对车辆与读数，如需更正走红冲后重录。
             </CallOut>
           )}
           {order.price_override_reason && (
@@ -279,6 +324,25 @@ export function OrderDetailPage() {
             <Card size="sm">
               <CardHeader className="border-b">
                 <CardTitle className="text-sm">基本信息</CardTitle>
+                {/* CardHeader 是 grid，右侧动作必须走 CardAction 槽位才不会被挤成整宽 */}
+                <CardAction>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={openDest}
+                    disabled={locked || !can("order.destination")}
+                    title={
+                      locked
+                        ? "作废/拒收的单不再登记入仓去向"
+                        : !can("order.destination")
+                          ? "登记入仓去向需保管员或站长岗位（02 §11 权限矩阵）"
+                          : undefined
+                    }
+                  >
+                    <MapPinIcon />
+                    {order.warehouse_id || order.slot_id ? "改派去向" : "登记去向"}
+                  </Button>
+                </CardAction>
               </CardHeader>
               <CardContent>
                 <InfoGrid
@@ -521,10 +585,15 @@ export function OrderDetailPage() {
                 )}
                 {order.status !== "voided" && order.status !== "rejected" && order.settled_at == null && (
                   <CallOut tone="info" title="下一步">
-                    到工作台按 <span className="tnum">F10</span> 完成结算，结算后本页自动出现金额明细。
-                    <Link to="/workstation" search={{ orderNo: order.order_no }} className="ml-1 underline underline-offset-2">
-                      打开工作台
+                    结算在「扫码结算」窗口做：凭这张码单上的二维码取单、现场计价收款，结完本页自动出现金额明细。
+                    <Link to="/scan-settle" search={{ orderNo: order.order_no }} className="ml-1 underline underline-offset-2">
+                      带去扫码结算
                     </Link>
+                    {(order.prints ?? []).length === 0 && order.net_weight_01kg != null && (
+                      <span className="ml-1 text-muted-foreground">
+                        （这单还没打过码单，客户手里没有可扫的票——先回工作台打印，或直接让客户报姓名在窗口手输单号）
+                      </span>
+                    )}
                   </CallOut>
                 )}
               </CardContent>
@@ -640,6 +709,57 @@ export function OrderDetailPage() {
           docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
         />
       )}
+
+      <Dialog open={destOpen} onOpenChange={setDestOpen}>
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">入仓去向 · {order.order_no}</DialogTitle>
+            <DialogDescription className="text-xs">
+              去向在制单时是选填项，粮真进了仓由值仓在这里补登记；改派会记审计，并把保管员署名换成当前操作人。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <Label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+              仓房
+              <Choose
+                aria-label="仓房"
+                value={destWh}
+                onChange={(v) => {
+                  setDestWh(v);
+                  setDestSlot("");
+                }}
+                options={[
+                  { value: "", label: "未定" },
+                  ...activeWarehouses.map((w) => ({ value: String(w.id), label: w.name })),
+                ]}
+              />
+            </Label>
+            <Label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+              货位
+              <Choose
+                aria-label="货位"
+                value={destSlot}
+                onChange={setDestSlot}
+                options={[
+                  { value: "", label: "未定" },
+                  ...slotPool.map((s) => ({ value: String(s.id), label: s.label })),
+                ]}
+              />
+            </Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            两处都选「未定」即清空本单去向；只选货位时按货位反查仓房。停用的仓房与货位不进候选，历史单据上的去向照旧可查。
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDestOpen(false)}>
+              取消
+            </Button>
+            <Button disabled={destMut.isPending} onClick={() => destMut.mutate()}>
+              {destMut.isPending ? "保存中…" : "保存去向"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={voidOpen} onOpenChange={setVoidOpen}>
         <AlertDialogContent className="max-w-[520px]">

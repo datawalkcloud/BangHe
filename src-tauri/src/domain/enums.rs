@@ -91,6 +91,15 @@ crate::db_enum! {
 }
 
 crate::db_enum! {
+    /// 流转卡占用态（§9.26 / 06 篇：在册循环资产，一卡一单）
+    CardStatus {
+        InPool => "in_pool",
+        InUse => "in_use",
+        Retired => "retired",
+    }
+}
+
+crate::db_enum! {
     /// 结算单付款状态（§9.16：比磅单少 `not_required`，结算一定产生应付）
     SettlementPaymentStatus {
         Unpaid => "unpaid",
@@ -320,6 +329,7 @@ pub const ENUM_SPECS: &[EnumSpec] = &[
     EnumSpec { rust: "Role", values: Role::VALUES, table: Some("user_account"), column: "role", ts: Some("Role"), ts_strict: true },
     EnumSpec { rust: "PartyType", values: PartyType::VALUES, table: Some("party"), column: "party_type", ts: Some("PartyType"), ts_strict: true },
     EnumSpec { rust: "PartyStatus", values: PartyStatus::VALUES, table: Some("party"), column: "status", ts: None, ts_strict: false },
+    EnumSpec { rust: "CardStatus", values: CardStatus::VALUES, table: Some("card"), column: "status", ts: Some("CardStatus"), ts_strict: true },
     EnumSpec { rust: "WeightSource", values: WeightSource::VALUES, table: Some("weigh_order"), column: "weight_source", ts: Some("WeightSource"), ts_strict: true },
     EnumSpec { rust: "WeightSource", values: WeightSource::VALUES, table: Some("weigh_record"), column: "source", ts: Some("WeightSource"), ts_strict: true },
     EnumSpec { rust: "WeighType", values: WeighType::VALUES, table: Some("weigh_record"), column: "weigh_type", ts: None, ts_strict: false },

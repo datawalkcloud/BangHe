@@ -20,10 +20,11 @@ use chrono::Local;
 use rusqlite::{params, Connection};
 
 use banghe_lib::auth::AuthProfile;
+use banghe_lib::cards::{pool_register, pool_retire, RegisterInput, RetireInput};
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::orders::{
-    capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, void_order,
-    CaptureInput, CreateOrderInput, OrderFilters, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, TareOverride, VoidOrderInput,
+    capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, void_order, assign_destination,
+    CaptureInput, CreateOrderInput, OrderFilters, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VoidOrderInput, AssignDestinationInput,
 };
 
 fn db() -> Connection {
@@ -91,6 +92,24 @@ fn seed_price(conn: &Connection, variety: i64) -> i64 {
     conn.last_insert_rowid()
 }
 
+/// 按指定卡号登记一张空闲在册卡（外来卡在测试里就是"没调这个辅助的卡号"）
+fn register_card(conn: &Connection, card_no: &str) {
+    pool_register(
+        conn,
+        &actor(1, "station_master"),
+        RegisterInput { card_no: card_no.into(), label: None, remark: None, operator_id: None },
+    )
+    .expect("登记流转卡应成功");
+}
+
+/// 制单默认必须绑一张空闲卡（06 §4.0），所以这套用例每建一张单都先在卡池造一张在册卡。
+fn free_card(conn: &Connection) -> String {
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM card", [], |r| r.get(0)).unwrap();
+    let card_no = format!("04A2C{n:04X}");
+    register_card(conn, &card_no);
+    card_no
+}
+
 fn create(conn: &Connection, party: i64, variety: i64) -> String {
     create_order(
         conn,
@@ -102,6 +121,7 @@ fn create(conn: &Connection, party: i64, variety: i64) -> String {
             warehouse_id: None,
             slot_id: None,
             remark: None,
+            card_no: Some(free_card(conn)),
             registered_by: None,
             weight_source: "scale".into(),
         },
@@ -123,13 +143,14 @@ fn capture_gross(conn: &Connection, no: &str, w: i64) {
             raw_frame: Some("=W1000.0kg ST".into()),
             has_photo: Some(true),
             tare_override: None,
+            tare_warning: None,
         },
     )
     .unwrap()
     .expect("单应存在");
 }
 
-fn capture_tare(conn: &Connection, no: &str, w: i64, ov: Option<TareOverride>) {
+fn capture_tare(conn: &Connection, no: &str, w: i64, warning: Option<&str>) {
     capture(
         conn,
         &actor(2, "weigher"),
@@ -141,7 +162,8 @@ fn capture_tare(conn: &Connection, no: &str, w: i64, ov: Option<TareOverride>) {
             operator_id: None,
             raw_frame: None,
             has_photo: Some(false),
-            tare_override: ov,
+            tare_override: None,
+            tare_warning: warning.map(str::to_string),
         },
     )
     .unwrap()
@@ -213,6 +235,98 @@ fn filters() -> OrderFilters {
 
 // ------------------------------------------------------------------------ 测试
 
+/// 制单必须绑卡（06 §4.0）：读不到卡就不许取号，卡未登记/已注销/还挂着没做完的单都要拦下。
+/// 全是接了真刷卡才犯得出来的错——尤其"闸门不过却已经把流水号吃掉了"这一条。
+#[test]
+fn create_order_binds_a_free_card_or_refuses_the_number() {
+    let conn = db();
+    ensure_users(&conn);
+    let xm: i64 = conn.query_row("SELECT id FROM grain_variety WHERE code='XM'", [], |r| r.get(0)).unwrap();
+    let party = new_party(&conn, "卡一", "341204199301272031");
+    let ym = Local::now().format("%Y%m").to_string();
+    let order_rows = |c: &Connection| c.query_row("SELECT COUNT(*) FROM weigh_order", [], |r| r.get::<_, i64>(0)).unwrap();
+    let try_create = |card: Option<&str>| -> Result<String, String> {
+        create_order(
+            &conn,
+            &actor(1, "weigher"),
+            CreateOrderInput {
+                party_id: party,
+                variety_id: xm,
+                vehicle_no: None,
+                warehouse_id: None,
+                slot_id: None,
+                remark: None,
+                card_no: card.map(str::to_string),
+                registered_by: None,
+                weight_source: "scale".into(),
+            },
+        )
+        .map(|o| o.order_no)
+    };
+
+    let seq_rows = |c: &Connection| {
+        c.query_row("SELECT COUNT(*) FROM seq_counter WHERE prefix_key = ?1", params![format!("BD:01:{ym}")], |r| r.get::<_, i64>(0)).unwrap()
+    };
+    // 闸门 1：没刷到卡 —— 连号都不该取
+    let e = try_create(None).unwrap_err();
+    assert!(e.contains("没刷到流转卡"), "应提示没读到卡，实际：{e}");
+    // 闸门 2：外来卡（卡池里没这串号）—— 不做"见卡就发"（06 §4.4 C2）
+    let e = try_create(Some("DEADBEEF")).unwrap_err();
+    assert!(e.contains("未登记"), "应提示卡未登记，实际：{e}");
+    // 闸门 3：注销过的卡不能再拿来开单
+    register_card(&conn, "04A2FFFF");
+    pool_retire(&conn, &actor(1, "station_master"), RetireInput { card_no: "04A2FFFF".into(), reason: "磨损淘汰".into() })
+        .expect("注销应成功");
+    let e = try_create(Some("04a2 ffff")).unwrap_err();
+    assert!(e.contains("已注销"), "应提示卡已注销，实际：{e}");
+    assert_eq!(order_rows(&conn), 0, "被拦下的刷卡不该留下磅单");
+    assert_eq!(seq_rows(&conn), 0, "闸门不过时不消耗流水号");
+
+    // 空闲在册卡：制单成功，卡池占用与单据快照同事务对上
+    register_card(&conn, "04A21F01");
+    let no = try_create(Some(" 04a2-1f01 ")).expect("空闲卡应能制单");
+    let (oid, snapshot): (i64, Option<String>) = conn
+        .query_row("SELECT id, card_no FROM weigh_order WHERE order_no = ?1", params![&no], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(snapshot.as_deref(), Some("04A21F01"), "单据侧快照要写归一后的卡号");
+    let (card_status, card_order): (String, Option<i64>) = conn
+        .query_row("SELECT status, current_order_id FROM card WHERE card_no = '04A21F01'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!((card_status.as_str(), card_order), ("in_use", Some(oid)), "占用真相在 card 表那一行");
+    let issued: i64 = conn
+        .query_row("SELECT COUNT(*) FROM audit_log WHERE action='card.issue' AND entity_no='04A21F01'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(issued, 1, "制单绑卡要留一笔发卡痕迹");
+
+    // 闸门 4：这张卡还有没做完的单 —— 一张卡不能同时开两张单，文案要点出挂在哪张单上
+    let e = try_create(Some("04A21F01")).unwrap_err();
+    assert!(e.contains("还挂着没做完的单") && e.contains(&no), "要说清卡挂在哪个单，实际：{e}");
+    assert_eq!(order_rows(&conn), 1, "被拦下的第二次制单不留单");
+    assert_eq!(seq_rows(&conn), 1, "被拦下的第二次制单也不该多吃一个号");
+
+    // 它挂着的单到终态却没自动回池（站点关了 card_release_on_terminal）：制单就地收回来再绑
+    conn.execute("UPDATE weigh_order SET status = 'settled' WHERE id = ?1", params![oid]).unwrap();
+    let no2 = try_create(Some("04A21F01")).expect("挂着终态单的卡应视同空闲");
+    let card_order2: Option<i64> = conn
+        .query_row("SELECT current_order_id FROM card WHERE card_no = '04A21F01'", [], |r| r.get(0))
+        .unwrap();
+    assert!(card_order2.is_some() && no2 != no, "卡应换挂到刚制的这张单上");
+    let new_snapshot: Option<String> = conn
+        .query_row("SELECT card_no FROM weigh_order WHERE order_no = ?1", params![&no2], |r| r.get(0))
+        .unwrap();
+    assert_eq!(new_snapshot.as_deref(), Some("04A21F01"), "新单要带上这张收回来的卡");
+    assert_eq!(
+        1,
+        conn.query_row("SELECT COUNT(*) FROM weigh_order WHERE order_no = ?1 AND card_no = '04A21F01'", params![&no], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        "旧单的卡号快照照旧留着：码单已按它印出，占用只跟最后一张单"
+    );
+
+    // 参数关掉：回到"制单不绑卡、卡事后靠后台监听发"（06 §3 的旧路径）
+    conn.execute("UPDATE app_setting SET value_json = 'false' WHERE key = 'card_required_on_create'", []).unwrap();
+    try_create(None).expect("关掉参数后无卡也能制单");
+}
+
 #[test]
 fn create_order_numbers_by_spec_and_snapshots_party() {
     let conn = db();
@@ -279,56 +393,41 @@ fn weigh_flow_drives_status_and_party_tare() {
     let e = capture(
         &conn,
         &actor(2, "weigher"),
-        CaptureInput { order_no: no.clone(), weigh_type: "gross".into(), weight_01kg: 1, source: "scale".into(), operator_id: None, raw_frame: None, has_photo: None, tare_override: None },
+        CaptureInput { order_no: no.clone(), weigh_type: "gross".into(), weight_01kg: 1, source: "scale".into(), operator_id: None, raw_frame: None, has_photo: None, tare_override: None, tare_warning: None },
     )
     .unwrap_err();
     assert!(e.contains("不能再称重"), "拒绝原因要回人话：{e}");
 }
 
+/// 皮重偏差超容差不再拦下：数据照常有效，捕获成功并自动记一条警示（无授权人），基准不被污染。
 #[test]
-fn tare_override_only_active_station_master() {
+fn tare_over_tolerance_still_captures_and_warns() {
     let conn = db();
     ensure_users(&conn);
     let party = new_party(&conn, "王五", "341204199301272017");
     let xm: i64 = conn.query_row("SELECT id FROM grain_variety WHERE code='XM'", [], |r| r.get(0)).unwrap();
     let no = create(&conn, party, xm);
     capture_gross(&conn, &no, 200000);
+    capture_tare(&conn, &no, 100000, None); // 首次无基准 → 放行并记为最近皮重 100000
 
-    // 授权人是磅员（ensure_users 已建 w2）→ 拒
-    let w2: i64 = conn.query_row("SELECT id FROM user_account WHERE username='w2'", [], |r| r.get(0)).unwrap();
-    let e = capture_tare_err(&conn, &no, &TareOverride { by: w2, reason: "带水箱满水".into() });
-    assert!(e.contains("站长"), "需站长授权：{e}");
-
-    // 空理由 → 拒
-    let e = capture_tare_err(&conn, &no, &TareOverride { by: 1, reason: "  ".into() });
-    assert!(e.contains("理由"));
-
-    // 站长放行 → 落列 + 审计（authorized_by 是站长 id）
-    capture_tare(&conn, &no, 150000, Some(TareOverride { by: 1, reason: "带水箱满水，复验属实".into() }));
+    // 第二次皮重 150000 偏离基准 50%（远超 3% 容差），未带任何客户端文案 → 服务端仍放行，自动生成警示
+    capture_tare(&conn, &no, 150000, None);
     let o = load_order_full(&conn, &no).unwrap().unwrap();
-    assert_eq!(o.tare_override_by, Some(1));
-    let audit: (String, Option<i64>) = conn
-        .query_row("SELECT actor_name, authorized_by FROM audit_log WHERE action='tare.override' AND entity_no=?1", params![no], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap();
-    assert_eq!(audit.1, Some(1));
-}
+    let warn = o.tare_override_reason.expect("超容差皮重必须留醒目警示");
+    assert!(warn.contains("容差"), "警示要写清超容差：{warn}");
+    assert!(warn.contains("50.0%"), "自动生成文案要算出偏差比例：{warn}");
+    assert_eq!(o.tare_override_by, None, "不再有授权人，此列恒空");
+    assert_eq!(o.status, "to_settle", "捕获照常推进状态，不因超容差被卡住");
 
-fn capture_tare_err(conn: &Connection, no: &str, ov: &TareOverride) -> String {
-    capture(
-        conn,
-        &actor(2, "weigher"),
-        CaptureInput {
-            order_no: no.into(),
-            weigh_type: "tare".into(),
-            weight_01kg: 150000,
-            source: "scale".into(),
-            operator_id: None,
-            raw_frame: None,
-            has_photo: None,
-            tare_override: Some(TareOverride { by: ov.by, reason: ov.reason.clone() }),
-        },
-    )
-    .unwrap_err()
+    // 审计留痕，且 authorized_by 为空（不再要求站长授权）
+    let authorized_by: Option<i64> = conn
+        .query_row("SELECT authorized_by FROM audit_log WHERE action='tare.override' AND entity_no=?1", params![no], |r| r.get(0))
+        .unwrap();
+    assert_eq!(authorized_by, None, "警示是自动记录，不存在授权人");
+
+    // 超容差的皮重不得污染基准：last_tare 仍是 100000
+    let base: i64 = conn.query_row("SELECT last_tare_01kg FROM party WHERE id=?1", params![party], |r| r.get(0)).unwrap();
+    assert_eq!(base, 100000, "超容差皮重不得改写最近皮重基准");
 }
 
 #[test]
@@ -730,7 +829,7 @@ fn cap(
     no: &str,
     wt: &str,
     w: i64,
-    ov: Option<TareOverride>,
+    warning: Option<&str>,
 ) -> Result<Option<banghe_lib::orders::WeighOrder>, String> {
     capture(
         conn,
@@ -743,7 +842,8 @@ fn cap(
             operator_id: None,
             raw_frame: None,
             has_photo: Some(false),
-            tare_override: ov,
+            tare_override: None,
+            tare_warning: warning.map(str::to_string),
         },
     )
 }
@@ -826,8 +926,10 @@ fn capture_reweigh_keeps_single_adopted_per_type() {
     assert_eq!(load_order_full(&conn, &no).unwrap().unwrap().gross_weight_01kg, Some(210000), "头值取最新采用值");
 }
 
+/// 服务端独立复算皮重容差：不信任前端有没有弹过提示，超差一律放行但自动补一条警示；
+/// 客户端附带的现场说明要保留，且异常皮重不得污染最近皮重基准。
 #[test]
-fn capture_tare_tolerance_gate_enforced_server_side() {
+fn capture_tare_tolerance_recomputed_server_side() {
     let conn = db();
     ensure_users(&conn);
     let p = new_party(&conn, "己", "341204199301272026");
@@ -835,17 +937,20 @@ fn capture_tare_tolerance_gate_enforced_server_side() {
     capture_gross(&conn, &no, 200000);
     capture_tare(&conn, &no, 100000, None); // 首次无基准 → 放行并记为最近皮重
 
-    // 第二次皮重偏离基准 30%（远超 3% 容差），未带授权 → 服务端必须拦下（补 C2 的 fail-open）
-    let e = cap(&conn, &no, "tare", 130000, None).unwrap_err();
-    assert!(e.contains("容差"), "超差皮重要指路授权：{e}");
+    // 第二次皮重偏离基准 30%（远超 3% 容差），未带任何文案 → 服务端仍放行并自动补警示
+    let ok = cap(&conn, &no, "tare", 130000, None).expect("超容差皮重不得被拦下");
+    let o = ok.unwrap();
+    assert!(o.tare_override_reason.as_deref().unwrap_or("").contains("30.0%"), "服务端要自己算出偏差：{:?}", o.tare_override_reason);
 
-    // 带在职站长授权后放行
-    let ok = cap(&conn, &no, "tare", 130000, Some(TareOverride { by: 1, reason: "车上加了备胎，站长现场确认".into() }));
-    assert!(ok.is_ok(), "站长授权的异常皮重应放行：{ok:?}");
+    // 客户端带现场说明 → 服务端复算仍触发，且原文案被并进警示里
+    let o = cap(&conn, &no, "tare", 130000, Some("车上加了备胎")).unwrap().unwrap();
+    let warn = o.tare_override_reason.expect("超容差必须留警示");
+    assert!(warn.contains("备胎"), "客户端说明要保留：{warn}");
+    assert!(warn.contains("容差"), "警示要写清超容差：{warn}");
 
     // 异常皮重不得污染基准：last_tare 仍是 100000
     let base: i64 = conn.query_row("SELECT last_tare_01kg FROM party WHERE id=?1", params![p], |r| r.get(0)).unwrap();
-    assert_eq!(base, 100000, "超差放行的皮重不得改写最近皮重基准");
+    assert_eq!(base, 100000, "超容差皮重不得改写最近皮重基准");
 }
 
 #[test]
@@ -882,4 +987,145 @@ fn list_parties_supports_type_and_keyword_together() {
     assert_eq!(hit[0].name, "甲张");
     let none = list_parties(&conn, "王", Some("farmer")).expect("无匹配同样应正常返回空集合");
     assert!(none.is_empty());
+}
+
+// ------------------------------------------------------------ 补录入仓去向
+// 去向在制单时选填（03 §9.9），所以这条写路径要守住三件事：填了就得自洽
+// （不许留"有货位没仓房"的半截去向）、谁登记的署名进 keeper_id、改派留审计。
+
+/// 值仓账号（keeper_id 有外键，岗位账号得真存在）
+fn ensure_keeper(conn: &Connection) -> i64 {
+    conn.execute(
+        "INSERT INTO user_account (username, display_name, password_hash, role, is_active, created_at)
+         VALUES ('keep', '值仓', '!x', 'keeper', 1, '2026-01-01T00:00:00.000+08:00')",
+        [],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+fn seed_warehouse(conn: &Connection, code: &str, active: bool) -> i64 {
+    conn.execute(
+        "INSERT INTO warehouse (code, name, kind, is_active, created_at) VALUES (?1, ?1, 'house', ?2, '2026-01-01T00:00:00.000+08:00')",
+        params![code, i64::from(active)],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+fn seed_slot(conn: &Connection, warehouse: i64, code: &str, active: bool) -> i64 {
+    conn.execute(
+        "INSERT INTO storage_slot (warehouse_id, code, label, is_active) VALUES (?1, ?2, ?2, ?3)",
+        params![warehouse, code, i64::from(active)],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+fn assign(conn: &Connection, keeper: i64, no: &str, warehouse: Option<i64>, slot: Option<i64>) -> Result<Option<banghe_lib::orders::WeighOrder>, String> {
+    assign_destination(
+        conn,
+        &actor(keeper, "keeper"),
+        AssignDestinationInput { order_no: no.into(), warehouse_id: warehouse, slot_id: slot, operator_id: None },
+    )
+}
+
+fn dest_audits(conn: &Connection, no: &str) -> Vec<(String, String)> {
+    let mut st = conn
+        .prepare("SELECT actor_name, reason FROM audit_log WHERE action='order.destination' AND entity_no=?1 ORDER BY id")
+        .unwrap();
+    st.query_map(params![no], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[test]
+fn destination_backfill_signs_the_keeper_and_audits_every_change() {
+    let conn = db();
+    ensure_users(&conn);
+    let keep = ensure_keeper(&conn);
+    let wh = seed_warehouse(&conn, "CW-A", true);
+    let s1 = seed_slot(&conn, wh, "C01-01", true);
+    let s2 = seed_slot(&conn, wh, "C01-02", true);
+    let no = create(&conn, new_party(&conn, "补录", "341204199301272041"), xm_id(&conn));
+
+    // 只选货位 ⇒ 反查补上仓房，库里不许出现"有货位没仓房"的半截去向
+    let o = assign(&conn, keep, &no, None, Some(s1)).unwrap().unwrap();
+    assert_eq!(o.warehouse_id, Some(wh), "只给货位也要补上所属仓房");
+    assert_eq!(o.warehouse_name.as_deref(), Some("CW-A"));
+    assert_eq!(o.slot_label.as_deref(), Some("C01-01"));
+    assert_eq!(o.keeper_id, Some(keep), "谁指定的去向就署谁的名（三环节署名之一）");
+    assert_eq!(
+        dest_audits(&conn, &no),
+        vec![(format!("测试{keep}"), "未指定 → CW-A / C01-01".into())]
+    );
+
+    // 改派：审计要看得出从哪儿换到哪儿
+    let o = assign(&conn, keep, &no, Some(wh), Some(s2)).unwrap().unwrap();
+    assert_eq!(o.slot_label.as_deref(), Some("C01-02"));
+    assert_eq!(dest_audits(&conn, &no).len(), 2);
+    assert_eq!(dest_audits(&conn, &no)[1].1, "CW-A / C01-01 → CW-A / C01-02");
+
+    // 清空去向 ⇒ 署名一并抹掉，别留一个查不到指向的签名
+    let o = assign(&conn, keep, &no, None, None).unwrap().unwrap();
+    assert_eq!(o.warehouse_id, None);
+    assert_eq!(o.slot_id, None);
+    assert_eq!(o.keeper_id, None, "去向清空后不该还挂着保管员署名");
+    assert_eq!(dest_audits(&conn, &no).last().unwrap().1, "CW-A / C01-02 → 未指定");
+}
+
+#[test]
+fn destination_rejects_mismatched_and_inactive_archives() {
+    let conn = db();
+    ensure_users(&conn);
+    let keep = ensure_keeper(&conn);
+    let a = seed_warehouse(&conn, "CW-A", true);
+    let b = seed_warehouse(&conn, "CW-B", true);
+    let stopped = seed_warehouse(&conn, "CW-C", false);
+    let sa = seed_slot(&conn, a, "C01-01", true);
+    let sb = seed_slot(&conn, b, "C02-01", true);
+    let sc = seed_slot(&conn, stopped, "C03-01", true);
+    let no = create(&conn, new_party(&conn, "错配", "341204199301272042"), xm_id(&conn));
+
+    // 货位不在所选仓房下：按去向统计会出现"A 仓的货位记到 B 仓"，必须当场拒
+    let e = assign(&conn, keep, &no, Some(a), Some(sb)).unwrap_err();
+    assert!(e.contains("不在该仓房下"), "错配要说清是哪一个：{e}");
+
+    // 档案不存在 / 已停用（含"仓房停了但货位还挂着"）
+    let e = assign(&conn, keep, &no, Some(9999), None).unwrap_err();
+    assert!(e.contains("仓房"), "不存在的仓房要报仓房：{e}");
+    let e = assign(&conn, keep, &no, Some(stopped), None).unwrap_err();
+    assert!(e.contains("已停用"), "停用的仓房不能进新指定：{e}");
+    let e = assign(&conn, keep, &no, None, Some(sc)).unwrap_err();
+    assert!(e.contains("货位"), "所属仓房已停用的货位同样不能选：{e}");
+
+    // 合法的一对不受影响
+    assert!(assign(&conn, keep, &no, Some(a), Some(sa)).is_ok());
+}
+
+#[test]
+fn destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones() {
+    let conn = db();
+    ensure_users(&conn);
+    let keep = ensure_keeper(&conn);
+    let wh = seed_warehouse(&conn, "CW-A", true);
+    let slot = seed_slot(&conn, wh, "C01-01", true);
+
+    // 作废单不参与汇总，再登记去向没有意义还会污染审计
+    let no = create(&conn, new_party(&conn, "作废甲", "341204199301272043"), xm_id(&conn));
+    void_order(&conn, &actor(2, "weigher"), void_input(&no, "农户临时取消售粮", 1)).unwrap();
+    let e = assign(&conn, keep, &no, Some(wh), Some(slot)).unwrap_err();
+    assert!(e.contains("已作废"), "作废单要当场拒：{e}");
+
+    // 已结算的单仍可补去向：粮进了哪个仓与钱结没结是两件事，事后清仓要靠它
+    let no2 = create(&conn, new_party(&conn, "已结算甲", "341204199301272044"), xm_id(&conn));
+    capture_gross(&conn, &no2, 150000);
+    capture_tare(&conn, &no2, 50000, None);
+    seed_price(&conn, xm_id(&conn));
+    settle_now(&conn, &no2, 240000, true);
+    let status_before = load_order_full(&conn, &no2).unwrap().unwrap().status;
+    let o = assign(&conn, keep, &no2, Some(wh), Some(slot)).unwrap().unwrap();
+    assert_eq!(o.status, status_before, "补去向不得改动单据状态");
+    assert_eq!(o.warehouse_name.as_deref(), Some("CW-A"));
 }

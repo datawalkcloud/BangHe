@@ -21,6 +21,8 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "order.create": ["station_master", "registrar", "weigher"],
   "order.void": ["station_master", "registrar", "weigher"],
   "order.reverse": ["station_master"],
+  /** 补录/改派入仓去向：值仓的活（02 §11），站长兜底 */
+  "order.destination": ["station_master", "keeper"],
   "tare.override": ["station_master"],
   "price.edit": ["station_master"],
   "price.override": ["station_master"],

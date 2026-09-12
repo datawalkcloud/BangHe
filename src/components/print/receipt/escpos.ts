@@ -43,7 +43,7 @@ function fillText(tpl: string, resolve: (key: string) => string): string {
  */
 export function receiptLines(template: ReceiptTemplate, ctx: ReceiptContext): NativePrintLine[] {
   const spec = getSpec(template.scenario);
-  const { docNo, dateText } = docMeta(ctx);
+  const { docNo, dateText } = docMeta(ctx, template.scenario);
   const out: NativePrintLine[] = [];
 
   /* ---------------------------------------------------------------- 票头 */
@@ -104,6 +104,15 @@ export function receiptLines(template: ReceiptTemplate, ctx: ReceiptContext): Na
       if (signers.length === 0) continue;
       if (sec.title) out.push({ kind: "text", text: sec.title, bold: true });
       for (const s of signers) out.push({ kind: "kv", label: s, value: "＿＿＿＿＿＿" });
+      continue;
+    }
+
+    if (sec.kind === "qr") {
+      // 取字段一律用模板自己的 scenario：靠上下文倒推会在"付款小票"这种同时挂着
+      // settlement 和 payment 的场景里拿错目录，编出一个扫出来对不上号的码
+      const payload = fillText(sec.text ?? "", (key) => asText(spec.resolveField(key, ctx))).trim();
+      // 票头已经印过一行「单号」，纸上不再重复——热敏票纵向每一毫米都是钱
+      if (payload) out.push({ kind: "qr", text: payload });
       continue;
     }
 

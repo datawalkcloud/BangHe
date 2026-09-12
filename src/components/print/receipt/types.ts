@@ -57,8 +57,15 @@ export interface TableDef {
   columns: ColumnDef[];
 }
 
-/** 模板由若干有序区块组成；区块类型决定渲染方式 */
-export type BlockKind = "kv" | "table" | "sign" | "text";
+/**
+ * 模板由若干有序区块组成；区块类型决定渲染方式。
+ *
+ * `qr` 与其他四种的区别只在落点：内容是同一条 `{{字段}}` 占位文本（与 text 区块同一套
+ * 解析规则），但渲染出来是码而不是字。之所以仍让用户模板携带它而不写死在票面里——
+ * 热敏机的码由 Rust（escpos 指令）画、A4 的码由前端 SVG 画，两边都必须读到同一份载荷，
+ * 否则「预览里有什么、纸上就有什么」这条承诺就破了。
+ */
+export type BlockKind = "kv" | "table" | "sign" | "text" | "qr";
 
 export interface ReceiptSection {
   id: string;
@@ -72,8 +79,21 @@ export interface ReceiptSection {
   columns?: string[];
   /** sign：署名栏标签，如 ["磅员","化验员","售粮人签字"] */
   signers?: string[];
-  /** text：自由文本行（如备注、提示语） */
+  /** text / qr：自由文本行（如备注、提示语），qr 区块里这条就是二维码载荷，支持 {{字段}} 占位 */
   text?: string;
+  /** qr：模块倍率（1=小 2=中 3=大）。热敏机另有自己的 size 指令，这里只管 A4/预览的视觉大小 */
+  qrScale?: 1 | 2 | 3;
+  /** qr：码下方是否附一行可读的单号（纸被晒白了、码扫不出来时人工兜底） */
+  qrCaption?: boolean;
+  /**
+   * 业务流程必备件：编辑器不给删、恢复默认之外任何路径都不会丢掉它。
+   *
+   * 只有一种东西配得上这个标记——扫了就能定位单据的凭票码。它一旦被删，
+   * 「先打票、后集中结算」这条主路径就断了：客户拿着没有码的票到窗口，
+   * 司磅员只能靠手敲单号，纸质票存在的意义随之消失。删除入口在编辑器里禁用，
+   * 真正的兜底在打印边界（见 `defaults.ts` 的 `ensureRequiredBlocks`）。
+   */
+  required?: boolean;
 }
 
 /** 一张完整的小票模板 */

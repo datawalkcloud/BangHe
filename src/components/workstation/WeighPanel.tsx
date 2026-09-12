@@ -4,7 +4,8 @@
  * 三条现场规则写死在这里：
  *  1. 读数不稳定不允许捕获——按钮禁用并说明原因（05 §5 要求禁用必须带文字）
  *  2. 仪表离线时必须能改手录，但手录会永久标记在磅单上，迎检必查
- *  3. 皮重与历史均值偏差超容差 → 拦下来弹授权框，授权人必须是站长，事由必填
+ *  3. 皮重与历史偏差超容差 → **不拦下这次捕获**：数据照常有效，只给一句警告，
+ *     并在磅单上留醒目提醒（本面板醒目条、详情页、码单票面「皮重警示」栏、审计）
  *
  * 底部那组"模拟载重 / 开上磅 / 开下磅"是 mock 专用的演示开关：
  * 真实环境里这三件事由车辆与仪表完成，界面上不会出现。
@@ -14,7 +15,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CarFrontIcon, CarIcon, KeyboardIcon, PenLineIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import type { UserAccount, WeighOrder } from "@/mock/types";
+import type { WeighOrder } from "@/mock/types";
 import { dateTime, fromKg, nowLocalISO, toKg, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
@@ -27,12 +28,6 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Choose } from "@/components/business/Choose";
 import { cn } from "cn";
 
 interface Pending {
@@ -44,7 +39,6 @@ export function WeighPanel({
   order,
   mean01kg,
   tolerancePct,
-  staff,
   scalePort,
   scaleDivision01kg,
   cameraOnline,
@@ -52,13 +46,13 @@ export function WeighPanel({
   order: WeighOrder | null;
   mean01kg: number | null;
   tolerancePct: number;
-  staff: UserAccount[];
   scalePort: string;
   scaleDivision01kg: number;
   cameraOnline: boolean;
 }) {
   const scale = useDeviceStore((s) => s.scale);
   const setCamera = useDeviceStore((s) => s.setCamera);
+  const mockOff = useDeviceStore((s) => s.mockOff);
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
 
@@ -67,9 +61,6 @@ export function WeighPanel({
   const [manualGross, setManualGross] = useState<number | null>(null);
   const [simKg, setSimKg] = useState("32000");
   const [flash, setFlash] = useState<"gross" | "tare" | null>(null);
-  const [pending, setPending] = useState<Pending | null>(null);
-  const [overrideReason, setOverrideReason] = useState("");
-  const [authorizerId, setAuthorizerId] = useState("");
 
   /** 待捕项：缺哪项就优先提示哪项，两项都有则为复称 */
   const next: "gross" | "tare" | null = !order
@@ -81,7 +72,7 @@ export function WeighPanel({
         : null;
 
   const capture = useMutation({
-    mutationFn: (args: Pending & { weigh_type: "gross" | "tare"; override?: { by: number; reason: string } | null }) =>
+    mutationFn: (args: Pending & { weigh_type: "gross" | "tare"; warning?: string | null }) =>
       api.capture({
         order_no: order!.order_no,
         weigh_type: args.weigh_type,
@@ -94,7 +85,7 @@ export function WeighPanel({
               (scale.rawFrame ?? `=W${(args.weight_01kg / 10).toFixed(1)}kg ST`)
             : undefined,
         has_photo: cameraOnline,
-        tare_override: args.override ?? null,
+        tare_warning: args.warning ?? null,
       }),
     onSuccess: (o, args) => {
       if (!o) {
@@ -105,9 +96,16 @@ export function WeighPanel({
       if (cameraOnline) setCamera({ lastCaptureAt: nowLocalISO() });
       setFlash(args.weigh_type);
       window.setTimeout(() => setFlash(null), 700);
-      toast.success(
-        `${args.weigh_type === "gross" ? "毛重" : "皮重"} ${weight(args.weight_01kg)} 已捕获${args.source === "manual" ? "（手录）" : ""}`,
-      );
+      const manualTag = args.source === "manual" ? "（手录）" : "";
+      // 超容差不拦这次捕获：以服务端复核结果为准给警告，警示文案同时已记在磅单上（醒目条/票面/审计）。
+      // 只判皮重那一捕——毛重/复称时单上可能挂着更早留下的警示，别拿旧文案冒充这次的结论
+      if (args.weigh_type === "tare" && o.tare_override_reason) {
+        toast.warning(`皮重 ${weight(args.weight_01kg)} 已捕获${manualTag}：偏差超出容差，已在磅单醒目提醒`, {
+          description: o.tare_override_reason,
+        });
+      } else {
+        toast.success(`${args.weigh_type === "gross" ? "毛重" : "皮重"} ${weight(args.weight_01kg)} 已捕获${manualTag}`);
+      }
       qc.invalidateQueries({ queryKey: ["order", o.order_no] });
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["open-orders"] });
@@ -135,13 +133,17 @@ export function WeighPanel({
       toast.error("读数必须大于 0");
       return;
     }
-    // 皮重容差校验（05 §4 ②）：只有拿到历史均值才有比较基准
+    // 皮重容差（05 §4 ②）：超差只附上警示文案照常捕获，不再拦下要授权；判定以服务端复算为准
     if (type === "tare" && mean01kg != null && tolerancePct > 0) {
       const tol = Math.round((mean01kg * tolerancePct) / 100);
-      if (Math.abs(value01kg - mean01kg) > tol) {
-        setPending({ weight_01kg: value01kg, source });
-        setOverrideReason("");
-        setAuthorizerId("");
+      const diff = value01kg - mean01kg;
+      if (Math.abs(diff) > tol) {
+        capture.mutate({
+          weigh_type: type,
+          weight_01kg: value01kg,
+          source,
+          warning: `偏差 ${diff > 0 ? "+" : "-"}${weight(Math.abs(diff), false)} kg（容差 ±${tolerancePct}%）`,
+        });
         return;
       }
     }
@@ -164,16 +166,13 @@ export function WeighPanel({
   useHotkey(" ", () => captureLive(next ?? "gross"), { enabled: !!order });
   useHotkey("p", () => captureLive("tare"), { enabled: !!order });
 
-  const authorizers = staff.filter((u) => u.role === "station_master" && u.is_active === 1);
-  const tolerance01kg = mean01kg == null ? null : Math.round((mean01kg * tolerancePct) / 100);
-  const liveDiff = pending && mean01kg != null ? pending.weight_01kg - mean01kg : null;
   const records = order?.records ?? [];
   const lastRecord = records[records.length - 1];
 
   return (
     <Card size="sm" className="min-w-0 py-0 gap-0">
-      <CardHeader className="grid-cols-[1fr_auto] items-center border-b py-1 px-2.5">
-        <CardTitle className="text-xs font-semibold">③ 称重区</CardTitle>
+      <CardHeader className="card-header-compact grid-cols-[1fr_auto] items-center border-b px-2.5">
+        <CardTitle className="text-xs font-semibold">称重区</CardTitle>
         <CardAction className="flex items-center gap-1.5 self-center text-xs text-muted-foreground">
           分度 {weight(scaleDivision01kg, false)} · {scalePort}
           {!cameraOnline && <ToneBadge tone="danger">无抓拍</ToneBadge>}
@@ -194,55 +193,56 @@ export function WeighPanel({
               value01kg={scale.connected ? scale.weight01kg : null}
               stable={scale.stable}
               connected={scale.connected}
-              size="xl"
+              size="lg"
             />
           </div>
 
-          {/* 右侧：本单已取重量明细 */}
-          <div className="flex shrink-0 min-w-[130px] flex-col justify-center gap-1 border-t sm:border-l sm:border-t-0 pt-1.5 sm:pt-0 sm:pl-2.5">
-            <span className="text-[11px] font-medium text-muted-foreground border-b pb-0.5">本单实测重量</span>
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="text-muted-foreground">毛重</span>
-              <span className="tnum font-semibold text-foreground">
-                {order?.gross_weight_01kg != null ? weight(order.gross_weight_01kg) : "待捕获"}
-              </span>
+          {/* 右侧：本单已取重量明细 + 捕获操作（填掉读数右边的空白） */}
+          <div className="flex shrink-0 min-w-[220px] flex-col justify-center gap-1.5 border-t sm:border-l sm:border-t-0 pt-1.5 sm:pt-0 sm:pl-2.5">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-medium text-muted-foreground border-b pb-0.5">本单实测重量</span>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-muted-foreground">毛重</span>
+                <span className="tnum font-semibold text-foreground">
+                  {order?.gross_weight_01kg != null ? weight(order.gross_weight_01kg) : "待捕获"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-muted-foreground">皮重</span>
+                <span className="tnum font-semibold text-foreground">
+                  {order?.tare_weight_01kg != null ? weight(order.tare_weight_01kg) : "待捕获"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-xs border-t pt-0.5">
+                <span className="font-semibold text-foreground">净重</span>
+                <span className="tnum font-bold text-primary text-sm">
+                  {order?.net_weight_01kg != null ? weight(order.net_weight_01kg) : "—"}
+                </span>
+              </div>
             </div>
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="text-muted-foreground">皮重</span>
-              <span className="tnum font-semibold text-foreground">
-                {order?.tare_weight_01kg != null ? weight(order.tare_weight_01kg) : "待捕获"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2 text-xs border-t pt-0.5">
-              <span className="font-semibold text-foreground">净重</span>
-              <span className="tnum font-bold text-primary text-sm">
-                {order?.net_weight_01kg != null ? weight(order.net_weight_01kg) : "—"}
-              </span>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button
+                size="default"
+                variant={next === "gross" ? "default" : "outline"}
+                onClick={() => captureLive("gross")}
+                disabled={!order || !scale.connected || !scale.stable || capture.isPending}
+                className="h-8 text-xs"
+              >
+                捕获毛重
+                <kbd className="ml-1 text-[10px] opacity-70">空格</kbd>
+              </Button>
+              <Button
+                size="default"
+                variant={next === "tare" ? "default" : "outline"}
+                onClick={() => captureLive("tare")}
+                disabled={!order || !scale.connected || !scale.stable || capture.isPending}
+                className="h-8 text-xs"
+              >
+                捕获皮重
+                <kbd className="ml-1 text-[10px] opacity-70">P</kbd>
+              </Button>
             </div>
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-1.5">
-          <Button
-            size="default"
-            variant={next === "gross" ? "default" : "outline"}
-            onClick={() => captureLive("gross")}
-            disabled={!order || !scale.connected || !scale.stable || capture.isPending}
-            className="h-8 text-xs"
-          >
-            捕获毛重
-            <kbd className="ml-1 text-[10px] opacity-70">空格</kbd>
-          </Button>
-          <Button
-            size="default"
-            variant={next === "tare" ? "default" : "outline"}
-            onClick={() => captureLive("tare")}
-            disabled={!order || !scale.connected || !scale.stable || capture.isPending}
-            className="h-8 text-xs"
-          >
-            捕获皮重
-            <kbd className="ml-1 text-[10px] opacity-70">P</kbd>
-          </Button>
         </div>
         {!order && <p className="text-xs text-warning">尚未制单，取号后才能捕获重量。</p>}
         {order && !scale.connected && (
@@ -305,108 +305,53 @@ export function WeighPanel({
           </p>
         )}
 
-        {order?.tare_override_by != null && (
+        {order?.tare_override_reason && (
           <div className="border border-warning bg-warning-bg p-1.5 text-xs">
-            <ToneBadge tone="warning">皮重超容差放行</ToneBadge>
+            <ToneBadge tone="warning">皮重偏差超容差</ToneBadge>
             <p className="mt-0.5">
-              授权人 {staff.find((u) => u.id === order.tare_override_by)?.display_name ?? `#${order.tare_override_by}`} ·
-              事由：{order.tare_override_reason ?? "—"}
+              本单已按现场读数捕获（数据有效）：{order.tare_override_reason}。请核对车辆与读数，如需更正走红冲重录；提醒已记入磅单、补打票面与审计。
             </p>
           </div>
         )}
 
-        {/* 演示专用：没有真车，用这组按钮把"上磅/下磅"演出来；真机流的上磅由车说了算 */}
-        {scale.source === "demo" && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t pt-1.5 text-[11px]">
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <KeyboardIcon className="size-3" />
-              演示
-            </span>
-            <Input
-              aria-label="模拟载重"
-              value={simKg}
-              onChange={(e) => setSimKg(e.target.value)}
-              className="tnum h-7 w-20 text-xs px-1.5"
-            />
-            <span className="text-muted-foreground">kg</span>
-            <Button size="xs" variant="outline" onClick={() => scale.driveOn(Number(simKg) || 0)} className="h-7 text-xs">
-              <CarFrontIcon />
-              上磅
-            </Button>
-            <Button size="xs" variant="outline" onClick={() => scale.driveOff()} className="h-7 text-xs">
-              <CarIcon />
-              下磅
-            </Button>
+        {/* Mock / 演示专用：没有真车，用这组控件把读数演出来；真机流的上磅由车说了算。
+            「外设关闭」验收态（mockOff）下不出现——那一态只留手工录入。 */}
+        {(scale.source === "demo" || scale.mocked) && !mockOff && (
+          <div className="flex flex-col gap-1 border-t pt-1.5 text-[11px]">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="flex items-center gap-1 text-muted-foreground">
+                <KeyboardIcon className="size-3" />
+                {scale.mocked ? "台账 Mock 模拟" : "演示"}
+              </span>
+              <Input
+                aria-label="手输重量"
+                value={simKg}
+                onChange={(e) => setSimKg(e.target.value)}
+                className="tnum h-7 w-20 text-xs px-1.5"
+              />
+              <span className="text-muted-foreground">kg</span>
+              <Button
+                size="xs"
+                onClick={() => scale.setDemoWeight(Number(simKg) || 0)}
+                className="h-7 text-xs"
+                title="把读数直接置为输入值（稳定，可立即捕获）"
+              >
+                <PenLineIcon />
+                置为读数
+              </Button>
+              <Button size="xs" variant="outline" onClick={() => scale.driveOn(Number(simKg) || 0)} className="h-7 text-xs">
+                <CarFrontIcon />
+                上磅
+              </Button>
+              <Button size="xs" variant="outline" onClick={() => scale.driveOff()} className="h-7 text-xs">
+                <CarIcon />
+                下磅
+              </Button>
+            </div>
+            <p className="text-muted-foreground">手输重量后点「置为读数」，再按 空格/P 捕获毛重、皮重。</p>
           </div>
         )}
       </CardContent>
-
-      <AlertDialog
-        open={pending != null}
-        onOpenChange={(v) => {
-          if (!v) setPending(null);
-        }}
-      >
-        <AlertDialogContent className="max-w-[520px]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>皮重与历史偏差过大，需站长授权</AlertDialogTitle>
-            <AlertDialogDescription className="flex flex-col gap-1.5">
-              <span>
-                历史均值 {weight(mean01kg)}，容差 ±{tolerancePct}%（±{tolerance01kg == null ? "—" : weight(tolerance01kg, false)}
-                {liveDiff != null && tolerance01kg != null ? `）；本次偏差 ${liveDiff > 0 ? "+" : ""}${weight(liveDiff, false)}` : "）"}
-              </span>
-              <span className="text-muted-foreground">
-                常见原因：车厢加装配件、油箱加满、带回货物。确认属实后再放行，事由会写进审计日志。
-              </span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="flex flex-col gap-2">
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              授权人（站长）
-              <Choose
-                aria-label="授权人"
-                value={authorizerId}
-                onChange={setAuthorizerId}
-                options={[
-                  { value: "", label: "请选择…" },
-                  ...authorizers.map((u) => ({ value: String(u.id), label: `${u.display_name}（站长）` })),
-                ]}
-              />
-            </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              偏差事由
-              <Textarea
-                rows={2}
-                value={overrideReason}
-                onChange={(e) => setOverrideReason(e.target.value)}
-                placeholder="如：油箱加满约 200 kg，已现场核对"
-                className="min-h-0 text-sm"
-              />
-            </Label>
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消，重新过磅</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={!authorizerId || overrideReason.trim().length < 4}
-              onClick={() => {
-                if (!pending) return;
-                capture.mutate({
-                  weigh_type: "tare",
-                  weight_01kg: pending.weight_01kg,
-                  source: pending.source,
-                  override: { by: Number(authorizerId), reason: overrideReason.trim() },
-                });
-                setPending(null);
-              }}
-            >
-              确认放行
-            </AlertDialogAction>
-          </AlertDialogFooter>
-          {(!authorizerId || overrideReason.trim().length < 4) && (
-            <p className="pb-1 text-xs text-warning">必须选定站长授权并填写不少于 4 字的事由，才能放行。</p>
-          )}
-        </AlertDialogContent>
-      </AlertDialog>
     </Card>
   );
 }

@@ -96,6 +96,14 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0008_backup_auto_interval.sql",
         sql: include_str!("migrations/0008_backup_auto_interval.sql"),
     },
+    Migration {
+        name: "0009_ic_flow_card.sql",
+        sql: include_str!("migrations/0009_ic_flow_card.sql"),
+    },
+    Migration {
+        name: "0010_card_required_on_create.sql",
+        sql: include_str!("migrations/0010_card_required_on_create.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

@@ -44,7 +44,7 @@ export function PartyPicker({
         <DialogHeader className="border-b px-4 py-3">
           <DialogTitle className="text-sm">{title}</DialogTitle>
           <DialogDescription className="text-xs">
-            支持姓名、编号、证号后 4 位、手机号、车牌检索；查无此人请到「农户与往来单位」新建档案。
+            支持姓名、编号、证号后 4 位、手机号、车牌检索；查无此人请关掉本框点「新档案」就地建一张，开户行等其余信息到「农户与单位」补全。
           </DialogDescription>
         </DialogHeader>
 
@@ -58,7 +58,7 @@ export function PartyPicker({
             <CommandEmpty className="py-0">
               <EmptyState
                 title={isFetching ? "正在查询…" : "没有匹配的档案"}
-                description={isFetching ? undefined : "可点下方「手工登记」以自由文本先完成本单，事后再补档案。"}
+                description={isFetching ? undefined : "关掉后点「新档案」手工录入证号建一张，或读卡后在弹窗里快捷登记。"}
               />
             </CommandEmpty>
             {data.map((p) => (

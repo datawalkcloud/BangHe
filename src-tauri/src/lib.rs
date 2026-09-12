@@ -1,9 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod idcard;
 mod printer;
+mod queue_print;
 
 pub mod auth;
 pub mod camera;
+pub mod cards;
 pub mod dashboard;
 pub mod db;
 pub mod devices;
@@ -85,6 +87,7 @@ pub fn run() {
             printer::printer_self_test,
             printer::print_weigh_ticket,
             printer::print_receipt,
+            queue_print::print_receipt_queue,
             camera::camera_list_local,
             auth::auth_login,
             auth::auth_session,
@@ -123,6 +126,12 @@ pub fn run() {
             orders::order_void,
             orders::settlement_of_order,
             orders::order_assign_destination,
+            cards::card_pool_list,
+            cards::card_pool_register,
+            cards::card_pool_retire,
+            cards::card_issue,
+            cards::card_locate,
+            cards::card_release,
             reports::report_daily,
             reports::settlement_list,
             ledger::report_ledger,

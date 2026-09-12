@@ -69,7 +69,9 @@ export function DatePicker({
           // min-w-0 + overflow-hidden：让触发器像 native input 一样能在网格列内收缩，
           // 否则 min-width:auto 会把日期文字撑破列宽、溢出到相邻表单字段上
           "min-w-0 justify-start gap-2 overflow-hidden text-left font-normal tnum",
-          !selected && "text-muted-foreground",
+          // 未选日期时的"选择日期"就是本字段的占位符：跟输入框共用 --input-placeholder，
+          // 不用 muted-foreground——那是标签/提示文字的颜色，和已填的正文太接近，看不出还没选。
+          !selected && "text-input-placeholder",
           className
         )}
       >
@@ -77,7 +79,9 @@ export function DatePicker({
         <span className="truncate">{selected?.isValid() ? selected.format("YYYY-MM-DD") : placeholder}</span>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Positioner side="bottom" align="start" sideOffset={4}>
+        {/* z 必须在 Positioner 上：它是 position:fixed，自成层叠上下文，
+            只给内层 Popup 写 z-50 出不去，会被同样 z-50 的 Dialog 整块盖住 */}
+        <Popover.Positioner className="isolate z-50" side="bottom" align="start" sideOffset={4}>
           <Popover.Popup className="z-50 w-[280px] rounded-2xl border border-border bg-popover p-3 text-popover-foreground shadow-lg outline-none">
             <div className="mb-2 flex items-center justify-between">
               <Button

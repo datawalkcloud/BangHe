@@ -722,7 +722,7 @@ pub async fn auth_reset_password(app: AppHandle, target: i64) -> Result<ActionOu
         .map_err(|e| format!("重置任务失败：{e}"))
 }
 
-/// 破坏性操作的站长授权（作废 / 红冲 / 补打 / 皮重越权，05 §10-7）。
+/// 破坏性操作的站长授权（作废 / 红冲 / 补打，05 §10-7）。
 /// 只回答"这个密码是不是某个在职站长的"，**不发会话**，也不动最后登录时间。
 #[tauri::command]
 pub async fn auth_verify_supervisor(app: AppHandle, username: String, password: String) -> Result<ActionOutcome, String> {

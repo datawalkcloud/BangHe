@@ -220,6 +220,17 @@ export const DEVICE_STATUS: Record<DeviceStatus, { label: string; tone: Tone }> 
   error: { label: "故障", tone: "danger" },
 };
 
+/* ---------------------------------------------------------------- 流转卡（06 篇） */
+
+/** 卡占用态：与后端 enums.rs `CardStatus`、§9.26 CHECK 逐字一致 */
+export type CardStatus = "in_pool" | "in_use" | "retired";
+
+export const CARD_STATUS: Record<CardStatus, { label: string; tone: Tone }> = {
+  in_pool: { label: "空闲在册", tone: "neutral" },
+  in_use: { label: "挂在途单", tone: "info" },
+  retired: { label: "已注销", tone: "danger" },
+};
+
 export type PrintChannel = "preview" | "pdf_silent" | "raw";
 
 export const PRINT_CHANNEL: Record<PrintChannel, string> = {

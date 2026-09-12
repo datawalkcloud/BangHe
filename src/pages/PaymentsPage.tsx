@@ -8,7 +8,6 @@
  * 界面不自己减天数，避免与报表口径不一致（02 §F5.4）。
  */
 import { useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { DownloadIcon, PrinterIcon } from "lucide-react";
 import { toast } from "sonner";

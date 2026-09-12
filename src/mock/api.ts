@@ -9,6 +9,9 @@
 import type {
   AppSetting,
   AuditLog,
+  CardIssueResult,
+  CardLocateResult,
+  CardPoolRow,
   DailyReport,
   Dashboard,
   DeviceConfig,
@@ -30,7 +33,7 @@ import type {
   Warehouse,
   WeighOrder,
 } from "./types";
-import type { DeviceStatus, OrderStatus, PaperKind, PaymentMethod, PrintChannel } from "@/lib/constants";
+import type { CardStatus, DeviceStatus, OrderStatus, PaperKind, PaymentMethod, PrintChannel } from "@/lib/constants";
 import { stamp, type PrintVerify } from "@/lib/print-guard";
 import {
   ALL_SLOTS,
@@ -75,6 +78,49 @@ import { amountFen, dateKey } from "./rng";
 const LATENCY = 90;
 function sleep(ms = LATENCY): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+/* ------------------------------------------------------- 流转卡 mock 态（06 篇） */
+/** 未到终态、可被发卡/推进的磅单状态（与 Rust OPEN_STATUS、orders OPEN_WHERE 同集合） */
+const OPEN_STATUSES: OrderStatus[] = ["draft", "registered", "qc_done", "gross_weighed", "tare_weighed", "reweigh", "to_settle"];
+
+/** 卡号归一：去非字母数字、转大写（与 Rust cards::normalize_card_no 同口径） */
+function normCard(raw: string): string {
+  return raw.replace(/[^0-9a-zA-Z]/g, "").toUpperCase();
+}
+
+/** 卡池演示态：预置一叠空闲卡，浏览器里也能走完"登记→发卡→推进→回收"全链 */
+const cards: CardPoolRow[] = Array.from({ length: 12 }, (_, i) => ({
+  card_no: (0x04a200 + i * 4).toString(16).toUpperCase().padStart(8, "0"),
+  label: `CARD-${String(i + 1).padStart(3, "0")}`,
+  status: "in_pool" as CardStatus,
+  order_no: null,
+  issued_at: null,
+  issued_by_name: null,
+  remark: null,
+}));
+
+/** 业务动作补一条审计（与 auditMaster 同表同形状，动作名与真库 audit 逐字一致） */
+function mkAudit(
+  action: string,
+  entity: string,
+  entityNo: string | null,
+  actorId: number | null,
+  reason: string | null = null,
+  at: string | null = null,
+): AuditLog {
+  return {
+    id: auditLogs.length + 1,
+    at: at ?? localIso(new Date()),
+    actor_id: actorId ?? 0,
+    actor_name: users.find((u) => u.id === actorId)?.display_name ?? "—",
+    action,
+    entity,
+    entity_no: entityNo,
+    reason,
+    authorized_by: null,
+    result: "ok",
+  };
 }
 
 function statableForSummary(o: WeighOrder): boolean {
@@ -752,12 +798,31 @@ export const api = {
     warehouse_id: number | null;
     slot_id: number | null;
     remark: string | null;
+    /** 制单时刷到的流转卡号；本站要求绑卡（card_required_on_create）时它是必填项 */
+    card_no?: string | null;
     registered_by: number;
     weight_source: "scale" | "manual";
   }): Promise<WeighOrder> {
     await sleep(120);
     const p = parties.find((x) => x.id === input.party_id)!;
     const v = varieties.find((x) => x.id === input.variety_id)!;
+    // 「制单必须绑卡」+ 这张卡能不能占（与 Rust cards::check_card_for_create 同一套闸）
+    const settingOf = (key: string, fallback: string) => settings.find((s) => s.key === key)?.value ?? fallback;
+    const requireCard =
+      settingOf("card_flow_mode", "auto") !== "off" && settingOf("card_required_on_create", "true") !== "false";
+    const card_no = normCard(input.card_no ?? "");
+    if (!card_no && requireCard) {
+      throw new Error("没刷到流转卡：请把 IC 卡贴紧读卡器再取号制单。本站要求「制单必须绑卡」，需要放开请到设置里关掉该参数");
+    }
+    const card = card_no ? cards.find((c) => c.card_no === card_no) : undefined;
+    if (card_no && !card) throw new Error(`卡 ${card_no} 未登记，请到「流转卡」页登记后再制单`);
+    if (card?.status === "retired") throw new Error(`卡 ${card_no} 已注销，不能再用它制单`);
+    const held = card?.status === "in_use" && card.order_no ? orderOf(card.order_no) : undefined;
+    if (held && OPEN_STATUSES.includes(held.status)) {
+      throw new Error(
+        `卡 ${card_no} 还挂着没做完的单 ${held.order_no}（${held.party_name}），一张卡不能同时开两张单：请先给那张单退卡，或换一张空闲卡`,
+      );
+    }
     const date = todayKey();
     const now = new Date();
     const o: WeighOrder = {
@@ -828,6 +893,16 @@ export const api = {
       id: o.id, at: o.registered_at, actor_id: input.registered_by, actor_name: users.find((u) => u.id === input.registered_by)?.display_name ?? "—",
       action: "order.create", entity: "weigh_order", entity_no: o.order_no, reason: null, authorized_by: null, result: "ok",
     });
+    if (card && card_no) {
+      const at = localIso(now);
+      card.status = "in_use";
+      card.order_no = o.order_no;
+      card.issued_at = at;
+      card.issued_by_name = users.find((u) => u.id === input.registered_by)?.display_name ?? null;
+      o.card_no = card_no;
+      o.updated_at = at;
+      auditLogs.unshift(mkAudit("card.issue", "card", card_no, input.registered_by, `随单 ${o.order_no} 制单绑定`, at));
+    }
     return o;
   },
 
@@ -840,8 +915,8 @@ export const api = {
     operator_id: number;
     raw_frame?: string;
     has_photo: boolean;
-    /** 皮重与历史均值偏差超容差时的授权放行记录，无授权不得传入 */
-    tare_override?: { by: number; reason: string } | null;
+    /** 皮重偏差超容差的警示文案（称重面板判出后附上）；捕获照常有效，只随单留醒目提醒 */
+    tare_warning?: string | null;
   }): Promise<WeighOrder | null> {
     await sleep(80);
     const o = orderOf(input.order_no);
@@ -873,21 +948,12 @@ export const api = {
     }
     if (input.source === "manual") o.weight_source = "manual";
     o.weigher_id = input.operator_id;
-    if (input.weigh_type === "tare" && input.tare_override) {
-      o.tare_override_by = input.tare_override.by;
-      o.tare_override_reason = input.tare_override.reason;
-      auditLogs.unshift({
-        id: o.id,
-        at,
-        actor_id: input.operator_id,
-        actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
-        action: "tare.override",
-        entity: "weigh_order",
-        entity_no: o.order_no,
-        reason: input.tare_override.reason,
-        authorized_by: users.find((u) => u.id === input.tare_override!.by)?.display_name ?? "—",
-        result: "ok",
-      });
+    const warning = input.weigh_type === "tare" ? (input.tare_warning ?? "").trim() : "";
+    if (warning) {
+      // 超容差不拦车：警示只随单留痕（醒目条 / 票面 / 时间轴 / 审计），不记"授权人"
+      o.tare_override_by = null;
+      o.tare_override_reason = warning;
+      auditLogs.unshift(mkAudit("tare.override", "weigh_order", o.order_no, input.operator_id, warning));
     }
     if (o.gross_weight_01kg != null && o.tare_weight_01kg != null) {
       o.net_weight_01kg = Math.abs(o.gross_weight_01kg - o.tare_weight_01kg);
@@ -979,6 +1045,13 @@ export const api = {
     }
     const o = orderOf(input.order_no);
     if (!o || o.net_weight_01kg == null) return null;
+    // 以下两条与 Rust `orders.rs::settle` 逐字同口径：mock 少了任何一条，浏览器演示就会比真库宽松
+    if (["voided", "rejected", "settled", "paid", "archived", "reversed"].includes(o.status)) {
+      throw new Error(`本单当前为「${o.status}」，不能结算`);
+    }
+    if (settlements.some((s) => s.orders.some((r) => r.order_id === o.id))) {
+      throw new Error(`磅单 ${o.order_no} 已生成过结算单，不能重复结算（不变式 6）`);
+    }
     const now = localIso(new Date());
     const deduct = input.package_deduct_01kg + input.moisture_deduct_01kg + input.impurity_deduct_01kg + input.other_deduct_01kg;
     const settleWeight = o.net_weight_01kg - deduct;
@@ -1011,6 +1084,16 @@ export const api = {
       o.paid_amount_fen = 0;
       o.payment_status = "unpaid";
       o.payment_method = null;
+    }
+    // 结算即终态：自动回收该单绑的流转卡回池（与真库 release_for_order 同口径，06 §6.3）
+    const settledCardNo = o.card_no;
+    if (settledCardNo) {
+      const rc = cards.find((c) => c.card_no === normCard(settledCardNo) && c.status === "in_use");
+      if (rc) {
+        rc.status = "in_pool";
+        rc.order_no = null;
+        auditLogs.unshift(mkAudit("card.release", "card", rc.card_no, null, `结算 ${o.order_no} 自动回收`, now));
+      }
     }
     const date = o.business_date;
     const settlement: Settlement = {
@@ -1080,6 +1163,46 @@ export const api = {
       actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
       action: "order.void", entity: "weigh_order", entity_no: o.order_no,
       reason: input.reason, authorized_by: users.find((u) => u.id === input.authorized_by)?.display_name ?? "—", result: "ok",
+    });
+    // 作废同为终态：自动回收该单绑的流转卡回池
+    const voidCardNo = o.card_no;
+    if (voidCardNo) {
+      const rc = cards.find((c) => c.card_no === normCard(voidCardNo) && c.status === "in_use");
+      if (rc) {
+        rc.status = "in_pool";
+        rc.order_no = null;
+        auditLogs.unshift(mkAudit("card.release", "card", rc.card_no, null, `作废 ${o.order_no} 自动回收`, now));
+      }
+    }
+    return o;
+  },
+
+  /** 补录 / 改派入仓去向：与真库 `order_assign_destination` 同一条归一与留痕口径 */
+  async assignOrderDestination(input: { order_no: string; warehouse_id: number | null; slot_id: number | null; operator_id: number }): Promise<WeighOrder | null> {
+    await sleep(120);
+    const o = orderOf(input.order_no);
+    if (!o) return null;
+    if (o.status === "voided" || o.status === "rejected") {
+      throw new Error(`本单${o.status === "voided" ? "已作废" : "拒收退粮"}，不再登记入仓去向`);
+    }
+    const before = [o.warehouse_name, o.slot_label].filter(Boolean).join(" / ") || "未指定";
+    // 只选了货位 ⇒ 反查补上仓房，不给库里留"有货位没仓房"的半截去向
+    const slot = ALL_SLOTS.find((s) => s.id === input.slot_id) ?? null;
+    const wh = warehouses.find((w) => w.id === input.warehouse_id) ?? slot?.warehouse ?? null;
+    o.warehouse_id = wh?.id ?? null;
+    o.warehouse_name = wh?.name ?? null;
+    o.slot_id = slot?.id ?? null;
+    o.slot_label = slot?.label ?? null;
+    // 去向署名即三环节里的保管员；清空去向时一并抹掉，别留一个查不到指向的签名
+    o.keeper_id = wh || slot ? input.operator_id : null;
+    const now = localIso(new Date());
+    o.updated_at = now;
+    auditLogs.unshift({
+      id: o.id, at: now, actor_id: input.operator_id,
+      actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
+      action: "order.destination", entity: "weigh_order", entity_no: o.order_no,
+      reason: `${before} → ${[o.warehouse_name, o.slot_label].filter(Boolean).join(" / ") || "未指定"}`,
+      authorized_by: null, result: "ok",
     });
     return o;
   },
@@ -1174,6 +1297,126 @@ export const api = {
     await sleep(0);
     const o = orderOf(no);
     return o ? settlementOfOrder(o.id) : null;
+  },
+
+  /* ------------------------------------------------------------ 流转卡（06 篇） */
+  async cardPoolList(input: { status?: CardStatus | "all" | ""; keyword?: string } = {}): Promise<CardPoolRow[]> {
+    await sleep(0);
+    const st = input.status && input.status !== "all" ? input.status : null;
+    const kw = (input.keyword ?? "").trim().toLowerCase();
+    return cards
+      .filter((c) => !st || c.status === st)
+      .filter((c) => !kw || c.card_no.toLowerCase().includes(kw) || (c.label ?? "").toLowerCase().includes(kw) || (c.order_no ?? "").toLowerCase().includes(kw))
+      .slice()
+      .sort((a, b) => a.status.localeCompare(b.status) || a.card_no.localeCompare(b.card_no));
+  },
+
+  async cardPoolRegister(input: { card_no: string; label?: string | null; remark?: string | null; operator_id: number }): Promise<CardPoolRow> {
+    await sleep();
+    const card_no = normCard(input.card_no);
+    if (!card_no) throw new Error("卡号为空：请先把卡放到读卡器上，或手输贴签编号");
+    const now = localIso(new Date());
+    let row = cards.find((c) => c.card_no === card_no);
+    const label = input.label?.trim() || null;
+    const remark = input.remark?.trim() || null;
+    if (row) {
+      // 已在册只补写贴签/备注，不重置占用态
+      row.label = label ?? row.label;
+      row.remark = remark ?? row.remark;
+      auditLogs.unshift(mkAudit("card.register", "card", card_no, input.operator_id, "已在册，补写贴签/备注", now));
+    } else {
+      row = { card_no, label, status: "in_pool", order_no: null, issued_at: null, issued_by_name: null, remark };
+      cards.push(row);
+      auditLogs.unshift(mkAudit("card.register", "card", card_no, input.operator_id, "卡池登记入库", now));
+    }
+    return { ...row };
+  },
+
+  async cardPoolRetire(input: { card_no: string; reason: string }): Promise<CardPoolRow> {
+    await sleep();
+    const card_no = normCard(input.card_no);
+    const reason = input.reason.trim();
+    if (reason.length < 4) throw new Error("注销原因不得少于 4 个字（丢了/磨损要写清，留痕可查）");
+    const row = cards.find((c) => c.card_no === card_no);
+    if (!row) throw new Error("该卡未在卡池登记，无需注销");
+    if (row.status === "retired") throw new Error("该卡已注销");
+    if (row.status === "in_use") throw new Error("该卡仍挂在一张在途单上，请先退卡或走补发换卡再注销");
+    row.status = "retired";
+    row.remark = reason;
+    auditLogs.unshift(mkAudit("card.retire", "card", card_no, null, reason));
+    return { ...row };
+  },
+
+  async cardIssue(input: { order_no?: string | null; card_no: string }): Promise<CardIssueResult> {
+    await sleep();
+    const card_no = normCard(input.card_no);
+    if (!card_no) throw new Error("没读到卡号：请把卡贴紧读卡器，或检查读卡器是否在线");
+    // 目标单：显式给了就验它，没给取最近制单且尚无卡的在途单
+    const order: WeighOrder | null = input.order_no?.trim()
+      ? orderOf(input.order_no.trim())
+      : orders
+          .filter((o) => !o.card_no && OPEN_STATUSES.includes(o.status))
+          .sort((a, b) => (a.registered_at < b.registered_at ? 1 : -1))[0] ?? null;
+    if (!order) throw new Error("没有等待发卡的在途单：请先点「制单」建单");
+    if (!OPEN_STATUSES.includes(order.status)) throw new Error(`本单当前为「${order.status}」，已完成的单据请直接去退卡，不再发卡`);
+    if (order.card_no) throw new Error(`单 ${order.order_no} 已绑定流转卡，如需换卡请走「补发换卡」`);
+    const row = cards.find((c) => c.card_no === card_no);
+    if (!row) throw new Error(`卡 ${card_no} 未登记，请到「流转卡」页登记后再发`);
+    if (row.status === "retired") throw new Error(`卡 ${card_no} 已注销，不能再发放`);
+    if (row.status === "in_use") throw new Error(`卡 ${card_no} 已挂在单 ${row.order_no ?? ""} 上，请先退卡或直接打开那张单`);
+    const now = localIso(new Date());
+    row.status = "in_use";
+    row.order_no = order.order_no;
+    row.issued_at = now;
+    row.issued_by_name = null;
+    order.card_no = card_no;
+    order.updated_at = now;
+    auditLogs.unshift(mkAudit("card.issue", "card", card_no, null, `发放至 ${order.order_no}`, now));
+    return { card: { ...row }, order_no: order.order_no };
+  },
+
+  async cardLocate(card_no_raw: string): Promise<CardLocateResult> {
+    await sleep(0);
+    const card_no = normCard(card_no_raw);
+    const row = cards.find((c) => c.card_no === card_no);
+    if (!row) return { found: false, status: "unknown", order_no: null, party_name: null, order_status: null };
+    const order = row.order_no ? orderOf(row.order_no) : undefined;
+    return {
+      found: true,
+      status: row.status,
+      order_no: order?.order_no ?? null,
+      party_name: order?.party_name ?? null,
+      order_status: order?.status ?? null,
+    };
+  },
+
+  async cardRelease(input: { card_no?: string | null; order_no?: string | null }): Promise<CardPoolRow | null> {
+    await sleep();
+    const now = localIso(new Date());
+    if (input.card_no?.trim()) {
+      const card_no = normCard(input.card_no);
+      const row = cards.find((c) => c.card_no === card_no && c.status === "in_use");
+      if (!row) throw new Error(`卡 ${card_no} 当前未占用，无需退卡`);
+      const held = row.order_no;
+      row.status = "in_pool";
+      row.order_no = null;
+      auditLogs.unshift(mkAudit("card.release", "card", card_no, null, "人工退卡回收", now));
+      void held;
+      return { ...row };
+    }
+    if (input.order_no?.trim()) {
+      const o = orderOf(input.order_no.trim());
+      const card_no = o?.card_no;
+      if (!card_no) throw new Error(`单 ${input.order_no} 没有绑定流转卡`);
+      const row = cards.find((c) => c.card_no === normCard(card_no));
+      if (row) {
+        row.status = "in_pool";
+        row.order_no = null;
+        auditLogs.unshift(mkAudit("card.release", "card", row.card_no, null, `按单 ${o?.order_no} 退卡`, now));
+        return { ...row };
+      }
+    }
+    throw new Error("退卡需给出卡号或单号");
   },
 };
 

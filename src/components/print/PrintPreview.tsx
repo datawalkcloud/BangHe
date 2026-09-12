@@ -32,6 +32,7 @@ export function PrintPreview({
   defaultPaper = "A4",
   onPaperChange,
   onPrint,
+  onPrinted,
   children,
 }: {
   open: boolean;
@@ -50,6 +51,13 @@ export function PrintPreview({
    * 失败原因由实现方自己提示，这里不再叠一层 toast。
    */
   onPrint?: (channel: PrintChannel, paper: PaperKind) => boolean | Promise<boolean>;
+  /**
+   * 出纸成功**且 print_log 留痕成功**后的回调。
+   *
+   * 挂在留痕成功里而不是出纸成功里：一张真的打出来却没留下记录的票，在系统里就等于没打过，
+   * 下一次不会标「补打」——这正是留痕存在的意义，回调不能绕过它自己认定"打过了"。
+   */
+  onPrinted?: () => void;
   children: ReactNode;
 }) {
   const [paperState, setPaperState] = useState<PaperKind>(defaultPaper);
@@ -71,6 +79,7 @@ export function PrintPreview({
       }),
     onSuccess: () => {
       toast.success(`${docNo} 已提交打印（${PAPER[paper]} · ${PRINT_CHANNEL[channel]}）`);
+      onPrinted?.();
       onOpenChange(false);
     },
     onError: () => toast.error("打印留痕失败，可重试或改用窗口预览"),

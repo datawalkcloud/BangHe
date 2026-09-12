@@ -26,7 +26,11 @@ use banghe_lib::settlements::{record_payment, RecordPaymentInput};
 use rusqlite::{params, Connection};
 
 fn db() -> Connection {
-    in_memory_migrated("0.1.0", MIGRATIONS).expect("内存库应能跑完全部迁移脚本")
+    let conn = in_memory_migrated("0.1.0", MIGRATIONS).expect("内存库应能跑完全部迁移脚本");
+    // 「制单必须绑卡」默认开着，闸门本身由 orders_contract 专测；这套用例测付款，不替每张单造卡
+    conn.execute("UPDATE app_setting SET value_json = 'false' WHERE key = 'card_required_on_create'", [])
+        .unwrap();
+    conn
 }
 
 fn actor(id: i64, role: &str) -> AuthProfile {
@@ -85,6 +89,7 @@ fn open_order(conn: &Connection, party: i64, variety: i64) -> String {
             warehouse_id: None,
             slot_id: None,
             remark: None,
+            card_no: None,
             registered_by: None,
             weight_source: "scale".into(),
         },
@@ -104,6 +109,7 @@ fn open_order(conn: &Connection, party: i64, variety: i64) -> String {
                 raw_frame: None,
                 has_photo: Some(false),
                 tare_override: None,
+                tare_warning: None,
             },
         )
         .unwrap()

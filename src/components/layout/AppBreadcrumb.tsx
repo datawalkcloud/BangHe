@@ -73,6 +73,8 @@ export function getBreadcrumbItems(pathname: string, search?: Record<string, unk
     const reportNo = decodeURIComponent(pathname.slice("/qc/".length));
     items.push({ label: "化验工作台", href: "/qc" });
     items.push({ label: `质检单 ${reportNo}` });
+  } else if (pathname === "/scan-settle") {
+    items.push({ label: "扫码结算" });
   } else if (pathname === "/settlements") {
     items.push({ label: "结算中心" });
   } else if (pathname.startsWith("/settlements/")) {

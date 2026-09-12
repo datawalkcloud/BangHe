@@ -4,7 +4,7 @@
  * 默认模板只是「起点」：用户在小票模板编辑器里改完保存后，覆盖写进本地存储，
  * 打印时以用户模板为准；点「恢复默认」即回到这里。
  */
-import type { ReceiptScenario, ReceiptTemplate } from "./types";
+import type { ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
 
 const BASELINE = "2026-09-12T00:00:00+08:00";
 
@@ -30,13 +30,22 @@ export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
           { id: uid(), kind: "kv", title: "仓储与状态", fields: ["warehouse", "status_label", "weight_source_label"] },
           {
             id: uid(), kind: "kv", title: "重量明细",
-            fields: ["gross_weight", "tare_weight", "net_weight", "package_deduct", "moisture_deduct", "impurity_deduct", "other_deduct", "deduct_total", "settlement_weight", "settlement_weight_ton"],
+            fields: ["gross_weight", "tare_weight", "net_weight", "package_deduct", "moisture_deduct", "impurity_deduct", "other_deduct", "deduct_total", "settlement_weight", "settlement_weight_ton", "tare_warning"],
           },
           {
             id: uid(), kind: "kv", title: "金额",
             fields: ["price_per_ton", "price_per_jin", "goods_amount", "deduction_fee", "payable_amount", "paid_amount", "payable_upper", "payment_status_label", "payment_method_label"],
           },
           { id: uid(), kind: "text", text: "备注：{{remark}}" },
+          {
+            id: uid(),
+            kind: "qr",
+            title: "凭票结算码",
+            text: "{{ticket_code}}",
+            qrCaption: true,
+            required: true,
+          },
+          { id: uid(), kind: "text", text: "结算：凭本票右下角二维码到结算窗口扫码算价付款，无需重新过磅；票面丢失请到磅房补打。" },
           { id: uid(), kind: "sign", signers: ["磅员", "化验员", "结算员", "售粮人签字"] },
         ],
       };
@@ -71,6 +80,7 @@ export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
           { id: uid(), kind: "kv", title: "基本信息", fields: ["payee_name", "period", "order_count", "status_label"] },
           { id: uid(), kind: "table", title: "结算磅单明细", dataset: "orders", columns: ["order_no", "settlement_weight", "price", "goods_amount"] },
           { id: uid(), kind: "kv", title: "金额", fields: ["total_goods", "total_deduction", "payable", "paid", "unpaid", "payable_upper", "main_method_label"] },
+          { id: uid(), kind: "qr", title: "凭单码（挂账核销时扫）", text: "{{settle_code}}", qrCaption: true },
           { id: uid(), kind: "sign", signers: ["收款人签字", "出纳", "站长"] },
         ],
       };
@@ -119,4 +129,32 @@ export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
         ],
       };
   }
+}
+
+/**
+ * 把模板里缺少的「流程必备区块」按出厂默认的位置补回来。
+ *
+ * 为什么必须有这一步：用户自定义模板存在本机 localStorage 里，而「凭票二维码」是后来才
+ * 加进默认模板的——一个早就保存过码单版式的站点，它的覆盖模板里天生没有这个码。
+ * 只在 `defaultTemplate` 里加码等于什么也没做：`store.ts` 的取值规则是"用户改过就以用户的为准"。
+ * 与其要求站长逐个场景点一次「恢复默认」（会连带丢掉他自己调好的版式），不如在**取用模板**
+ * 这一处兜底：缺什么补什么，已有的一个都不动。
+ *
+ * 补回的位置照着出厂默认来：插在原本就在它前面的那个区块之后；默认里的锚点区块也被删了，
+ * 就退到末尾——凭票码在署名前还是在票尾，都不影响它能不能被扫出来。
+ */
+export function ensureRequiredBlocks<T extends ReceiptTemplate>(template: T): T {
+  const baseline = defaultTemplate(template.scenario).sections;
+  const missing = baseline.filter((b) => b.required && !template.sections.some((s) => s.kind === b.kind && s.required));
+  if (missing.length === 0) return template;
+
+  const sections = [...template.sections];
+  for (const block of missing) {
+    const restored: ReceiptSection = { ...block, id: uid() };
+    const anchorInDefault = baseline.slice(0, baseline.indexOf(block)).reverse().find((a) => !a.required);
+    const anchorIdx = anchorInDefault ? sections.findIndex((s) => s.kind === anchorInDefault.kind && s.title === anchorInDefault.title) : -1;
+    if (anchorIdx >= 0) sections.splice(anchorIdx + 1, 0, restored);
+    else sections.push(restored);
+  }
+  return { ...template, sections };
 }

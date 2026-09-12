@@ -27,7 +27,7 @@ import { receiptLines } from "./escpos";
 import { SCENARIOS } from "./scenarios";
 import { PaperFrame, ReceiptDocument } from "./render";
 import { PAPER_SPEC } from "./paper";
-import { useReceiptStore } from "./store";
+import { effectiveTemplate, useReceiptStore } from "./store";
 import { uid } from "./defaults";
 import type { BlockKind, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
 
@@ -41,6 +41,7 @@ const BLOCK_LABEL: Record<BlockKind, string> = {
   table: "表格区",
   sign: "署名区",
   text: "文本行",
+  qr: "二维码",
 };
 
 export function ReceiptTemplateEditor() {
@@ -53,11 +54,11 @@ export function ReceiptTemplateEditor() {
 
   const [scenario, setScenario] = useState<ReceiptScenario>("weigh_order");
   const spec = SCENARIOS[scenario];
-  const [draft, setDraft] = useState<ReceiptTemplate>(() => defaultTemplate(scenario));
+  const [draft, setDraft] = useState<ReceiptTemplate>(() => effectiveTemplate(scenario));
 
-  // 切换场景时载入该场景当前生效模板（用户覆盖优先）
+  // 切换场景时载入该场景当前生效模板（用户覆盖优先；effectiveTemplate 会补回流程必备区块）
   useEffect(() => {
-    setDraft(defaultTemplate(scenario));
+    setDraft(effectiveTemplate(scenario));
   }, [scenario]);
 
   const sample = useMemo(() => spec.sampleContext(), [scenario]);
@@ -102,7 +103,8 @@ export function ReceiptTemplateEditor() {
     });
   }
   function removeSection(id: string) {
-    setDraft((d) => ({ ...d, sections: d.sections.filter((s) => s.id !== id) }));
+    // 必备区块（码单上的凭票码）不给删：删了这张票就到窗口扫不出来，主路径直接断
+    setDraft((d) => ({ ...d, sections: d.sections.filter((s) => s.id !== id || s.required) }));
   }
   function addSection(kind: BlockKind) {
     const base: ReceiptSection =
@@ -112,7 +114,9 @@ export function ReceiptTemplateEditor() {
           ? { id: uid(), kind, title: spec.tables?.[0]?.label ?? "表格", dataset: spec.tables?.[0]?.dataset, columns: spec.tables?.[0]?.columns.map((c) => c.key) }
           : kind === "sign"
             ? { id: uid(), kind, title: "署名", signers: ["经办人", "复核"] }
-            : { id: uid(), kind, text: "说明：{{空缺}}" };
+            : kind === "qr"
+              ? { id: uid(), kind, title: "二维码", text: "{{ticket_code}}", qrCaption: true }
+              : { id: uid(), kind, text: "说明：{{空缺}}" };
     setDraft((d) => ({ ...d, sections: [...d.sections, base] }));
   }
 
@@ -306,7 +310,7 @@ export function ReceiptTemplateEditor() {
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">区块（{draft.sections.length}）</h3>
               <div className="flex gap-1">
-                {(["kv", "table", "sign", "text"] as BlockKind[]).map((k) => (
+                {(["kv", "table", "sign", "text", "qr"] as BlockKind[]).map((k) => (
                   <Button key={k} size="xs" variant="outline" onClick={() => addSection(k)}>
                     <PlusIcon />
                     {BLOCK_LABEL[k]}
@@ -378,7 +382,14 @@ function SectionEditor({
   return (
     <div className="space-y-2 border bg-muted/30 p-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{BLOCK_LABEL[sec.kind]}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{BLOCK_LABEL[sec.kind]}</span>
+          {sec.required && (
+            <span className="rounded border border-primary/40 px-1.5 py-0.5 text-[10px] text-primary" title="结算窗口要靠它扫码找单，删不掉">
+              必备
+            </span>
+          )}
+        </span>
         <div className="flex items-center gap-1">
           <Button size="xs" variant="ghost" disabled={index === 0} onClick={() => onMove(-1)} aria-label="上移">
             <ArrowUpIcon />
@@ -386,13 +397,16 @@ function SectionEditor({
           <Button size="xs" variant="ghost" disabled={index === total - 1} onClick={() => onMove(1)} aria-label="下移">
             <ArrowDownIcon />
           </Button>
-          <Button size="xs" variant="ghost" onClick={onRemove} aria-label="删除">
-            <Trash2Icon />
-          </Button>
+          {/* 必备区块不给删除入口，而不是给一个点了没反应的灰色按钮：删不掉是设计，不是故障 */}
+          {!sec.required && (
+            <Button size="xs" variant="ghost" onClick={onRemove} aria-label="删除">
+              <Trash2Icon />
+            </Button>
+          )}
         </div>
       </div>
 
-      {(sec.kind === "kv" || sec.kind === "table" || sec.kind === "sign") && (
+      {(sec.kind === "kv" || sec.kind === "table" || sec.kind === "sign" || sec.kind === "qr") && (
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
           区块标题
           <Input value={sec.title ?? ""} onChange={(e) => onPatch({ title: e.target.value })} className="h-7 text-xs" />
@@ -404,6 +418,7 @@ function SectionEditor({
         <TablePicker sec={sec} scenario={scenario} onPatch={onPatch} />
       )}
       {sec.kind === "sign" && <SignEditor sec={sec} onPatch={onPatch} />}
+      {sec.kind === "qr" && <QrEditor sec={sec} scenario={scenario} onPatch={onPatch} />}
       {sec.kind === "text" && (
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
           文本（支持 {"{{字段key}}"} 占位，如 {"{{remark}}"}）
@@ -415,6 +430,74 @@ function SectionEditor({
           />
         </Label>
       )}
+    </div>
+  );
+}
+
+/**
+ * 二维码区块：能改的是"码画多大、要不要在旁边印一行字"，不改载荷。
+ *
+ * 载荷（`{{ticket_code}}`）是结算窗口扫码定位单据的唯一依据，改错一个字符的票仍然印得出来、
+ * 只是永远扫不到单——这种错在票面上完全看不出来，等到客户站在窗口才发现。所以必备区块的载荷
+ * 一律只读；站长自己新加的码（收款码、小程序码之类）没有这个风险，放开编辑。
+ */
+function QrEditor({
+  sec,
+  scenario,
+  onPatch,
+}: {
+  sec: ReceiptSection;
+  scenario: ReceiptScenario;
+  onPatch: (p: Partial<ReceiptSection>) => void;
+}) {
+  const spec = SCENARIOS[scenario];
+  // 本场景里能当载荷用的凭据字段（约定：key 以 _code 结尾的都是"可扫码的定位符"）
+  const codeFields = spec.fields.filter((f) => f.key.endsWith("_code"));
+
+  return (
+    <div className="space-y-1.5">
+      <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        码的内容（支持 {"{{字段key}}"} 占位）
+        <Input
+          value={sec.text ?? ""}
+          onChange={(e) => onPatch({ text: e.target.value })}
+          readOnly={sec.required}
+          className={`h-7 text-xs font-mono ${sec.required ? "bg-muted/50 text-muted-foreground" : "bg-background"}`}
+        />
+        <span className="text-[10px] text-muted-foreground">
+          {sec.required
+            ? "流程必备件，只读：这一栏错了照样能打票，但那张票永远扫不出单号。要改码的内容请连业务一起改（src/lib/ticket-code.ts）。"
+            : `本场景可用作载荷的字段：${codeFields.map((f) => `{{${f.key}}} ${f.label}`).join("　") || "（无）"}`}
+        </span>
+      </Label>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          尺寸
+          <Choose
+            aria-label="二维码尺寸"
+            size="sm"
+            value={String(sec.qrScale ?? 2)}
+            onChange={(v) => onPatch({ qrScale: Number(v) as 1 | 2 | 3 })}
+            options={[
+              { value: "1", label: "小（0.35mm/点，约 13mm 见方）" },
+              { value: "2", label: "中（0.5mm/点，约 19mm 见方）" },
+              { value: "3", label: "大（0.7mm/点，约 26mm 见方）" },
+            ]}
+          />
+        </Label>
+        <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          码下方印单号
+          <span className="flex h-8 items-center gap-2">
+            <Switch checked={sec.qrCaption === true} onCheckedChange={(v) => onPatch({ qrCaption: v })} />
+            <span className="text-xs">{sec.qrCaption ? "印（晒白了还能手输）" : "不印"}</span>
+          </span>
+        </Label>
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        「中」这一档和热敏机自己画的尺寸是同一种物理大小（203dpi、4 点/模块），所以 A4 预览里看着多大、纸上就多大。
+        尺寸只影响 A4 与屏幕预览；热敏纸上的码由机器排点，改的是 ESC/POS 的 size 指令，不在这张模板里。
+      </p>
     </div>
   );
 }

@@ -17,6 +17,7 @@ import {
   LayoutDashboardIcon,
   PlugZapIcon,
   ScaleIcon,
+  ScanLineIcon,
   Settings2Icon,
   UsersIcon,
   WalletIcon,
@@ -49,7 +50,7 @@ export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
     label: "作业",
     items: [
       item("首页看板", "/", LayoutDashboardIcon, "今日收购概览与告警"),
-      item("磅房工作台", "/workstation", ScaleIcon, "读卡 · 过磅 · 化验 · 结算"),
+      item("磅房工作台", "/workstation", ScaleIcon, "读卡 · 过磅 · 化验 · 打印"),
       item("磅单中心", "/orders", ClipboardListIcon, "全部过磅单查询与打印"),
     ],
   },
@@ -58,6 +59,7 @@ export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
     items: [
       item("农户与单位", "/parties", UsersIcon, "售粮人档案与履历"),
       item("化验工作台", "/qc", FlaskConicalIcon, "待检队列与质检单"),
+      item("扫码结算", "/scan-settle", ScanLineIcon, "凭票扫码，逐张算价收款"),
       item("结算中心", "/settlements", WalletIcon, "合并结算与结算单"),
       item("付款与挂账", "/payments", CreditCardIcon, "付款登记、挂账超期"),
     ],
@@ -69,6 +71,7 @@ export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
       item("台账报表", "/reports/ledger", BarChart3Icon, "监管台账与统计分析"),
       item("设备中心", "/devices", PlugZapIcon, "地磅、读卡、抓拍、打印"),
       item("系统与审计", "/system/audit", Settings2Icon, "操作留痕、备份、人员权限"),
+      item("流转卡", "/cards", CreditCardIcon, "卡池登记、注销、空闲预警"),
     ],
   },
 ];

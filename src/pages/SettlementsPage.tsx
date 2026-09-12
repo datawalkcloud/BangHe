@@ -4,13 +4,14 @@
  * 结算单是"一张付款凭据对应若干磅单"的载体，也是挂账的落点：
  * 当场付清的单在这里立刻是 paid，挂账的单在这里停着等出纳核销。
  *
- * 顶部把「待结算池」单独列出，因为 to_settle 状态的磅单如果当天不清，
- * 第二天就变成了"粮已经进仓、钱还没算"的悬空数，是站长最该看见的东西。
+ * 这一页**不生产结算单**：结算发生在「扫码结算」窗口（客户凭码单上的二维码来算钱），
+ * 台账只负责查、对、以及把挂账的揪出来。顶部把「待结算池」单独列出，因为 to_settle
+ * 状态的磅单如果当天不清，第二天就变成"粮已经进仓、钱还没算"的悬空数，是站长最该看见的东西。
  */
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { CircleDollarSignIcon, WalletIcon } from "lucide-react";
+import { ScanLineIcon, WalletIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { SETTLEMENT_SCAN_LIMIT } from "@/lib/reports-native";
 import type { Settlement } from "@/mock/types";
@@ -162,9 +163,9 @@ export function SettlementsPage() {
               <WalletIcon />
               付款与挂账
             </Button>
-            <Button size="sm" render={<Link to="/workstation" />}>
-              <CircleDollarSignIcon />
-              去工作台结算
+            <Button size="sm" render={<Link to="/scan-settle" />}>
+              <ScanLineIcon />
+              扫码结算
             </Button>
           </>
         }
@@ -200,7 +201,7 @@ export function SettlementsPage() {
               tone="warning"
               title={`待结算池里还压着 ${poolOrders} 张磅单（约 ${money(poolFen)}）`}
               action={
-                <Button size="xs" variant="outline" onClick={() => void navigate({ to: "/workstation" })}>
+                <Button size="xs" variant="outline" onClick={() => void navigate({ to: "/scan-settle" })}>
                   去结算
                 </Button>
               }
@@ -267,7 +268,7 @@ export function SettlementsPage() {
             empty={
               <EmptyState
                 title="没有符合条件的结算单"
-                description="结算单在工作台按 F10 完成计价后生成；挂账的会停在未付款状态。"
+                description="结算单在「扫码结算」窗口凭码单生成；挂账的会停在未付款状态等核销。"
               />
             }
             toolbar={

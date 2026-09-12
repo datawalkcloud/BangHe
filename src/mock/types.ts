@@ -7,6 +7,7 @@
  * 数值一律为定点整数（03 §3.1）：`_01kg` / `_fen` / `_fen_per_ton` / `_001pct`。
  */
 import type {
+  CardStatus,
   DeviceKind,
   DeviceStatus,
   Grade,
@@ -187,6 +188,8 @@ export interface WeighOrder {
   warehouse_name: string | null;
   slot_id: ID | null;
   slot_label: string | null;
+  /** 当前绑定的流转卡号快照（06 篇）：发卡写、换卡改；占用真相以 card 表为准，可选以免强制后端 DTO 同批改 */
+  card_no?: string | null;
   vehicle_no: string | null;
   driver_name: string | null;
 
@@ -213,7 +216,9 @@ export interface WeighOrder {
   payment_method: PaymentMethod | null;
 
   weight_source: WeightSource;
+  /** 旧「站长授权放行」遗留字段：授权路径移除后恒为 null，仅为兼容老数据保留 */
   tare_override_by: ID | null;
+  /** 皮重偏差超容差的警示文案（捕获时自动生成）；null = 未超差 */
   tare_override_reason: string | null;
   is_manual_pricing: 0 | 1;
   reversed_order_id: ID | null;
@@ -241,6 +246,31 @@ export interface WeighOrder {
   photos?: CapturePhoto[];
   prints?: PrintLog[];
   timeline?: TimelineEvent[];
+}
+
+/** 卡池一行 / 单据侧展示（与 Rust `cards::CardPoolRow` 逐字一致） */
+export interface CardPoolRow {
+  card_no: string;
+  label: string | null;
+  status: CardStatus;
+  order_no: string | null;
+  issued_at: string | null;
+  issued_by_name: string | null;
+  remark: string | null;
+}
+
+export interface CardIssueResult {
+  card: CardPoolRow;
+  order_no: string;
+}
+
+/** 只读定位结果：编排器据此决定这一刷干什么（发卡 / 推进 / 拦下） */
+export interface CardLocateResult {
+  found: boolean;
+  status: CardStatus | "unknown";
+  order_no: string | null;
+  party_name: string | null;
+  order_status: OrderStatus | null;
 }
 
 export interface CapturePhoto {

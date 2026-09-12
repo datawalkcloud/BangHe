@@ -8,8 +8,11 @@ function Table({
   containerClassName,
   ...props
 }: React.ComponentProps<"table"> & {
-  /** 滚动口在 data-slot=table-container 这一层，要限高 / 改 overflow 只能从这儿传；
-      在它的更外层限高会让 thead 的 sticky 跟着整块滚走 */
+  /**
+   * 滚动口在 data-slot=table-container 这一层，要限高 / 改 overflow 只能从这儿传；
+   * 在它的更外层限高会让 thead 的 sticky 跟着整块滚走（data-table.tsx 用它挂
+   * `max-h-[70vh] overflow-auto` 来给十列以上的台账做滚动条）。
+   */
   containerClassName?: string
 }) {
   return (

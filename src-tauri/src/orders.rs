@@ -13,7 +13,8 @@
 //!  - **复检链**：同单再录化验时旧报告 `is_effective=0`（不变式 7 的
 //!    `uk_qc_effective` 也逼着必须这么做），新报告 `is_recheck=1` 并指回首检。
 //!  - **拒收单复检接收后恢复流转**（mock 会把单永久卡在 rejected）。
-//!  - 皮重授权放行：放行人必须是**在职站长**（02 §11），mock 只在弹窗里验密码。
+//!  - **皮重超容差不拦车**：服务端复算偏差，超出即自动在磅单上记一条警示文案（屏显醒目条 +
+//!    时间轴 + 审计 + 票面「皮重警示」栏），捕获照常完成；旧的「站长授权放行」路径已移除。
 //!  - `party.last_tare_01kg` 在每次皮重捕获后刷新——皮重异常参考从此用真历史。
 //!
 //! **PII 过渡态**：`id_card_no_enc` / `phone_enc` / `bank_account_enc` 现以明文 UTF-8
@@ -206,6 +207,7 @@ pub struct WeighOrder {
     pub warehouse_name: Option<String>,
     pub slot_id: Option<i64>,
     pub slot_label: Option<String>,
+    pub card_no: Option<String>,
     pub vehicle_no: Option<String>,
     pub driver_name: Option<String>,
     pub gross_weight_01kg: Option<i64>,
@@ -229,7 +231,9 @@ pub struct WeighOrder {
     pub payment_status: String,
     pub payment_method: Option<String>,
     pub weight_source: String,
+    /// 旧「授权放行」遗留列：授权路径移除后恒为 NULL，列留着只为兼容既有库
     pub tare_override_by: Option<i64>,
+    /// 皮重偏差超容差的警示文案（服务端自动生成）；null = 未超差
     pub tare_override_reason: Option<String>,
     pub is_manual_pricing: i64,
     pub reversed_order_id: Option<i64>,
@@ -468,7 +472,8 @@ pub(crate) const ORDER_SELECT: &str = "SELECT o.id, o.order_no, o.business_date,
          o.payable_amount_fen, o.paid_amount_fen, o.payment_status, o.payment_method,
          o.weight_source, o.tare_override_by, o.tare_override_reason, o.is_manual_pricing, o.reversed_order_id, o.reverse_of_id, o.qc_report_id,
          o.registered_by, o.registered_at, o.gross_at, o.tare_at, o.qc_at, o.settled_at, o.paid_at, o.voided_at, o.void_reason,
-         o.weigher_id, o.inspector_id, o.keeper_id, o.remark, o.created_at, o.updated_at
+         o.weigher_id, o.inspector_id, o.keeper_id, o.remark, o.created_at, o.updated_at,
+         o.card_no
   FROM weigh_order o
   JOIN party p ON p.id = o.party_id
   JOIN grain_variety v ON v.id = o.variety_id
@@ -537,6 +542,8 @@ pub(crate) fn map_order_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WeighOrde
         remark: r.get(57)?,
         created_at: r.get(58)?,
         updated_at: r.get(59)?,
+        // 末列追加：ORDER_SELECT 的新列一律排在最后，不重排上面这串下标
+        card_no: r.get(60)?,
         records: None,
         photos: None,
         prints: None,
@@ -830,8 +837,10 @@ fn build_timeline(
             },
         );
     }
-    if o.tare_override_by.is_some() {
-        add(o.tare_at.as_ref(), "tare.override", "皮重异常授权放行".into(), user_name(conn, o.tare_override_by), "warning", o.tare_override_reason.clone());
+    if o.tare_override_reason.is_some() {
+        // 超容差警示：不再要求授权，捕获人即经手人；旧数据里记过授权人的仍显示授权人
+        let who = o.tare_override_by.or(o.weigher_id);
+        add(o.tare_at.as_ref(), "tare.override", "皮重偏差超容差".into(), user_name(conn, who), "warning", o.tare_override_reason.clone());
     }
     if o.settled_at.is_some() {
         add(o.settled_at.as_ref(), "settle.create", "生成结算单".into(), user_name(conn, settlement.map(|s| s.settler_id)), "info", settlement.map(|s| s.settle_no.clone()));
@@ -1291,9 +1300,20 @@ pub struct CreateOrderInput {
     pub warehouse_id: Option<i64>,
     pub slot_id: Option<i64>,
     pub remark: Option<String>,
+    /// 制单时刷到的流转卡号（前端 `ic_read` 的结果，服务端不猜）。
+    /// `card_required_on_create` 开着时它是必填项，关掉才允许留空走"事后靠监听发卡"。
+    #[serde(default)]
+    pub card_no: Option<String>,
     #[allow(dead_code)]
     pub registered_by: Option<i64>,
     pub weight_source: String,
+}
+
+/// 本站制单是否必须先刷到流转卡（06 §4.0）。`card_flow_mode=off` 的站点压根不用卡，
+/// 参数默认值一律按"强制"走——新库装上就有这道闸，站长要放开得显式关掉。
+pub(crate) fn card_required_on_create(conn: &Connection) -> bool {
+    setting_str(conn, "card_flow_mode", "auto") != "off"
+        && setting_bool(conn, "card_required_on_create", true)
 }
 
 pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderInput) -> Result<WeighOrder, String> {
@@ -1325,6 +1345,20 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
     let variety = variety.ok_or_else(|| "所选品种不存在或已停用，请重新选择".to_string())?;
     let dest = resolve_destination(conn, input.warehouse_id, input.slot_id)?;
 
+    // 制单必须先刷到一张流转卡（06 §4.0）：判定全部放在取号之前——闸不过时既不该吃掉流水号，
+    // 也不该在库里落下没绑卡的半张单（命令层的 write_tx 回滚只是第二道保险）
+    let card_no = input
+        .card_no
+        .as_deref()
+        .map(crate::cards::normalize_card_no)
+        .filter(|s| !s.is_empty());
+    if card_no.is_none() && card_required_on_create(conn) {
+        return Err("没刷到流转卡：请把 IC 卡贴紧读卡器再取号制单。本站要求「制单必须绑卡」，需要放开请到设置里关掉该参数".into());
+    }
+    if let Some(card) = card_no.as_deref() {
+        crate::cards::check_card_for_create(conn, card)?;
+    }
+
     let order_no = next_no(conn, "BD")?;
     let now = now_iso();
     conn.execute(
@@ -1344,7 +1378,13 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
         ],
     )
     .map_err(|e| format!("制单失败：{e}"))?;
+    // 必须紧跟 INSERT：下面的 audit 自己插一行，last_insert_rowid() 就被改写走了
+    let order_id = conn.last_insert_rowid();
     audit(conn, actor, "order.create", "weigh_order", &order_no, Some(&format!("{} · {}", party.1, variety.1)), None);
+    // 绑卡与制单同一事务：卡未登记、已注销、还挂着别的未完成单，整笔回滚，不留已取号的孤单
+    if let Some(card) = card_no.as_deref() {
+        crate::cards::bind_on_create(conn, actor, order_id, &order_no, card)?;
+    }
     load_order_full(conn, &order_no)?.ok_or_else(|| "制单后读取磅单失败".to_string())
 }
 
@@ -1363,14 +1403,17 @@ pub struct CaptureInput {
     #[serde(default)]
     #[allow(dead_code)]
     pub has_photo: Option<bool>,
-    pub tare_override: Option<TareOverride>,
+    /// 旧「站长授权放行」入参：闸门已改为警示提醒，此字段仅作兼容读取，服务端一律忽略
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub tare_override: Option<serde_json::Value>,
+    /// 客户端（称重面板 / IC 刷皮重）判出偏差超容差时附上的人话文案；是否记录以服务端复算为准
+    #[serde(default)]
+    pub tare_warning: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TareOverride {
-    pub by: i64,
-    pub reason: String,
-}
+/// 警示文案入库前的长度上限（票面一栏、日志一行，够写清偏差就够了）
+const TARE_WARNING_MAX_CHARS: usize = 200;
 
 /// 允许继续称重的状态（其余为终态/结算后，必须拒绝——mock 全放行是纸面 review 看不出来的洞）
 const WEIGHABLE: &[&str] = &["draft", "registered", "qc_done", "gross_weighed", "tare_weighed", "reweigh", "to_settle"];
@@ -1402,41 +1445,48 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
         return Err(format!("本单当前为「{status}」，不能再称重；如需更正请走红冲后重录"));
     }
 
-    if let Some(ov) = &input.tare_override {
-        if input.weigh_type != "tare" {
-            return Err("皮重授权只用于皮重捕获".into());
-        }
-        if ov.reason.trim().is_empty() {
-            return Err("皮重异常放行必须填写理由（迎检必查）".into());
-        }
-        let role: Option<String> = conn
-            .query_row("SELECT role FROM user_account WHERE id = ?1 AND is_active = 1 AND deleted_at IS NULL", params![ov.by], |r| r.get(0))
-            .optional()
-            .map_err(|e| format!("检查授权人失败：{e}"))?;
-        match role.as_deref() {
-            Some("station_master") => {}
-            Some(_) => return Err("皮重异常只能由站长授权放行".into()),
-            None => return Err("授权人不存在或已停用".into()),
-        }
-    }
-
-    // 皮重容差闸门（05 §4 ②）：服务端按站点参数独立复算，不信任前端有没有拦下或弹过授权框。
-    let within_tare_tolerance = if input.weigh_type == "tare" {
+    // 皮重容差：服务端按站点参数独立复算（不信任前端有没有弹过提示）。
+    // 超容差不再拦下捕获——数据照常有效，只自动在磅单上记一条警示，
+    // 屏显醒目条、时间轴、审计与票面「皮重警示」栏都从这里出。
+    let tare_warning_text = if input.weigh_type == "tare" {
         let mean: Option<i64> = conn
             .query_row("SELECT last_tare_01kg FROM party WHERE id = ?1", params![party_id], |r| r.get(0))
             .ok()
             .flatten();
         let pct = setting_int(conn, "tare_tolerance_pct", 0); // 单位 0.01%（300 = 3.00%）
         match mean {
-            Some(m) if m > 0 && pct > 0 => (input.weight_01kg - m).abs() <= (m * pct + 5000) / 10000,
-            _ => true,
+            Some(m) if m > 0 && pct > 0 => {
+                if (input.weight_01kg - m).abs() <= (m * pct + 5000) / 10000 {
+                    None
+                } else {
+                    let client = input
+                        .tare_warning
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("");
+                    let client = if client.is_empty() {
+                        String::new()
+                    } else {
+                        client.chars().take(TARE_WARNING_MAX_CHARS).collect()
+                    };
+                    let auto = format!(
+                        "实测皮重 {:.1}kg，较最近历史皮重 {:.1}kg 偏差 {}{:.1}%，超出容差 {:.2}%",
+                        input.weight_01kg as f64 / 10.0,
+                        m as f64 / 10.0,
+                        if input.weight_01kg >= m { "+" } else { "-" },
+                        ((input.weight_01kg - m).abs() as f64) * 100.0 / (m as f64),
+                        pct as f64 / 100.0,
+                    );
+                    Some(if client.is_empty() { auto } else { format!("{auto}（{client}）") })
+                }
+            }
+            _ => None,
         }
     } else {
-        true
+        None
     };
-    if !within_tare_tolerance && input.tare_override.is_none() {
-        return Err("皮重与历史均值偏差超出容差，须经站长授权放行".into());
-    }
+    let within_tare_tolerance = tare_warning_text.is_none();
 
     // 毛/皮齐备时净重必须为正：去掉旧的 abs()，避免把颠倒的重量洗成"合法"净重照常结算。
     let (new_gross, new_tare) =
@@ -1493,29 +1543,29 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
             gross_at = CASE WHEN ?1 IS NOT NULL THEN ?4 ELSE gross_at END,
             tare_at  = CASE WHEN ?2 IS NOT NULL THEN ?4 ELSE tare_at  END,
             status = ?5, weight_source = ?6, weigher_id = ?7,
-            tare_override_by = COALESCE(?8, tare_override_by),
-            tare_override_reason = COALESCE(?9, tare_override_reason),
+            tare_override_by = NULL,
+            tare_override_reason = COALESCE(?8, tare_override_reason),
             updated_at = ?4, updated_by = ?7
          WHERE id = ?10",
         params![
             new_gross, new_tare, net, now, new_status,
             if manual { "manual" } else { "scale" }, actor.id,
-            input.tare_override.as_ref().map(|o| o.by),
-            input.tare_override.as_ref().map(|o| o.reason.trim()),
+            tare_warning_text,
             order_id,
         ],
     )
     .map_err(|e| format!("更新磅单失败：{e}"))?;
     if input.weigh_type == "tare" && within_tare_tolerance {
-        // 皮重异常判定要用"最近皮重"；仅在容差内刷新，异常放行的皮重不得污染基准（§9.6）
+        // 皮重异常判定要用"最近皮重"；仅在容差内刷新，超容差的皮重不得污染基准（§9.6）
         conn.execute(
             "UPDATE party SET last_tare_01kg = ?1, updated_at = ?2, updated_by = ?3 WHERE id = ?4",
             params![input.weight_01kg, now, actor.id, party_id],
         )
         .map_err(|e| format!("刷新最近皮重失败：{e}"))?;
     }
-    if let Some(ov) = &input.tare_override {
-        audit(conn, actor, "tare.override", "weigh_order", &input.order_no, Some(ov.reason.trim()), Some(ov.by));
+    if let Some(text) = &tare_warning_text {
+        // 不要求任何人授权：捕获人自己就是审计主体，警示文案随单留痕
+        audit(conn, actor, "tare.override", "weigh_order", &input.order_no, Some(text.as_str()), None);
     }
     load_order_full(conn, &input.order_no)
 }
@@ -1897,6 +1947,8 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
         .map_err(|e| format!("付款流水写入失败：{e}"))?;
         audit(conn, actor, "pay.record", "settlement", &settle_no, Some(&format!("当场结清 {pay_no}")), None);
     }
+    // 结算即终态：同事务释放该单绑的流转卡（受 card_release_on_terminal 控制，06 §6.3）
+    crate::cards::release_for_order(conn, order_id);
     let order = load_order_full(conn, &order_no)?.ok_or_else(|| "结算后读取磅单失败".to_string())?;
     let settlement = load_settlement_by_id(conn, settlement_id)?.ok_or_else(|| "结算后读取结算单失败".to_string())?;
     // gross/tare 未用，silence 编译器；结算不动毛皮重原值
@@ -2149,6 +2201,7 @@ pub async fn order_list(app: AppHandle, filters: OrderFilters) -> Result<PageRes
 
 #[tauri::command]
 pub async fn order_create(app: AppHandle, input: CreateOrderInput) -> Result<WeighOrder, String> {
+    // 取号与绑卡（06 §4.0）就在这一笔事务里：卡那道闸不过，号与单一起回滚
     write_tx(&app, move |conn, actor| create_order(conn, actor, input), FLOOR_ROLES, "制单").await
 }
 
@@ -2245,7 +2298,8 @@ pub struct VoidOrderInput {
     pub authorized_by: i64,
 }
 
-/// 验明"授权人是当前在职站长"。皮重异常放行是同一条口径（见 [`capture`]）。
+/// 验明"授权人是当前在职站长"（作废 / 红冲一类破坏性操作）。
+/// 皮重偏差超容差已不走授权——捕获有效、只记警示（见 [`capture`]）。
 fn ensure_active_station_master(conn: &Connection, id: i64) -> Result<(), String> {
     let role: Option<String> = conn
         .query_row(
@@ -2293,6 +2347,8 @@ pub fn void_order(conn: &Connection, actor: &AuthProfile, input: VoidOrderInput)
     )
     .map_err(|e| format!("作废失败：{e}"))?;
     audit(conn, actor, "order.void", "weigh_order", &order.order_no, Some(&reason), Some(input.authorized_by));
+    // 作废同样是终态：同事务释放该单绑的流转卡（06 §6.3）
+    crate::cards::release_for_order(conn, order.id);
     load_order_full(conn, &order.order_no)
 }
 

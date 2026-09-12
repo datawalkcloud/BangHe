@@ -1,38 +1,42 @@
 /**
  * 磅房工作台（05 §4 核心界面）。
  *
- * 默认排布是 1280 px 下的三栏：左「身份与制单 + 皮重参考」、中「过磅画面 + 称重 + 化验」、
- * 右「结算与打印」，底部一条在途作业。磅员 90% 的时间只盯读数与车上磅画面，所以这两块
- * 默认摆在中栏顶部——但摆哪儿是他的事：「自定义布局」里拖把手换位、拖右缘/下缘/右下角改大小、
- * 收掉不看的块，排布按登录账号存进 §9.25，磅员/化验员/站长共用一台机也互不影响（05 §4.1）。
+ * 交互已从"点按钮"改成"刷卡推进"（06 篇）：来新人点「制单」弹窗读卡制单 → 关框；
+ * 之后一张流转卡刷一次推进一步——①刷捕毛重 ②刷捕皮重并自动出码单 ③刷弹结算框（复用 SettleForm）
+ * 选付款方式完成结算。工作台后台常听 IC（`useIcWorkflow` 唯一收口），弹窗读身份证时让出设备锁。
+ * 读卡器故障 / 关掉流转卡时，称重/结算面板仍可应急手点（05 §10-1 无外设闭环）。
  *
- * 低频与留痕类信息不在这里常驻，只留入口：称重轨迹/原始帧/抓拍原图看「单证详情」，
- * 历史皮重明细看「农户档案」。删除只会让人少看一块，收起来才叫省地方。
- *
- * 页面本身只做三件事：取数、把 URL 上的 orderNo 当"当前作业单"、注册 F7/F8/F9。
- * 具体动作与它自己的表单状态同处一个面板，就近注册快捷键。
+ * 排布按登录账号存进 §9.25，磅员/化验员/站长共用一台机互不影响（05 §4.1）；身份与制单不再是面板。
+ * 低频留痕（称重轨迹、原始帧、历史皮重）不常驻，只在「单证详情 / 农户档案」里看。
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, PanelTopIcon, RotateCcwIcon } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, PanelTopIcon, RotateCcwIcon, UserRoundPlusIcon } from "lucide-react";
 import { api } from "@/lib/api";
-import { useSetting, useStaff, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
+import { useSetting, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useDeviceStore } from "@/store/device";
 import { date, weight } from "@/lib/format";
-import { IdentityPanel, TarePanel, draftFromOrder, emptyDraft } from "@/components/workstation/IdentityPanel";
-import type { OrderDraft } from "@/components/workstation/IdentityPanel";
+import { TarePanel } from "@/components/workstation/IdentityPanel";
 import { WeighPanel } from "@/components/workstation/WeighPanel";
 import { QcPanel } from "@/components/workstation/QcPanel";
-import { SettlePanel } from "@/components/workstation/SettlePanel";
+import { PrintPanel } from "@/components/workstation/PrintPanel";
 import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
 import { CameraPanel } from "@/components/workstation/CameraPanel";
 import { PanelTile, WorkstationGrid } from "@/components/workstation/WorkstationGrid";
 import { useWorkstationLayout } from "@/components/workstation/layout";
 import type { PanelId } from "@/components/workstation/layout";
+import { RegistrationDialog } from "@/components/workstation/RegistrationDialog";
+import { useIcWorkflow } from "@/components/workstation/useIcWorkflow";
+import { SettleForm } from "@/components/settlement/SettleForm";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+import { printReceiptSilently } from "@/components/print/receipt/silent";
+import { effectiveTemplate } from "@/components/print/receipt/store";
+import type { PaperKind, PrintChannel } from "@/lib/constants";
 import { useQuickDetail } from "@/components/business/QuickDetailSheet";
 import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
@@ -41,11 +45,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function WorkstationPage() {
   const { orderNo } = useSearch({ from: "/workstation" });
   const navigate = useNavigate();
-  const readCard = useDeviceStore((s) => s.reader.idcard.read);
+  const qcClient = useQueryClient();
   const mockOff = useDeviceStore((s) => s.mockOff);
   const openQuickDetail = useQuickDetail((s) => s.open);
   const names = useStaffNames();
-  const { data: staff = [] } = useStaff();
   const { data: varieties = [] } = useVarieties();
   const { data: warehouses = [] } = useWarehouses();
   const { data: slots = [] } = useSlots();
@@ -65,157 +68,179 @@ export function WorkstationPage() {
     enabled: !!orderNo,
   });
 
-  /** 库里 `tare_tolerance_pct` 是 0.01%（300 = 3.00%），下游组件一律按百分数用，在这里除一次 */
   const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
   const division01kg = useSetting("scale_division_01kg").num || 100;
   const allowCredit = useSetting("settlement_allow_part_pay").bool;
 
-  const [draft, setDraft] = useState<OrderDraft>(() => emptyDraft(null));
-  const setDraftPatch = useCallback((patch: Partial<OrderDraft>) => setDraft((d) => ({ ...d, ...patch })), []);
-
+  /** 制单弹窗 */
+  const [regOpen, setRegOpen] = useState(false);
+  /** 第三刷要结算的单号（null = 结算框关着） */
+  const [settleNo, setSettleNo] = useState<string | null>(null);
+  /** 打印目标：自动出码单时是被称的那张单，手动打印时是当前单；null 回落到当前 order */
+  const [printTarget, setPrintTarget] = useState<string | null>(null);
   const [printOpen, setPrintOpen] = useState(false);
-  const [hasPrinted, setHasPrinted] = useState(false);
+  /**
+   * 「直打」触发器：第二刷皮重后自动出码单、F9、凭票面板与顶部按钮共用这一条路——
+   * 无预览直接打（silent.ts 按模板纸型分流热敏直连 / 打印队列直打，纸张随打印机配置），
+   * 只有真打不出去（浏览器演示、设备离线、队列报错）才回退弹预览框。
+   */
+  const [directPrint, setDirectPrint] = useState(false);
+  const printedFor = useRef<string | null>(null);
   const [focusMode, setFocusMode] = useState(false);
-  /** 编辑态：只有开着它格子才能被拖走。日常界面不留"手一抖布局就变"的入口 */
   const [editing, setEditing] = useState(false);
   const board = useWorkstationLayout();
-  /** 「过磅画面」按钮从此就是相机面板的显隐，改动进他本人那份布局，不再是刷新即失的本地开关 */
   const showCam = !board.hidden.includes("camera");
-  useEffect(() => setHasPrinted(false), [orderNo]);
-
-  const toggleFocusMode = useCallback(async () => {
-    const next = !focusMode;
-    setEditing(false); // 专注模式是给磅员盯读数用的，不留可拖拽界面
-    setFocusMode(next);
-    if (document.fullscreenElement && !next) {
-      await document.exitFullscreen();
-      return;
-    }
-    if (!document.fullscreenElement && next) {
-      await document.documentElement.requestFullscreen().catch(() => undefined);
-    }
-  }, [focusMode]);
-
-  useEffect(() => {
-    const onFsChange = () => setFocusMode(Boolean(document.fullscreenElement));
-    document.addEventListener("fullscreenchange", onFsChange);
-    return () => document.removeEventListener("fullscreenchange", onFsChange);
-  }, []);
-
-  useHotkey("f11", () => {
-    void toggleFocusMode();
-  });
-
-  const partyId = order?.party_id ?? draft.party?.id ?? null;
-  const { data: partyDetail } = useQuery({
-    queryKey: ["party", partyId],
-    queryFn: () => (partyId != null ? api.getParty(partyId) : Promise.resolve(null)),
-    enabled: partyId != null,
-  });
-
-  const tareRecent = partyDetail?.tareHistory ?? [];
-  const tareMean01kg = useMemo(() => {
-    const r = tareRecent.slice(0, 5);
-    if (r.length === 0) return null;
-    return Math.round(r.reduce((s, x) => s + x.tare_01kg, 0) / r.length);
-  }, [tareRecent]);
-  const currentTare01kg = order?.tare_weight_01kg ?? null;
-  const tareAlert =
-    currentTare01kg != null &&
-    tareMean01kg != null &&
-    tolerancePct > 0 &&
-    Math.abs(currentTare01kg - tareMean01kg) > Math.round((tareMean01kg * tolerancePct) / 100);
-
-  const variety = useMemo(
-    () => varieties.find((v) => v.id === (order?.variety_id ?? draft.varietyId)) ?? null,
-    [varieties, order?.variety_id, draft.varietyId],
-  );
-  const qc = useMemo(
-    () => (order?.qc_report_id != null ? (qcRows.find((r) => r.id === order.qc_report_id) ?? null) : null),
-    [qcRows, order?.qc_report_id],
-  );
-  const scaleDevice = devices.find((d) => d.kind === "scale");
-  const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
-  const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
-  const cameraOnline = !mockOff && cameraDevice?.last_status === "online";
-  const photos = order?.photos ?? [];
 
   const goOrder = useCallback(
     (no: string | null) => void navigate({ to: "/workstation", search: { orderNo: no ?? undefined } }),
     [navigate],
   );
 
-  const newOrder = useCallback(() => {
-    if (order) setDraft(draftFromOrder(order));
-    goOrder(null);
-  }, [order, goOrder]);
-
-  useHotkey("f7", newOrder);
-  useHotkey("f8", () => void readCard());
-  useHotkey("f9", () => {
-    if (!order) return;
-    setPrintOpen(true);
+  // 弹窗开着时让出读卡器（06 §1.2）：自己的制单弹窗用 regOpen 即时 pause；
+  // 顶部工具条「新建过磅单」开的是同一张弹窗，通过 regHolding 让位；结算框展示期间同样不起 IC 监听
+  const regHolding = useDeviceStore((s) => s.regHolding);
+  useIcWorkflow({
+    paused: regOpen || settleNo != null || regHolding,
+    onRequestSettle: (no) => {
+      goOrder(no);
+      setSettleNo(no);
+    },
+    onWeighed: (o) => {
+      // 皮重即净重已定 → 触发自动出码单（06 §2.2 硬规矩 2）；真正是否无感由下方 effect 判
+      printedFor.current = null;
+      setPrintTarget(o.order_no);
+      setDirectPrint(true);
+    },
   });
 
-  const openOrdersHint = order
-    ? `${order.variety_name}${order.grade ? ` · ${order.grade}` : ""}`
-    : draft.party
-      ? `${draft.party.name} · 未制单`
-      : "未制单";
-
+  // F7（制单）已收进顶部工具条作全局键：任何页面都弹同一张 RegistrationDialog，
+  // 这里不再重复绑定，避免一次按键叠出两层弹窗
   /**
-   * 面板本体按 id 收在这儿：网格只管谁占哪几格，取数与参数一处都不因为它挪了位置而改。
-   * 只是建元素不调用，收起的面板不会挂载。
+   * 打当前单的码单：不弹预览，直接打到默认打印机（热敏纸直连小票机，A4/针式进打印队列、
+   * 纸张随打印机自身配置）。重复 F9 对同一张单也算一次新的直打（补打场景），所以先清
+   * printedFor 闸门；只有直打真失败时 effect 才回退弹预览框。
    */
+  const triggerPrint = useCallback(() => {
+    if (!order) return;
+    printedFor.current = null;
+    setPrintTarget(order.order_no);
+    setDirectPrint(true);
+  }, [order]);
+
+  useHotkey("f9", triggerPrint);
+  /**
+   * 专注态以「是不是真的全屏」为准回写。全屏里 ESC 被 WebView 自己拿去退出全屏，
+   * 键盘事件根本到不了页面，不回写就会出现「全屏已退、界面还钉在 fixed inset-0」，
+   * 只能摸回右上角那个按钮才能救回来。
+   */
+  useEffect(() => {
+    const sync = () => setFocusMode(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  const applyFocusMode = useCallback((next: boolean) => {
+    setEditing(false);
+    setFocusMode(next);
+    if (next && !document.fullscreenElement) void document.documentElement.requestFullscreen().catch(() => undefined);
+    // ESC 已经退掉全屏时这里可能再被调一次，对正在退出的窗口调 exitFullscreen 会 reject
+    if (!next && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+  }, []);
+  const toggleFocusMode = useCallback(() => applyFocusMode(!focusMode), [applyFocusMode, focusMode]);
+  useHotkey("f11", () => toggleFocusMode());
+  // 覆盖层档（浏览器预览里 requestFullscreen 被拒）没有原生 ESC 可依，只能自己接一条
+  useHotkey(
+    "escape",
+    () => {
+      // 弹窗/抽屉开着时 ESC 该先关它们，不该顺手把专注态也退出
+      if (document.querySelector('[data-slot="dialog-content"], [data-slot="sheet-content"]')) return;
+      applyFocusMode(false);
+    },
+    { enabled: focusMode, allowInInput: true },
+  );
+
+  const partyId = order?.party_id ?? null;
+  const { data: partyDetail } = useQuery({
+    queryKey: ["party", partyId],
+    queryFn: () => (partyId != null ? api.getParty(partyId) : Promise.resolve(null)),
+    enabled: partyId != null,
+  });
+  const tareRecent = partyDetail?.tareHistory ?? [];
+  const tareMean01kg = useMemo(() => {
+    const r = tareRecent.slice(0, 5);
+    return r.length === 0 ? null : Math.round(r.reduce((s, x) => s + x.tare_01kg, 0) / r.length);
+  }, [tareRecent]);
+  const currentTare01kg = order?.tare_weight_01kg ?? null;
+  const tareAlert =
+    currentTare01kg != null && tareMean01kg != null && tolerancePct > 0 &&
+    Math.abs(currentTare01kg - tareMean01kg) > Math.round((tareMean01kg * tolerancePct) / 100);
+
+  const variety = useMemo(() => varieties.find((v) => v.id === order?.variety_id) ?? null, [varieties, order?.variety_id]);
+  const qc = useMemo(() => (order?.qc_report_id != null ? qcRows.find((r) => r.id === order.qc_report_id) ?? null : null), [qcRows, order?.qc_report_id]);
+  const scaleDevice = devices.find((d) => d.kind === "scale");
+  const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
+  const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
+  const cameraOnline = !mockOff && cameraDevice?.last_status === "online";
+  const photos = order?.photos ?? [];
+
+  // ── 第三刷结算框：拿 settleNo 对应单的 order / variety / qc ──
+  const { data: settleOrder } = useQuery({
+    queryKey: ["order", settleNo],
+    queryFn: () => (settleNo ? api.getOrder(settleNo) : Promise.resolve(null)),
+    enabled: settleNo != null,
+  });
+  const { data: settleQcRows = [] } = useQuery({
+    queryKey: ["qc-of-order", settleNo],
+    queryFn: () => (settleNo ? api.listQc({ keyword: settleNo }) : Promise.resolve([])),
+    enabled: settleNo != null,
+  });
+  const settleVariety = useMemo(() => varieties.find((v) => v.id === settleOrder?.variety_id) ?? null, [varieties, settleOrder?.variety_id]);
+  const settleQc = useMemo(() => (settleOrder?.qc_report_id != null ? settleQcRows.find((r) => r.id === settleOrder.qc_report_id) ?? null : null), [settleQcRows, settleOrder?.qc_report_id]);
+
+  // ── 打印目标（自动出码单可能是刚称那张，不是 URL 当前单） ──
+  const { data: printOrder } = useQuery({
+    queryKey: ["order", printTarget],
+    queryFn: () => (printTarget ? api.getOrder(printTarget) : Promise.resolve(null)),
+    enabled: printTarget != null,
+  });
+  const { data: printQcRows = [] } = useQuery({
+    queryKey: ["qc-of-order", printTarget],
+    queryFn: () => (printTarget ? api.listQc({ keyword: printTarget }) : Promise.resolve([])),
+    enabled: printTarget != null,
+  });
+  const printQc = printOrder?.qc_report_id != null ? printQcRows.find((r) => r.id === printOrder.qc_report_id) ?? null : null;
+  /** 只认 print_log 里成功的那几条（补打角标进监管台账，不能由"对话框开合过"决定） */
+  const printTimes = (printOrder?.prints ?? []).filter((p) => p.doc_type === "weigh_order" && p.result === "success").length;
+
+  /** 直打触发点（第二刷皮重后自动 / F9·按钮手动）：先无预览直打，失败（回 "preview"）才弹预览框兜底 */
+  useEffect(() => {
+    if (!directPrint || !printTarget || !station || !printOrder) return;
+    if (printedFor.current === printTarget) return;
+    printedFor.current = printTarget;
+    void (async () => {
+      const out = await printReceiptSilently({
+        scenario: "weigh_order",
+        docNo: printTarget,
+        isReprint: printTimes > 0,
+        context: { station, names, order: printOrder, qc: printQc },
+        devices,
+      });
+      if (out === "preview") setPrintOpen(true);
+      else qcClient.invalidateQueries({ queryKey: ["order", printTarget] });
+      setDirectPrint(false);
+    })();
+  }, [directPrint, printTarget, station, printOrder, printQc, names, devices, printTimes, qcClient]);
+
+  /** 面板本体按 id 收在这儿；身份与制单已移到弹窗，不在格子里 */
   const bodies: Record<PanelId, ReactNode> = {
-    identity: (
-      <IdentityPanel
-        order={order ?? null}
-        draft={draft}
-        onDraft={setDraftPatch}
-        parties={parties}
-        varieties={varieties}
-        warehouses={warehouses}
-        slots={slots}
-        onCreated={(no) => goOrder(no)}
-        onNewOrder={newOrder}
-      />
-    ),
-    tare: (
-      <TarePanel
-        recent={tareRecent.slice(0, 5)}
-        last01kg={partyDetail?.last_tare_01kg ?? null}
-        mean01kg={tareMean01kg}
-        tolerancePct={tolerancePct}
-        currentTare01kg={currentTare01kg}
-        alert={tareAlert}
-        partyId={partyId}
-      />
-    ),
+    tare: <TarePanel recent={tareRecent.slice(0, 5)} last01kg={partyDetail?.last_tare_01kg ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} currentTare01kg={currentTare01kg} alert={tareAlert} partyId={partyId} />,
     camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} mockOff={mockOff} />,
-    weigh: (
-      <WeighPanel
-        order={order ?? null}
-        mean01kg={tareMean01kg}
-        tolerancePct={tolerancePct}
-        staff={staff}
-        scalePort={String(scaleDevice?.config?.port ?? "COM1")}
-        scaleDivision01kg={division01kg}
-        cameraOnline={cameraOnline}
-      />
-    ),
+    weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} cameraOnline={cameraOnline} />,
     qc: <QcPanel order={order ?? null} variety={variety} />,
-    settle: (
-      <SettlePanel
-        order={order ?? null}
-        variety={variety}
-        qc={qc}
-        prices={prices}
-        allowCredit={allowCredit}
-        onPrint={() => setPrintOpen(true)}
-      />
-    ),
+    settle: <PrintPanel order={order ?? null} variety={variety} qc={qc} prices={prices} onPrint={triggerPrint} />,
   };
+
+  const openOrdersHint = order ? `${order.variety_name}${order.grade ? ` · ${order.grade}` : ""}` : "未制单";
 
   return (
     <div className={focusMode ? "fixed inset-0 z-40 flex flex-col bg-background" : "flex min-h-0 flex-1 flex-col"}>
@@ -224,8 +249,8 @@ export function WorkstationPage() {
           title="磅房工作台"
           description={
             <>
-              读卡 → 制单 → 称重 → 化验 → 结算 → 打印，一屏完成。<Kbd>F7</Kbd> 新建 <Kbd>F8</Kbd> 读卡{" "}
-              <Kbd>空格</Kbd> 捕获 <Kbd>F5</Kbd> 化验 <Kbd>F10</Kbd> 结算
+              制单后一张流转卡<b className="font-semibold">刷一次推进一步</b>：毛重 → 皮重（自动出码单）→ 结算。
+              <Kbd>F7</Kbd> 制单 <Kbd>空格</Kbd>/<Kbd>P</Kbd> 应急手点捕获 <Kbd>F5</Kbd> 化验 <Kbd>F9</Kbd> 打印
             </>
           }
           actions={
@@ -238,11 +263,15 @@ export function WorkstationPage() {
                   单证详情
                 </Button>
               )}
+              <Button size="sm" onClick={() => setRegOpen(true)}>
+                <UserRoundPlusIcon />
+                制单（F7）
+              </Button>
               <Button size="sm" variant="outline" onClick={() => board.togglePanel("camera", showCam)}>
                 <CctvIcon />
                 {showCam ? "隐藏画面" : "过磅画面"}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setPrintOpen(true)} disabled={!order}>
+              <Button size="sm" variant="outline" onClick={triggerPrint} disabled={!order}>
                 <PrinterIcon />
                 打印（F9）
               </Button>
@@ -279,16 +308,16 @@ export function WorkstationPage() {
                 size="sm"
                 variant={editing ? "default" : "outline"}
                 onClick={() => {
-                  board.flush(); // 退出编辑态前把防抖里欠的那次保存补上
+                  board.flush();
                   setEditing((v) => !v);
                 }}
               >
                 <LayoutGridIcon />
                 {editing ? "完成" : "自定义布局"}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => void toggleFocusMode()}>
-                {focusMode ? <Minimize2Icon /> : <Maximize2Icon />}
-                {focusMode ? "退出专注" : "全屏专注（F11）"}
+              <Button size="sm" variant="outline" onClick={toggleFocusMode}>
+                <Maximize2Icon />
+                全屏专注（F11）
               </Button>
             </>
           }
@@ -317,12 +346,7 @@ export function WorkstationPage() {
             ))}
           </div>
         ) : (
-          <WorkstationGrid
-            items={board.items}
-            editing={editing}
-            onLayout={board.applyLayout}
-            onCommit={board.flush}
-          >
+          <WorkstationGrid items={board.items} editing={editing} onLayout={board.applyLayout} onCommit={board.flush}>
             {board.tiles.map(({ spec }) => (
               <PanelTile key={spec.id} spec={spec} editing={editing} onHide={() => board.togglePanel(spec.id, true)}>
                 {bodies[spec.id]}
@@ -334,34 +358,76 @@ export function WorkstationPage() {
 
       {!focusMode && <OpenOrdersBar activeNo={orderNo} onPick={(no) => goOrder(no)} />}
 
-      {order && station ? (
+      {/* 制单弹窗（身份与制单，05 §4.0） */}
+      <RegistrationDialog
+        open={regOpen}
+        onOpenChange={setRegOpen}
+        parties={parties}
+        varieties={varieties}
+        warehouses={warehouses}
+        slots={slots}
+        lastVarietyId={variety?.id ?? null}
+        onCreated={(no) => goOrder(no)}
+      />
+
+      {/* 第三刷结算框：复用 SettleForm（与 /scan-settle 同一条算钱口径，06 §6.3） */}
+      <Dialog open={settleNo != null} onOpenChange={(v) => !v && setSettleNo(null)}>
+        <DialogContent className="max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-semibold">结算 {settleNo ?? ""}</DialogTitle>
+          </DialogHeader>
+          {settleOrder ? (
+            <SettleForm
+              order={settleOrder}
+              variety={settleVariety}
+              qc={settleQc}
+              prices={prices}
+              allowCredit={allowCredit}
+              submitLabel="确认结算并收款"
+              submitHotkey={null}
+              onSettled={(r) => {
+                toast.success(`已结算 ${r.order.order_no}，本单卡自动回池`);
+                qcClient.invalidateQueries({ queryKey: ["order", r.order.order_no] });
+                qcClient.invalidateQueries({ queryKey: ["orders"] });
+                qcClient.invalidateQueries({ queryKey: ["open-orders"] });
+                qcClient.invalidateQueries({ queryKey: ["settlements"] });
+                qcClient.invalidateQueries({ queryKey: ["dashboard"] });
+                setSettleNo(null);
+              }}
+            />
+          ) : (
+            <p className="py-4 text-center text-xs text-muted-foreground">读取磅单中…</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 出码单：自动（第②刷）或手动（F9 / 凭票面板），打的是 printOrder */}
+      {printOrder && station ? (
         <ReceiptPrintPreview
           open={printOpen}
           onOpenChange={(v) => {
             setPrintOpen(v);
-            if (!v) setHasPrinted(true);
+            if (!v) setPrintTarget(null);
           }}
           scenario="weigh_order"
-          context={{ station, names, order, qc, reprint: hasPrinted }}
-          isReprint={hasPrinted}
-          docNo={order.order_no}
+          context={{ station, names, order: printOrder, qc: printQc, reprint: printTimes > 0 }}
+          isReprint={printTimes > 0}
+          docNo={printOrder.order_no}
+          onPrinted={() => qcClient.invalidateQueries({ queryKey: ["order", printOrder.order_no] })}
         />
       ) : (
-        printOpen && (
-          <EmptyState title="还没有可打印的磅单" description="请先取号制单并完成称重。" />
-        )
+        printOpen && <EmptyState title="还没有可打印的磅单" description="请先取号制单并完成称重。" />
       )}
 
       {focusMode && (
         <div className="absolute right-4 top-4 z-50">
-          <Button size="sm" variant="outline" onClick={() => void toggleFocusMode()}>
-            {focusMode ? <Minimize2Icon /> : <Maximize2Icon />}
-            {focusMode ? "退出专注" : "全屏专注"}
+          <Button size="sm" variant="outline" onClick={toggleFocusMode}>
+            <Minimize2Icon />
+            退出专注（Esc / F11）
           </Button>
         </div>
       )}
 
-      {/* 展示模式（F2）已在全局注册，这里把当前单的摘要嗝在标题里，便于核对 */}
       <span className="sr-only">{`${openOrdersHint} ${date(order?.registered_at)} ${weight(order?.net_weight_01kg)}`}</span>
     </div>
   );

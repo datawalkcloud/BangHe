@@ -8,7 +8,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PaperKind } from "@/lib/constants";
 import { getSpec } from "./scenarios";
 import { PAPER_SPEC, mmToPx } from "./paper";
-import type { FieldKind, ReceiptContext, ReceiptSection, ReceiptTemplate } from "./types";
+import { QrGraphic } from "./QrGraphic";
+import type { FieldKind, ReceiptContext, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
 
 const SONG = { fontFamily: '"SimSun", "宋体", "NSimSun", serif' } as const;
 
@@ -17,8 +18,27 @@ function valueClass(kind: FieldKind): string {
   return "";
 }
 
-/** 从上下文推出单据号与时间（用于票头） */
-export function docMeta(ctx: ReceiptContext): { docNo: string; dateText: string } {
+/** 场景 → 该场景的"这是哪张单、哪一天" */
+const DOC_BY_SCENARIO: Record<ReceiptScenario, (ctx: ReceiptContext) => { docNo: string; dateText: string } | null> = {
+  weigh_order: (c) => (c.order ? { docNo: c.order.order_no, dateText: c.order.business_date } : null),
+  quality_report: (c) => (c.qc ? { docNo: c.qc.report_no, dateText: c.qc.inspected_at.slice(0, 10) } : null),
+  settlement_voucher: (c) => (c.settlement ? { docNo: c.settlement.settle_no, dateText: c.settlement.business_date } : null),
+  payment_receipt: (c) => (c.payment ? { docNo: c.payment.pay_no, dateText: c.payment.paid_at.slice(0, 10) } : null),
+  daily_report: (c) => (c.daily ? { docNo: `日报 ${c.daily.date}`, dateText: c.daily.date } : null),
+  ledger: (c) => (c.ledgerRows?.length ? { docNo: `台账 ${c.ledgerRows[0].business_date}`, dateText: c.ledgerRows[0].business_date } : null),
+};
+
+/**
+ * 票头用的单据号与日期。
+ *
+ * 传 scenario 就照模板的场景取，不传才从上下文倒推——倒推这件事本身是有坑的：
+ * 付款小票的上下文里同时挂着 payment 和 settlement，先判 settlement 就会把票头印成结算单号。
+ */
+export function docMeta(ctx: ReceiptContext, scenario?: ReceiptScenario): { docNo: string; dateText: string } {
+  if (scenario) {
+    const hit = DOC_BY_SCENARIO[scenario](ctx);
+    if (hit) return hit;
+  }
   switch (ctx.order ? "weigh" : ctx.qc ? "qc" : ctx.settlement ? "settle" : ctx.payment ? "pay" : ctx.daily ? "daily" : "ledger") {
     case "weigh":
       return { docNo: ctx.order!.order_no, dateText: ctx.order!.business_date };
@@ -36,8 +56,8 @@ export function docMeta(ctx: ReceiptContext): { docNo: string; dateText: string 
 }
 
 /** 把 text 区块里的 {{key}} 占位替换成对应字段值 */
-function renderText(tpl: string, ctx: ReceiptContext): ReactNode {
-  const spec = getSpec((ctx.order ? "weigh_order" : ctx.qc ? "quality_report" : ctx.settlement ? "settlement_voucher" : ctx.payment ? "payment_receipt" : ctx.daily ? "daily_report" : "ledger"));
+function renderText(tpl: string, ctx: ReceiptContext, scenario: ReceiptScenario): ReactNode {
+  const spec = getSpec(scenario);
   const parts = tpl.split(/(\{\{[^}]+\}\})/g);
   return parts.map((p, i) => {
     const m = p.match(/\{\{(.+?)\}\}/);
@@ -50,8 +70,26 @@ function renderText(tpl: string, ctx: ReceiptContext): ReactNode {
   });
 }
 
-function KVBlock({ section, ctx }: { section: ReceiptSection; ctx: ReceiptContext }) {
-  const spec = getSpec(sectionScenario(ctx));
+/**
+ * ReactNode → 纯文本。
+ *
+ * 与 `escpos.ts` 的 `asText` 同规则：字段解析器目前一律返回字符串，真出现节点时宁可给空串，
+ * 也绝不把 `[object Object]` 编进二维码——那是一张扫不出来、又看不出哪儿错的废票。
+ */
+function asPlainText(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+
+/** 只做 {{key}} 替换、返回字符串（二维码载荷要的是字符串，不是节点） */
+function fillPlaceholders(tpl: string, resolve: (key: string) => string): string {
+  return tpl.replace(/\{\{(.+?)\}\}/g, (_, key: string) => resolve(key.trim()));
+}
+
+function KVBlock({ section, ctx, scenario }: { section: ReceiptSection; ctx: ReceiptContext; scenario: ReceiptScenario }) {
+  const spec = getSpec(scenario);
   const fields = section.fields ?? [];
   if (fields.length === 0) return null;
   return (
@@ -74,8 +112,8 @@ function KVBlock({ section, ctx }: { section: ReceiptSection; ctx: ReceiptContex
   );
 }
 
-function TableBlock({ section, ctx }: { section: ReceiptSection; ctx: ReceiptContext }) {
-  const spec = getSpec(sectionScenario(ctx));
+function TableBlock({ section, ctx, scenario }: { section: ReceiptSection; ctx: ReceiptContext; scenario: ReceiptScenario }) {
+  const spec = getSpec(scenario);
   const table = spec.tables?.find((t) => t.dataset === section.dataset);
   if (!table) return null;
   const cols = (section.columns ?? table.columns.map((c) => c.key))
@@ -119,6 +157,34 @@ function TableBlock({ section, ctx }: { section: ReceiptSection; ctx: ReceiptCon
   );
 }
 
+/**
+ * 二维码区块：`text` 里的 {{字段}} 占位解析完就是码的内容。
+ *
+ * 与其他区块不同，这里取字段用的是**模板自己的 scenario**，不走 `sectionScenario(ctx)` 的上下文倒推：
+ * 付款小票的上下文里同时挂着 settlement 和 payment，倒推会把场景认成结算凭证，于是码里编进去的是
+ * 另一张单的单号——票面看不出任何异常，扫出来才对不上。"能扫对"是这块的唯一职责，所以宁可多传一个参数。
+ */
+function QrBlock({
+  section,
+  ctx,
+  scenario,
+}: {
+  section: ReceiptSection;
+  ctx: ReceiptContext;
+  scenario: ReceiptScenario;
+}) {
+  const spec = getSpec(scenario);
+  const payload = fillPlaceholders(section.text ?? "", (key) => asPlainText(spec.resolveField(key, ctx)));
+  if (!payload) return null;
+  return (
+    <div className="mt-2 flex flex-col items-center gap-0.5 py-1">
+      {section.title && <p className="mb-0.5 text-[11px] font-bold">{section.title}</p>}
+      <QrGraphic text={payload} scale={section.qrScale ?? 2} />
+      {section.qrCaption && <p className="font-mono text-[10px] tracking-[0.06em]">{payload}</p>}
+    </div>
+  );
+}
+
 function SignBlock({ section }: { section: ReceiptSection }) {
   const signers = section.signers ?? [];
   if (signers.length === 0) return null;
@@ -141,16 +207,13 @@ function SignBlock({ section }: { section: ReceiptSection }) {
   );
 }
 
-/** 从上下文判断当前场景（模板与上下文应同源，这里兜底推导） */
-function sectionScenario(ctx: ReceiptContext) {
-  if (ctx.order) return "weigh_order" as const;
-  if (ctx.qc) return "quality_report" as const;
-  if (ctx.settlement) return "settlement_voucher" as const;
-  if (ctx.payment) return "payment_receipt" as const;
-  if (ctx.daily) return "daily_report" as const;
-  return "ledger" as const;
-}
-
+/**
+ * 场景一律由模板自己带（`template.scenario`），这里不再从上下文倒推。
+ *
+ * 倒推在"上下文里同时挂着两张单"的票上必然出错：付款小票要带 settlement（票面有「关联单据」栏），
+ * 于是 `ctx.settlement` 先命中，字段目录取成结算凭证那一套，pay_no / amount / trade_no 全都对不上号，
+ * 打出来的是一张整版「—」的空白小票。浏览器里点一次就能复现，只是从前没人打付款小票的 A4 版式。
+ */
 export function ReceiptDocument({
   template,
   context,
@@ -162,7 +225,7 @@ export function ReceiptDocument({
   paperOverride?: PaperKind;
 }) {
   const station = context.station;
-  const { docNo, dateText } = docMeta(context);
+  const { docNo, dateText } = docMeta(context, template.scenario);
   const showReprint = template.showReprintBadge && context.reprint;
   const paper = paperOverride ?? template.paper;
   const spec = PAPER_SPEC[paper];
@@ -200,13 +263,14 @@ export function ReceiptDocument({
         <div className="mt-3 border-t-2 border-black" />
 
         {template.sections.map((sec) => {
-          if (sec.kind === "kv") return <KVBlock key={sec.id} section={sec} ctx={context} />;
-          if (sec.kind === "table") return <TableBlock key={sec.id} section={sec} ctx={context} />;
+          if (sec.kind === "kv") return <KVBlock key={sec.id} section={sec} ctx={context} scenario={template.scenario} />;
+          if (sec.kind === "table") return <TableBlock key={sec.id} section={sec} ctx={context} scenario={template.scenario} />;
           if (sec.kind === "sign") return <SignBlock key={sec.id} section={sec} />;
+          if (sec.kind === "qr") return <QrBlock key={sec.id} section={sec} ctx={context} scenario={template.scenario} />;
           if (sec.kind === "text")
             return (
               <p key={sec.id} className="mt-2 border border-black px-2 py-1">
-                {renderText(sec.text ?? "", context)}
+                {renderText(sec.text ?? "", context, template.scenario)}
               </p>
             );
           return null;

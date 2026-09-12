@@ -2,25 +2,19 @@ import React, { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import {
-  AlertTriangleIcon,
-  BanknoteIcon,
   FlaskConicalIcon,
   PrinterIcon,
   ShieldAlertIcon,
-  UserIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
 import {
-  GRADES,
-  INDICATORS,
   ORDER_STATUS,
   PARTY_TYPE,
   PAYMENT_METHOD,
-  PAYMENT_STATUS,
   TEST_METHOD,
-  WEIGHT_SOURCE,
+  TONE_DOT,
 } from "@/lib/constants";
 import {
   dateTime,
@@ -31,7 +25,7 @@ import {
   price as fmtPrice,
   weight,
 } from "@/lib/format";
-import { useSetting, useStaffNames, useStation } from "@/hooks/useLookups";
+import { useStaffNames, useStation } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import {
   Sheet,
@@ -56,7 +50,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { Choose } from "@/components/business/Choose";
-import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import {
   OrderStatusBadge,
@@ -150,11 +143,6 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
     queryFn: () => api.settlementOfOrderNo(orderNo),
     enabled: !!orderNo,
   });
-  const { data: partyDetail } = useQuery({
-    queryKey: ["party", order?.party_id],
-    queryFn: () => (order ? api.getParty(order.party_id) : Promise.resolve(null)),
-    enabled: !!order,
-  });
 
   const qc = useMemo(
     () => (order?.qc_report_id != null ? (qcRows.find((r) => r.id === order.qc_report_id) ?? null) : null),
@@ -194,7 +182,6 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
 
   const records = order.records ?? [];
   const photos = order.photos ?? [];
-  const prints = order.prints ?? [];
   const timeline = order.timeline ?? [];
   const locked = order.status === "voided" || order.status === "rejected";
   const manual = order.weight_source === "manual";
@@ -241,7 +228,7 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
 
       {order.status === "voided" && (
         <CallOut tone="danger" title="本磅单已作废">
-          作废原因：{orDash(order.void_reason)}（授权人：{names(order.authorized_by ?? null)}）。作废单据保留档案供审计，不计入任何结算与交班汇总。
+          作废原因：{orDash(order.void_reason)}。作废单据保留档案供审计，不计入任何结算与交班汇总。
         </CallOut>
       )}
 
@@ -267,9 +254,9 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           { label: "毛重", value: <span className="tnum">{weight(order.gross_weight_01kg)}</span> },
           { label: "皮重", value: <span className="tnum">{weight(order.tare_weight_01kg)}</span> },
           { label: "净重", value: <span className="tnum font-semibold">{weight(order.net_weight_01kg)}</span> },
-          { label: "扣重", value: <span className="tnum text-warning">{weight(order.deduction_weight_01kg)}</span> },
+          { label: "扣重", value: <span className="tnum text-warning">{weight(order.deduct_total_01kg)}</span> },
           { label: "结算重量", value: <span className="tnum font-bold text-primary">{weight(order.settlement_weight_01kg)}</span> },
-          { label: "结算单价", value: <span className="tnum">{fmtPrice(order.unit_price_fen)}</span> },
+          { label: "结算单价", value: <span className="tnum">{fmtPrice(order.price_fen_per_ton).perTon}</span> },
           { label: "应付金额", value: <span className="tnum font-bold text-base text-primary">{money(order.payable_amount_fen)}</span> },
           {
             label: "化验结果",
@@ -285,8 +272,8 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           {
             label: "结算单号",
             value: settlement ? (
-              <QuickDetailLink type="settlement" id={settlement.settlement.settle_no} className="tnum">
-                {settlement.settlement.settle_no}
+              <QuickDetailLink type="settlement" id={settlement.settle_no} className="tnum">
+                {settlement.settle_no}
               </QuickDetailLink>
             ) : (
               "未结算"
@@ -297,7 +284,7 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
 
       <div className="space-y-2 border-t pt-3">
         <h4 className="text-xs font-semibold">称重轨迹（共 {records.length} 次读数）</h4>
-        <DataTable data={records} columns={recordCols} rowKey={(r) => `${r.seq}-${r.captured_at}`} compact />
+        <DataTable<WeighRecord> rows={records} columns={recordCols} rowKey={(r) => `${r.seq}-${r.captured_at}`} dense />
       </div>
 
       {photos.length > 0 && (
@@ -306,8 +293,10 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {photos.map((p, idx) => (
               <div key={idx} className="border bg-muted p-1 text-center">
-                <img src={p.url} alt={p.label} className="h-24 w-full object-cover" />
-                <span className="text-[10px] text-muted-foreground">{p.label}</span>
+                <div className={cn("flex h-24 w-full items-center justify-center text-[10px] text-white/90", TONE_DOT[p.tone])}>
+                  {p.missing ? "缺图" : p.label}
+                </div>
+                <span className="text-[10px] text-muted-foreground">{p.label} · {dateTime(p.captured_at).slice(5)}</span>
               </div>
             ))}
           </div>
@@ -350,8 +339,10 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
               <Choose
                 value={voidAuth}
                 onChange={setVoidAuth}
-                options={masters.map((m) => ({ label: m.name, value: String(m.id) }))}
-                placeholder="选择授权站长…"
+                options={[
+                  { value: "", label: "选择授权站长…" },
+                  ...masters.map((m) => ({ label: m.display_name, value: String(m.id) })),
+                ]}
               />
             </div>
             <div>
@@ -419,13 +410,13 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
       <div className="grid grid-cols-2 gap-3 border-t pt-3">
         <div className="border p-3 bg-card">
           <div className="text-xs text-muted-foreground">累计交售</div>
-          <div className="tnum text-lg font-bold">{weight(detail.summary.total_net_weight_01kg)}</div>
-          <div className="text-[11px] text-muted-foreground">共 {detail.summary.total_orders} 车次</div>
+          <div className="tnum text-lg font-bold">{weight(detail.total_net_01kg)}</div>
+          <div className="text-[11px] text-muted-foreground">共 {detail.recent.length} 车次</div>
         </div>
         <div className="border p-3 bg-card">
-          <div className="text-xs text-muted-foreground">累计应付金额</div>
-          <div className="tnum text-lg font-bold text-primary">{money(detail.summary.total_payable_fen)}</div>
-          <div className="text-[11px] text-muted-foreground">未付余额：{money(detail.summary.unpaid_fen)}</div>
+          <div className="text-xs text-muted-foreground">未结清挂账</div>
+          <div className="tnum text-lg font-bold text-destructive">{money(detail.credit_fen)}</div>
+          <div className="text-[11px] text-muted-foreground">按结算单核销，逾期进付款台账预警</div>
         </div>
       </div>
 
@@ -439,7 +430,7 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
                   <QuickDetailLink type="settlement" id={c.settlement.settle_no} className="tnum font-medium text-xs">
                     {c.settlement.settle_no}
                   </QuickDetailLink>
-                  <span className="text-muted-foreground ml-2">{c.settlement.settle_date}</span>
+                  <span className="text-muted-foreground ml-2">{c.settlement.settled_at?.slice(0, 10)}</span>
                 </div>
                 <div className="tnum font-bold text-destructive">未付：{money(c.unpaid_fen)}</div>
               </div>
@@ -448,11 +439,11 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
         </div>
       )}
 
-      {detail.recentOrders.length > 0 && (
+      {detail.recent.length > 0 && (
         <div className="space-y-2 border-t pt-3">
           <h4 className="text-xs font-semibold">近期交售记录</h4>
           <div className="max-h-60 overflow-y-auto space-y-1">
-            {detail.recentOrders.slice(0, 10).map((r) => (
+            {detail.recent.slice(0, 10).map((r) => (
               <div key={r.order_no} className="flex items-center justify-between border-b py-1.5 text-xs last:border-b-0">
                 <div>
                   <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-xs">
@@ -486,7 +477,7 @@ function QcQuickDetailContent({ reportNo }: { reportNo: string }) {
   if (isLoading) return <Skeleton className="h-96 w-full" />;
   if (!data) return <EmptyState title={`找不到质检单 ${reportNo}`} />;
 
-  const { report, first } = data;
+  const { report } = data;
 
   return (
     <div className="flex flex-col gap-4">
@@ -519,14 +510,17 @@ function QcQuickDetailContent({ reportNo }: { reportNo: string }) {
       <div className="space-y-2 border-t pt-3">
         <h4 className="text-xs font-semibold">化验指标明细</h4>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          {Object.entries(INDICATORS).map(([key, item]) => {
-            const val = report.items[key as keyof typeof report.items];
+          {report.indicators.map((it) => {
+            const shown =
+              it.unit === "0.01pct" && it.value_num != null
+                ? percent(it.value_num)
+                : it.value_num != null
+                  ? String(it.value_num)
+                  : (it.value_text ?? "-");
             return (
-              <div key={key} className="flex justify-between border p-2 bg-card">
-                <span className="text-muted-foreground">{item.name}</span>
-                <span className="tnum font-medium">
-                  {val != null ? (item.unit === "%" ? percent(val as number) : String(val)) : "-"}
-                </span>
+              <div key={it.code} className="flex justify-between border p-2 bg-card">
+                <span className="text-muted-foreground">{it.name}</span>
+                <span className={cn("tnum font-medium", it.over_std === 1 && "text-warning")}>{shown}</span>
               </div>
             );
           })}
@@ -544,7 +538,6 @@ function QcQuickDetailContent({ reportNo }: { reportNo: string }) {
 
 // ---------------- 4. 结算单详情抽屉 ----------------
 function SettlementQuickDetailContent({ settleNo }: { settleNo: string }) {
-  const names = useStaffNames();
   const openQuickDetail = useQuickDetail((s) => s.open);
 
   const { data, isLoading } = useQuery({
@@ -566,7 +559,7 @@ function SettlementQuickDetailContent({ settleNo }: { settleNo: string }) {
             <PaymentStatusBadge status={s.payment_status} />
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            {s.settle_date} · {s.party_name} · 共 {s.order_count} 笔过磅单
+            {s.settled_at?.slice(0, 10)} · {s.party_name} · 共 {s.order_count} 笔过磅单
           </p>
         </div>
         <Button size="xs" variant="outline" onClick={() => openQuickDetail("party", s.party_id)}>

@@ -388,6 +388,7 @@ const AUDIT_ACTION: Record<string, string> = {
   "order.create": "制单",
   "order.void": "作废磅单",
   "order.reverse": "红冲",
+  "order.destination": "登记入仓去向",
   "tare.override": "皮重越差授权",
   "weigh.manual": "称重手录",
   "price.override": "改单价",

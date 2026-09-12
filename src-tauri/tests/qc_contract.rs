@@ -20,7 +20,11 @@ use banghe_lib::orders::{
 use banghe_lib::qc::{qc_detail, qc_queue};
 
 fn db() -> Connection {
-    in_memory_migrated("0.1.0", MIGRATIONS).expect("内存库应能跑完全部迁移脚本")
+    let conn = in_memory_migrated("0.1.0", MIGRATIONS).expect("内存库应能跑完全部迁移脚本");
+    // 「制单必须绑卡」默认开着，闸门本身由 orders_contract 专测；这套用例测化验，不替每张单造卡
+    conn.execute("UPDATE app_setting SET value_json = 'false' WHERE key = 'card_required_on_create'", [])
+        .unwrap();
+    conn
 }
 
 fn actor(id: i64, role: &str) -> AuthProfile {
@@ -78,6 +82,7 @@ fn new_order(conn: &Connection, party: i64, no_hint: &str) -> String {
             warehouse_id: None,
             slot_id: None,
             remark: None,
+            card_no: None,
             registered_by: None,
             weight_source: "scale".into(),
         },
@@ -99,6 +104,7 @@ fn capture_gross(conn: &Connection, no: &str, w: i64) {
             raw_frame: Some("=10000.0kg".into()),
             has_photo: None,
             tare_override: None,
+            tare_warning: None,
         },
     )
     .unwrap()
@@ -118,6 +124,7 @@ fn capture_tare(conn: &Connection, no: &str, w: i64) {
             raw_frame: None,
             has_photo: None,
             tare_override: None,
+            tare_warning: None,
         },
     )
     .unwrap()

@@ -34,11 +34,13 @@ import { QcPage } from "@/pages/QcPage";
 import { QcDetailPage } from "@/pages/QcDetailPage";
 import { SettlementsPage } from "@/pages/SettlementsPage";
 import { SettlementDetailPage } from "@/pages/SettlementDetailPage";
+import { ScanSettlePage } from "@/pages/ScanSettlePage";
 import { PaymentsPage } from "@/pages/PaymentsPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { MastersPage, type MastersSection } from "@/pages/MastersPage";
 import { ReportsPage, type ReportKind } from "@/pages/ReportsPage";
 import { DevicesPage } from "@/pages/DevicesPage";
+import { CardsPage } from "@/pages/CardsPage";
 import { SystemPage, type SystemSection } from "@/pages/SystemPage";
 import { useSession } from "@/store/session";
 
@@ -130,6 +132,19 @@ const settlementDetailRoute = createRoute({
   component: SettlementDetailPage,
 });
 
+/**
+ * 扫码结算窗口。当前处理的那张单走 `?orderNo=`，与工作台同一套写法：
+ * 深链能把某一单从磅单详情、结算台账直接递到窗口里，不必再手输一遍单号。
+ */
+const scanSettleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/scan-settle",
+  validateSearch: (raw: Record<string, unknown>): { orderNo?: string } => ({
+    orderNo: typeof raw.orderNo === "string" && raw.orderNo ? raw.orderNo : undefined,
+  }),
+  component: ScanSettlePage,
+});
+
 const paymentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/payments", component: PaymentsPage });
 
 /** /masters/$section —— 用壳组件把 params 传下去，页面本身保持纯 props */
@@ -152,6 +167,8 @@ const reportsRoute = createRoute({
 });
 
 const devicesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/devices", component: DevicesPage });
+
+const cardsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/cards", component: CardsPage });
 
 const systemRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -176,7 +193,7 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
-const routeTree = rootRoute.addChildren([loginRoute, indexRoute, workstationRoute, ordersRoute, orderDetailRoute, partiesRoute, partyDetailRoute, qcRoute, qcDetailRoute, settlementsRoute, settlementDetailRoute, paymentsRoute, mastersRoute, reportsRoute, devicesRoute, systemRoute]);
+const routeTree = rootRoute.addChildren([loginRoute, indexRoute, workstationRoute, ordersRoute, orderDetailRoute, partiesRoute, partyDetailRoute, qcRoute, qcDetailRoute, settlementsRoute, settlementDetailRoute, scanSettleRoute, paymentsRoute, mastersRoute, reportsRoute, devicesRoute, cardsRoute, systemRoute]);
 
 export const router = createRouter({
   routeTree,

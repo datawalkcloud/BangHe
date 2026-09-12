@@ -28,6 +28,7 @@ import {
   ton,
   weight,
 } from "@/lib/format";
+import { encodeDocCode } from "@/lib/ticket-code";
 import type {
   DailyReport,
   LedgerRow,
@@ -99,7 +100,7 @@ const SAMPLE_ORDER: WeighOrder = {
   payment_method: "cash",
   weight_source: "scale",
   tare_override_by: null,
-  tare_override_reason: null,
+  tare_override_reason: "实测皮重 1582.0kg，较最近历史皮重 1450.0kg 偏差 +9.1%，超出容差 3.00%",
   is_manual_pricing: 0,
   reversed_order_id: null,
   reverse_of_id: null,
@@ -290,6 +291,8 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("deduct_total", "扣重合计", "重量明细", "weight"),
   mk("settlement_weight", "结算重量", "重量明细", "weight"),
   mk("settlement_weight_ton", "结算重量(吨)", "重量明细", "ton"),
+  // 皮重偏差超容差的醒目提醒：捕获不被拦下，但票面必须印得出来（迎检与事后核对都看这一栏）
+  mk("tare_warning", "皮重警示", "重量明细", "text"),
   mk("price_per_ton", "单价(元/吨)", "金额", "money"),
   mk("price_per_jin", "单价(元/斤)", "金额", "money"),
   mk("goods_amount", "货款", "金额", "money"),
@@ -311,9 +314,11 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("inspector", "化验员", "署名", "text"),
   mk("registered_by_label", "登记/结算员", "署名", "text"),
   mk("remark", "备注", "署名", "text"),
+  // 不是给人读的一栏：码单右下角那个码的内容，结算窗口扫它定位本单（02 §F1.4 先打票后集中结算）
+  mk("ticket_code", "凭票二维码载荷", "凭据", "text"),
 ];
 
-const WEIGH_GROUPS = ["售粮人", "车辆", "品种等级", "仓储状态", "重量明细", "金额", "时间线", "署名"];
+const WEIGH_GROUPS = ["售粮人", "车辆", "品种等级", "仓储状态", "重量明细", "金额", "时间线", "署名", "凭据"];
 
 /* ----------------------------------------------------------- 场景 2：质检单 */
 
@@ -355,6 +360,7 @@ const SETTLE_FIELDS: FieldDef[] = [
   mk("period", "覆盖期间", "基本信息", "text"),
   mk("order_count", "磅单数", "基本信息", "enum"),
   mk("status_label", "状态", "基本信息", "enum"),
+  mk("settle_code", "凭单二维码载荷", "基本信息", "text"),
   mk("total_goods", "货款合计", "金额", "money"),
   mk("total_deduction", "扣款合计", "金额", "money"),
   mk("payable", "应付合计", "金额", "money"),
@@ -485,6 +491,8 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "warehouse": return `${o.warehouse_name ?? "—"}${o.slot_label ? ` / ${o.slot_label}` : ""}`;
       case "status_label": return ORDER_STATUS[o.status].label;
       case "weight_source_label": return o.weight_source === "scale" ? "地磅读数" : "人工手录";
+      // 超容差皮重：捕获仍有效，但票面必须把提醒印出来（与详情页醒目条同源，读 tare_override_reason）
+      case "tare_warning": return o.tare_override_reason ?? "—";
       case "gross_weight": return weight(o.gross_weight_01kg);
       case "tare_weight": return weight(o.tare_weight_01kg);
       case "net_weight": return weight(o.net_weight_01kg);
@@ -516,6 +524,8 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "inspector": return ctx.names(o.inspector_id);
       case "registered_by_label": return ctx.names(o.registered_by);
       case "remark": return o.remark ?? "—";
+      // 载荷只有一个定位符：票先打、价后算，金额进码等于让客户自己改价；证号进码等于把 PII 印在流通纸上
+      case "ticket_code": return encodeDocCode(o.order_no);
       default: return "—";
     }
   },
@@ -581,6 +591,8 @@ const SETTLE_SPEC: ScenarioSpec = {
       case "period": return `${s.period_from} 至 ${s.period_to}`;
       case "order_count": return `${s.order_count} 张`;
       case "status_label": return s.payment_status === "paid" ? "已付清" : s.payment_status === "partial" ? "部分付款" : "未付款";
+      // 挂账的凭证日后要拿回来核销，同一套载荷契约，扫码侧按 JS 前缀认出它是结算单
+      case "settle_code": return encodeDocCode(s.settle_no);
       case "total_goods": return money(s.total_goods_fen);
       case "total_deduction": return money(s.total_deduction_fen);
       case "payable": return money(s.payable_fen);

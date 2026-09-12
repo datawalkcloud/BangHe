@@ -34,7 +34,31 @@ interface CardScanDialogProps {
   timeoutSeconds?: number;
   /** 读不到卡的退路：关掉监听直接开手工录入表单 */
   onManualEntry?: () => void;
+  /**
+   * 场景文案：建档（/parties）与制单（工作台弹窗）共用同一套监听逻辑，只换说法——
+   * 建档说「去建档」，制单说「去搜档案选人」。缺省即建档场景。
+   */
+  scene?: "enroll" | "order";
 }
+
+/** 各场景的文案差异收在一张表里，监听行为两处完全一致 */
+const SCENE_COPY: Record<
+  NonNullable<CardScanDialogProps["scene"]>,
+  { description: string; timeoutDescription: string; footerHint: string; manualLabel: string }
+> = {
+  enroll: {
+    description: "放稳后不用点任何东西，系统正在连续寻卡，读到即自动带出档案。",
+    timeoutDescription: "人还没走过来？重新点一次「读卡建档」可再来一轮；也可改用手工录入证号。",
+    footerHint: "读卡只影响录入速度。读不出来可以点「手工录入」，照样能建档。",
+    manualLabel: "手工录入",
+  },
+  order: {
+    description: "放稳后不用点任何东西，系统正在连续寻卡，读到即自动填入售粮人。",
+    timeoutDescription: "人还没走过来？重新点一次「读卡」可再来一轮；也可点「搜档案」选人。",
+    footerHint: "读卡只影响录入速度。读不出来可以点「搜档案」，照样能制单。",
+    manualLabel: "搜档案",
+  },
+};
 
 const RING_R = 62;
 const RING_C = 2 * Math.PI * RING_R;
@@ -87,7 +111,8 @@ function PlaceCardArt() {
   );
 }
 
-export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManualEntry }: CardScanDialogProps) {
+export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManualEntry, scene = "enroll" }: CardScanDialogProps) {
+  const copy = SCENE_COPY[scene];
   const watchNote = useDeviceStore((s) => s.reader.idcard.watchNote);
   const cardError = useDeviceStore((s) => s.reader.idcard.error);
   const [left, setLeft] = useState(timeoutSeconds);
@@ -129,11 +154,13 @@ export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManu
       if (rest > 0) return;
       clearInterval(ticker);
       toast.info(`监听了 ${timeoutSeconds} 秒，还没有读到证件`, {
-        description: "人还没走过来？重新点一次「读卡建档」可再来一轮；也可改用手工录入证号。",
+        description: copy.timeoutDescription,
       });
       closeRef.current(false);
     }, 200);
     return () => clearInterval(ticker);
+    // copy 来自模块级常量表，引用恒定，不会造成重跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, halted, timeoutSeconds]);
 
   const statusLine = halted ? "读卡器不可用，监听已停止" : "正在监听感应区，请放卡…";
@@ -145,7 +172,7 @@ export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManu
         <DialogHeader>
           <DialogTitle className="text-sm">请将身份证平放在读卡器感应区</DialogTitle>
           <DialogDescription className="text-xs">
-            放稳后不用点任何东西，系统正在连续寻卡，读到即自动带出档案。
+            {copy.description}
           </DialogDescription>
         </DialogHeader>
 
@@ -179,9 +206,7 @@ export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManu
               </p>
             )}
             <p className={cardError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{hint}</p>
-            <p className="text-xs text-muted-foreground">
-              读卡只影响录入速度。读不出来可以点「手工录入」，照样能建档。
-            </p>
+            <p className="text-xs text-muted-foreground">{copy.footerHint}</p>
           </div>
         </div>
 
@@ -196,7 +221,7 @@ export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManu
               }}
             >
               <KeyboardIcon />
-              手工录入
+              {copy.manualLabel}
             </Button>
           )}
           <DialogClose render={<Button size="sm" variant="outline" />}>

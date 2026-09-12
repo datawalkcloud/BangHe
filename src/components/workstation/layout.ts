@@ -41,27 +41,29 @@ export const GRID_MIN_WIDTH = 1280;
 /** 停手多久后落库。太短等于每帧一写，太长会让"拖完马上关窗口"丢掉布局 */
 const SAVE_DEBOUNCE_MS = 400;
 
-export type PanelId = "identity" | "tare" | "camera" | "weigh" | "qc" | "settle";
+export type PanelId = "tare" | "camera" | "weigh" | "qc" | "settle";
 
 export interface PanelSpec {
   id: PanelId;
-  /** 编辑态把手上显示的名字，与面板自己 CardTitle 一致（含 05 §4 的序号） */
+  /** 编辑态把手上显示的名字，与面板自己 CardTitle 一致 */
   title: string;
   /** 面板选择菜单里的副文案：这块是干什么的 */
   hint: string;
   /** 默认格位，就是接真库以前那三栏的样子 */
   box: { x: number; y: number; w: number; h: number };
-  /** 再小就没法用了：称重区要容得下读数，结算区要容得下算价表 */
+  /** 再小就没法用了：称重区要容得下读数，凭票区要容得下金额预览与打印入口 */
   min: { w: number; h: number };
 }
 
+// 「身份与制单」不再占格子（05 §4.0：来新人点「制单」弹窗，制单即关）；左栏改由皮重参考顶上。
 export const PANELS: readonly PanelSpec[] = [
-  { id: "identity", title: "① 身份与制单", hint: "读卡、选农户、取号制单", box: { x: 0, y: 0, w: 3, h: 14 }, min: { w: 2, h: 8 } },
-  { id: "tare", title: "② 皮重参考", hint: "历史皮重与容差告警", box: { x: 0, y: 14, w: 3, h: 10 }, min: { w: 2, h: 4 } },
+  { id: "tare", title: "皮重参考", hint: "历史皮重与容差告警", box: { x: 0, y: 0, w: 3, h: 24 }, min: { w: 2, h: 4 } },
   { id: "camera", title: "车上磅画面", hint: "实时预览与上磅抓拍", box: { x: 3, y: 0, w: 6, h: 7 }, min: { w: 3, h: 4 } },
-  { id: "weigh", title: "③ 称重区", hint: "读数、判稳、捕获", box: { x: 3, y: 7, w: 6, h: 11 }, min: { w: 3, h: 8 } },
-  { id: "qc", title: "④ 化验区", hint: "指标录入与等级判定", box: { x: 3, y: 18, w: 6, h: 6 }, min: { w: 3, h: 5 } },
-  { id: "settle", title: "⑤ 结算与打印", hint: "取价、扣量、付款、打码单", box: { x: 9, y: 0, w: 3, h: 24 }, min: { w: 2, h: 10 } },
+  { id: "weigh", title: "称重区", hint: "读数、判稳、捕获", box: { x: 3, y: 7, w: 6, h: 11 }, min: { w: 3, h: 8 } },
+  { id: "qc", title: "化验区", hint: "指标录入与等级判定", box: { x: 3, y: 18, w: 6, h: 6 }, min: { w: 3, h: 5 } },
+  // id 保留 "settle" 不改名：排布按 §9.25 存在用户账号里、存的正是这个 id。改了名，所有人存好的
+  // 界面就认不出这一格、会被按默认位悄悄重排——他们排好的东西不该为一次功能搬家买单。
+  { id: "settle", title: "凭票与打印", hint: "码单出票、补打、去扫码结算", box: { x: 9, y: 0, w: 3, h: 24 }, min: { w: 2, h: 10 } },
 ];
 
 const SPEC_BY_ID = new Map<string, PanelSpec>(PANELS.map((p) => [p.id, p]));
