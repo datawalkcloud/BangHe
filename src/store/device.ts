@@ -15,6 +15,12 @@
  * 与 IC（Mifare）两条介质通道（能读哪几条由 `lib/card-reader` 的登记表决定）。本 store 只把
  * `nativeIdcard` 的三个命令（status / read / ic_read）收成一份界面状态，让设备中心、工作台 F8、
  * 档案页读卡看到的是同一台读卡器、同一句失败原因。
+ *
+ * **开真机的前提与地磅同一口径：台账里得有一行「启用」的证卡阅读器**（`registered`，由
+ * 底栏从 `["devices"]` 查询算出并同步）。USB 上插着读卡器 ≠ 本站登记了它——读卡带出的是
+ * 真实公民 PII，没建档进台账的设备绝不能悄悄可用；未启用时三条通道一律给"请到设备中心
+ * 登记并启用"这句原因。设备中心登记表单里的「本机设备自检」不走这条闸门（入台账前本来就
+ * 要能测得到），它直接调 `nativeIdcard.status`。
  */
 import { create } from "zustand";
 import { useEffect, useMemo } from "react";
@@ -75,6 +81,13 @@ export interface ScaleState {
   setConnected: (v: boolean) => void;
   tick: () => void;
 }
+
+/**
+ * 台账闸门的统一说法（与 openRealScale 的"没有启用的真机地磅"同一段式）：
+ * 三条通道（probe / 读身份证 / 读 IC）在未登记时都回这一句，界面不必各编各的。
+ */
+const READER_NOT_REGISTERED =
+  "设备台账里没有启用的证卡阅读器：请到设备中心登记并启用后再读卡；制单可继续用「搜档案」或手工录入证号";
 
 /** 一次真机探测的结论，与 Rust `idcard::ReaderStatus` 对齐（设备中心状态灯的数据源） */
 export interface ReaderProbe {
@@ -182,6 +195,13 @@ export interface CardReaderState {
   /** 台账里这台机处于 Mock 模式：身份证通道回演示卡，IC 通道不造假 */
   mocked: boolean;
   setMocked: (v: boolean) => void;
+  /**
+   * 台账里有没有**启用**的证卡阅读器（`kind='idcard' && is_enabled=1` 的行存在）。
+   * 真机三条通道开设备前都先过这道闸；与 mocked 同由底栏从 `["devices"]` 算出并同步，
+   * 默认 false——查清台账前宁可先不给开真机，也不会有人拿没登记的读卡器悄悄读证。
+   */
+  registered: boolean;
+  setRegistered: (v: boolean) => void;
   /** 打开设备问一次 SAM，判断"这台机此刻在不在" */
   probe: () => Promise<ReaderProbe | null>;
   idcard: IdCardChannel;
@@ -385,6 +405,8 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
     lastProbe: null,
     mocked: false,
     setMocked: (v) => set((s) => ({ reader: { ...s.reader, mocked: v } })),
+    registered: false,
+    setRegistered: (v) => set((s) => ({ reader: { ...s.reader, registered: v } })),
     probe: async () => {
       const patch = (p: Partial<CardReaderState>) => set((s) => ({ reader: { ...s.reader, ...p } }));
       if (get().mockOff) {
@@ -408,6 +430,19 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
           error: get().reader.mocked
             ? "这台读卡器在台账里处于 Mock 模式：身份证通道回演示卡，IC 通道不造假"
             : "当前是浏览器预览，没有原生设备通道",
+          at: clock(),
+        };
+        patch({ probing: false, status: r.status, lastProbe: r });
+        return r;
+      }
+      // 台账闸门：没登记/没启用就压根不开这台 USB 设备——机器插着读卡器不代表本站要读卡
+      if (!get().reader.registered) {
+        const r: ReaderProbe = {
+          status: "unknown",
+          connected: false,
+          samId: null,
+          fingerprint: false,
+          error: READER_NOT_REGISTERED,
           at: clock(),
         };
         patch({ probing: false, status: r.status, lastProbe: r });
@@ -463,6 +498,11 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
           const demo = { ...DEMO_CARD };
           patchCard({ reading: false, watchNote: null, last: demo, error: null });
           return demo;
+        }
+        // 台账闸门（文件头约定）：写 error 而不是 watchNote，监听循环据此停下——未登记是配置态，轮下去没有意义
+        if (!st.reader.registered) {
+          patchCard({ reading: false, last: null, error: READER_NOT_REGISTERED });
+          return null;
         }
         patchCard({ reading: true, error: null });
         const res = await nativeIdcard.read(opts?.photo === true);
@@ -583,6 +623,11 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
               ? "这台读卡器在台账里是 Mock，IC 通道不给演示数据"
               : "当前是浏览器预览，没有原生设备通道；请用「npm run tauri dev」启动桌面端后重试",
           });
+          return null;
+        }
+        // 台账闸门：与身份证通道同一条，未登记不开设备
+        if (!st.reader.registered) {
+          patchIc({ reading: false, last: null, error: READER_NOT_REGISTERED });
           return null;
         }
         patchIc({ reading: true, error: null });

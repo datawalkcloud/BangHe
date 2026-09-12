@@ -81,20 +81,37 @@ export function DeviceStatusBar() {
   const cfg = (code: string) => devices.find((d) => d.code === code);
 
   const scaleCfg = cfg("scale1");
-  const readerCfg = cfg("idcard1");
   const camCfg = cfg("cam1");
   const prtCfg = devices.find((d) => d.kind === "printer" && d.is_default === 1) ?? cfg("prt1");
 
-  // 台账的 Mock 标记决定读卡走真机还是演示卡。底栏常驻、且已经加载了设备清单，
-  // 就由它把这条同步进 store，工作台和档案页的读卡按钮因此不必各判一遍。
-  useEffect(() => {
-    setReaderMocked(readerCfg?.is_mock === 1);
-  }, [readerCfg?.is_mock, setReaderMocked]);
+  // 读卡器的台账判据按「kind + 启用态」整体算，不写死设备码：登记新设备的编码是自动生成的，
+  // 认死 idcard1 会让"根本没登记"与"登记成别的码"两种情况都静默走真机——那正是这次的漏洞。
+  // 判据与 useScaleTick 的 scaleMocked 同式：有真机用真机；只剩 Mock 才算 mocked；一台没有 = 闸门关。
+  const readers = devices.filter((d) => d.kind === "idcard" && d.is_enabled === 1);
+  const realReaders = readers.filter((d) => d.is_mock === 0);
+  const readerRegistered = readers.length > 0;
+  const readerMocked = readerRegistered && realReaders.length === 0;
+  // 底栏提示的"生效设备码"与通道路由同一判据：有真机时报真机那台，别在混装台账下指错行
+  const readerDev =
+    (realReaders.find((d) => d.is_default === 1) ?? realReaders[0]) ??
+    (readers.find((d) => d.is_default === 1) ?? readers[0]) ??
+    null;
 
-  // 启动时探一次，底栏那颗灯才有真机依据；探测只开设备问 SAM，不占读卡时序
+  // 台账的 Mock 标记与"有没有启用的读卡器"决定读卡走真机、演示卡还是拒开设备。底栏常驻、
+  // 且已经加载了设备清单，就由它把这两个结论同步进 store，工作台和档案页不必各判一遍。
+  const setReaderRegistered = useDeviceStore((s) => s.reader.setRegistered);
+  useEffect(() => {
+    setReaderMocked(readerMocked);
+  }, [readerMocked, setReaderMocked]);
+  useEffect(() => {
+    setReaderRegistered(readerRegistered);
+  }, [readerRegistered, setReaderRegistered]);
+
+  // 启动时探一次，底栏那颗灯才有真机依据；探测只开设备问 SAM，不占读卡时序。
+  // 台账查清后闸门翻真会自动重探，未登记的灰灯不必等用户点读卡才见到原因
   useEffect(() => {
     void probeReader();
-  }, [probeReader, mockOff, readerCfg?.is_mock]);
+  }, [probeReader, mockOff, readerRegistered, readerMocked]);
 
   const scaleDetail = scale.connected
     ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg)} · ${scale.stable ? "稳" : "不稳"}`
@@ -103,13 +120,18 @@ export function DeviceStatusBar() {
   // 两条通道各自刚读了谁／哪张卡，底栏只放得下一句，按最近一次成功的那条说
   const readerDetail =
     reader.status === "online"
-      ? reader.idcard.last
-        ? `在线 · 刚读 ${reader.idcard.last.name}`
-        : reader.ic.last
-          ? `在线 · 刚读 IC ${reader.ic.last.sn}`
-          : "在线"
+      ? reader.idcard.watching
+        ? "在线 · 正在监听身份证"
+        : reader.ic.watching
+          ? "在线 · 正在监听 IC 卡"
+          : reader.idcard.last
+            ? `在线 · 刚读 ${reader.idcard.last.name}`
+            : reader.ic.last
+              ? `在线 · 刚读 IC ${reader.ic.last.sn}`
+              : "在线"
       : reader.status === "unknown"
-        ? "未检测，读卡时自动探测"
+        ? // 闸门/ Mock 的探测都带回一句原因（"台账里没有启用的证卡阅读器…"），亮灯更要说出来
+          (reader.lastProbe?.error ?? "未检测，读卡时自动探测")
         : (reader.lastProbe?.error ?? "离线，可手工输入身份证号");
 
   return (
@@ -124,7 +146,7 @@ export function DeviceStatusBar() {
         />
         <Separator orientation="vertical" className="h-4 shrink-0" />
         {/* 底栏给磅房操作员看，不摆驱动代码（routon_sdtapi 这类），只说能不能读卡、刚读了谁 */}
-        <Chip title="卡" status={reader.status} detail={readerDetail} deviceCode="idcard1" />
+        <Chip title="卡" status={reader.status} detail={readerDetail} deviceCode={readerDev?.code} />
         <Separator orientation="vertical" className="h-4 shrink-0" />
         <Chip
           title="像"

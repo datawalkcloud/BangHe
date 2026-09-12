@@ -9,7 +9,7 @@
  *    卡压在感应区不动不会一轮轮重复推进（06 §4.2）；本 hook 再叠一层 `card_swipe_debounce_ms`
  *    时间窗当第二道保险（同一张卡同一待办步窗口内只算一刷）。
  *  ⑤ `card_flow_mode=off` 的站点根本不起监听，全程面板手点（06 §4.4 C1"无外设也要能完成闭环"）；
- *    这台机压根没有 IC 通道（浏览器预览 / 台账切成 Mock / 底栏「Mock 关」）同样不起循环。
+ *    这台机压根没有 IC 通道（浏览器预览 / 台账未登记启用 / 台账切成 Mock / 底栏「Mock 关」）同样不起循环。
  *    真设备只是**暂时**故障时才按 2→15 s 退避重起，插回来不必刷新页面（06 §4.2）。
  *
  * 设备互斥（06 §1.2）：一台读卡器一次只解一种介质。弹窗要读身份证 / 弹结算框时 `paused=true`，
@@ -63,11 +63,13 @@ export function useIcWorkflow({
   /** 该站用不用流转卡：off＝不起监听、全程面板手点（06 §4.4 C1 的退路，读卡器故障时同样靠它） */
   const flowMode = useSetting("card_flow_mode").raw ?? "auto";
   /**
-   * 这台机此刻有没有 IC 通道：浏览器预览 / 台账切成 Mock / 底栏「Mock 关」都算**没有**。
+   * 这台机此刻有没有 IC 通道：浏览器预览 / 台账没登记启用 / 台账切成 Mock / 底栏「Mock 关」都算**没有**。
    * 没有就别起循环，更别跟着退避重起——那是配置态不是故障，反复轮只会白刷 store。
-   * 三个量都进依赖：站长把这台机切回真机、或把外设开关打开，本 effect 自己会重挂起来听。
+   * 四个量都进依赖：站长登记/启用这台机、切回真机、或把外设开关打开，本 effect 自己会重挂起来听。
    */
-  const icAvailable = useDeviceStore((s) => runningInTauri() && !s.mockOff && !s.reader.mocked);
+  const icAvailable = useDeviceStore(
+    (s) => runningInTauri() && !s.mockOff && s.reader.registered && !s.reader.mocked,
+  );
 
   const running = useRef(false);
   /** 第二道保险：key = `单号:待办步` → 上次处理时刻，同键窗口内不重复推进（一刷的判据见 watch 边沿） */

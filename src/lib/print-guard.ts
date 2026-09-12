@@ -25,6 +25,14 @@ export function needsPrintVerify(key: string, value: string): boolean {
 /** 纸宽 → 栅格列数（与 Rust `Paper::cols()` 同一口径，只在这里映射一次） */
 export const PAPER_COLS: Record<NativePaper, number> = { p80: 48, p58: 32 };
 
+/**
+ * ESC/POS 直写 usbprint.sys、靠 VID/PID 寻址的两类驱动。
+ * 判据只写这一份：设备中心（登记/探测/联机面板）与工作台直打（silent.ts 出纸口分流）
+ * 都从这里取，另一处再抄一遍就是"改了登记忘了改路由"的分叉点。
+ * （Rust 侧 devices.rs 的 probe_plan 有同名判断，由契约测试对值。）
+ */
+export const ESCPOS_DRIVERS = ["escpos_usbprint", "raw_escpos"];
+
 /** 配置里的 VID/PID 手写成 "0x0483" 这样的十六进制串，这里统一转数字 */
 export function parseHex(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;

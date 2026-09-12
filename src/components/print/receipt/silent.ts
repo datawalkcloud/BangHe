@@ -4,12 +4,16 @@
  * 磅房的现场规矩只有一条：点打印 = 出纸，中间不弹任何框。这里是那条规矩的唯一实现——
  * 工作台不论自动（第二刷）还是手动（F9），都先走这里，只有真打不出去才回退预览框。
  *
- * 出纸口按**模板纸型**分流，两条路物理上不是一台机器：
- *  - 58 / 80 热敏：ESC/POS 直写 usbprint.sys（`print_receipt`），字节直达小票机；
- *  - A4 / 241 针式：Windows 打印队列直打（`print_receipt_queue`），Rust 用 GDI 把同一份
- *    行序列画到打印机 DC 上提交假脱机。**纸型、托盘、方向一概不传**——以打印机自身的
- *    配置为准（针式机装着 241 连续纸就出 241，激光机装着 A4 就出 A4）。
- *    目标机取设备台账里登记的默认队列机（`rawQueue`），台账没配就交给系统默认打印机。
+ * **出纸口由设备中心配置的打印机决定**（默认项优先，其次台账里唯一那台），两条路物理上
+ * 不是一台机器：
+ *  - 直连小票机（驱动 `escpos_usbprint` / `raw_escpos`）：ESC/POS 直写 usbprint.sys
+ *    （`print_receipt`），按台账的 VID/PID 寻址、按台账纸宽排栅格；
+ *  - 队列机（驱动 `preview` / `raw_escp`，即 A4 激光与 241 针式）：Windows 打印队列直打
+ *    （`print_receipt_queue`），Rust 用 GDI 把同一份行序列画到打印机 DC 上提交假脱机。
+ *    **纸型、托盘、方向一概不传**——以打印机自身的配置为准（装 241 连续纸就出 241，
+ *    装 A4 就出 A4）。目标机取台账扫队列机回填的 `rawQueue` 真实队列名。
+ *  台账没登记打印机时，才退回按**票面模板纸型**分流（热敏自动挑一台直连机 / 其余进系统
+ *  默认队列）——现场"配了哪台就打哪台"，不能让模板里的纸型和硬件各说各话。
  *
  * 浏览器演示没有原生通道，一律回 `"preview"`——回退不是失败，是"这台机/这个配置没法
  * 自动打"的诚实交代。出纸成功后自己补一条 `print_log`（与预览组件同一张表、同一形状）；
@@ -20,6 +24,7 @@ import { api } from "@/lib/api";
 import { runningInTauri, nativePrinter, toNativePaper, type NativePrintOutcome, type NativeResult } from "@/lib/native";
 import type { DeviceConfig } from "@/mock/types";
 import type { PaperKind, PrintChannel } from "@/lib/constants";
+import { parseHex, ESCPOS_DRIVERS } from "@/lib/print-guard";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
 import { receiptLines } from "./escpos";
@@ -33,19 +38,32 @@ function isThermal(paper: PaperKind): boolean {
   return paper === "thermal80" || paper === "thermal58";
 }
 
+type DirectTarget =
+  /** ESC/POS 直写：vid/pid 来自台账（缺省由 Rust 自动挑第一台 usbprint 设备） */
+  | { kind: "thermal"; paper: PaperKind; vid?: number; pid?: number; deviceName: string }
+  /** Windows 打印队列：printer = 真实队列名，undefined = 系统默认打印机 */
+  | { kind: "queue"; printer?: string; deviceName?: string };
+
 /**
- * 台账里配的队列打印机名：启用的打印机设备中，驱动为窗口预览/针式套打（即"靠队列名寻址"
- * 的那两类）优先取默认项。`rawQueue` 是设备中心扫队列机时回填的**真实队列名**，
- * 名称字段只做人看的备注，所以优先 rawQueue、没有再退 name。返回 undefined = 交给系统默认打印机。
+ * 出纸口解析：设备中心登记的打印机（启用、非 Mock，默认项优先）说了算；
+ * 没登记才按模板纸型兜底分流。Mock 机不参与——它背后没有能出纸的硬件。
  */
-export function resolveQueuePrinter(devices: DeviceConfig[]): string | undefined {
-  const queues = devices.filter(
-    (d) => d.kind === "printer" && d.is_enabled === 1 && (d.driver === "preview" || d.driver === "raw_escp"),
-  );
-  const picked = queues.find((d) => d.is_default === 1) ?? queues[0];
-  if (!picked) return undefined;
-  const name = String(picked.config.rawQueue ?? picked.name ?? "").trim();
-  return name || undefined;
+export function resolveDirectTarget(devices: DeviceConfig[], templatePaper: PaperKind): DirectTarget {
+  const printers = devices.filter((d) => d.kind === "printer" && d.is_enabled === 1 && d.is_mock !== 1);
+  const picked = printers.find((d) => d.is_default === 1) ?? printers[0];
+  if (picked) {
+    if (ESCPOS_DRIVERS.includes(picked.driver)) {
+      const paper = String(picked.config.paper ?? "") === "thermal58" ? "thermal58" : "thermal80";
+      const vid = parseHex(picked.config.vid) ?? undefined;
+      const pid = parseHex(picked.config.pid) ?? undefined;
+      return { kind: "thermal", paper, vid, pid, deviceName: picked.name };
+    }
+    // 队列机：rawQueue 是扫队列机回填的真实队列名，name 只是人看的备注
+    const queue = String(picked.config.rawQueue ?? picked.name ?? "").trim();
+    return { kind: "queue", printer: queue || undefined, deviceName: queue || picked.name };
+  }
+  if (isThermal(templatePaper)) return { kind: "thermal", paper: templatePaper, deviceName: "热敏小票机" };
+  return { kind: "queue" };
 }
 
 export async function printReceiptSilently({
@@ -59,39 +77,44 @@ export async function printReceiptSilently({
   context: ReceiptContext;
   docNo: string;
   isReprint?: boolean;
-  /** 设备台账（队列机从中解析）；不传 = 全部交给系统默认打印机 */
+  /** 设备台账（出纸口从中解析）；不传 = 按模板纸型兜底分流 */
   devices?: DeviceConfig[];
 }): Promise<SilentOutcome> {
   if (!runningInTauri()) return "preview";
 
   const tpl = effectiveTemplate(scenario);
-  const paper = tpl.paper as PaperKind;
+  const target = resolveDirectTarget(devices, tpl.paper as PaperKind);
   const lines = receiptLines(tpl, { ...context, reprint: isReprint });
 
   let channel: PrintChannel;
   let printerName: string;
   let res: NativeResult<NativePrintOutcome>;
+  // 留痕的纸型 = 实际出纸介质的纸型：热敏以台账配置为准，队列以票面模板为准（真纸随打印机，程序不选纸）
+  let paper: PaperKind;
 
-  if (isThermal(paper)) {
+  if (target.kind === "thermal") {
     /* ---------------------------------------------- 热敏：ESC/POS usbprint 直写 */
     channel = "raw";
+    paper = target.paper;
     const printer = useDeviceStore.getState().printer;
     if (printer.status !== "online") {
       toast.error(`小票机不可用：${printer.lastError ?? "离线"}`, { description: "已转窗口预览，可手动重打" });
       return "preview";
     }
-    printerName = printer.name;
+    printerName = target.deviceName;
     res = await nativePrinter.receipt(lines, {
       paper: toNativePaper(paper),
+      vid: target.vid,
+      pid: target.pid,
       cols: useReceiptStore.getState().thermalCols ?? undefined,
     });
   } else {
     /* ---------------------------------------------- A4 / 针式：Windows 打印队列直打 */
     channel = "pdf_silent";
-    const target = resolveQueuePrinter(devices);
-    res = await nativePrinter.receiptToQueue(lines, { printer: target ?? null });
-    // 队列机用回执里的真实机器名留痕；拿不到才退回台账备注名 / "系统默认打印机"
-    printerName = res.available ? (res.data?.device || target || "系统默认打印机") : (target ?? "系统默认打印机");
+    paper = tpl.paper as PaperKind;
+    res = await nativePrinter.receiptToQueue(lines, { printer: target.printer ?? null });
+    // 队列机用回执里的真实机器名留痕；拿不到才退回台账名 / "系统默认打印机"
+    printerName = (res.available ? res.data?.device : undefined) || target.deviceName || "系统默认打印机";
   }
 
   const out = res.available ? res.data : undefined;
@@ -113,7 +136,7 @@ export async function printReceiptSilently({
     });
     toast.success(
       channel === "raw"
-        ? `${docNo} 已出码单（热敏直连）`
+        ? `${docNo} 已出码单（${printerName} · 热敏直连）`
         : `${docNo} 已提交「${printerName}」，纸张等按打印机配置`,
     );
   } catch (e) {

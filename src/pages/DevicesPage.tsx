@@ -29,7 +29,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { nativeCamera, nativeIdcard, nativePrinter, nativeSerial, runningInTauri, toNativePaper, type NativeLocalCamera, type NativePaper, type NativePrinterDevice, type NativePrinterStatus, type NativeReaderStatus, type NativeWindowsPrinter } from "@/lib/native";
 import { MEDIUM, READER_DRIVER_IDS, readerFields, readerSpec } from "@/lib/card-reader";
-import { PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
+import { ESCPOS_DRIVERS, PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import type { DeviceConfig } from "@/mock/types";
 import type { DeviceKind, DeviceStatus, Tone } from "@/lib/constants";
 import { DEVICE_KIND, DEVICE_STATUS, ROLE, TONE_BOX, TONE_DOT, TONE_TEXT } from "@/lib/constants";
@@ -130,8 +130,7 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
   },
 };
 
-/** ESC/POS 直写 usbprint.sys、靠 VID/PID 寻址的两类驱动（与 devices.rs probe_plan、PrinterPanel 同源判据） */
-const ESCPOS_DRIVERS = ["escpos_usbprint", "raw_escpos"];
+/** ESC/POS 直写 usbprint.sys、靠 VID/PID 寻址的两类驱动（判据收在 print-guard，工作台直打同源） */
 
 /**
  * 纸型候选随驱动收敛：热敏只给 80/58、A4 只给 A4、针式只给 241。
@@ -1431,10 +1430,12 @@ function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) 
   const probe = useDeviceStore((s) => s.reader.probe);
   const spec = readerSpec(d.driver);
 
-  // 选中这台机就探一次：卡片状态灯读的是台账 last_status，不主动探测会一直挂着安装时录入的旧值
+  // 选中这台机就探一次：卡片状态灯读的是台账 last_status，不主动探测会一直挂着安装时录入的旧值。
+  // reader.registered 进依赖：刚登记/启用这台机时台账结论会晚于本面板挂载，闸门翻真后要自动重探，
+  // 不能一直停在"台账里没有启用的证卡阅读器"那句刚入库时说的旧话上。
   useEffect(() => {
     void probe();
-  }, [probe, mockOff, d.is_mock]);
+  }, [probe, mockOff, d.is_mock, reader.registered]);
 
   // 探测结论回写台账（只动状态四字段），面板与卡片因此不会出现两种说法
   const report = useMutation({

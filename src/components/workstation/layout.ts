@@ -41,7 +41,7 @@ export const GRID_MIN_WIDTH = 1280;
 /** 停手多久后落库。太短等于每帧一写，太长会让"拖完马上关窗口"丢掉布局 */
 const SAVE_DEBOUNCE_MS = 400;
 
-export type PanelId = "tare" | "camera" | "weigh" | "qc" | "settle";
+export type PanelId = "tare" | "camera" | "weigh" | "qc";
 
 export interface PanelSpec {
   id: PanelId;
@@ -51,7 +51,7 @@ export interface PanelSpec {
   hint: string;
   /** 默认格位，就是接真库以前那三栏的样子 */
   box: { x: number; y: number; w: number; h: number };
-  /** 再小就没法用了：称重区要容得下读数，凭票区要容得下金额预览与打印入口 */
+  /** 再小就没法用了：称重区要容得下读数，化验区要容得下指标行 */
   min: { w: number; h: number };
 }
 
@@ -61,9 +61,8 @@ export const PANELS: readonly PanelSpec[] = [
   { id: "camera", title: "车上磅画面", hint: "实时预览与上磅抓拍", box: { x: 3, y: 0, w: 6, h: 7 }, min: { w: 3, h: 4 } },
   { id: "weigh", title: "称重区", hint: "读数、判稳、捕获", box: { x: 3, y: 7, w: 6, h: 11 }, min: { w: 3, h: 8 } },
   { id: "qc", title: "化验区", hint: "指标录入与等级判定", box: { x: 3, y: 18, w: 6, h: 6 }, min: { w: 3, h: 5 } },
-  // id 保留 "settle" 不改名：排布按 §9.25 存在用户账号里、存的正是这个 id。改了名，所有人存好的
-  // 界面就认不出这一格、会被按默认位悄悄重排——他们排好的东西不该为一次功能搬家买单。
-  { id: "settle", title: "凭票与打印", hint: "码单出票、补打、去扫码结算", box: { x: 9, y: 0, w: 3, h: 24 }, min: { w: 2, h: 10 } },
+  // 「凭票与打印」不再是格子面板：出票/补打入口收进第三刷结算弹窗（TicketPrintSection）。
+  // 老用户存好的排布里若还留着 "settle" 那一格，sanitize 认不出就静默丢弃，不报错也不重排其余面板。
 ];
 
 const SPEC_BY_ID = new Map<string, PanelSpec>(PANELS.map((p) => [p.id, p]));
