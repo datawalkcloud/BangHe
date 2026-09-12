@@ -11,6 +11,8 @@ import { LoaderCircleIcon, PrinterIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { PaperKind, PrintChannel } from "@/lib/constants";
+import type { ReceiptScenario } from "./receipt/types";
+import { PAPER_SPEC } from "./receipt/paper";
 import { PAPER, PRINT_CHANNEL } from "@/lib/constants";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
@@ -26,16 +28,33 @@ export function PrintPreview({
   docType,
   docNo,
   isReprint = false,
+  paper: paperProp,
+  defaultPaper = "A4",
+  onPaperChange,
+  onPrint,
   children,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  docType: "weigh_order" | "quality_report" | "settlement_voucher";
+  docType: ReceiptScenario;
   docNo: string;
   isReprint?: boolean;
+  /** 受控纸型：传入后此处选择会直接驱动预览与打印尺寸 */
+  paper?: PaperKind;
+  defaultPaper?: PaperKind;
+  onPaperChange?: (p: PaperKind) => void;
+  /**
+   * 接管"按下打印"这个动作。不传则落到 `window.print()`（浏览器等价演示）。
+   * 返回 `false` 表示这次没出纸——此时**不留痕**，否则 print_log 里会多出一条
+   * "已打印"而纸上什么都没有的假记录，日后补打对不上账。
+   * 失败原因由实现方自己提示，这里不再叠一层 toast。
+   */
+  onPrint?: (channel: PrintChannel, paper: PaperKind) => boolean | Promise<boolean>;
   children: ReactNode;
 }) {
-  const [paper, setPaper] = useState<PaperKind>("A4");
+  const [paperState, setPaperState] = useState<PaperKind>(defaultPaper);
+  const paper = paperProp ?? paperState;
+  const setPaper = onPaperChange ?? setPaperState;
   const [channel, setChannel] = useState<PrintChannel>("preview");
   const printer = useDeviceStore((s) => s.printer);
 
@@ -57,14 +76,27 @@ export function PrintPreview({
     onError: () => toast.error("打印留痕失败，可重试或改用窗口预览"),
   });
 
-  function doPrint() {
+  async function doPrint() {
     if (printer.status !== "online") {
       toast.error(`${printer.name} ${printer.lastError ?? "不可用"}，可改用窗口预览打印`);
       return;
     }
     // 真实实现按通道分流：preview 走 webview print、pdf_silent 走 Rust 静默导出、
-    // raw 走 Windows Spooler 直连针式；这里统一用浏览器打印等价演示
-    window.print();
+    // raw 走 ESC/POS 直连小票机。调用方给了 onPrint 就交给它（它知道票面长什么样），
+    // 否则统一用浏览器打印等价演示。
+    if (onPrint) {
+      let printed: boolean;
+      try {
+        printed = (await onPrint(channel, paper)) !== false;
+      } catch (e) {
+        toast.error(`打印失败：${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      // 没出纸就别留痕：print_log 是"当初那张纸打的是什么"的凭据，不能记假的
+      if (!printed) return;
+    } else {
+      window.print();
+    }
     log.mutate();
   }
 
@@ -94,10 +126,7 @@ export function PrintPreview({
           </div>
         )}
 
-        <div className="max-h-[62vh] overflow-y-auto bg-muted/40 p-4">
-          {/* 屏幕上给个纸张阴影，让操作员看到的就是纸上会有什么的边界 */}
-          <div className="shadow-[0_0_0_1px_var(--color-border),0_8px_24px_rgb(0_0_0/0.12)]">{children}</div>
-        </div>
+        <div className="max-h-[62vh] overflow-y-auto bg-muted/40 p-4">{children}</div>
 
         <DialogFooter className="mx-0 flex items-center gap-3 border-t px-4 py-3 sm:justify-between">
           <div className="flex items-end gap-3">
@@ -111,6 +140,7 @@ export function PrintPreview({
                 onChange={setPaper}
                 options={(Object.keys(PAPER) as PaperKind[]).map((k) => ({ value: k, label: PAPER[k] }))}
               />
+              <span className="text-[10px] text-muted-foreground">{PAPER_SPEC[paper].note}</span>
             </Field>
             <Field className="gap-1">
               <FieldLabel className="text-xs">通道</FieldLabel>

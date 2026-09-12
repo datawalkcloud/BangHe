@@ -12,6 +12,7 @@ import { ORDER_STATUS } from "@/lib/constants";
 import { dateTimeShort, durationText, sinceMinutes } from "@/lib/format";
 import { useSetting } from "@/hooks/useLookups";
 import { OrderStatusBadge } from "@/components/business/badges";
+import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 
 export function OpenOrdersBar({
@@ -47,15 +48,18 @@ export function OpenOrdersBar({
           const overdue = mins >= threshold;
           const active = o.order_no === activeNo;
           return (
-            <button
+            <Button
               key={o.order_no}
               type="button"
+              variant="outline"
+              size="xs"
+              aria-pressed={active}
               onClick={() => onPick(o.order_no)}
               title={`${o.party_name} · ${o.variety_name} · ${ORDER_STATUS[o.status].desc}`}
               className={cn(
-                "flex shrink-0 items-center gap-2 border bg-background px-2 py-1 text-left text-xs transition-colors",
+                "h-auto shrink-0 gap-2 rounded-none bg-background px-2 py-1 text-left text-xs font-normal hover:bg-background",
                 active ? "border-foreground" : "border-border hover:border-foreground/40",
-                overdue && "border-warning bg-warning-bg",
+                overdue && "border-warning bg-warning-bg hover:bg-warning-bg",
               )}
             >
               <span className="tnum font-medium">{o.order_no.slice(-6)}</span>
@@ -70,7 +74,7 @@ export function OpenOrdersBar({
                   停留 {durationText(mins)}
                 </span>
               )}
-            </button>
+            </Button>
           );
         })}
       </div>

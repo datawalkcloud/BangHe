@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -36,9 +37,20 @@ import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
-import { PrintPreview } from "@/components/print/PrintPreview";
-import { QcReportSheet, WeighOrderSheet } from "@/components/print/sheets";
+import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { cn } from "cn";
+
+/**
+ * 详情页只读明细表的紧凑排版。
+ *
+ * shadcn Table 的默认节奏（表头 h-12、单元格 p-3、表头 font-medium 且继承 text-foreground）
+ * 是给"列表页"用的；详情页里的这些表是嵌在卡片内的小明细，必须保持原先的
+ * py-1.5 / 无左右内边距 / 表头随行取色，否则卡片会被撑开一大截。
+ * 用后代选择器（[&_th] / [&_td]）而不是单元格上的 className，是因为前者的
+ * 特异性高于组件内置的 p-3、h-12、text-foreground，能稳定压住。
+ */
+const DETAIL_TABLE =
+  "border-collapse text-sm [&_th]:h-auto [&_th]:px-0 [&_th]:py-1.5 [&_th]:font-normal [&_th]:text-inherit [&_td]:px-0 [&_td]:py-1.5";
 
 export function OrderDetailPage() {
   const { orderNo } = useParams({ from: "/orders/$orderNo" });
@@ -253,7 +265,7 @@ export function OrderDetailPage() {
             </CallOut>
           )}
           {order.price_override_reason && (
-            <CallOut tone="info" title="单价偏离价目表">
+            <CallOut tone="info" title={order.price_list_id != null ? "单价偏离价目表" : "手工定价（当时无生效价目）"}>
               {orDash(order.price_override_reason)}（执行单价 {fmtPrice(order.price_fen_per_ton).perTon}）
             </CallOut>
           )}
@@ -392,16 +404,16 @@ export function OrderDetailPage() {
                         { label: "备注", value: orDash(qc.remark), span: 2 },
                       ]}
                     />
-                    <table className="w-full border-collapse text-sm">
-                      <thead>
-                        <tr className="border-b text-xs text-muted-foreground">
-                          <th className="py-1.5 text-left font-normal">指标</th>
-                          <th className="py-1.5 text-right font-normal">实测</th>
-                          <th className="py-1.5 text-right font-normal">国标基准</th>
-                          <th className="py-1.5 text-right font-normal">偏差</th>
-                        </tr>
-                      </thead>
-                      <tbody>
+                    <Table className={DETAIL_TABLE}>
+                      <TableHeader>
+                        <TableRow className="border-b text-xs text-muted-foreground hover:bg-transparent">
+                          <TableHead>指标</TableHead>
+                          <TableHead className="text-right">实测</TableHead>
+                          <TableHead className="text-right">国标基准</TableHead>
+                          <TableHead className="text-right">偏差</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
                         {qc.indicators.map((it) => {
                           const meta = INDICATORS[it.code];
                           const shown =
@@ -426,18 +438,18 @@ export function OrderDetailPage() {
                                 }`
                               : null;
                           return (
-                            <tr key={it.code} className={cn("border-b last:border-0", over && "bg-warning-bg")}>
-                              <td className="py-1.5">{meta?.name ?? it.name}</td>
-                              <td className={cn("tnum py-1.5 text-right", over && "font-medium text-warning")}>{shown}</td>
-                              <td className="tnum py-1.5 text-right text-muted-foreground">{std}</td>
-                              <td className="py-1.5 text-right text-xs">
+                            <TableRow key={it.code} className={cn("border-b hover:bg-transparent", over && "bg-warning-bg")}>
+                              <TableCell>{meta?.name ?? it.name}</TableCell>
+                              <TableCell className={cn("tnum text-right", over && "font-medium text-warning")}>{shown}</TableCell>
+                              <TableCell className="tnum text-right text-muted-foreground">{std}</TableCell>
+                              <TableCell className="text-right text-xs">
                                 {over ? delta ?? "超基准" : <span className="text-muted-foreground">合格</span>}
-                              </td>
-                            </tr>
+                              </TableCell>
+                            </TableRow>
                           );
                         })}
-                      </tbody>
-                    </table>
+                      </TableBody>
+                    </Table>
                     <p className="text-xs text-muted-foreground">
                       基准值仅用于超标提示与定级参考，不参与扣量计算。
                     </p>
@@ -564,34 +576,34 @@ export function OrderDetailPage() {
                 {prints.length === 0 ? (
                   <p className="text-sm text-muted-foreground">本单从未打印，码单联次未生成。</p>
                 ) : (
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr className="border-b text-xs text-muted-foreground">
-                        <th className="py-1.5 text-left font-normal">时间</th>
-                        <th className="py-1.5 text-left font-normal">纸型/通道</th>
-                        <th className="py-1.5 text-left font-normal">打印机</th>
-                        <th className="py-1.5 text-left font-normal">性质</th>
-                        <th className="py-1.5 text-left font-normal">操作人</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                  <Table className={DETAIL_TABLE}>
+                    <TableHeader>
+                      <TableRow className="border-b text-xs text-muted-foreground hover:bg-transparent">
+                        <TableHead>时间</TableHead>
+                        <TableHead>纸型/通道</TableHead>
+                        <TableHead>打印机</TableHead>
+                        <TableHead>性质</TableHead>
+                        <TableHead>操作人</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {prints.map((p) => (
-                        <tr key={p.id} className="border-b last:border-0">
-                          <td className="tnum py-1.5 text-xs">{dateTime(p.printed_at)}</td>
-                          <td className="py-1.5 text-xs">{p.paper}</td>
-                          <td className="truncate py-1.5 text-xs">{p.printer_name}</td>
-                          <td className="py-1.5 text-xs">
+                        <TableRow key={p.id} className="border-b hover:bg-transparent">
+                          <TableCell className="tnum text-xs">{dateTime(p.printed_at)}</TableCell>
+                          <TableCell className="text-xs">{p.paper}</TableCell>
+                          <TableCell className="truncate text-xs">{p.printer_name}</TableCell>
+                          <TableCell className="text-xs">
                             {p.is_reprint === 1 ? (
                               <ToneBadge tone="warning">补打</ToneBadge>
                             ) : (
                               <span className="text-muted-foreground">首次</span>
                             )}
-                          </td>
-                          <td className="py-1.5 text-xs">{names(p.operator_id)}</td>
-                        </tr>
+                          </TableCell>
+                          <TableCell className="text-xs">{names(p.operator_id)}</TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 )}
                 <p className="text-xs text-muted-foreground">
                   补打必须在纸上带「补打」字样并记录授权人，与首打联次区分（01 §F6.2）。
@@ -615,19 +627,18 @@ export function OrderDetailPage() {
       </div>
 
       {station && (
-        <PrintPreview
+        <ReceiptPrintPreview
           open={printDoc !== null}
           onOpenChange={(v) => !v && setPrintDoc(null)}
-          docType={printDoc ?? "weigh_order"}
-          docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
+          scenario={printDoc === "quality_report" ? "quality_report" : "weigh_order"}
+          context={
+            printDoc === "quality_report" && qc
+              ? { station, names, qc, reprint: true }
+              : { station, names, order, qc, reprint: true }
+          }
           isReprint
-        >
-          {printDoc === "quality_report" && qc ? (
-            <QcReportSheet report={qc} station={station} names={names} />
-          ) : (
-            <WeighOrderSheet order={order} station={station} qc={qc} reprint names={names} />
-          )}
-        </PrintPreview>
+          docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
+        />
       )}
 
       <AlertDialog open={voidOpen} onOpenChange={setVoidOpen}>

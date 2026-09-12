@@ -1,0 +1,7 @@
+﻿cargo :     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.74s
+所在位置 行:445 字符: 44
++ ... tion "G:\Github\BangHe\src-tauri"; cargo check --offline 2>&1 | Out-F ...
++                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `d...get(s) in 0.74s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 

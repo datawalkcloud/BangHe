@@ -4,8 +4,12 @@
  * 建档是收粮第一道闸门：证号重复即同一人，皮重档案决定下一车能不能快速过磅，
  * 所以这张列表把「上次皮重」和「挂账额度」直接摆在列表里，不用点进详情。
  *
- * 读卡按钮走 useDeviceStore.idcard，与工作台共用同一个读卡结果，
- * 但这里读到的是"卡片身份"，命中已有档案时只提示不覆盖，避免误改档案。
+ * 读卡建档走 CardScanDialog：弹窗开着就一直寻卡，读到卡才收工，不要求农户跟着按钮节奏重试。
+ * 读到的仍是 useDeviceStore 里同一份"卡片身份"，与工作台共用；命中已有档案时只带出不覆盖，
+ * 避免误改档案。
+ *
+ * 核验状态跟着证号来源走（01 §E11、03 `party.id_card_verified`）：读卡带进来且原样保存的证号
+ * 记为「已核验」，手工录入的、以及读卡后又改动过证号的都是「未核验」，列表与详情据此亮牌。
  */
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -21,7 +25,8 @@ import { useWarehouses } from "@/hooks/useLookups";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
 import { ALL, Choose } from "@/components/business/Choose";
-import { DataTable, type Column } from "@/components/business/DataTable";
+import { CardScanDialog } from "@/components/business/CardScanDialog";
+import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge } from "@/components/business/badges";
 import { WeightField } from "@/components/business/NumField";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
@@ -51,6 +56,21 @@ interface PartyForm {
   tare01kg: number | null;
   remark: string;
   active: boolean;
+  /**
+   * 核验来源凭证：本轮读卡带进来的那个证号（"" 表示没读过卡）。
+   * 只活在表单里、不落库，保存时拿它和表单证号比一次，决定 `id_card_verified`。
+   */
+  read_card_no: string;
+}
+
+/**
+ * 核验判定只有一条口径：表单里的证号与读卡带进来的证号逐字相等。
+ * 读卡后又被手改过、或者压根是手录的，都回落到未核验——宁可让磅员重刷一次卡，
+ * 也不能让一个没人核验证件号的档案顶着「已核验」去迎检（01 §E11）。
+ */
+function cardVerified(form: PartyForm): 0 | 1 {
+  const read = form.read_card_no.trim().toUpperCase();
+  return read !== "" && read === form.id_card_no.trim().toUpperCase() ? 1 : 0;
 }
 
 function emptyForm(): PartyForm {
@@ -69,6 +89,7 @@ function emptyForm(): PartyForm {
     tare01kg: null,
     remark: "",
     active: true,
+    read_card_no: "",
   };
 }
 
@@ -88,21 +109,24 @@ function formOf(p: Party): PartyForm {
     tare01kg: p.last_tare_01kg,
     remark: p.remark ?? "",
     active: p.status === "active",
+    // 已核验的档案把证号本身当作凭证带进来：改电话、改额度这类无关编辑不该把核验状态弄丢，
+    // 但一改证号就对不上了，自动回落成未核验。未核验的留空，避免凭空升级。
+    read_card_no: p.id_card_verified === 1 ? p.id_card_no : "",
   };
 }
 
 export function PartiesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const readCard = useDeviceStore((s) => s.idcard.read);
-  const reading = useDeviceStore((s) => s.idcard.reading);
-  const cardError = useDeviceStore((s) => s.idcard.error);
-  const lastCard = useDeviceStore((s) => s.idcard.last);
+  const cardError = useDeviceStore((s) => s.reader.idcard.error);
+  const lastCard = useDeviceStore((s) => s.reader.idcard.last);
   const { data: warehouses = [] } = useWarehouses();
 
   const [kw, setKw] = useState("");
   const [type, setType] = useState<PartyType | "all">("all");
   const [open, setOpen] = useState(false);
+  /** 「读卡建档」的放卡监听弹窗：开着就一直寻卡，读到卡或被关掉才停 */
+  const [scanOpen, setScanOpen] = useState(false);
   const [form, setForm] = useState<PartyForm>(emptyForm);
 
   const { data: rows = [], isPending } = useQuery({
@@ -118,14 +142,24 @@ export function PartiesPage() {
     if (!lastCard) return;
     const hit = all.find((p) => p.id_card_no === lastCard.id_card_no);
     if (hit) {
+      // 卡面证号与档案证号对上了，这一轮读卡就是替他做的实名核验：原先手录的档案顺手升级
+      const upgrade = hit.id_card_verified !== 1;
       toast.info(`读卡命中已有档案「${hit.name}」`, {
-        description: "已在编辑框里带出该档案，可直接修改。",
+        description: upgrade
+          ? "卡面证号与档案一致，保存后档案将标记为「已核验」。"
+          : "已在编辑框里带出该档案，可直接修改。",
       });
-      setForm(formOf(hit));
+      setForm({ ...formOf(hit), read_card_no: lastCard.id_card_no });
       setOpen(true);
     } else {
       toast.success("读到新证号，已按卡片信息预填建档表单");
-      setForm({ ...emptyForm(), name: lastCard.name, id_card_no: lastCard.id_card_no, address: lastCard.address });
+      setForm({
+        ...emptyForm(),
+        name: lastCard.name,
+        id_card_no: lastCard.id_card_no,
+        address: lastCard.address,
+        read_card_no: lastCard.id_card_no,
+      });
       setOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,12 +184,18 @@ export function PartiesPage() {
         last_tare_01kg: form.tare01kg,
         remark: form.remark.trim() || null,
         status: form.active ? "active" : "disabled",
+        // 读卡带入且没改过证号才算核验过；真库与 mock 都认这个值（03 §9.6 id_card_verified）
+        id_card_verified: cardVerified(form),
       });
     },
     onSuccess: (p) => {
-      toast.success(form.id == null ? `已建档：${p.name}（${p.code}）` : `档案已更新：${p.name}`);
+      toast.success(
+        form.id == null
+          ? `已建档：${p.name}（${p.code}）· ${p.id_card_verified === 1 ? "已核验" : "未核验"}`
+          : `档案已更新：${p.name}`,
+      );
       setOpen(false);
-      useDeviceStore.getState().idcard.clear();
+      useDeviceStore.getState().reader.idcard.clear();
       void queryClient.invalidateQueries({ queryKey: ["parties"] });
       void queryClient.invalidateQueries({ queryKey: ["party", p.id] });
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
@@ -170,6 +210,8 @@ export function PartiesPage() {
   const isOrg = form.party_type === "cooperative" || form.party_type === "company";
   const code = form.id_card_no.trim().toUpperCase();
   const idOk = code === "" ? false : isOrg ? /^[0-9A-Z]{18}$/.test(code) : validateIdCard(code);
+  /** 提示用：按当前表单状态，保存后这张档案会不会是「已核验」 */
+  const verifiedByCard = cardVerified(form) === 1;
   const errors: string[] = [];
   if (!form.name.trim()) errors.push("姓名必填");
   if (!code) errors.push(isOrg ? "统一社会信用代码必填" : "身份证号必填");
@@ -236,9 +278,9 @@ export function PartiesPage() {
         description={`共 ${all.length} 份档案 · 停用后不可再制单，但历史磅单不受影响`}
         actions={
           <>
-            <Button size="sm" variant="outline" onClick={() => void readCard()} disabled={reading}>
+            <Button size="sm" variant="outline" onClick={() => setScanOpen(true)}>
               <ScanLineIcon />
-              {reading ? "读卡中…" : "读卡建档"}
+              读卡建档
             </Button>
             <Button
               size="sm"
@@ -362,6 +404,13 @@ export function PartiesPage() {
                   {idOk ? "格式正确" : isOrg ? "应为 18 位数字/大写字母" : "校验位不通过，请核对"}
                 </span>
               )}
+              {code !== "" && idOk && (
+                <span className="text-xs text-muted-foreground">
+                  {verifiedByCard
+                    ? "证号读卡带入 · 保存后标记「已核验」"
+                    : "证号手工录入 · 保存后为「未核验」，放卡刷一次即可核验"}
+                </span>
+              )}
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               联系电话
@@ -443,6 +492,15 @@ export function PartiesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CardScanDialog
+        open={scanOpen}
+        onOpenChange={setScanOpen}
+        onManualEntry={() => {
+          setForm(emptyForm());
+          setOpen(true);
+        }}
+      />
     </div>
   );
 }

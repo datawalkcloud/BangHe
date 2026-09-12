@@ -52,11 +52,21 @@ export interface BackupFile {
   sha256_ok: boolean | null;
 }
 
+/** 自动备份线程一轮检查的结论：`ok=false` 时 `detail` 就是中文失败原因 */
+export interface AutoBackupState {
+  ran_at: string;
+  ok: boolean;
+  detail: string;
+}
+
 /** 备份页的整屏状态。参数只从 app_setting 按**库里的真实键名**读；
  *  库里没有的键如实给 null（前端显示"库中未设此参数"），不在前端造默认值。 */
 export interface BackupStatus {
   backup_dir: string;
   keep_count: number;
+  /** 自动备份间隔（天）与本次运行里线程最近一次检查的结论；null = 还没查过 */
+  auto_interval_days: number;
+  auto_last: AutoBackupState | null;
   attachment_keep_days: number;
   retention_sample_days: number | null;
   pii_mask_id_card: boolean | null;
@@ -127,7 +137,19 @@ export const systemApi = {
   /** 筛选全部交给库：关键字命中人名/动作码/单号/事由，日期按业务留痕时间 at 取区间 */
   listAudits: (filters: AuditFilters = {}): Promise<AuditRow[]> => {
     const { keyword = "", result, dateFrom, dateTo, limit } = filters;
-    if (!runningInTauri()) return mock.listAudits(keyword) as Promise<AuditRow[]>;
+    if (!runningInTauri())
+      // mock 只认关键字，结果与日期区间在这里补筛：页面上的筛选器在演示模式下
+      // 也得真的改变列表，否则"选了被拒绝却纹丝不动"会被当成界面坏了。
+      return mock
+        .listAudits(keyword)
+        .then((rows) =>
+          rows.filter(
+            (r) =>
+              (result == null || r.result === result) &&
+              (dateFrom == null || r.at.slice(0, 10) >= dateFrom) &&
+              (dateTo == null || r.at.slice(0, 10) <= dateTo),
+          ),
+        ) as Promise<AuditRow[]>;
     return call<AuditRow[]>("audit_list", {
       filters: { keyword, result: result ?? null, dateFrom: dateFrom ?? null, dateTo: dateTo ?? null, limit: limit ?? null },
     });
@@ -144,6 +166,10 @@ export const systemApi = {
     runningInTauri() ? call<HealthReport>("db_health") : Promise.reject(new Error(NO_CHANNEL)),
   backupReveal: (): Promise<string> =>
     runningInTauri() ? call<string>("backup_reveal") : Promise.reject(new Error(NO_CHANNEL)),
+  /** 把备份目录之外的一份 .db 副本（U 盘 / 移动硬盘）收进备份目录。
+   *  落盘后就与本机备份同权：预检、校验、恢复全都走原来那套，没有第二条恢复路径。 */
+  backupImport: (path: string): Promise<BackupFile> =>
+    runningInTauri() ? call<BackupFile>("backup_import", { input: { path } }) : Promise.reject(new Error(NO_CHANNEL)),
   restorePreflight: (name: string): Promise<Preflight> =>
     runningInTauri() ? call<Preflight>("restore_preflight", { name }) : Promise.reject(new Error(NO_CHANNEL)),
   restoreApply: (name: string, confirm: string): Promise<RestoreResult> =>

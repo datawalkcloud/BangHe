@@ -45,6 +45,19 @@ export function SectionTitle({ children, extra }: { children: ReactNode; extra?:
   );
 }
 
+/**
+ * 分区顶部的「一句说明 + 右侧动作」条。原先只在基础档案里用，
+ * 员工与岗位搬到系统与审计后两页都要，于是提到公共排版件里，避免两份走样。
+ */
+export function SectionBar({ note, action }: { note: string; action?: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <p className="min-w-[16rem] flex-1 text-xs text-muted-foreground">{note}</p>
+      {action}
+    </div>
+  );
+}
+
 /** 空状态必须给下一步动作，不留纯文案空页（05 §6.3） */
 export function EmptyState({
   title,

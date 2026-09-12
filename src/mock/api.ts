@@ -18,6 +18,7 @@ import type {
   PageResult,
   Party,
   PaymentRecord,
+  PrintLog,
   PriceList,
   QualityReport,
   QcReport,
@@ -243,13 +244,6 @@ export const api = {
     });
   },
 
-  async getSettlement(no: string): Promise<Settlement | null> {
-    await sleep();
-    const s = settlements.find((x) => x.settle_no === no) ?? null;
-    if (!s) return null;
-    return { ...s, orders: s.orders.slice() };
-  },
-
   /** 待结算池：已到 to_settle 的磅单，按售粮人分组 */
   async pendingSettlements(): Promise<{ party: Party; rows: WeighOrder[] }[]> {
     await sleep();
@@ -339,7 +333,8 @@ export const api = {
       name: input.name,
       party_type: input.party_type,
       id_card_no: input.id_card_no,
-      id_card_verified: 0,
+      // 与真库 save_party 同口径：核验标记由调用方（证号是否读卡带入）决定，缺省未核验
+      id_card_verified: input.id_card_verified ?? 0,
       phone: input.phone ?? "",
       address: input.address ?? "",
       bank_name: input.bank_name ?? null,
@@ -389,6 +384,27 @@ export const api = {
     return created;
   },
 
+  /**
+   * 删除品种。mock 不建模外键，但为让预览与桌面端语义一致，
+   * 仍先查引用：被价目表或磅单引用过的品种拒绝删除，只能「停用」。
+   * 真实实现是软删除（grain_variety.deleted_at），引用查询由数据库层负责。
+   */
+  async deleteVariety(id: number, operator_id: number): Promise<GrainVariety> {
+    await sleep(60);
+    const idx = varieties.findIndex((v) => v.id === id);
+    if (idx < 0) throw new Error("品种不存在");
+    const v = varieties[idx];
+    const usedByPrice = priceLists.some((p) => p.variety_id === id);
+    const usedByOrder = orders.some((o) => o.variety_id === id);
+    if (usedByPrice || usedByOrder) {
+      auditMaster("variety.delete", "grain_variety", v.code, operator_id, "仍被价目表或磅单引用，已拒绝");
+      throw new Error("该品种已在价目表或历史磅单中被引用，不能删除；如不再使用请改为「停用」");
+    }
+    const [removed] = varieties.splice(idx, 1);
+    auditMaster("variety.delete", "grain_variety", removed.code, operator_id, `删除 ${removed.name}（${removed.code}）`);
+    return removed;
+  },
+
   /** 调价：只追加新价目，不改历史价（历史价是已结算单的证据，01 §F2.3） */
   async savePrice(
     input: {
@@ -408,7 +424,7 @@ export const api = {
     if (idx >= 0) {
       const next: PriceList = { ...priceLists[idx], ...input, id: priceLists[idx].id };
       priceLists[idx] = next;
-      auditMaster("price.update", "price_list", `${next.variety_id}/${next.grade}`, input.operator_id, input.basis);
+      auditMaster("price.update", "price_list", `${next.variety_id}/${next.grade}`, input.operator_id, "调价");
       return next;
     }
     const created: PriceList = {
@@ -424,7 +440,7 @@ export const api = {
       remark: input.remark ?? null,
     };
     priceLists.unshift(created);
-    auditMaster("price.create", "price_list", `${created.variety_id}/${created.grade}`, input.operator_id, created.basis);
+    auditMaster("price.create", "price_list", `${created.variety_id}/${created.grade}`, input.operator_id, "调价");
     return created;
   },
 
@@ -634,6 +650,66 @@ export const api = {
     return { ...created };
   },
 
+  /**
+   * 修改已登记设备（真实实现即 `device_config` 的 UPDATE）。编码与类型不可改：
+   * 编码是台账主键、被打印留痕与外键引用；换类型请「停用 + 重新登记」。
+   * `config` 合并写入（表单没露出的键保留），改了驱动或配置就把联机结论作废回到未检测。
+   */
+  async updateDevice(input: {
+    code: string;
+    name: string;
+    kind: DeviceConfig["kind"];
+    driver: string;
+    config: Record<string, string | number | boolean>;
+    is_default: boolean;
+    operator_id: number;
+  }): Promise<DeviceConfig> {
+    await sleep(100);
+    const d = devices.find((x) => x.code === input.code);
+    if (!d) throw new Error("设备不存在");
+    const name = input.name.trim();
+    if (!name) throw new Error("设备名称必填：台账靠名字认机器");
+    if (!input.driver.trim()) throw new Error("驱动协议必填");
+    if (input.kind !== d.kind) throw new Error(`设备类型不可修改（当前 ${d.kind}）；换类型请停用本台后重新登记`);
+    const oldCfg = JSON.stringify(d.config);
+    d.config = { ...d.config, ...input.config };
+    const driverChanged = input.driver.trim() !== d.driver;
+    const cfgChanged = JSON.stringify(d.config) !== oldCfg;
+    const invalidate = driverChanged || cfgChanged;
+    if (input.is_default && d.is_default !== 1) {
+      devices.filter((x) => x.kind === d.kind).forEach((x) => (x.is_default = 0));
+    }
+    d.name = name;
+    d.driver = input.driver.trim();
+    d.is_default = input.is_default ? 1 : 0;
+    if (invalidate) {
+      d.last_status = "unknown";
+      d.last_ok_at = null;
+      d.last_error = null;
+    }
+    auditMaster(
+      "device.update",
+      "device_config",
+      d.code,
+      input.operator_id,
+      `编辑 ${d.name}（驱动 ${d.driver}）${invalidate ? "：驱动/配置已变，回到未检测待重测" : ""}`,
+    );
+    return { ...d };
+  },
+
+  /**
+   * 删除设备（错录清理）。真实命令会先查 weigh_record / attachment 的引用再决定，
+   * 有业务历史的拒删；mock 不建模这些外键，演示机直接移除并留痕。
+   */
+  async deleteDevice(code: string, operator_id: number): Promise<DeviceConfig[]> {
+    await sleep(60);
+    const idx = devices.findIndex((x) => x.code === code);
+    if (idx < 0) throw new Error("设备不存在");
+    const [removed] = devices.splice(idx, 1);
+    auditMaster("device.delete", "device_config", code, operator_id, `删除 ${removed.name}（${removed.kind} · 驱动 ${removed.driver}）`);
+    return devices.map((x) => ({ ...x }));
+  },
+
   /* ------------------------------------------------------------ 报表 */
   async reportDaily(date: string): Promise<DailyReport> {
     await sleep(160);
@@ -668,12 +744,6 @@ export const api = {
   },
 
   /* ------------------------------------------------- 工作台写操作（内存态） */
-
-  /** 取号：立即占位，断电不重号由真实实现的同事务保证 */
-  async nextOrderNo(): Promise<string> {
-    await sleep(30);
-    return previewOrderNo(todayKey());
-  },
 
   async createOrder(input: {
     party_id: number;
@@ -903,6 +973,10 @@ export const api = {
     party_signed?: boolean;
   }): Promise<{ order: WeighOrder; settlement: Settlement } | null> {
     await sleep(160);
+    // 01 §F2.3：偏离价目或没有生效价目时都是手填价，必须留改价事由（与 Rust 端 settle 同口径）
+    if (input.price_list_id == null && !(input.price_override_reason ?? "").trim()) {
+      throw new Error("手填单价必须填写改价事由（历史价是已结算单的唯一可追溯出处）");
+    }
     const o = orderOf(input.order_no);
     if (!o || o.net_weight_01kg == null) return null;
     const now = localIso(new Date());
@@ -1063,7 +1137,7 @@ export const api = {
   },
 
   /** 打印留痕：真实实现走三通道，这里只记一条日志 */
-  async logPrint(input: { doc_type: "weigh_order" | "quality_report" | "settlement_voucher"; doc_no: string; paper: PaperKind; printer_name: string; channel: PrintChannel; is_reprint: boolean; operator_id: number }): Promise<void> {
+  async logPrint(input: { doc_type: PrintLog["doc_type"]; doc_no: string; paper: PaperKind; printer_name: string; channel: PrintChannel; is_reprint: boolean; operator_id: number }): Promise<void> {
     await sleep(200);
     const now = localIso(new Date());
     printLogs.push({

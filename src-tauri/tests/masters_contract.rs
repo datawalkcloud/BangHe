@@ -302,13 +302,9 @@ fn editing_a_price_does_not_conflict_with_itself() {
 }
 
 #[test]
-fn a_price_without_a_basis_or_with_a_bad_period_is_refused() {
+fn a_price_with_a_bad_period_or_nonpositive_unit_is_refused() {
     let conn = db();
     let xm = seed_variety_id(&conn, "XM");
-
-    let mut no_basis = price_input(xm, "2026-01-01", "2026-12-31");
-    no_basis.basis = "   ".into();
-    assert!(err_of(save_price(&conn, &actor(), no_basis)).contains("定价依据"));
 
     let mut backwards = price_input(xm, "2026-12-31", "2026-01-01");
     backwards.id = None;

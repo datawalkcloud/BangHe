@@ -282,9 +282,12 @@ export const devices: DeviceConfig[] = [
     is_enabled: 0, is_mock: 0, is_default: 0, last_status: "offline", last_ok_at: `${HISTORY_DAYS > 5 ? 6 : 3} 天前`, last_error: "串口未连接或线缆松动", err_count: 12,
   },
   {
-    id: 3, code: "idcard1", name: "华视 CRB-6101（x86 桥接进程）", kind: "idcard", driver: "bridge_exe",
-    config: { exe: "idcard-bridge-x86.exe", portRange: "49152-49252", photo: "true", licenseFile: "C:\\termb.lic" },
-    is_enabled: 1, is_mock: 0, is_default: 1, last_status: "online", last_ok_at: "2 分钟前", last_error: null, err_count: 0,
+    // 现场实机（2026-09-11 接入）：精伦 Routon iDR，加载 resources/sdtapi/ 下的 64 位 Sdtapi.dll 进程内直调，
+    // 不再有 x86 桥接子进程与端口段。一台机两条通道（身份证 SAM + IC/Mifare），能读什么由 lib/card-reader 登记。
+    // 状态一律从"未检测"起，等面板真探到 SAM 号才转绿。
+    id: 3, code: "idcard1", name: "证卡阅读器 精伦 Routon iDR（身份证 + IC）", kind: "idcard", driver: "routon_sdtapi",
+    config: { transport: "Sdtapi.dll x64 in-process", dll: "resources/sdtapi/Sdtapi.dll", photo: "false", icKey: "FFFFFFFFFFFF" },
+    is_enabled: 1, is_mock: 0, is_default: 1, last_status: "unknown", last_ok_at: null, last_error: null, err_count: 0,
   },
   {
     id: 4, code: "cam1", name: "磅区抓拍（海康 ISAPI）", kind: "camera", driver: "hikvision_isapi",

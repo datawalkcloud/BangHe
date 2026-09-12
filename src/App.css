@@ -2,6 +2,9 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/inter";
+/* 工作台自定义布局的网格样式（05 §4.1）。引在这里而不是 main.tsx：
+   排到本文件自己的规则之前，下面 .ws-grid* 对占位色与缩放手柄的覆盖才压得住。 */
+@import "react-grid-layout/css/styles.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -164,6 +167,72 @@
     }
 }
 
+/* ============================================================ 全局滚动条：默认不显示，滚了才浮现 */
+
+/* 系统里所有滚动区都是原生 overflow 滚动（页面主体、工作台卡片、下拉与弹层一律 overflow-y-auto），
+   所以这件事只在滚动条伪元素上做，不改任何组件结构：
+   - 轨道恒宽 12px（比 Windows 默认的 17px 细），显隐不换宽度，内容不会横向抖动；
+   - 滑块默认全透明 = 看不见。容器正在滚动时由 lib/scrollbar.ts 挂上 .is-scrolling 让它浮现，
+     指针停在容器上也浮现——否则谁也够不着一根看不见的滑块，滚到一半就抓不住了；
+   - 细与宽在同一根 12px 轨道里靠「透明描边 + background-clip: padding-box」抠出来：
+     描边 4px → 可见 4px 细条；指针压到滑块上描边 1px → 可见 10px 粗条（戴手套也点得中）。
+     轨道必须比粗条更宽是硬约束——滑块宽不出轨道，所以轨道取 12px 而不是更细。
+   - 圆角跟主题令牌 --radius 走（本工程 base-maia 直角体系，--radius 固定 0，见 05 §7.2；
+     theme.ts 也刻意不把主题面板里的圆角选项注入运行时，两处保持一致）。注意描边会把圆角"啃小"：
+     可见区是 padding box，它的圆角 = 外圆角 − 描边宽，所以外圆角要写成 calc(--radius + 描边宽)，
+     看得见的部分才正好等于 --radius。
+   需要彻底没有滚动条的地方（侧栏）继续用 Tailwind 的 no-scrollbar，本节的规则不覆盖它的 display: none。 */
+:root {
+    --scrollbar-size: 12px;
+    --scrollbar-inset: 4px;
+    --scrollbar-inset-hover: 1px;
+    --scrollbar-thumb: color-mix(in oklab, var(--foreground) 26%, transparent);
+    --scrollbar-thumb-hover: color-mix(in oklab, var(--foreground) 42%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none; /* 不要上下箭头，轨道宽度全留给滑块 */
+}
+::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  background-clip: padding-box;
+  border: var(--scrollbar-inset) solid transparent;
+  border-radius: calc(var(--radius) + var(--scrollbar-inset));
+  transition: background-color 160ms ease, border-width 160ms ease, border-radius 160ms ease;
+}
+/* 滚动中 / 指针在容器上 → 细条显形 */
+.is-scrolling::-webkit-scrollbar-thumb,
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+/* 指针压到滑块本体 → 加宽到 10px、加深（放最后，与上一条同特异性时以它为准） */
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+  border-width: var(--scrollbar-inset-hover);
+  border-radius: calc(var(--radius) + var(--scrollbar-inset-hover));
+}
+
+/* Firefox 一类非 WebKit 内核没有滚动条伪元素，降级成"细轨道 + 显隐换色"，宽度变化做不到 */
+@supports not selector(::-webkit-scrollbar) {
+  *:not(.no-scrollbar) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 160ms ease;
+  }
+  .is-scrolling:not(.no-scrollbar),
+  :hover:not(.no-scrollbar) {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+
 @layer utilities {
   /* 重量与金额必须等宽对齐，见 05 文档 §6.1 */
   .tnum {
@@ -184,7 +253,17 @@ textarea[data-slot="textarea"] {
   background-color: var(--component-surface);
 }
 
-/* 打印：仅保留打印容器内容，纸型与边距由具体模板覆盖 */
+/* 纸张（#print-root）在屏幕上给个投影：看到边界，就大致是"纸上会有这么多" */
+.receipt-paper {
+  background: #fff;
+  box-shadow:
+    0 0 0 1px var(--color-border),
+    0 10px 30px rgb(0 0 0 / 0.16);
+}
+
+/* 打印：只保留 #print-root（纸张本体），其余全部隐藏。
+   纸张自带 mm 宽与 mm 内边距，@page 尺寸由 ReceiptDocument 按纸型动态注入；
+   这里只把它从屏幕上的"适应宽度缩放 + 投影"还原成真实毫米，保证 1:1 出纸。 */
 @media print {
   body * {
     visibility: hidden;
@@ -195,11 +274,170 @@ textarea[data-slot="textarea"] {
   }
   #print-root {
     position: absolute;
-    inset: 0;
-    overflow: visible;
+    top: 0;
+    left: 0;
+    margin: 0;
+    box-shadow: none !important;
   }
-  @page {
-    size: A4;
-    margin: 8mm;
+  /* 纸张托架只服务屏幕：纸上不能带 transform / 裁剪高度 / 居中留白 */
+  .receipt-fit-host,
+  .receipt-fit {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
   }
+  .receipt-fit-inner {
+    transform: none !important;
+  }
+}
+
+/* ============================================================ 工作台自定义布局（05 §4.1） */
+
+/* 库给 .react-grid-item 挂了 200 ms 的 transform/width/height 过渡、给容器挂了 height 过渡。
+   只在编辑态要：拖拽时邻居被挤开，这段动画是"谁被挪走了"的反馈。
+   日常界面反过来——磅房一屏应该"说是什么位置就是什么位置"，任何一次重排（从顶栏放出收起的
+   面板、开发期热更新重注入整张样式表）都不该让整张桌子滑一下，那在磅员眼里就是闪。 */
+.ws-grid:not(.ws-grid-edit),
+.ws-grid:not(.ws-grid-edit) .react-grid-item {
+  transition: none;
+}
+
+/* 拖拽落点占位：库默认是红色，换成主色半透明，跟主题一起变深浅 */
+.ws-grid .react-grid-placeholder {
+  background-color: color-mix(in oklab, var(--primary) 22%, transparent);
+  border-radius: var(--radius);
+  opacity: 1;
+}
+
+/* 面板本体不知道自己在网格里：由这一层把 Card 撑满整格，内容超出时卡片自己滚，
+   于是"把结算区拖小两格"不会把整页顶出滚动条，也不会把按钮挤没。 */
+.ws-tile {
+  position: relative; /* 把手是绝对定位的，不管库用 transform 还是 top/left 铺格子，都得有个依附的盒子 */
+  min-width: 0;
+}
+/* 窄屏堆叠时格子几何不生效，就别摆出可拖的样子（收起走顶栏「面板」，提示条会说明） */
+.ws-stacked .ws-grip {
+  display: none;
+}
+.ws-grid .ws-tile > [data-slot="card"] {
+  height: 100%;
+  min-height: 0;
+}
+.ws-grid .ws-tile > [data-slot="card"] > [data-slot="card-content"] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 编辑态覆在卡片标题上的把手条：拖它换位，点右端 × 收起这块 */
+.ws-grip {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 25px;
+  padding: 0 3px 0 8px;
+  border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+  background-color: color-mix(in oklab, var(--accent) 92%, transparent);
+  color: var(--accent-foreground);
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.ws-grip-hide {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.75;
+}
+.ws-grip-hide:hover {
+  opacity: 1;
+  background-color: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+.ws-tile-edit {
+  outline: 1px dashed color-mix(in oklab, var(--primary) 55%, transparent);
+  outline-offset: 1px;
+}
+
+/* 缩放手柄。库自带的是"悬停才显形"的 20 px 角标，而且只在 se 一个轴上给了可视标记：
+   一个角标压在卡片角上、离邻居只剩格缝那点距离，看不准是拽哪一块，磅房里戴手套更够不着。
+   编辑态改成右缘 / 下缘 / 右下角三条常驻抓取条，各自外扩 6 px 伸进 12 px 的格缝（GRID_MARGIN），
+   于是"往哪儿拽"不要求指针先落准。z-index 抬到卡片之上：手柄压在邻居的那几像素，
+   不该反过来被邻居的卡盖住。非编辑态库会挂 react-resizable-hide，三条整块 display:none，不留点击死角。 */
+.ws-grid-edit .react-grid-item > .react-resizable-handle {
+  z-index: 6;
+  opacity: 1;
+}
+
+/* 右下角：唯一带库那种 L 形标记的轴，放大到 28 px 并把标记推到外沿，指向"往这个方向拽" */
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se {
+  right: -6px;
+  bottom: -6px;
+  width: 28px;
+  height: 28px;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid color-mix(in oklab, var(--primary) 65%, transparent);
+  border-bottom: 2px solid color-mix(in oklab, var(--primary) 65%, transparent);
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se:hover::after {
+  border-color: var(--primary);
+}
+
+/* 右缘 / 下缘：整条边都能拽。库把这两轴也套了同一条 L 形标记，靠 rotate 摆方向——
+   铺在长条上会歪到卡外去，所以这里既撤掉它的 rotate，也改用一条居中的小杠当提示。 */
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e {
+  top: 0;
+  right: -6px;
+  margin-top: 0;
+  width: 18px;
+  height: 100%;
+  transform: none;
+  cursor: ew-resize;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s {
+  left: 0;
+  bottom: -6px;
+  margin-left: 0;
+  width: 100%;
+  height: 18px;
+  transform: none;
+  cursor: ns-resize;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e::after,
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s::after {
+  display: none;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e::before,
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  background-color: color-mix(in oklab, var(--primary) 45%, transparent);
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e::before {
+  width: 4px;
+  height: 28px;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s::before {
+  width: 28px;
+  height: 4px;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle:hover::before {
+  background-color: var(--primary);
 }

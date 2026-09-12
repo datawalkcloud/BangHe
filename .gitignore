@@ -21,6 +21,9 @@ tools/*/*.bin
 src-tauri/icons/ios/
 src-tauri/icons/android/
 
+# 真机读卡时精伦 SavePhoto.dll 会往 Sdtapi.dll 同目录落一份身份证照片（含个人信息），别提交
+src-tauri/resources/sdtapi/photo.*
+
 # 浏览器冒烟测试落在仓库根目录的截图，不属于源码（只匹配根层，不影响 src-tauri/icons）
 /*.png
 /_qa/

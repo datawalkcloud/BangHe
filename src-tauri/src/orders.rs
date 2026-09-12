@@ -78,10 +78,12 @@ const FLOOR_ROLES: &[&str] = &["station_master", "registrar", "weigher"];
 const QC_ROLES: &[&str] = &["station_master", "inspector"];
 /// 结算与当场付款（05 §6.1 settle.create）
 pub(crate) const SETTLE_ROLES: &[&str] = &["station_master", "cashier"];
+/// 补录入仓去向：值仓的活，站长兜底（02 §11 保管员 = 指定仓房货位）
+const KEEPER_ROLES: &[&str] = &["station_master", "keeper"];
 
 // ------------------------------------------------------------------------- 审计
-// audit_log（§9.21）动作名与 mock 层逐字一致（order.create / tare.override /
-// settle.create / pay.record / party.create|update），审计页换真库不用改筛选。
+// audit_log（§9.21）动作名与 mock 层逐字一致（order.create / order.destination /
+// tare.override / settle.create / pay.record / party.create|update），审计页换真库不用改筛选。
 
 pub(crate) fn audit(
     conn: &Connection,
@@ -131,6 +133,18 @@ pub(crate) fn setting_int(conn: &Connection, key: &str, default: i64) -> i64 {
     .ok()
     .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
     .and_then(|v| v.as_i64())
+    .unwrap_or(default)
+}
+
+/// 站点参数里的开关。值以 JSON 存，`true`/`false` 之外的形态（没这条键、被人写成字符串）
+/// 一律按默认值走——开关类的东西不能因为格式坏了就停掉作业。
+pub(crate) fn setting_bool(conn: &Connection, key: &str, default: bool) -> bool {
+    conn.query_row("SELECT value_json FROM app_setting WHERE key = ?1", params![key], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
+    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    .and_then(|v| v.as_bool().or_else(|| v.as_i64().map(|n| n != 0)))
     .unwrap_or(default)
 }
 
@@ -597,7 +611,7 @@ fn load_prints(conn: &Connection, order_no: &str) -> Result<Vec<PrintLog>, Strin
     .map_err(|e| format!("读取打印记录失败：{e}"))
 }
 
-fn load_qc(conn: &Connection, report_id: i64) -> Result<Option<QcReport>, String> {
+pub(crate) fn load_qc(conn: &Connection, report_id: i64) -> Result<Option<QcReport>, String> {
     type QcHead = (i64, String, i64, String, String, String, i64, Option<String>, String, Option<String>, i64, i64, String, i64, Option<i64>, i64, i64, String, Option<String>, Option<String>, Option<String>);
     let head: Option<QcHead> = conn
         .query_row(
@@ -927,11 +941,11 @@ pub fn list_parties(conn: &Connection, keyword: &str, ptype: Option<&str>) -> Re
     }
     sql.push_str(" ORDER BY id");
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("读取售粮人档案失败：{e}"))?;
-    let rows: Vec<Party> = match (ptype, kw.is_empty()) {
-        (Some(t), true) => stmt
+    let rows: Vec<Party> = match ptype {
+        Some(t) => stmt
             .query_map(params![t], map_party_row)
             .and_then(|m| m.collect::<Result<Vec<_>, _>>()),
-        _ => stmt
+        None => stmt
             .query_map([], map_party_row)
             .and_then(|m| m.collect::<Result<Vec<_>, _>>()),
     }
@@ -1198,6 +1212,75 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
     }
 }
 
+// --------------------------------------------------------------------- 入仓去向
+// 去向在磅单上是选填项（03 §9.9：多数站点制单时不登记），但一旦填了就必须自洽：
+// 只记货位不记仓房的"半截去向"会让按仓房汇总的那批粮在报表里凭空消失。
+
+/// 校验并归一后的一组去向。`None`/`None` 就是"本单不登记去向"，合法。
+#[derive(Debug, Clone, Default)]
+pub struct Destination {
+    pub warehouse_id: Option<i64>,
+    pub warehouse_name: Option<String>,
+    pub slot_id: Option<i64>,
+    pub slot_label: Option<String>,
+}
+
+impl Destination {
+    /// 审计与提示用的一行字（"1号平房仓 / C01-03"）
+    fn text(&self) -> String {
+        let parts = [self.warehouse_name.as_deref(), self.slot_label.as_deref()];
+        let joined = parts.into_iter().flatten().collect::<Vec<_>>().join(" / ");
+        if joined.is_empty() {
+            "未指定".into()
+        } else {
+            joined
+        }
+    }
+}
+
+fn resolve_destination(conn: &Connection, warehouse_id: Option<i64>, slot_id: Option<i64>) -> Result<Destination, String> {
+    let mut out = Destination::default();
+    if let Some(id) = warehouse_id {
+        let name: Option<String> = conn
+            .query_row(
+                "SELECT name FROM warehouse WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("检查仓房失败：{e}"))?;
+        out.warehouse_name = Some(name.ok_or_else(|| "入库仓房不存在或已停用".to_string())?);
+        out.warehouse_id = Some(id);
+    }
+    if let Some(id) = slot_id {
+        // 货位所属仓房一并 JOIN 校验：只停仓房不停货位时，这个货位同样不能再选
+        let hit: Option<(i64, String, String)> = conn
+            .query_row(
+                "SELECT sl.warehouse_id, COALESCE(sl.label, sl.code), w.name
+                   FROM storage_slot sl JOIN warehouse w ON w.id = sl.warehouse_id
+                  WHERE sl.id = ?1 AND sl.is_active = 1 AND w.deleted_at IS NULL AND w.is_active = 1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| format!("检查货位失败：{e}"))?;
+        let (slot_wh, label, wh_name) =
+            hit.ok_or_else(|| "货位不存在或已停用（也可能是它所属的仓房已停用）".to_string())?;
+        if let Some(w) = out.warehouse_id {
+            if w != slot_wh {
+                return Err(format!("货位「{label}」不在该仓房下，请重选仓房或货位"));
+            }
+        } else {
+            // 只选了货位 ⇒ 反查补上仓房，界面与报表说的是同一处
+            out.warehouse_id = Some(slot_wh);
+            out.warehouse_name = Some(wh_name);
+        }
+        out.slot_id = Some(id);
+        out.slot_label = Some(label);
+    }
+    Ok(out)
+}
+
 // ------------------------------------------------------------------------ 制单
 
 #[derive(Debug, Deserialize)]
@@ -1240,22 +1323,7 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
         .optional()
         .map_err(|e| format!("检查品种失败：{e}"))?;
     let variety = variety.ok_or_else(|| "所选品种不存在或已停用，请重新选择".to_string())?;
-    if let Some(w) = input.warehouse_id {
-        let ok: i64 = conn
-            .query_row("SELECT COUNT(*) FROM warehouse WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1", params![w], |r| r.get(0))
-            .map_err(|e| format!("检查仓房失败：{e}"))?;
-        if ok == 0 {
-            return Err("入库仓房不存在或已停用".into());
-        }
-    }
-    if let Some(s) = input.slot_id {
-        let ok: i64 = conn
-            .query_row("SELECT COUNT(*) FROM storage_slot WHERE id = ?1 AND is_active = 1", params![s], |r| r.get(0))
-            .map_err(|e| format!("检查货位失败：{e}"))?;
-        if ok == 0 {
-            return Err("货位不存在或已停用".into());
-        }
-    }
+    let dest = resolve_destination(conn, input.warehouse_id, input.slot_id)?;
 
     let order_no = next_no(conn, "BD")?;
     let now = now_iso();
@@ -1268,7 +1336,7 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
             ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?11)",
         params![
             order_no, today(), input.party_id, input.variety_id,
-            input.warehouse_id, input.slot_id,
+            dest.warehouse_id, dest.slot_id,
             input.vehicle_no.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_uppercase()),
             party.1, // driver_name 沿用 mock：默认同售粮人
             input.remark.as_deref().map(str::trim).filter(|s| !s.is_empty()),
@@ -1314,8 +1382,8 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
     if input.source != "scale" && input.source != "manual" {
         return Err(format!("称重来源「{}」不在值域内", input.source));
     }
-    if input.weight_01kg < 0 {
-        return Err("重量不能为负数".into());
+    if input.weight_01kg <= 0 {
+        return Err("重量必须大于 0".into());
     }
     type OrderHead = (i64, String, Option<i64>, Option<i64>, i64, i64);
     let head: Option<OrderHead> = conn
@@ -1352,6 +1420,41 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
         }
     }
 
+    // 皮重容差闸门（05 §4 ②）：服务端按站点参数独立复算，不信任前端有没有拦下或弹过授权框。
+    let within_tare_tolerance = if input.weigh_type == "tare" {
+        let mean: Option<i64> = conn
+            .query_row("SELECT last_tare_01kg FROM party WHERE id = ?1", params![party_id], |r| r.get(0))
+            .ok()
+            .flatten();
+        let pct = setting_int(conn, "tare_tolerance_pct", 0); // 单位 0.01%（300 = 3.00%）
+        match mean {
+            Some(m) if m > 0 && pct > 0 => (input.weight_01kg - m).abs() <= (m * pct + 5000) / 10000,
+            _ => true,
+        }
+    } else {
+        true
+    };
+    if !within_tare_tolerance && input.tare_override.is_none() {
+        return Err("皮重与历史均值偏差超出容差，须经站长授权放行".into());
+    }
+
+    // 毛/皮齐备时净重必须为正：去掉旧的 abs()，避免把颠倒的重量洗成"合法"净重照常结算。
+    let (new_gross, new_tare) =
+        if input.weigh_type == "gross" { (Some(input.weight_01kg), tare) } else { (gross, Some(input.weight_01kg)) };
+    if let (Some(g), Some(t)) = (new_gross, new_tare) {
+        if g <= t {
+            return Err(format!(
+                "毛重（{:.1}kg）不高于皮重（{:.1}kg），净重不为正，请核对称重类型或更正",
+                g as f64 / 10.0,
+                t as f64 / 10.0,
+            ));
+        }
+    }
+    let net = match (new_gross, new_tare) {
+        (Some(g), Some(t)) => Some(g - t),
+        _ => None,
+    };
+
     let device_id: Option<i64> = if input.source == "scale" {
         conn.query_row(
             "SELECT id FROM device_config WHERE kind = 'scale' AND is_enabled = 1 ORDER BY is_default DESC, id LIMIT 1",
@@ -1363,6 +1466,12 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
         None
     };
     let now = now_iso();
+    // 复称：先把同类型旧轨迹取消"已采用"，保证每类只有一个采用值（时间轴/证据墙按 is_adopted=1 取）。
+    conn.execute(
+        "UPDATE weigh_record SET is_adopted = 0 WHERE order_id = ?1 AND weigh_type = ?2 AND is_adopted = 1",
+        params![order_id, input.weigh_type],
+    )
+    .map_err(|e| format!("归并称重轨迹失败：{e}"))?;
     conn.execute(
         "INSERT INTO weigh_record (order_id, seq, weigh_type, weight_01kg, aligned_weight_01kg, is_adopted, source, device_id, raw_frame, stable, captured_at, operator_id)
          VALUES (?1, ?2, ?3, ?4, ?4, 1, ?5, ?6, ?7, 1, ?8, ?9)",
@@ -1370,11 +1479,6 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
     )
     .map_err(|e| format!("写称重轨迹失败：{e}"))?;
 
-    let (new_gross, new_tare) = if input.weigh_type == "gross" { (Some(input.weight_01kg), tare) } else { (gross, Some(input.weight_01kg)) };
-    let net = match (new_gross, new_tare) {
-        (Some(g), Some(t)) => Some((g - t).abs()),
-        _ => None,
-    };
     let new_status = if net.is_some() { "to_settle" } else if input.weigh_type == "gross" { "gross_weighed" } else { "tare_weighed" };
     let mut manual = input.source == "manual";
     if !manual {
@@ -1386,8 +1490,8 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
     conn.execute(
         "UPDATE weigh_order SET
             gross_weight_01kg = ?1, tare_weight_01kg = ?2, net_weight_01kg = ?3,
-            gross_at = CASE WHEN ?1 IS NOT NULL AND gross_at IS NULL THEN ?4 ELSE gross_at END,
-            tare_at  = CASE WHEN ?2 IS NOT NULL AND tare_at  IS NULL THEN ?4 ELSE tare_at  END,
+            gross_at = CASE WHEN ?1 IS NOT NULL THEN ?4 ELSE gross_at END,
+            tare_at  = CASE WHEN ?2 IS NOT NULL THEN ?4 ELSE tare_at  END,
             status = ?5, weight_source = ?6, weigher_id = ?7,
             tare_override_by = COALESCE(?8, tare_override_by),
             tare_override_reason = COALESCE(?9, tare_override_reason),
@@ -1402,8 +1506,8 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
         ],
     )
     .map_err(|e| format!("更新磅单失败：{e}"))?;
-    if input.weigh_type == "tare" {
-        // 皮重异常判定要用"最近皮重"，从此每次捕获即刷新（§9.6 列注释的职责）
+    if input.weigh_type == "tare" && within_tare_tolerance {
+        // 皮重异常判定要用"最近皮重"；仅在容差内刷新，异常放行的皮重不得污染基准（§9.6）
         conn.execute(
             "UPDATE party SET last_tare_01kg = ?1, updated_at = ?2, updated_by = ?3 WHERE id = ?4",
             params![input.weight_01kg, now, actor.id, party_id],
@@ -1563,16 +1667,10 @@ pub fn save_qc(conn: &Connection, actor: &AuthProfile, input: SaveQcInput) -> Re
 #[serde(rename_all = "camelCase")]
 pub struct QcListOpts {
     #[serde(default)]
-    pub only_pending: Option<bool>,
-    #[serde(default)]
     pub keyword: Option<String>,
 }
 
 pub fn list_qc(conn: &Connection, opts: &QcListOpts) -> Result<Vec<QcReport>, String> {
-    // 与 mock 存根一致：待检队列走 qcQueue（本轮仍 mock），这里恒空。
-    if opts.only_pending.unwrap_or(false) {
-        return Ok(Vec::new());
-    }
     let kw = opts.keyword.clone().unwrap_or_default().trim().to_lowercase();
     let mut stmt = conn
         .prepare(
@@ -1705,13 +1803,34 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
         return Err(format!("本单当前为「{status}」，不能结算"));
     }
     let Some(net) = net else { return Ok(None) };
-    let deduct = input.package_deduct_01kg + input.moisture_deduct_01kg + input.impurity_deduct_01kg + input.other_deduct_01kg;
+    let deduct = input
+        .package_deduct_01kg
+        .checked_add(input.moisture_deduct_01kg)
+        .and_then(|v| v.checked_add(input.impurity_deduct_01kg))
+        .and_then(|v| v.checked_add(input.other_deduct_01kg))
+        .ok_or_else(|| "各项扣量之和溢出，请核对录入".to_string())?;
+    if deduct > net {
+        return Err(format!(
+            "各项扣量合计（{:.1}kg）大于净重（{:.1}kg），结算重量不为正",
+            deduct as f64 / 10.0,
+            net as f64 / 10.0,
+        ));
+    }
     let settle_weight = net - deduct;
     if settle_weight <= 0 {
-        return Ok(None);
+        return Err("扣量后结算重量必须大于 0".into());
     }
     let goods = amount_fen(settle_weight, input.price_fen_per_ton);
-    let payable = goods - input.deduction_fee_fen;
+    let payable = goods
+        .checked_sub(input.deduction_fee_fen)
+        .ok_or_else(|| "货款减去扣款溢出，请核对录入".to_string())?;
+    if payable < 0 {
+        return Err(format!(
+            "扣款（{:.2}元）大于货款（{:.2}元），应付金额不得为负",
+            input.deduction_fee_fen as f64 / 100.0,
+            goods as f64 / 100.0,
+        ));
+    }
     let now = now_iso();
 
     conn.execute(
@@ -2035,7 +2154,54 @@ pub async fn order_create(app: AppHandle, input: CreateOrderInput) -> Result<Wei
 
 #[tauri::command]
 pub async fn order_capture(app: AppHandle, input: CaptureInput) -> Result<Option<WeighOrder>, String> {
-    write_tx(&app, move |conn, actor| capture(conn, actor, input), FLOOR_ROLES, "称重").await
+    // 前端的 has_photo 只是"当时摄像头在线"的自我声明，拿来当门闩：离线时连这三秒的网络都不去堵。
+    let want_photo = input.has_photo.unwrap_or(false);
+    let order = write_tx(&app, move |conn, actor| capture(conn, actor, input), FLOOR_ROLES, "称重").await?;
+    if want_photo {
+        if let Some(weighed) = order.as_ref() {
+            attach_weigh_photo(&app, weighed).await;
+        }
+    }
+    Ok(order)
+}
+
+/// 过磅抓拍（04 §2.4）：磅单已经提交，这里只往那条称重轨迹上挂一张图。
+///
+/// 取图要等摄像机应答（连接与收图各 3 秒），所以放在称重事务**之外**——让一张照片
+/// 把已经成立的过磅拖回滚、或者把单连接的写事务开足三秒，都是把主次颠倒了（04 §4）。
+/// 于是这里的所有失败都就地降级成"无抓拍"，含"配置非法"那类：原因由 `camera` 写进
+/// `device_config.last_error`，站长在设备中心看得到，不该由一次称重去替它报警。
+async fn attach_weigh_photo(app: &AppHandle, weighed: &WeighOrder) {
+    // capture() 成功即新增一条轨迹，`records` 按 seq 升序，最后一条就是刚称的那个头
+    let Some(record) = weighed.records.as_ref().and_then(|rs| rs.last()) else {
+        return;
+    };
+    let (Ok(app_dir), Ok(pool)) = (app.path().app_data_dir(), pool_of(app)) else { return };
+    let (order_id, record_id, operator_id) = (weighed.id, record.id, record.operator_id);
+    let weigh_type = record.weigh_type.clone();
+    let attached = tauri::async_runtime::spawn_blocking(move || -> Result<Option<i64>, String> {
+        let conn = pool.lock().unwrap_or_else(|p| p.into_inner());
+        let key = if weigh_type == "tare" { "capture_on_tare" } else { "capture_on_gross" };
+        if !setting_bool(&conn, key, true) {
+            return Ok(None);
+        }
+        let ctx = crate::camera::CaptureContext { order_id, weigh_record_id: record_id, operator_id };
+        let photo = crate::camera::capture_snapshot(&conn, &app_dir, &ctx)?;
+        if let Some(att) = photo {
+            conn.execute(
+                "UPDATE weigh_record SET photo_attachment_id = ?1 WHERE id = ?2",
+                params![att, record_id],
+            )
+            .map_err(|e| format!("回填抓拍引用失败：{e}"))?;
+        }
+        Ok(photo)
+    })
+    .await;
+    // 取不到图就是"无抓拍"：Ok(None) 的原因 camera 已写进台账并打到 stderr；
+    // Err 是配置非法，同样不回头否定这次已经成立的过磅，只留一行现场可查的痕迹。
+    if let Err(e) = attached {
+        eprintln!("[抓拍] 本轮按无抓拍处理：{e}");
+    }
 }
 
 #[tauri::command]
@@ -2150,4 +2316,73 @@ pub async fn order_void(app: AppHandle, input: VoidOrderInput) -> Result<Option<
 #[tauri::command]
 pub async fn settlement_of_order(app: AppHandle, no: String) -> Result<Option<Settlement>, String> {
     read_only(&app, move |conn| settlement_of(conn, &no), "结算单读取").await
+}
+
+// ----------------------------------------------------------------- 补录入仓去向
+// 制单时去向选填（03 §9.9），所以粮真进了仓往往是保管员事后到详情页补一笔。
+// 这条命令就是那个写入口：谁指定的写进 keeper_id（03 §9.11 三环节署名之一），
+// 改派留审计，作废/拒收的单不再接受登记。
+
+#[derive(Debug, Deserialize)]
+pub struct AssignDestinationInput {
+    pub order_no: String,
+    pub warehouse_id: Option<i64>,
+    pub slot_id: Option<i64>,
+    /// 操作人以会话为准，此字段只为与 mock 签名对齐而存在
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub operator_id: Option<i64>,
+}
+
+/// 不再接受去向登记的状态：作废单不参与汇总，拒收单粮已随车离场。
+const DESTINATION_LOCKED: &[&str] = &["voided", "rejected"];
+
+pub fn assign_destination(conn: &Connection, actor: &AuthProfile, input: AssignDestinationInput) -> Result<Option<WeighOrder>, String> {
+    let order: Option<WeighOrder> = conn
+        .query_row(&format!("{ORDER_SELECT} WHERE o.order_no = ?1"), params![input.order_no], map_order_row)
+        .optional()
+        .map_err(|e| format!("读取磅单失败：{e}"))?;
+    let Some(order) = order else { return Ok(None) };
+    if DESTINATION_LOCKED.contains(&order.status.as_str()) {
+        let label = match order.status.as_str() {
+            "voided" => "已作废",
+            "rejected" => "拒收退粮",
+            other => other,
+        };
+        return Err(format!("本单{label}，不再登记入仓去向"));
+    }
+    let dest = resolve_destination(conn, input.warehouse_id, input.slot_id)?;
+    let now = now_iso();
+    // 清空去向时署名一并抹掉，免得详情里挂着"保管员张三"却查不到他指定了哪里
+    let keeper_id: Option<i64> = if dest.warehouse_id.is_none() && dest.slot_id.is_none() {
+        None
+    } else {
+        Some(actor.id)
+    };
+    conn.execute(
+        "UPDATE weigh_order SET warehouse_id = ?2, slot_id = ?3, keeper_id = ?4, updated_at = ?5 WHERE id = ?1",
+        params![order.id, dest.warehouse_id, dest.slot_id, keeper_id, now],
+    )
+    .map_err(|e| format!("登记去向失败：{e}"))?;
+    let before = Destination {
+        warehouse_id: order.warehouse_id,
+        warehouse_name: order.warehouse_name.clone(),
+        slot_id: order.slot_id,
+        slot_label: order.slot_label.clone(),
+    };
+    audit(
+        conn,
+        actor,
+        "order.destination",
+        "weigh_order",
+        &order.order_no,
+        Some(&format!("{} → {}", before.text(), dest.text())),
+        None,
+    );
+    load_order_full(conn, &order.order_no)
+}
+
+#[tauri::command]
+pub async fn order_assign_destination(app: AppHandle, input: AssignDestinationInput) -> Result<Option<WeighOrder>, String> {
+    write_tx(&app, move |conn, actor| assign_destination(conn, actor, input), KEEPER_ROLES, "登记入仓去向").await
 }

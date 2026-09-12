@@ -14,6 +14,17 @@
 //!  4. 换完库不自动重启，只回 `restart_required`——现场可能还有单没录完，
 //!     重启必须由站长在界面上确认（`app_restart` 另外要求"本次运行确实恢复成功过"）。
 //!
+//! 本轮补上的两个缺口（都来自"备份做错了当天的粮款就找不回来"这一条）：
+//!  - **自动备份**：01 §数据留存承诺过"自动备份"，而此前备份只有三个触发点——手动按钮、
+//!    迁移前、恢复前。站长连续几周不点按钮，磁盘上就一份副本都没有。现在起由 `lib.rs` 起的
+//!    守护线程每小时查一次，超过 `backup_auto_interval_days`（缺省 1 天）没有新副本就补一份
+//!    `kind = auto`。无人值守时没有登录人，留痕的 `actor_id` 如实留 NULL、名字写"系统自动"
+//!    （与 `authorized_by` 那条同口径：不拿 0 冒充一个不存在的人）。
+//!  - **从备份目录之外导入副本**：现场把副本拷去 U 盘之后，**拷回来恢复**曾经做不到——
+//!    [`resolve_backup`] 拒绝任何路径分隔符，页面只能列 `backup_dir` 里的名字。新增
+//!    [`import_backup`]：认一个绝对路径，验完校验和再落进备份目录，之后走的就是原来那条
+//!    预检 + 换库路径。zip 副本仍不支持（解压缩包要引新依赖，且解压面本身是新攻击面）。
+//!
 //! 其它几条与页面口径相关的取舍：
 //!  - **审计页只读不设岗**：留痕的意义是"谁都能查"，viewer 也看得着；写入侧的岗位
 //!    闸门在 [`crate::orders`] / [`crate::masters`] 那边，这里不重复判。
@@ -67,6 +78,14 @@ pub const BACKUP_ROLES: &[&str] = &["station_master", "cashier"];
 pub const RESTORE_ROLES: &[&str] = &["station_master"];
 /// 恢复命令要求逐字确认的文案，与 `src/lib/system-native.ts` 的 `RESTORE_CONFIRM_TEXT` 同源。
 const RESTORE_CONFIRM_TEXT: &str = "恢复备份";
+/// 自动备份间隔（天）。这个键**没有种子**：`app_setting` 里有就照它跑，没有按
+/// [`AUTO_BACKUP_INTERVAL_DEFAULT`] 跑——自动备份是兜底能力，默认开着比等站长建键有用。
+const AUTO_BACKUP_INTERVAL_KEY: &str = "backup_auto_interval_days";
+const AUTO_BACKUP_INTERVAL_DEFAULT: i64 = 1;
+/// 守护线程的轮询粒度。到期判定只看文件名时间戳，一小时一次的成本是一次 read_dir。
+const AUTO_BACKUP_POLL_SECS: u64 = 3600;
+/// 无人值守动作的留痕主体：`actor_id` 留 NULL，名字如实写这个，不冒充任何真实账号。
+pub const SYSTEM_ACTOR_NAME: &str = "系统自动";
 
 /// 本进程是否刚成功换过库。[`app_restart`] 用它挡"顺手重启一下"——磅房里重启一次
 /// 就可能丢一张正在录的单，这个按钮只属于恢复向导的最后一步。
@@ -185,6 +204,28 @@ fn actor_with_roles(app: &AppHandle, roles: &[&str], what: &str) -> Result<AuthP
     Ok(actor)
 }
 
+/// 留痕主体的最小投影。[`create_backup`] 有两个调用方——命令层（有登录人）与自动备份
+/// 线程（没有）——与其把 actor 参数做成 `Option<&AuthProfile>` 让每个调用点自己拆字段，
+/// 不如在这里一次说清"这次动磁盘的是谁"。`From<&AuthProfile>` 让既有调用点原样编译。
+#[derive(Debug, Clone)]
+pub struct ActorRef {
+    pub id: Option<i64>,
+    pub name: String,
+}
+
+impl ActorRef {
+    /// 无人值守：`actor_id` 留 NULL，名字写"系统自动"。
+    pub fn system() -> Self {
+        Self { id: None, name: SYSTEM_ACTOR_NAME.to_string() }
+    }
+}
+
+impl From<&AuthProfile> for ActorRef {
+    fn from(a: &AuthProfile) -> Self {
+        Self { id: Some(a.id), name: a.display_name.clone() }
+    }
+}
+
 // -------------------------------------------------------------------- 留痕写入
 // 与 [`crate::orders`] 的 audit() 同一条 INSERT、同一套取舍：写失败只打 stderr，
 // 不回滚已经成功的业务动作（备份文件已经在磁盘上了，不能因为一条审计把它说成失败）。
@@ -197,9 +238,12 @@ fn client_info() -> String {
     format!("{host} / banghe {}", env!("CARGO_PKG_VERSION"))
 }
 
-fn try_audit(
+/// 一条留痕的落库动作。**没有登录人时 actor_id 就是 NULL**（见 [`SYSTEM_ACTOR_NAME`]），
+/// 不拿 0 或某个真实账号顶名。
+fn audit_row(
     conn: &Connection,
-    actor: &AuthProfile,
+    actor_id: Option<i64>,
+    actor_name: &str,
     action: &str,
     entity: &str,
     entity_no: &str,
@@ -208,14 +252,25 @@ fn try_audit(
     conn.execute(
         "INSERT INTO audit_log (at, actor_id, actor_name, action, entity, entity_no, reason, result, client_info)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'ok', ?8)",
-        params![now_iso(), actor.id, actor.display_name, action, entity, entity_no, reason, client_info()],
+        params![now_iso(), actor_id, actor_name, action, entity, entity_no, reason, client_info()],
     )
     .map(|_| ())
     .map_err(|e| format!("{action} 的审计写入失败：{e}"))
 }
 
-fn audit(conn: &Connection, actor: &AuthProfile, action: &str, entity: &str, entity_no: &str, reason: &str) {
-    if let Err(e) = try_audit(conn, actor, action, entity, entity_no, reason) {
+fn try_audit(
+    conn: &Connection,
+    actor: &AuthProfile,
+    action: &str,
+    entity: &str,
+    entity_no: &str,
+    reason: &str,
+) -> Result<(), String> {
+    audit_row(conn, Some(actor.id), &actor.display_name, action, entity, entity_no, reason)
+}
+
+fn audit(conn: &Connection, actor: &ActorRef, action: &str, entity: &str, entity_no: &str, reason: &str) {
+    if let Err(e) = audit_row(conn, actor.id, &actor.name, action, entity, entity_no, reason) {
         eprintln!("[banghe] {e}（{entity} {entity_no}）");
     }
 }
@@ -430,11 +485,25 @@ pub struct BackupFile {
     pub prune_error: Option<String>,
 }
 
+/// 自动备份线程一次检查的结果。放在进程内静态变量里而不是库里：它说的是"这台机器
+/// 上的线程最近跑没跑、有没有报错"，换库或拷走备份目录都不该把它一起带过去。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AutoBackupState {
+    pub ran_at: String,
+    pub ok: bool,
+    /// 成功：副本名或"未到间隔"；失败：中文原因，页面照原样显示
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct BackupStatus {
     pub backup_dir: String,
     pub keep_count: i64,
+    /// 自动备份间隔（天）与守护线程上次检查的结果。`auto_last` 为 null = 本次运行还没查过。
+    pub auto_interval_days: i64,
+    pub auto_last: Option<AutoBackupState>,
     pub attachment_keep_days: i64,
     /// 0006 起 `app_setting` 里有这两个键（留样 30 天 / 掩码开启），值原样从库里取；
     /// 规则是**键真不在才回 null**，代码不替站长兜一个合规默认值
@@ -529,6 +598,14 @@ pub struct BackupRunInput {
 pub struct RestoreApplyInput {
     pub name: Option<String>,
     pub confirm: Option<String>,
+}
+
+/// 导入外部副本的入参。`path` 是站长在文件选择框里挑中的**绝对路径**，
+/// 清洗与落盘规则见 [`check_source`] 与 [`import_backup`]。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackupImportInput {
+    pub path: Option<String>,
 }
 
 // ------------------------------------------------------------------- 审计查询
@@ -752,11 +829,12 @@ pub fn prune_backups(backup_dir: &Path, keep: i64, protect: &[&str]) -> (Vec<Str
 pub fn create_backup(
     conn: &Connection,
     loc: &Locations,
-    actor: &AuthProfile,
+    actor: impl Into<ActorRef>,
     kind: &str,
     stamp: &str,
     extra_protect: &[&str],
 ) -> Result<BackupFile, String> {
+    let actor = actor.into();
     let kind = check_kind(kind)?;
     check_stamp(stamp)?;
     let backup_dir = loc.backup_dir(conn);
@@ -792,7 +870,7 @@ pub fn create_backup(
     if !prune_errors.is_empty() {
         reason.push_str(&format!("；注意有旧备份删不掉，磁盘并未释放：{}", prune_errors.join("；")));
     }
-    audit(conn, actor, "backup", "app_meta", &name, &reason);
+    audit(conn, &actor, "backup", "app_meta", &name, &reason);
     Ok(BackupFile {
         pruned: Some(pruned),
         prune_error: if prune_errors.is_empty() {
@@ -825,6 +903,8 @@ pub fn collect_backup_status(conn: &Connection, loc: &Locations) -> Result<Backu
     Ok(BackupStatus {
         backup_dir: display(&backup_dir),
         keep_count: setting_int(conn, "backup_keep_count", 30),
+        auto_interval_days: auto_interval_days(conn),
+        auto_last: auto_backup_note(),
         attachment_keep_days: setting_int(conn, "attachment_keep_days", 3650),
         retention_sample_days: setting_opt_int(conn, "retention_sample_days"),
         pii_mask_id_card: setting_opt_bool(conn, "pii_mask_id_card"),
@@ -836,6 +916,99 @@ pub fn collect_backup_status(conn: &Connection, loc: &Locations) -> Result<Backu
         doc_oldest_date,
         audit_rows,
     })
+}
+
+// ------------------------------------------------------------------ 自动备份
+
+/// 当前生效的自动备份间隔（天）。填 0 或负数一律夹到 1：轮询每小时一次，真按 0 跑
+/// 等于一天备份 24 份，把 `backup_keep_count` 的名额在当天占满，反而挤掉真正更老但
+/// 还没到期的副本。想少留几份应该调大间隔，不是调小这个数。
+pub fn auto_interval_days(conn: &Connection) -> i64 {
+    setting_int(conn, AUTO_BACKUP_INTERVAL_KEY, AUTO_BACKUP_INTERVAL_DEFAULT).max(1)
+}
+
+/// `YYYYMMDD-HHMMSS` 距今多少天（向下取整）。认不出来的时间戳回 None。
+fn stamp_age_days(stamp: &str) -> Option<i64> {
+    let then = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d-%H%M%S").ok()?;
+    Some((Local::now().naive_local() - then).num_days())
+}
+
+/// 该不该补一份自动备份：只看**最新那份普通副本**的名字时间戳。
+/// `pre_migrate_*` 不算数——它只在库结构要变时才有，一个从不备份的站点光靠它撑不起
+/// "数据留存"这件事；淘汰规则同样不计它（见 [`prune_backups`]），两处口径保持一致。
+fn auto_backup_needed(conn: &Connection, backup_dir: &Path) -> bool {
+    let interval = auto_interval_days(conn);
+    let newest_plain = list_backups(backup_dir)
+        .into_iter()
+        .find(|f| !f.name.starts_with("pre_migrate_"));
+    match newest_plain.as_ref().and_then(|f| name_stamp(&f.name)).as_deref().and_then(stamp_age_days) {
+        // 认不出时间戳的副本（手工拷进来的怪名字）按"过期"处理：宁可多备份一次
+        None => true,
+        Some(age) => age >= interval,
+    }
+}
+
+static AUTO_LAST: Mutex<Option<AutoBackupState>> = Mutex::new(None);
+
+fn remember_auto_backup(ok: bool, detail: &str) {
+    let state = AutoBackupState { ran_at: now_iso(), ok, detail: detail.to_string() };
+    *AUTO_LAST.lock().unwrap_or_else(|p| p.into_inner()) = Some(state);
+}
+
+/// 页面上"自动备份最近一次检查说了什么"。None = 本次运行线程还没跑过第一轮。
+pub fn auto_backup_note() -> Option<AutoBackupState> {
+    AUTO_LAST.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// 到期就补一份 `kind = auto`，没到就什么都不做。回 `Some(副本)` 表示这次真生成了文件。
+///
+/// 收 `&Connection` 与 [`create_backup`] 同一条理由：调用方已经持锁，这里再抢一次就死锁。
+pub fn auto_backup_if_due(conn: &Connection, loc: &Locations) -> Result<Option<BackupFile>, String> {
+    let backup_dir = loc.backup_dir(conn);
+    if !auto_backup_needed(conn, &backup_dir) {
+        return Ok(None);
+    }
+    Ok(Some(create_backup(conn, loc, ActorRef::system(), "auto", &stamp_now(), &[])?))
+}
+
+/// 起自动备份的守护线程：**先立刻查一轮**（新装站点当场就有第一份退路），之后每小时一次。
+///
+/// 用 `std::thread` 而不是事件循环里的定时器：这一轮全是同步的文件与 SQL 操作；
+/// 地磅读线程已经是这个形态，两个后台线程混用两种生命周期管理只会更难归因。
+/// 失败不弹错也不影响主流程——页面上那行"自动备份"因此必须是可见的（见 `auto_backup_note`）。
+pub fn spawn_auto_backup(app: AppHandle) {
+    let spawned = std::thread::Builder::new()
+        .name("banghe-auto-backup".into())
+        .spawn(move || {
+            loop {
+                auto_backup_tick(&app);
+                std::thread::sleep(std::time::Duration::from_secs(AUTO_BACKUP_POLL_SECS));
+            }
+        });
+    if let Err(e) = spawned {
+        eprintln!("[banghe] 自动备份线程没起来（{e}），本次运行只能靠手动备份");
+    }
+}
+
+/// 线程的一轮：取锁、判定、必要时落盘，并把结论记进 [`auto_backup_note`]。
+fn auto_backup_tick(app: &AppHandle) {
+    let outcome = (|| -> Result<Option<BackupFile>, String> {
+        let pool = pool_of(app)?;
+        let loc = locations(app)?;
+        let guard = pool.lock().unwrap_or_else(|p| p.into_inner());
+        auto_backup_if_due(&guard, &loc)
+    })();
+    match outcome {
+        Ok(Some(file)) => {
+            eprintln!("[banghe] 自动备份已生成 {}", file.name);
+            remember_auto_backup(true, &format!("已生成 {}", file.name));
+        }
+        Ok(None) => remember_auto_backup(true, "未到自动备份间隔，无需新副本"),
+        Err(e) => {
+            eprintln!("[banghe] 自动备份失败：{e}");
+            remember_auto_backup(false, &e);
+        }
+    }
 }
 
 /// 校验一个副本：只读打开 + `integrity_check` + `quick_check` + 校验和比对 + 行数。
@@ -955,6 +1128,144 @@ pub fn collect_health(conn: &Connection, loc: &Locations) -> Result<HealthReport
         app_version: meta_value(conn, "app_version"),
         schema_version: meta_value(conn, "schema_version"),
     })
+}
+
+// ----------------------------------------------------------------- 导入外部副本
+
+/// 外部副本路径的入参清洗。**只认绝对路径**：相对路径会按进程工作目录解释，
+/// 而磅房机的工作目录不在任何人的预期里（与 [`Locations::backup_dir`] 同一条规矩）。
+/// 比对身份时用 canonicalize 的结果，回给界面的仍是原样路径。
+fn check_source(loc: &Locations, backup_dir: &Path, src: &Path) -> Result<PathBuf, String> {
+    if src.as_os_str().is_empty() {
+        return Err("请先选择要导入的备份文件".into());
+    }
+    if !src.is_absolute() {
+        return Err(format!("只能导入绝对路径（例如 D:\\banghe\\backup 里的副本），当前「{}」不是", display(src)));
+    }
+    if !src.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("db")) {
+        return Err(format!("只能导入 .db 备份文件：{}", display(src)));
+    }
+    let canon = src
+        .canonicalize()
+        .map_err(|e| format!("打不开要导入的副本（{}）：{e}", display(src)))?;
+    if !canon.is_file() {
+        return Err(format!("{} 不是一个文件", display(src)));
+    }
+    if file_size(&canon) == 0 {
+        return Err(format!("{} 大小为 0 字节，是个空文件", display(src)));
+    }
+    // 现库不能当备份导入：文件级 copy 的库不带 -wal 里已提交未合并的页，
+    // 导进来一份"看着像备份、其实缺最近几笔"的副本，比没有副本更危险。
+    if loc.db_path().canonicalize().ok().as_deref() == Some(canon.as_path()) {
+        return Err("这是正在使用的库文件，不能当作备份导入。要给当前库做备份请用「立即备份」".into());
+    }
+    // 已经在备份目录里的副本本来就在页面上的列表里，再拷一份只是造出一个同名撞车的假货
+    if canon.parent() == backup_dir.canonicalize().ok().as_deref() {
+        return Err("这份副本已经在备份目录里了，直接在下面的列表里选中它即可".into());
+    }
+    Ok(src.to_path_buf())
+}
+
+/// 把备份目录之外的一份 `.db` 副本收进备份目录，之后它就与本机自己备份的副本完全同权：
+/// 走同一条 [`preflight_copy`] 预检与 [`apply_restore`] 换库，本函数不另开恢复路径。
+///
+/// 目标名**优先沿用源文件名**：`banghe_<时间>_<kind>.db` 里带着它真正的生成时刻，
+/// 排序与淘汰都读这个名字时间戳（见 [`name_stamp`]）。改成导入时刻会把一份三年前的旧库
+/// 伪装成新副本，淘汰时反过来挤掉真正更新的备份。
+pub fn import_backup(
+    conn: &Connection,
+    loc: &Locations,
+    actor: &AuthProfile,
+    src: &Path,
+) -> Result<BackupFile, String> {
+    let backup_dir = loc.backup_dir(conn);
+    std::fs::create_dir_all(&backup_dir)
+        .map_err(|e| format!("创建备份目录失败（{}）：{e}", display(&backup_dir)))?;
+    let src = check_source(loc, &backup_dir, src)?;
+    let hex = sha256_of(&src)?;
+
+    // 带旁文件的外部副本先验一次。U 盘上拷坏的文件在这里就被拒，比让它进到备份目录、
+    // 到预检时才炸更省事——而且它还会占掉一个淘汰名额，把真副本挤出去。
+    if let Some(expected) = read_sidecar(&src) {
+        if !expected.eq_ignore_ascii_case(&hex) {
+            return Err(format!(
+                "副本的校验和对不上（旁文件记 {expected}，实算 {hex}），{} 已损坏或被改动，不能导入",
+                display(&src)
+            ));
+        }
+    }
+
+    // 同一份内容已经在备份目录里：直接把现有那条回给界面。连点两次导入不该在磁盘上
+    // 堆出第二份，也不该因为兜底名带秒数而在同一秒里报"请隔一秒再试"。
+    if let Some(existing) = list_backups(&backup_dir)
+        .into_iter()
+        .find(|f| f.sha256.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(&hex)))
+    {
+        return Ok(existing);
+    }
+
+    let src_name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut name = if name_stamp(&src_name).is_some() { src_name.clone() } else { stamp_backup_name() };
+    if backup_dir.join(&name).exists() {
+        // 走到这里说明同名但内容不同（同一份内容已被上面接住）：退到导入名。
+        // 绝不覆盖已有副本——那等于删掉一份别人的退路。
+        name = stamp_backup_name();
+        if backup_dir.join(&name).exists() {
+            return Err(format!("同一秒内刚导入过同名副本（{name}），请隔一秒再试"));
+        }
+    }
+    let dst = backup_dir.join(&name);
+    std::fs::copy(&src, &dst).map_err(|e| format!("把副本拷进备份目录失败（{}）：{e}", display(&dst)))?;
+    // 落盘后重算：拷贝中途断连或盘坏最常见的表现就是这一步对不上。
+    // 对不上就把刚写下的这一对文件删掉，磁盘上不留半成品。
+    let got = match sha256_of(&dst) {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = std::fs::remove_file(&dst);
+            return Err(e);
+        }
+    };
+    if !got.eq_ignore_ascii_case(&hex) {
+        let _ = std::fs::remove_file(&dst);
+        return Err(format!("副本拷进备份目录后校验和变了（{hex} → {got}），已放弃这次导入"));
+    }
+    // 无论源文件有没有旁文件都写一份：它证明的是"自本次导入起没被改过"，
+    // 这正是后续 [`verify_backup`] 与预检要用的那件事。
+    write_sidecar(&dst, &hex)?;
+
+    let size = file_size(&dst);
+    let keep = setting_int(conn, "backup_keep_count", 30);
+    // 刚导进来的这份往往就是站长马上要恢复的那一份，必须进保护名单（同 [`apply_restore`]
+    // 里给待换副本留位数的道理）；它名字里的时间戳可能比保留数外的那些还旧。
+    let (pruned, prune_errors) = prune_backups(&backup_dir, keep, &[name.as_str()]);
+    let mut reason = format!("导入外部副本 {name}，源文件 {}，{size} 字节，校验和 {hex}", display(&src));
+    if !pruned.is_empty() {
+        reason.push_str(&format!("；按保留 {keep} 份清理掉 {}", pruned.join("、")));
+    }
+    if !prune_errors.is_empty() {
+        reason.push_str(&format!("；注意有旧备份删不掉，磁盘并未释放：{}", prune_errors.join("；")));
+    }
+    audit(conn, &ActorRef::from(actor), "backup", "app_meta", &name, &reason);
+
+    Ok(BackupFile {
+        pruned: Some(pruned),
+        prune_error: if prune_errors.is_empty() { None } else { Some(prune_errors.join("；")) },
+        name,
+        path: display(&dst),
+        size_bytes: size,
+        created_at: mtime_iso(&dst).unwrap_or_else(|| "未知时间".to_string()),
+        sha256: Some(hex),
+        sha256_ok: Some(true),
+        kind: kind_of(&src_name),
+    })
+}
+
+/// 导入时的兜底名：源文件名不合本程序的命名语法（没有 `YYYYMMDD-HHMMSS` 时间戳）时用它。
+fn stamp_backup_name() -> String {
+    format!("banghe_{}_imported.db", stamp_now())
 }
 
 // ----------------------------------------------------------------------- 恢复
@@ -1145,10 +1456,10 @@ pub fn preflight_copy(conn: &Connection, backup_dir: &Path, name: &str) -> Resul
 
 /// 换库的**入口**：在 [`apply_restore`] 之前加一道岗位闸门。
 ///
-/// 单列出来有两个用处：① 命令层 `restore_apply` 之外（测试、以及任何不经会话的命令）
-/// 调 `apply_restore` 也不会绕过"只有站长能换库"这条线；② 拒绝路径全部落在碰文件之前，
-/// 于是 tests/system_contract.rs 能把"确认文案不对、岗位不对、副本不存在"逐条跑一遍。
-/// 确认文案与预检本身仍由 `apply_restore` 把关，这里不重复写第二份。
+/// 命令层 `restore_apply` 走的就是这里，所以 tests/system_contract.rs 跑的是线上同一条路径，
+/// 包括"确认文案不对、岗位不对、副本不存在"这三种在碰文件之前就该被拒的情形。
+/// 确认文案与预检仍由 `apply_restore` 把关，这里不写第二份；反过来说，**绕开本函数直接调
+/// `apply_restore` 等于没有岗位闸门**（它只认确认文案），新增调用方一律走这里。
 pub fn restore_apply_guard(
     pool: &Pool,
     loc: &Locations,
@@ -1411,6 +1722,22 @@ pub async fn backup_reveal(app: AppHandle) -> Result<String, String> {
         .open_path(path.clone(), None::<&str>)
         .map_err(|e| format!("已生成备份目录 {path}，但打开文件管理器失败：{e}"))?;
     Ok(path)
+}
+
+/// 导入备份目录之外的一份 `.db` 副本（现场"拷去 U 盘又拷回来"的那一步）。
+/// 岗位与手动备份同档：它只往备份目录里添文件，真正危险的换库仍然在 `restore_apply`。
+#[tauri::command]
+pub async fn backup_import(app: AppHandle, input: BackupImportInput) -> Result<BackupFile, String> {
+    let pool = pool_of(&app)?;
+    let actor = actor_with_roles(&app, BACKUP_ROLES, "导入外部副本（请找站长或出纳）")?;
+    let loc = locations(&app)?;
+    let path = input.path.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = pool.lock().unwrap_or_else(|p| p.into_inner());
+        import_backup(&guard, &loc, &actor, Path::new(&path))
+    })
+    .await
+    .map_err(|e| format!("导入副本任务失败：{e}"))?
 }
 
 /// 换库。仅站长，且 `confirm` 必须逐字等于 [`RESTORE_CONFIRM_TEXT`]。

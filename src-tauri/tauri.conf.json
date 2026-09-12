@@ -30,7 +30,10 @@
     "active": true,
     "targets": ["nsis"],
     "resources": {
-      "resources/sdtapi/*": "sdtapi/"
+      "resources/sdtapi/Sdtapi.dll": "sdtapi/Sdtapi.dll",
+      "resources/sdtapi/Dewlt.dll": "sdtapi/Dewlt.dll",
+      "resources/sdtapi/SavePhoto.dll": "sdtapi/SavePhoto.dll",
+      "resources/sdtapi/routon.ini": "sdtapi/routon.ini"
     },
     "publisher": "磅禾",
     "copyright": "© 磅禾",

@@ -1,10 +1,11 @@
 /**
- * 应用骨架（05 §2）：顶栏工具条 + Sidebar 左（240/56）+ 页面区 + 底部设备状态条。
+ * 应用骨架（05 §2）：顶栏工具条 + Sidebar 左（展开宽度可拖、折叠固定 56）+ 页面区 + 底部设备状态条。
  *
  * 三条硬约束在代码里的落点：
  *  1. 设备状态条常驻不可隐藏——它挂在 SidebarProvider 之外，侧栏折叠不影响它
  *  2. 全局快捷键集中在本文件注册，权限校验在命令层另做（05 §5 要求）
- *  3. 展示模式（F2）为覆盖层，真实实现是独立 Tauri 窗口，这里等价演示给农户核对
+ *  3. 展示模式（F2）：桌面端一律另起独立窗口，多屏整屏贴外屏、单屏开浮动窗，
+ *     主窗口始终留给操作员；本文件内的覆盖层只服务浏览器预览，见 `lib/display-window.ts`
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -15,6 +16,7 @@ import { api } from "@/lib/api";
 import { useScaleTick } from "@/store/device";
 import { useSession } from "@/store/session";
 import { Button } from "@/components/ui/button";
+import { useSidebarWidth } from "@/hooks/useSidebarWidth";
 import {
   Sidebar,
   SidebarContent,
@@ -38,15 +40,23 @@ import { AppTopbar } from "@/components/layout/AppTopbar";
 import { NAV_FLAT, NAV_GROUPS, isNavActive } from "@/components/layout/app-nav";
 import { cn } from "cn";
 import { DisplayView } from "@/components/business/DisplayView";
+import { toggleDisplayWindow } from "@/lib/display-window";
 import { runningInTauri } from "@/lib/native";
 import { toast } from "sonner";
 
-/** 侧栏展开 240 / 折叠 56（05 §7.3），覆盖 shadcn 默认的 256/68 */
-const SIDEBAR_STYLE = { "--sidebar-width": "240px", "--sidebar-width-icon": "56px" } as CSSProperties;
+/**
+ * 侧栏折叠档固定 56（05 §7.3）。展开档不再钉死 240：握把可以拖，
+ * 初值与上下限见 `hooks/useSidebarWidth.ts` 与 `ui/sidebar.tsx`。
+ */
+const SIDEBAR_STYLE = { "--sidebar-width-icon": "56px" } as CSSProperties;
+
+/** 窄到这个宽度以下就收掉"Alt+N"角标和品牌副标题，把横向空间让给导航文字本身 */
+const SIDEBAR_ROOMY_WIDTH = 216;
 
 function Brand() {
   const { data: st } = useQuery({ queryKey: ["station"], queryFn: () => api.station() });
-  const { state } = useSidebar();
+  const { state, resize } = useSidebar();
+  const roomy = resize.width >= SIDEBAR_ROOMY_WIDTH;
   return (
     <SidebarHeader className="gap-0">
       {/* 折叠态栏宽 56，logo 放大到 40 并居中，避免 32px 在窄栏里显得过小 */}
@@ -55,7 +65,7 @@ function Brand() {
         {state === "expanded" && (
           <span className="flex min-w-0 flex-col leading-tight">
             <span className="truncate text-sm font-semibold">{st?.name ?? "磅禾粮站"}</span>
-            <span className="truncate text-xs text-muted-foreground">收粮计量结算系统</span>
+            {roomy && <span className="truncate text-xs text-muted-foreground">收粮计量结算系统</span>}
           </span>
         )}
       </div>
@@ -66,7 +76,8 @@ function Brand() {
 function Nav() {
   const pathname = useLocation({ select: (l) => l.pathname });
   const navigate = useNavigate();
-  const { state } = useSidebar();
+  const { state, resize } = useSidebar();
+  const showShortcut = state === "expanded" && resize.width >= SIDEBAR_ROOMY_WIDTH;
   const go = (href: string) => void navigate({ to: href as never });
   return (
     <SidebarContent className="gap-0">
@@ -86,7 +97,7 @@ function Nav() {
                     >
                       <item.icon />
                       <span>{item.label}</span>
-                      {state === "expanded" && idx >= 0 && idx < 9 && (
+                      {showShortcut && idx >= 0 && idx < 9 && (
                         <span className="tnum ml-auto text-[10px] text-muted-foreground">Alt+{idx + 1}</span>
                       )}
                     </SidebarMenuButton>
@@ -107,6 +118,8 @@ export function AppShell() {
   const [display, setDisplay] = useState(false);
   const navigate = useNavigate();
   const demo = useSession((s) => s.demo);
+  // 展开宽度拖到哪就记到哪（跟着账号走），拖完刷新还在原处
+  const sidebarWidth = useSidebarWidth();
   useScaleTick(220);
 
   /**
@@ -153,28 +166,7 @@ export function AppShell() {
       return;
     }
     try {
-      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-      let existing: Awaited<ReturnType<typeof WebviewWindow.getByLabel>> | null = null;
-      try {
-        existing = await WebviewWindow.getByLabel("display");
-      } catch {
-        // 首次打开时窗口不存在，继续创建即可。
-      }
-      if (existing) {
-        await existing.show();
-        await existing.setFocus();
-        return;
-      }
-      const displayWindow = new WebviewWindow("display", {
-        url: new URL("/?display=1", window.location.origin).toString(),
-        title: "磅禾展示模式",
-        fullscreen: true,
-        decorations: false,
-        resizable: true,
-      });
-      await displayWindow.once("tauri://error", (event) => console.error("展示窗口创建失败", event));
-      await displayWindow.show();
-      await displayWindow.setFocus();
+      await toggleDisplayWindow();
     } catch (error) {
       toast.error(`无法打开展示窗口：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -221,6 +213,10 @@ export function AppShell() {
     <SidebarProvider
       open={!collapsed}
       onOpenChange={setCollapsed}
+      resizable
+      width={sidebarWidth.width}
+      onWidthChange={sidebarWidth.setWidth}
+      onWidthCommit={sidebarWidth.commit}
       style={SIDEBAR_STYLE}
       className="h-svh min-h-0 overflow-hidden"
     >

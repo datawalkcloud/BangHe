@@ -186,7 +186,7 @@ export function LoginPage() {
               <AlertTitle>账号已临时锁定</AlertTitle>
               <AlertDescription>
                 连错密码次数已达上限，请 <span className="tnum font-semibold">{Math.ceil(lockedLeft / 60)}</span> 分钟后再试。
-                <span className="mt-1 block text-xs">找站长在「基础档案 → 员工与岗位」里重置密码也可以。</span>
+                <span className="mt-1 block text-xs">找站长在「系统与审计 → 员工与岗位」里重置密码也可以。</span>
               </AlertDescription>
             </Alert>
           )}
@@ -279,16 +279,17 @@ export function LoginPage() {
               {/* 还没验过密码的这一支留条退路：想换个人登录、或本来就知道自己的密码，不该被扣在这屏。
                   已登录待改密（mustSetup）不给退——密码没设，回去也只是再被守卫弹回来。 */}
               {!mustSetup && (
-                <button
+                <Button
                   type="button"
+                  variant="link"
                   onClick={() => {
                     setResult(null);
                     session.setNotice(null);
                   }}
-                  className="text-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  className="h-auto self-center p-0 text-xs font-normal text-muted-foreground underline underline-offset-2 hover:text-foreground"
                 >
                   返回登录
-                </button>
+                </Button>
               )}
             </form>
           )}

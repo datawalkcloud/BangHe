@@ -1,9 +1,10 @@
 /**
  * 磅房工作台（05 §4 核心界面）。
  *
- * 1280 px 下三栏，xl 起三栏等高、各自纵向滚动，整页不出页面级滚动条：
- * 左「身份与制单 + 皮重参考」、中「过磅画面 + 称重 + 化验」、右「结算与打印」，
- * 底部一条在途作业。磅员 90% 的时间只盯读数与车上磅画面，所以这两块固定在中栏顶部。
+ * 默认排布是 1280 px 下的三栏：左「身份与制单 + 皮重参考」、中「过磅画面 + 称重 + 化验」、
+ * 右「结算与打印」，底部一条在途作业。磅员 90% 的时间只盯读数与车上磅画面，所以这两块
+ * 默认摆在中栏顶部——但摆哪儿是他的事：「自定义布局」里拖把手换位、拖右缘/下缘/右下角改大小、
+ * 收掉不看的块，排布按登录账号存进 §9.25，磅员/化验员/站长共用一台机也互不影响（05 §4.1）。
  *
  * 低频与留痕类信息不在这里常驻，只留入口：称重轨迹/原始帧/抓拍原图看「单证详情」，
  * 历史皮重明细看「农户档案」。删除只会让人少看一块，收起来才叫省地方。
@@ -11,10 +12,10 @@
  * 页面本身只做三件事：取数、把 URL 上的 orderNo 当"当前作业单"、注册 F7/F8/F9。
  * 具体动作与它自己的表单状态同处一个面板，就近注册快捷键。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon } from "lucide-react";
+import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, PanelTopIcon, RotateCcwIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSetting, useStaff, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
@@ -27,9 +28,12 @@ import { QcPanel } from "@/components/workstation/QcPanel";
 import { SettlePanel } from "@/components/workstation/SettlePanel";
 import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
 import { CameraPanel } from "@/components/workstation/CameraPanel";
-import { PrintPreview } from "@/components/print/PrintPreview";
+import { PanelTile, WorkstationGrid } from "@/components/workstation/WorkstationGrid";
+import { useWorkstationLayout } from "@/components/workstation/layout";
+import type { PanelId } from "@/components/workstation/layout";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { useQuickDetail } from "@/components/business/QuickDetailSheet";
-import { WeighOrderSheet } from "@/components/print/sheets";
 import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,8 +41,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function WorkstationPage() {
   const { orderNo } = useSearch({ from: "/workstation" });
   const navigate = useNavigate();
-  const readCard = useDeviceStore((s) => s.idcard.read);
+  const readCard = useDeviceStore((s) => s.reader.idcard.read);
   const mockOff = useDeviceStore((s) => s.mockOff);
+  const openQuickDetail = useQuickDetail((s) => s.open);
   const names = useStaffNames();
   const { data: staff = [] } = useStaff();
   const { data: varieties = [] } = useVarieties();
@@ -69,13 +74,18 @@ export function WorkstationPage() {
   const setDraftPatch = useCallback((patch: Partial<OrderDraft>) => setDraft((d) => ({ ...d, ...patch })), []);
 
   const [printOpen, setPrintOpen] = useState(false);
-  const [showCam, setShowCam] = useState(true);
   const [hasPrinted, setHasPrinted] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  /** 编辑态：只有开着它格子才能被拖走。日常界面不留"手一抖布局就变"的入口 */
+  const [editing, setEditing] = useState(false);
+  const board = useWorkstationLayout();
+  /** 「过磅画面」按钮从此就是相机面板的显隐，改动进他本人那份布局，不再是刷新即失的本地开关 */
+  const showCam = !board.hidden.includes("camera");
   useEffect(() => setHasPrinted(false), [orderNo]);
 
   const toggleFocusMode = useCallback(async () => {
     const next = !focusMode;
+    setEditing(false); // 专注模式是给磅员盯读数用的，不留可拖拽界面
     setFocusMode(next);
     if (document.fullscreenElement && !next) {
       await document.exitFullscreen();
@@ -153,6 +163,60 @@ export function WorkstationPage() {
       ? `${draft.party.name} · 未制单`
       : "未制单";
 
+  /**
+   * 面板本体按 id 收在这儿：网格只管谁占哪几格，取数与参数一处都不因为它挪了位置而改。
+   * 只是建元素不调用，收起的面板不会挂载。
+   */
+  const bodies: Record<PanelId, ReactNode> = {
+    identity: (
+      <IdentityPanel
+        order={order ?? null}
+        draft={draft}
+        onDraft={setDraftPatch}
+        parties={parties}
+        varieties={varieties}
+        warehouses={warehouses}
+        slots={slots}
+        onCreated={(no) => goOrder(no)}
+        onNewOrder={newOrder}
+      />
+    ),
+    tare: (
+      <TarePanel
+        recent={tareRecent.slice(0, 5)}
+        last01kg={partyDetail?.last_tare_01kg ?? null}
+        mean01kg={tareMean01kg}
+        tolerancePct={tolerancePct}
+        currentTare01kg={currentTare01kg}
+        alert={tareAlert}
+        partyId={partyId}
+      />
+    ),
+    camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} mockOff={mockOff} />,
+    weigh: (
+      <WeighPanel
+        order={order ?? null}
+        mean01kg={tareMean01kg}
+        tolerancePct={tolerancePct}
+        staff={staff}
+        scalePort={String(scaleDevice?.config?.port ?? "COM1")}
+        scaleDivision01kg={division01kg}
+        cameraOnline={cameraOnline}
+      />
+    ),
+    qc: <QcPanel order={order ?? null} variety={variety} />,
+    settle: (
+      <SettlePanel
+        order={order ?? null}
+        variety={variety}
+        qc={qc}
+        prices={prices}
+        allowCredit={allowCredit}
+        onPrint={() => setPrintOpen(true)}
+      />
+    ),
+  };
+
   return (
     <div className={focusMode ? "fixed inset-0 z-40 flex flex-col bg-background" : "flex min-h-0 flex-1 flex-col"}>
       {!focusMode && (
@@ -174,13 +238,53 @@ export function WorkstationPage() {
                   单证详情
                 </Button>
               )}
-              <Button size="sm" variant="outline" onClick={() => setShowCam((v) => !v)}>
+              <Button size="sm" variant="outline" onClick={() => board.togglePanel("camera", showCam)}>
                 <CctvIcon />
                 {showCam ? "隐藏画面" : "过磅画面"}
               </Button>
               <Button size="sm" variant="outline" onClick={() => setPrintOpen(true)} disabled={!order}>
                 <PrinterIcon />
                 打印（F9）
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<Button size="sm" variant="outline" />}>
+                  <PanelTopIcon />
+                  面板
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>显示哪些区块</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {board.specs.map((s) => (
+                    <DropdownMenuCheckboxItem
+                      key={s.id}
+                      checked={s.shown}
+                      onCheckedChange={(v) => board.togglePanel(s.id, v !== true)}
+                      disabled={s.shown && board.specs.filter((x) => x.shown).length === 1}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm">{s.title}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{s.hint}</span>
+                      </span>
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {editing && (
+                <Button size="sm" variant="outline" onClick={board.reset}>
+                  <RotateCcwIcon />
+                  恢复默认
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant={editing ? "default" : "outline"}
+                onClick={() => {
+                  board.flush(); // 退出编辑态前把防抖里欠的那次保存补上
+                  setEditing((v) => !v);
+                }}
+              >
+                <LayoutGridIcon />
+                {editing ? "完成" : "自定义布局"}
               </Button>
               <Button size="sm" variant="outline" onClick={() => void toggleFocusMode()}>
                 {focusMode ? <Minimize2Icon /> : <Maximize2Icon />}
@@ -191,91 +295,57 @@ export function WorkstationPage() {
         />
       )}
 
-      <div className={focusMode ? "min-h-0 flex-1 overflow-y-auto px-2 py-1 xl:overflow-hidden" : "min-h-0 flex-1 overflow-y-auto px-2 py-1.5 xl:overflow-hidden"}>
+      <div className="flex min-h-0 flex-1 flex-col">
         {order?.void_reason && (
-          <p className="mb-1.5 border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+          <p className="mx-2 mt-1.5 border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
             本单已作废：{order.void_reason}（仅作留痕，如需继续作业请新建下一单）
           </p>
         )}
-        {isLoading ? (
-          <div className="grid gap-2 xl:h-full xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
+        {editing && (
+          <p className="mx-2 mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+            排布存在你本人账号上，换台磅房机登录也是这一套。
+            {board.saving && <span className="shrink-0 text-primary">保存中…</span>}
+          </p>
+        )}
+        {!board.ready || isLoading ? (
+          <div className="grid flex-1 grid-cols-1 gap-3 px-2.5 py-2 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
             {Array.from({ length: 3 }, (_, i) => (
-              <div key={i} className="flex flex-col gap-2">
+              <div key={i} className="flex flex-col gap-3">
                 <Skeleton className="h-72" />
                 <Skeleton className="h-48" />
               </div>
             ))}
           </div>
         ) : (
-          <div className="grid gap-2 xl:h-full xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
-            <div className="flex min-w-0 flex-col gap-2 [&>*]:shrink-0 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
-              <IdentityPanel
-                order={order ?? null}
-                draft={draft}
-                onDraft={setDraftPatch}
-                parties={parties}
-                varieties={varieties}
-                warehouses={warehouses}
-                slots={slots}
-                onCreated={(no) => goOrder(no)}
-                onNewOrder={newOrder}
-              />
-              <TarePanel
-                recent={tareRecent.slice(0, 5)}
-                last01kg={partyDetail?.last_tare_01kg ?? null}
-                mean01kg={tareMean01kg}
-                tolerancePct={tolerancePct}
-                currentTare01kg={currentTare01kg}
-                alert={tareAlert}
-                partyId={partyId}
-              />
-            </div>
-
-            <div className="flex min-w-0 flex-col gap-2 [&>*]:shrink-0 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
-              {showCam && (
-                <CameraPanel cameras={cameras} order={order ?? null} photos={photos} mockOff={mockOff} />
-              )}
-              <WeighPanel
-                order={order ?? null}
-                mean01kg={tareMean01kg}
-                tolerancePct={tolerancePct}
-                staff={staff}
-                scalePort={String(scaleDevice?.config?.port ?? "COM1")}
-                scaleDivision01kg={division01kg}
-                cameraOnline={cameraOnline}
-              />
-              <QcPanel order={order ?? null} variety={variety} />
-            </div>
-
-            <div className="flex min-w-0 flex-col gap-2 [&>*]:shrink-0 xl:min-h-0 xl:overflow-y-auto xl:pr-1">
-              <SettlePanel
-                order={order ?? null}
-                variety={variety}
-                qc={qc}
-                prices={prices}
-                allowCredit={allowCredit}
-                onPrint={() => setPrintOpen(true)}
-              />
-            </div>
-          </div>
+          <WorkstationGrid
+            items={board.items}
+            editing={editing}
+            onLayout={board.applyLayout}
+            onCommit={board.flush}
+          >
+            {board.tiles.map(({ spec }) => (
+              <PanelTile key={spec.id} spec={spec} editing={editing} onHide={() => board.togglePanel(spec.id, true)}>
+                {bodies[spec.id]}
+              </PanelTile>
+            ))}
+          </WorkstationGrid>
         )}
       </div>
 
       {!focusMode && <OpenOrdersBar activeNo={orderNo} onPick={(no) => goOrder(no)} />}
 
       {order && station ? (
-        <PrintPreview
+        <ReceiptPrintPreview
           open={printOpen}
           onOpenChange={(v) => {
             setPrintOpen(v);
             if (!v) setHasPrinted(true);
           }}
-          docType="weigh_order"
-          docNo={order.order_no}
+          scenario="weigh_order"
+          context={{ station, names, order, qc, reprint: hasPrinted }}
           isReprint={hasPrinted}
-        >
-          <WeighOrderSheet order={order} station={station} qc={qc} reprint={hasPrinted} names={names} />
-        </PrintPreview>
+          docNo={order.order_no}
+        />
       ) : (
         printOpen && (
           <EmptyState title="还没有可打印的磅单" description="请先取号制单并完成称重。" />

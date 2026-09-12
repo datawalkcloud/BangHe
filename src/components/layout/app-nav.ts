@@ -68,7 +68,7 @@ export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
       item("基础档案", "/masters/varieties", BookOpenIcon, "品种、仓房、价目、参数"),
       item("台账报表", "/reports/ledger", BarChart3Icon, "监管台账与统计分析"),
       item("设备中心", "/devices", PlugZapIcon, "地磅、读卡、抓拍、打印"),
-      item("系统与审计", "/system/audit", Settings2Icon, "操作留痕、备份、日结"),
+      item("系统与审计", "/system/audit", Settings2Icon, "操作留痕、备份、人员权限"),
     ],
   },
 ];

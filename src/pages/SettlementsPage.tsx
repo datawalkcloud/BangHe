@@ -12,6 +12,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSignIcon, WalletIcon } from "lucide-react";
 import { api } from "@/lib/api";
+import { SETTLEMENT_SCAN_LIMIT } from "@/lib/reports-native";
 import type { Settlement } from "@/mock/types";
 import { PAYMENT_METHOD, PAYMENT_STATUS } from "@/lib/constants";
 import { dateTime, money, rmbUpper, weight } from "@/lib/format";
@@ -39,7 +40,8 @@ export function SettlementsPage() {
 
   const { data: rows = [], isPending } = useQuery({
     queryKey: ["settlements", status, applied],
-    queryFn: () => api.listSettlements({ paymentStatus: status === "all" ? undefined : status, keyword: applied }),
+    queryFn: () =>
+      api.listSettlements({ paymentStatus: status === "all" ? undefined : status, keyword: applied, limit: SETTLEMENT_SCAN_LIMIT }),
   });
   const { data: pool = [] } = useQuery({
     queryKey: ["pending-settlements"],
@@ -60,6 +62,9 @@ export function SettlementsPage() {
       orders: list.reduce((n, s) => n + s.order_count, 0),
     };
   }, [rows]);
+
+  // 撞上服务端取回上限 = 库里还有没读回来的结算单，上面的金额只能算部分和（同 /system/shift 的 capped 口径）
+  const capped = rows.length >= SETTLEMENT_SCAN_LIMIT;
 
   const overdue = credits.filter((c) => c.overdue_days > 0);
   const poolOrders = pool.reduce((n, g) => n + g.rows.length, 0);
@@ -150,7 +155,7 @@ export function SettlementsPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="结算台账"
-        description={`共 ${rows.length} 张结算单 · 应付 ${money(totals.payable)} · 未付 ${money(totals.unpaid)}`}
+        description={`共 ${rows.length} 张结算单 · ${capped ? "（部分和）" : ""}应付 ${money(totals.payable)} · 未付 ${money(totals.unpaid)}`}
         actions={
           <>
             <Button size="sm" variant="outline" render={<Link to="/payments" />}>
@@ -266,9 +271,15 @@ export function SettlementsPage() {
               />
             }
             toolbar={
-              <span className="text-xs text-muted-foreground">
-                合计行来自当前筛选的全集，不是本页 50 条之和；撤销的结算单保留划线记录，不物理删除。
-              </span>
+              capped ? (
+                <span className="text-xs text-warning">
+                  单次最多取回 {SETTLEMENT_SCAN_LIMIT} 条，上方合计与本页金额都是部分和——请把付款状态筛成单项或缩短关键字后分段核对。
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  合计行来自当前筛选的全集，不是本页 50 条之和；撤销的结算单保留划线记录，不物理删除。
+                </span>
+              )
             }
           />
         </div>

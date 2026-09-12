@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { verticalCompactor } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
 import { api } from "@/lib/api";
 import { useSession } from "@/store/session";
@@ -28,9 +29,13 @@ import { useSession } from "@/store/session";
 export const LAYOUT_KEY = "workstation.layout";
 
 export const GRID_COLS = 12;
-/** 行预算。行高按视口换算，24 行恒等于铺满工作区 */
+/** 行预算。行高按视口换算，24 行正好铺满工作区；拖过头时允许排到预算以外，由外层滚动条接住 */
 export const GRID_ROWS = 24;
-export const GRID_MARGIN: readonly [number, number] = [8, 8];
+/**
+ * 格缝。编辑态要在这条缝里放缩放手柄外扩的那半截抓取条（见 App.css），
+ * 8 px 时缝比手柄还窄、两块卡的角互相顶着，所以取 12 px：日常看着不空，拽的时候有地方落手。
+ */
+export const GRID_MARGIN: readonly [number, number] = [12, 12];
 /** 低于此宽度不铺网格，退回单列纵向堆叠（1280 以下三栏本来就挤） */
 export const GRID_MIN_WIDTH = 1280;
 /** 停手多久后落库。太短等于每帧一写，太长会让"拖完马上关窗口"丢掉布局 */
@@ -61,6 +66,7 @@ export const PANELS: readonly PanelSpec[] = [
 
 const SPEC_BY_ID = new Map<string, PanelSpec>(PANELS.map((p) => [p.id, p]));
 
+/** 存库的排布。`items` 恒含全部面板（收起来的那格也留着，再放回来还在老地方），`hidden` 只是显隐标记 */
 export interface LayoutDoc {
   items: Layout;
   hidden: PanelId[];
@@ -73,10 +79,15 @@ function intIn(value: unknown, lo: number, hi: number): number | null {
 
 /** 面板当前该占的格子：尺寸/位置都夹在合法区间内，minW/minH 一律取注册表而不是存值 */
 function toLayoutItem(spec: PanelSpec, raw?: Partial<LayoutItem>): LayoutItem {
-  const w = intIn(raw?.w, spec.min.w, GRID_COLS - spec.box.x) ?? spec.box.w;
+  const minX = intIn(raw?.x, 0, GRID_COLS - spec.min.w) ?? spec.box.x;
+  const w = intIn(raw?.w, spec.min.w, GRID_COLS - minX) ?? spec.box.w;
+  const x = Math.min(minX, GRID_COLS - w);
   const h = intIn(raw?.h, spec.min.h, GRID_ROWS) ?? spec.box.h;
-  const x = intIn(raw?.x, 0, GRID_COLS - w) ?? spec.box.x;
-  const y = intIn(raw?.y, 0, GRID_ROWS - h) ?? spec.box.y;
+  // y 不设上限：24 行是"铺满工作区"的预算，不是硬顶。把某一块撑宽之后，
+  // 网格自己会把后面的块顶到 24 行以外（外层那根滚动条接住它，见 WorkstationGrid）。
+  // 这里再夹回 24 行以内，等于凭空造出压字——存出去的排布跟屏幕上看到的不是一张图，
+  // 下次读回来还会被 normalize 的脏数据闸门整体退回默认（用户的调整白做）。
+  const y = intIn(raw?.y, 0, Number.MAX_SAFE_INTEGER) ?? spec.box.y;
   return { i: spec.id, x, y, w, h, minW: spec.min.w, minH: spec.min.h };
 }
 
@@ -91,10 +102,11 @@ function isStackable(items: Layout): boolean {
 /**
  * 收进来的一串格子规整成能用的布局：认不出的丢、越界的夹、重复的只留第一个，
  * 本次版本新增而档案里没有的面板补回默认位（升级后不会"少一块"）。
- * 夹完还互相压字的（手改过 JSON、或旧版本格式对不上）整份退回默认——
- * 与其猜他要哪一块，不如给他一张确定的桌子。
+ * 这一步**不判互相压字**，因为它的两个调用方对压字的容忍度不一样：
+ * 网格在一次缩放的中间帧就是会报回压字的格子（把别人挤开是手势结束时它自己做的事），
+ * 而库里读回来的脏值需要 `normalize` 那道退回默认的闸门。
  */
-function normalize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
+function sanitize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
   const seen = new Set<string>();
   const items: LayoutItem[] = [];
   const list = Array.isArray(rawItems) ? rawItems : [];
@@ -107,14 +119,38 @@ function normalize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
   for (const spec of PANELS) {
     if (!seen.has(spec.id)) items.push(toLayoutItem(spec));
   }
-  if (!isStackable(items)) return defaultDoc();
-
   const hidden = Array.isArray(rawHidden)
     ? (rawHidden.filter((id): id is PanelId => typeof id === "string" && SPEC_BY_ID.has(id)) as PanelId[])
     : [];
-  const kept = items.filter((it) => !hidden.includes(it.i as PanelId));
-  // 全收起来就没有可操作的界面了：至少留一块，多了不管（编辑态能自己调回来）
-  return { items: kept.length > 0 ? kept : items, hidden: hidden.filter((id) => !kept.some((it) => it.i === id)) };
+  return { items, hidden };
+}
+
+/**
+ * 只用于读库那条路：夹完还互相压字的（手改过 JSON、或旧版本格式对不上）整份退回默认——
+ * 与其猜他要哪一块，不如给他一张确定的桌子。收起的面板不参与判重叠，
+ * 它那一格让给谁都可以，放回来时由网格自己挤开。全收起来也退回默认，
+ * 否则界面上就没有可操作的东西了。
+ */
+function normalize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
+  const doc = sanitize(rawItems, rawHidden);
+  const visible = doc.items.filter((it) => !doc.hidden.includes(it.i as PanelId));
+  if (!isStackable(visible) || visible.length === 0) return defaultDoc();
+  return doc;
+}
+
+/**
+ * 落库前的最后一道：把互相压字的可见格子按**跟界面同一套规则**（竖向 compactor）挤开。
+ *
+ * 为什么要有这一步：网格只在手势结束时才报回挤干净的格子，而我们的 `flush` 挂在
+ * `onResizeStop`/`onDragStop` 上、防抖也可能抢在它前面一帧，写出去的就会是压字的脏值。
+ * 脏值一进库，下次读回来就被 `normalize` 那道闸门整体退回默认——用户这次拖的、缩的白做，
+ * 表现就是"一松手弹回原样"。本地显示什么我们不动它，只保证**进库的那份一定站得住**。
+ */
+function settle(doc: LayoutDoc): LayoutDoc {
+  const hiddenItems = doc.items.filter((it) => doc.hidden.includes(it.i as PanelId));
+  const visible = doc.items.filter((it) => !doc.hidden.includes(it.i as PanelId));
+  if (isStackable(visible)) return doc;
+  return sanitize([...verticalCompactor.compact(visible, GRID_COLS), ...hiddenItems], doc.hidden);
 }
 
 export function defaultDoc(): LayoutDoc {
@@ -139,18 +175,14 @@ export function stringifyDoc(doc: LayoutDoc): string {
   });
 }
 
-/** 收起面板时它那一格的位置留不留？留——再放回来还在老地方，这是"收起"不是"删除" */
+/**
+ * 收起 / 放出面板。格子不动只翻标记：再放回来还在老地方，这是"收起"不是"删除"。
+ * 放出后若与别人压字，交给网格的 compactor 当场挤开，下一次 onLayoutChange 就是干净的。
+ */
 function withHidden(doc: LayoutDoc, id: PanelId, hide: boolean): LayoutDoc {
-  const spec = SPEC_BY_ID.get(id)!;
-  if (hide) {
-    const hidden = doc.hidden.includes(id) ? doc.hidden : [...doc.hidden, id];
-    return { items: doc.items.filter((it) => it.i !== id), hidden };
-  }
-  const bottom = doc.items.reduce((m, it) => Math.max(m, it.y + it.h), 0);
-  const shown = doc.items.some((it) => it.i === id)
-    ? doc.items
-    : [...doc.items, toLayoutItem(spec, { ...spec.box, y: Math.min(bottom, GRID_ROWS - spec.box.h) })];
-  return { items: shown, hidden: doc.hidden.filter((h) => h !== id) };
+  if (!SPEC_BY_ID.has(id)) return doc;
+  const hidden = doc.hidden.includes(id) ? doc.hidden : [...doc.hidden, id];
+  return { items: doc.items, hidden: hide ? hidden : doc.hidden.filter((h) => h !== id) };
 }
 
 /**
@@ -182,7 +214,7 @@ export function useWorkstationLayout() {
   }, [actorId, query.isFetched, query.data]);
 
   const save = useMutation({
-    mutationFn: (next: LayoutDoc) => api.setPref(LAYOUT_KEY, stringifyDoc(next)),
+    mutationFn: (next: LayoutDoc) => api.setPref(LAYOUT_KEY, stringifyDoc(settle(next))),
     onError: (e: Error) => toast.error(`布局没能保存：${e.message}（本机仍生效，重启后可能回到原样）`),
   });
   const persist = save.mutate;
@@ -216,9 +248,22 @@ export function useWorkstationLayout() {
 
   useEffect(() => flush, [flush]);
 
-  const applyLayout = useCallback((items: Layout) => commit(normalize(items, docRef.current.hidden), true), [commit]);
+  /**
+   * 网格报回来的只有可见的那几块（收起的本就不渲染），把隐藏项那一格并回去再规整，
+   * 不然拖一次就把它们悄悄打回默认位。
+   * 这里用 `sanitize` 而不是 `normalize`：缩放中间帧压字是常态，把别人挤开是网格
+   * 在手势结束时自己做的事，拿读库那道"压字就退回默认"的闸门去卡它，
+   * 等于用户每把一块拖大一点就被打回默认三栏（实测就是这样，看起来像"缩放根本不生效"）。
+   */
+  const applyLayout = useCallback(
+    (visible: Layout) => {
+      const hiddenItems = docRef.current.items.filter((it) => docRef.current.hidden.includes(it.i as PanelId));
+      commit(sanitize([...visible, ...hiddenItems], docRef.current.hidden), true);
+    },
+    [commit],
+  );
   const togglePanel = useCallback(
-    (id: PanelId, show: boolean) => commit(withHidden(docRef.current, id, show)),
+    (id: PanelId, hide: boolean) => commit(withHidden(docRef.current, id, hide)),
     [commit],
   );
   const reset = useCallback(() => {
@@ -228,16 +273,31 @@ export function useWorkstationLayout() {
 
   const hidden = doc.hidden;
   const specs = useMemo(() => PANELS.map((p) => ({ ...p, shown: !hidden.includes(p.id) })), [hidden]);
+  /** 只含可见面板的格子，直接喂给网格 */
+  const visibleItems = useMemo(
+    () => doc.items.filter((it) => !hidden.includes(it.i as PanelId)),
+    [doc.items, hidden],
+  );
+  /** 渲染顺序按格子走（y→x），窄屏退回单列堆叠时读起来才跟宽屏一个次序 */
+  const tiles = useMemo(
+    () =>
+      [...visibleItems]
+        .sort((a, b) => a.y - b.y || a.x - b.x)
+        .map((it) => ({ spec: SPEC_BY_ID.get(it.i)!, item: it })),
+    [visibleItems],
+  );
 
   return {
     /** 没拿到本人那份之前不要铺网格：否则会把别人的/默认排布当成他的闪一下 */
     ready: actorId != null && query.isFetched,
-    items: doc.items,
+    items: visibleItems,
+    tiles,
     hidden,
     specs,
     saving: save.isPending,
     applyLayout,
     flush,
+    /** 第二参数是"要不要收起"，与面板菜单里的勾选状态相反 */
     togglePanel,
     reset,
   };

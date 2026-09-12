@@ -8,5 +8,5 @@ pub mod device;
 pub mod model;
 pub mod render;
 
-pub use model::{Paper, WeighTicket};
-pub use render::{new_printer, write_self_test, write_weigh_ticket};
+pub use model::{Paper, PrintLine, TextAlign, WeighTicket};
+pub use render::{new_printer, write_lines, write_self_test, write_weigh_ticket};

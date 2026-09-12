@@ -1,20 +1,21 @@
 /**
- * 系统与审计（05 §3 `/system/$section`，五分区均为 P1，先把界面立起来）。
+ * 系统与审计（05 §3 `/system/$section`，六个分区均为 P1，先把界面立起来）。
  *
  * 分区的存在理由各不相同：
- * - users：P0 没有密码，只能"选择操作员"，但署名机制必须现在就与 P1 一致（actor_id 不变）；
+ * - users / staff：前者讲"当前登录的是谁、能做什么"，后者管"档案与岗位权限矩阵"。
+ *   两块都动账号体系，必须紧挨着放，否则改一处忘了另一处就出事。
  * - audit：迎检第一张表。谁、什么时候、对哪张单、做了什么、谁授权的，五件事缺一不可；
  * - backup：把"留存年限 / 备份份数"这类硬指标做成页面可见的自查，而不是写在文档里没人看；
  * - shift：日结前得先知道还有什么没闭环，否则封账等于把窟窿埋进历史；
- * - appearance：显示模式与色板是**本机**偏好（磅房里每台屏的光照不一样），
- *   所以它既不需要站长权限，也不写审计、不进站点参数——与上面四个分区正好相反。
+ * - appearance / templates：显示模式、配色与票据版式都是**本机**偏好（磅房里每台屏的光照不一样，
+ *   每台打印机走纸也不一样），所以它们不需要站长权限，也不写审计、不进站点参数——与上面五个分区正好相反。
  *
  * 与仓房分区同样的处理：没有接口的动作一律标只读并写明原因，绝不做只弹 toast 的假按钮。
  */
 import { useMemo, useState } from "react";
 import { Link, Navigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { DownloadIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { DownloadIcon, FolderOpenIcon, LockIcon, PlusIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { AuditLog, UserAccount, WeighOrder } from "@/mock/types";
@@ -26,29 +27,38 @@ import { runningInTauri } from "@/lib/native";
 import { RESTORE_CONFIRM_TEXT, systemApi, type AuditRow, type BackupFile, type HealthReport, type Preflight, type RestoreResult, type VerifyReport } from "@/lib/system-native";
 import { SETTLEMENT_SCAN_LIMIT } from "@/lib/reports-native";
 import { useHotkey } from "@/hooks/useHotkey";
-import { PERMISSIONS, useActor, useSession } from "@/store/session";
+import { actorId, PERMISSIONS, useActor, useSession } from "@/store/session";
 import { useStaff, useStation } from "@/hooks/useLookups";
 import { StatCard } from "@/components/business/StatCard";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
-import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
+import { CallOut, EmptyState, InfoGrid, PageHeader, SectionBar, SectionTitle } from "@/components/business/layout";
 import { ThemeSettingsPanel } from "@/components/business/ThemeSettingsPanel";
+import { ReceiptTemplateEditor } from "@/components/print/receipt/TemplateEditor";
 import { OperatorPanel } from "@/components/business/OperatorSwitch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "cn";
 
-export type SystemSection = "users" | "audit" | "backup" | "shift" | "appearance";
+export type SystemSection = "users" | "staff" | "audit" | "backup" | "shift" | "appearance" | "templates";
 
 const SECTIONS: { key: SystemSection; label: string; desc: string }[] = [
   { key: "users", label: "登录与权限", desc: "当前操作员与岗位可见范围" },
+  { key: "staff", label: "员工与岗位", desc: "人员档案、岗位权限矩阵（仅站长可改）" },
   { key: "audit", label: "操作审计", desc: "关键动作留痕，迎检必查" },
   { key: "backup", label: "备份与恢复", desc: "留存参数自查与体检" },
   { key: "shift", label: "日结交班", desc: "封账前的挂起清单" },
   { key: "appearance", label: "外观与主题", desc: "显示模式与色板，只影响本机" },
+  { key: "templates", label: "小票模板", desc: "各场景票据版式与可打印字段" },
 ];
 
 export function SystemPage({ section }: { section: SystemSection }) {
@@ -81,10 +91,12 @@ export function SystemPage({ section }: { section: SystemSection }) {
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {section === "users" && <UsersSection />}
+        {section === "staff" && <StaffSection />}
         {section === "audit" && <AuditSection />}
         {section === "backup" && <BackupSection />}
         {section === "shift" && <ShiftSection />}
         {section === "appearance" && <ThemeSettingsPanel />}
+        {section === "templates" && <ReceiptTemplateEditor />}
       </div>
     </div>
   );
@@ -101,37 +113,9 @@ function permissionsOf(role: Role): string[] {
 }
 
 function UsersSection() {
-  const { data: staff = [] } = useStaff();
   const actor = useActor();
   // 空闲失效时长由后端随会话下发，这里只换算成分钟，不在前端抄一份常量
   const idleMinutes = Math.round((useSession((s) => s.session?.idleTtlSecs) ?? 0) / 60);
-
-  const columns = useMemo<Column<UserAccount>[]>(
-    () => [
-      {
-        key: "who",
-        header: "员工",
-        cell: (u) => (
-          <span className="flex flex-wrap items-center gap-1.5">
-            <span className="font-medium">{u.display_name}</span>
-            <span className="tnum text-xs text-muted-foreground">{u.username}</span>
-            {actor?.id === u.id && <ToneBadge tone="info">当前</ToneBadge>}
-          </span>
-        ),
-        sortValue: (u) => u.display_name,
-      },
-      { key: "role", header: "岗位", cell: (u) => ROLE[u.role], sortValue: (u) => u.role },
-      { key: "perms", header: "可执行动作", align: "right", cell: (u) => <span className="tnum">{permissionsOf(u.role).length}</span> },
-      { key: "phone", header: "联系电话", cell: (u) => <span className="tnum text-xs">{orDash(u.phone)}</span> },
-      { key: "logins", header: "最后登录", cell: (u) => <span className="text-xs text-muted-foreground">{u.last_login_at ? dateTime(u.last_login_at) : "从未登录"}</span> },
-      {
-        key: "active",
-        header: "状态",
-        cell: (u) => (u.is_active === 1 ? <ToneBadge tone="success">在职</ToneBadge> : <ToneBadge tone="neutral">已停用</ToneBadge>),
-      },
-    ],
-    [actor?.id],
-  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -156,25 +140,243 @@ function UsersSection() {
 
         <CallOut title="密码与会话都在本机校验，问不到会话就当作没登录">
           登录、设密码、重置与授权全部走桌面端的 <span className="font-mono">auth.rs</span>：
-          argon2id 校验、连错若干次临时锁定并在登录页倒计时、无操作
-          <span className="tnum"> {idleMinutes} </span>
-          分钟后需重新登录；会话只存内存，重启程序必须重登。未登录进不了任何业务页，
-          写操作的署名由这个会话给出，而不是前端传进来的 id。新增账号与重置他人密码在
-          <Link to="/masters/$section" params={{ section: "staff" }} className="underline">
+          argon2id 校验、连错若干次临时锁定并在登录页倒计时、
+          {idleMinutes > 0 ? (
+            <>
+              无操作<span className="tnum"> {idleMinutes} </span>分钟后需重新登录；
+            </>
+          ) : (
+            <>空闲失效时长由桌面端会话下发（当前拿不到该值，前端不抄一份常量兜底）；</>
+          )}
+          会话只存内存，重启程序必须重登。未登录进不了任何业务页，
+          写操作的署名由这个会话给出，而不是前端传进来的 id。新增账号、调整岗位与权限矩阵在
+          <Link to="/system/$section" params={{ section: "staff" }} className="underline">
             {" "}
-            基础档案 → 员工与岗位
+            系统与审计 → 员工与岗位
           </Link>
           （仅站长）。浏览器预览没有原生通道，属演示模式：只认在职名单、不校验密码。
         </CallOut>
       </div>
+    </div>
+  );
+}
 
+/* ---------------------------------------------------------- 员工与岗位 */
+
+const ROLE_LIST = Object.keys(ROLE) as Role[];
+
+/** 岗位权限矩阵的紧凑排版：shadcn Table 默认 h-12 表头 / p-3 单元格会把矩阵撑得过高，
+ *  这里用后代选择器压回 px-3 / py-1.5，特异性高于组件内置类，能稳定覆盖。 */
+const PERM_TABLE =
+  "border-collapse text-sm [&_th]:h-auto [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-normal [&_th]:text-inherit [&_td]:px-3 [&_td]:py-1.5";
+
+interface StaffForm {
+  id: number | null;
+  username: string;
+  display_name: string;
+  role: Role;
+  phone: string;
+  active: boolean;
+}
+
+function StaffSection() {
+  const { data: rows = [] } = useStaff();
+  const queryClient = useQueryClient();
+  const actor = useActor();
+  const can = useSession((s) => s.can);
+  const editable = can("setting.write");
+
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<StaffForm>({ id: null, username: "", display_name: "", role: "weigher", phone: "", active: true });
+  const patch = (p: Partial<StaffForm>) => setForm((f) => ({ ...f, ...p }));
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.saveStaff({
+        id: form.id ?? undefined,
+        operator_id: actorId(),
+        username: form.username.trim(),
+        display_name: form.display_name.trim(),
+        role: form.role,
+        phone: form.phone.trim(),
+        is_active: form.active ? 1 : 0,
+      }),
+    onSuccess: (u) => {
+      toast.success(`员工「${u.display_name}」已保存`);
+      setOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ["staff"] });
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  });
+
+  const columns: Column<UserAccount>[] = [
+    { key: "username", header: "登录名", cell: (u) => <span className="tnum">{u.username}</span>, sortValue: (u) => u.username },
+    {
+      key: "display_name",
+      header: "姓名",
+      cell: (u) => (
+        <span className="flex items-center gap-1.5">
+          <span className="font-medium">{u.display_name}</span>
+          {actor?.id === u.id && <ToneBadge tone="info">当前值班</ToneBadge>}
+        </span>
+      ),
+      sortValue: (u) => u.display_name,
+    },
+    { key: "role", header: "岗位", cell: (u) => ROLE[u.role], sortValue: (u) => u.role },
+    { key: "phone", header: "电话", cell: (u) => <span className="tnum">{orDash(u.phone)}</span> },
+    {
+      key: "last",
+      header: "最近使用",
+      cell: (u) => <span className="tnum text-xs text-muted-foreground">{u.last_login_at ? u.last_login_at.slice(0, 16) : "从未"}</span>,
+    },
+    {
+      key: "active",
+      header: "状态",
+      cell: (u) => (u.is_active === 1 ? <ToneBadge tone="success">在职</ToneBadge> : <ToneBadge tone="neutral">停用</ToneBadge>),
+    },
+    {
+      key: "op",
+      header: "操作",
+      cell: (u) => (
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={!editable}
+          onClick={(e) => {
+            e.stopPropagation();
+            setForm({
+              id: u.id,
+              username: u.username,
+              display_name: u.display_name,
+              role: u.role,
+              phone: u.phone,
+              active: u.is_active === 1,
+            });
+            setOpen(true);
+          }}
+        >
+          编辑
+        </Button>
+      ),
+    },
+  ];
+
+  const perms = Object.entries(PERMISSIONS);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <SectionBar
+        note="身份来源已从「选择操作员」换成密码登录：制单 / 称重 / 化验 / 结算的留痕一律署名当前登录人，署名机制未变，只是拿人的入口换了。"
+        action={
+          <Button
+            size="sm"
+            disabled={!editable}
+            onClick={() => {
+              setForm({ id: null, username: "", display_name: "", role: "weigher", phone: "", active: true });
+              setOpen(true);
+            }}
+          >
+            {editable ? <PlusIcon /> : <LockIcon />}
+            新增员工
+          </Button>
+        }
+      />
       <DataTable
         columns={columns}
-        rows={staff}
+        rows={rows}
         rowKey={(u) => u.id}
-        empty={<EmptyState title="还没有员工档案" description="先到基础档案录人员，否则无法署名。" />}
-        toolbar={<span className="text-xs text-muted-foreground">「可执行动作」由岗位反查权限表得出，不是手填的数字，因此改权限表这里就跟着变。</span>}
+        rowClassName={(u) => (u.is_active === 0 ? "text-muted-foreground" : undefined)}
+        empty={<EmptyState title="还没有员工档案" description="至少要有一名站长，否则授权类操作无法完成。" />}
       />
+
+      <section className="border bg-card">
+        <header className="border-b px-3 py-2 text-sm font-semibold">
+          岗位权限矩阵
+          <span className="ml-2 text-xs font-normal text-muted-foreground">✔ 表示该岗位可直接执行；留空的必须站长授权</span>
+        </header>
+        <Table className={PERM_TABLE}>
+          <TableHeader>
+            <TableRow className="border-b text-xs text-muted-foreground hover:bg-transparent">
+              <TableHead>权限</TableHead>
+              {ROLE_LIST.map((r) => (
+                <TableHead key={r} className="text-center">
+                  {ROLE[r]}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {perms.map(([perm, roles]) => (
+              <TableRow key={perm} className="border-b hover:bg-transparent">
+                <TableCell className="font-mono text-xs">{perm}</TableCell>
+                {ROLE_LIST.map((r) => (
+                  <TableCell key={r} className="text-center">
+                    {roles.includes(r) ? (
+                      <span className="text-success" aria-label="允许">
+                        ✔
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground" aria-label="不允许">
+                        ·
+                      </span>
+                    )}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </section>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">{form.id == null ? "新增员工" : `编辑员工 ${form.display_name}`}</DialogTitle>
+            <DialogDescription className="text-xs">
+              登录名唯一，停用后不能再用该身份制单，但历史留痕保持不变。新员工首次登录用装机初始密码，进去后被强制改密，此后只有本人知道。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              登录名 *
+              <Input value={form.username} onChange={(e) => patch({ username: e.target.value })} className="tnum text-sm" disabled={form.id != null} />
+            </Label>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              姓名 *
+              <Input value={form.display_name} onChange={(e) => patch({ display_name: e.target.value })} className="text-sm" />
+            </Label>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              岗位
+              <Choose
+                aria-label="岗位"
+                value={form.role}
+                onChange={(v) => patch({ role: v as Role })}
+                options={ROLE_LIST.map((r) => ({ value: r, label: ROLE[r] }))}
+              />
+            </Label>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              电话
+              <Input value={form.phone} onChange={(e) => patch({ phone: e.target.value })} className="tnum text-sm" />
+            </Label>
+            <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="在职" />
+              在职
+            </Label>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              取消
+            </Button>
+            <Button
+              disabled={!form.username.trim() || !form.display_name.trim() || save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? "保存中…" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -382,11 +584,11 @@ function AuditSection() {
         </Label>
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
           起始日
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 text-sm" aria-label="留痕起始日" />
+          <DatePicker value={from} onChange={(v) => setFrom(v)} className="w-auto" aria-label="留痕起始日" />
         </Label>
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
           截止日
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 text-sm" aria-label="留痕截止日" />
+          <DatePicker value={to} onChange={(v) => setTo(v)} className="w-auto" aria-label="留痕截止日" />
         </Label>
         <div className="flex gap-2 pb-0.5">
           <Button size="sm" variant="outline" onClick={() => window.print()}>
@@ -476,6 +678,34 @@ function BackupSection() {
     }
   }
 
+  /**
+   * 从 U 盘 / 移动硬盘导入一份副本。选择框只负责给出一个绝对路径，
+   * 合法性判定与落盘全在后端 `import_backup`（同名不同内容绝不覆盖、拷完重算校验和）。
+   * 导入成功后立刻替站长跑一次预检：拷回来的目的本来就是恢复，别让预检再等一次点击。
+   */
+  async function importFromOutside() {
+    setBusy("import");
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({
+        title: "选择要导入的备份副本",
+        multiple: false,
+        filters: [{ name: "磅房数据库备份", extensions: ["db"] }],
+      });
+      if (typeof picked !== "string") return; // 站长按了取消
+      const file = await systemApi.backupImport(picked);
+      setPreflight(await systemApi.restorePreflight(file.name));
+      setConfirmText("");
+      setRestored(null);
+      await refetch();
+      toast.success(`已导入 ${file.name}，预检结果见下方`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (!desktop) {
     return (
       <CallOut tone="warning" title="备份、校验、体检与恢复都要落文件系统，浏览器预览里没有">
@@ -545,6 +775,10 @@ function BackupSection() {
           <DownloadIcon />
           打开备份目录
         </Button>
+        <Button size="sm" variant="outline" disabled={!canBackup || busy !== null} onClick={() => void importFromOutside()}>
+          <FolderOpenIcon />
+          {busy === "import" ? "导入中…" : "从其它位置导入副本"}
+        </Button>
         <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void refetch()}>
           刷新
         </Button>
@@ -560,6 +794,22 @@ function BackupSection() {
           { label: "抓拍留存", value: `${captureDays} 天` },
           { label: "备份保留", value: `${status?.backups.length ?? 0} / ${keepCount} 份` },
           { label: "最近备份", value: status?.last_backup_at ? dateTime(status.last_backup_at) : "从未" },
+          {
+            label: "自动备份",
+            value: status ? (
+              <span
+                className={status.auto_last && !status.auto_last.ok ? "text-destructive" : undefined}
+                title={status.auto_last?.detail ?? "本次运行还没跑过第一轮到期检查"}
+              >
+                每 {status.auto_interval_days} 天
+                {status.auto_last
+                  ? ` · ${status.auto_last.ok ? "正常" : "上次检查失败"} · ${dateTime(status.auto_last.ran_at)}`
+                  : ""}
+              </span>
+            ) : (
+              "—"
+            ),
+          },
           { label: "库文件", value: <span className="tnum">{status ? fileSize(status.db_size_bytes) : "—"}</span> },
           { label: "WAL 未合并", value: <span className="tnum">{status ? fileSize(status.wal_size_bytes) : "—"}</span> },
           { label: "最早单据", value: <span className="tnum">{status?.doc_oldest_date ?? "—"}</span> },
@@ -629,7 +879,7 @@ function BackupSection() {
           {status.backups.map((b) => (
             <li key={b.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-sm">
               <span className="font-mono text-xs">{b.name}</span>
-              <ToneBadge tone={b.kind === "auto-migrate" ? "info" : b.kind === "pre-restore" ? "warning" : "neutral"}>{b.kind}</ToneBadge>
+              <ToneBadge tone={b.kind === "imported" || b.kind === "pre_migrate" ? "info" : b.kind === "pre-restore" ? "warning" : "neutral"}>{b.kind}</ToneBadge>
               <span className="text-xs text-muted-foreground">{dateTime(b.created_at)}</span>
               <span className="tnum text-xs">{fileSize(b.size_bytes)}</span>
               <ToneBadge tone={b.sha256_ok === true ? "success" : b.sha256_ok === false ? "danger" : "neutral"}>

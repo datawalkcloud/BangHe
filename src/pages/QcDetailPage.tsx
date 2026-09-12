@@ -18,11 +18,19 @@ import { DocTimeline } from "@/components/business/DocTimeline";
 import { QcDecisionBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
 import { useQuickDetail } from "@/components/business/QuickDetailSheet";
-import { PrintPreview } from "@/components/print/PrintPreview";
-import { QcReportSheet } from "@/components/print/sheets";
+import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "cn";
+
+/**
+ * 详情页只读明细表的紧凑排版（同 OrderDetailPage）。
+ * shadcn Table 默认的 h-12 表头 / p-3 单元格会把卡片撑开，这里用后代选择器压回
+ * py-1.5 / 无左右内边距 / 表头随行取色，特异性高于组件内置类，能稳定覆盖。
+ */
+const DETAIL_TABLE =
+  "border-collapse text-sm [&_th]:h-auto [&_th]:px-0 [&_th]:py-1.5 [&_th]:font-normal [&_th]:text-inherit [&_td]:px-0 [&_td]:py-1.5";
 
 export function QcDetailPage() {
   const { reportNo } = useParams({ from: "/qc/$reportNo" });
@@ -168,18 +176,18 @@ export function QcDetailPage() {
                 <ToneBadge tone="neutral">{GRADES.length} 档等级制</ToneBadge>
               </header>
               <div className="p-3">
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b text-xs text-muted-foreground">
-                      <th className="py-1.5 text-left font-normal">指标</th>
-                      <th className="py-1.5 text-right font-normal">{isRecheck ? "复检" : "实测"}</th>
-                      {isRecheck && <th className="py-1.5 text-right font-normal">首检</th>}
-                      {isRecheck && <th className="py-1.5 text-right font-normal">差值</th>}
-                      <th className="py-1.5 text-right font-normal">国标基准</th>
-                      <th className="py-1.5 text-right font-normal">结论</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table className={DETAIL_TABLE}>
+                  <TableHeader>
+                    <TableRow className="border-b text-xs text-muted-foreground hover:bg-transparent">
+                      <TableHead>指标</TableHead>
+                      <TableHead className="text-right">{isRecheck ? "复检" : "实测"}</TableHead>
+                      {isRecheck && <TableHead className="text-right">首检</TableHead>}
+                      {isRecheck && <TableHead className="text-right">差值</TableHead>}
+                      <TableHead className="text-right">国标基准</TableHead>
+                      <TableHead className="text-right">结论</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {report.indicators.map((it) => {
                       const meta = INDICATORS[it.code];
                       const fmt = (v: number | null, unit: string) =>
@@ -200,21 +208,21 @@ export function QcDetailPage() {
                         before && before.value_num != null && it.value_num != null ? it.value_num - before.value_num : null;
                       const std = meta?.std;
                       return (
-                        <tr key={it.code} className={cn("border-b last:border-0", it.over_std === 1 && "bg-warning-bg")}>
-                          <td className="py-1.5">{meta?.name ?? it.name}</td>
-                          <td className={cn("tnum py-1.5 text-right", it.over_std === 1 && "font-medium text-warning")}>{shown}</td>
-                          {isRecheck && <td className="tnum py-1.5 text-right text-muted-foreground">{beforeShown ?? "—"}</td>}
+                        <TableRow key={it.code} className={cn("border-b hover:bg-transparent", it.over_std === 1 && "bg-warning-bg")}>
+                          <TableCell>{meta?.name ?? it.name}</TableCell>
+                          <TableCell className={cn("tnum text-right", it.over_std === 1 && "font-medium text-warning")}>{shown}</TableCell>
+                          {isRecheck && <TableCell className="tnum text-right text-muted-foreground">{beforeShown ?? "—"}</TableCell>}
                           {isRecheck && (
-                            <td className="tnum py-1.5 text-right text-xs">
+                            <TableCell className="tnum text-right text-xs">
                               {diff == null ? "—" : `${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${
                                 it.unit === "gL" ? `${Math.abs(diff)} g/L` : percent(Math.abs(diff), "")
                               }`}
-                            </td>
+                            </TableCell>
                           )}
-                          <td className="tnum py-1.5 text-right text-muted-foreground">
+                          <TableCell className="tnum text-right text-muted-foreground">
                             {meta?.unit === "text" ? "—" : std == null ? "—" : fmt(std, meta.unit)}
-                          </td>
-                          <td className="py-1.5 text-right text-xs">
+                          </TableCell>
+                          <TableCell className="text-right text-xs">
                             {it.unit === "text" ? (
                               <span className="text-muted-foreground">描述项</span>
                             ) : it.over_std === 1 ? (
@@ -222,12 +230,12 @@ export function QcDetailPage() {
                             ) : (
                               <span className="text-success">合格</span>
                             )}
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       );
                     })}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             </section>
           </div>
@@ -244,9 +252,13 @@ export function QcDetailPage() {
       </div>
 
       {station && (
-        <PrintPreview open={printOpen} onOpenChange={setPrintOpen} docType="quality_report" docNo={report.report_no}>
-          <QcReportSheet report={report} station={station} names={names} />
-        </PrintPreview>
+        <ReceiptPrintPreview
+          open={printOpen}
+          onOpenChange={setPrintOpen}
+          scenario="quality_report"
+          context={{ station, names, qc: report, reprint: true }}
+          docNo={report.report_no}
+        />
       )}
     </div>
   );

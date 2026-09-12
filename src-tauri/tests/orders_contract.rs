@@ -403,10 +403,10 @@ fn qc_recheck_chain_and_reject_flow() {
     assert_eq!(load_order_full(&conn, &no).unwrap().unwrap().status, "qc_done", "拒收后复检接收要恢复流转");
 
     // qc_list 关键字（工作台按单号回查）
-    let rows = list_qc(&conn, &QcListOpts { only_pending: Some(false), keyword: Some(no.clone()) }).unwrap();
+    let rows = list_qc(&conn, &QcListOpts { keyword: Some(no.clone()) }).unwrap();
     assert!(rows.len() >= 3, "该单历次化验（含降级旧报告）都能按单号查到");
     assert!(rows.iter().all(|r| r.order_no == no));
-    assert!(list_qc(&conn, &QcListOpts { only_pending: Some(true), keyword: None }).unwrap().is_empty(), "onlyPending 与 mock 存根一致恒空");
+    // 待检队列已改由 qc::qc_queue 真接库，守卫在 tests/qc_contract.rs
 }
 
 #[test]
@@ -720,4 +720,166 @@ fn settlement_of_links_order_and_settled_order_cannot_be_voided() {
     let e = void_order(&conn, &actor(4, "cashier"), void_input(&no, "价格算错了想废了重开", 1)).unwrap_err();
     assert!(e.contains("红冲"), "已结算要指路红冲：{e}");
     assert_eq!(load_order_full(&conn, &no).unwrap().unwrap().status, "settled", "拒绝作废不得改坏状态");
+}
+
+// ---------------------------------------------------- 服务端不变式回归（P0 加固）
+
+/// 直接调 capture 拿 Result，用于断言"该被拦下"的路径（`capture_gross/tare` 会 panic）。
+fn cap(
+    conn: &Connection,
+    no: &str,
+    wt: &str,
+    w: i64,
+    ov: Option<TareOverride>,
+) -> Result<Option<banghe_lib::orders::WeighOrder>, String> {
+    capture(
+        conn,
+        &actor(2, "weigher"),
+        CaptureInput {
+            order_no: no.into(),
+            weigh_type: wt.into(),
+            weight_01kg: w,
+            source: "scale".into(),
+            operator_id: None,
+            raw_frame: None,
+            has_photo: Some(false),
+            tare_override: ov,
+        },
+    )
+}
+
+/// 以一条基准 SettleInput 起步，闭包按需改字段后交给 settle，返回 Result 以便断言报错。
+fn settle_full(
+    conn: &Connection,
+    no: &str,
+    f: impl FnOnce(&mut SettleInput),
+) -> Result<Option<banghe_lib::orders::SettleResult>, String> {
+    let mut input = SettleInput {
+        order_no: no.into(),
+        price_fen_per_ton: 240000,
+        package_deduct_01kg: 0,
+        moisture_deduct_01kg: 0,
+        impurity_deduct_01kg: 0,
+        other_deduct_01kg: 0,
+        deduction_fee_fen: 0,
+        pay_now: false,
+        payment_method: "cash".into(),
+        settler_id: None,
+        price_list_id: Some(latest_price(conn)),
+        price_override_reason: None,
+        party_signed: Some(true),
+    };
+    f(&mut input);
+    settle(conn, &actor(4, "cashier"), input)
+}
+
+fn xm_id(conn: &Connection) -> i64 {
+    conn.query_row("SELECT id FROM grain_variety WHERE code='XM'", [], |r| r.get(0)).unwrap()
+}
+
+#[test]
+fn capture_rejects_nonpositive_weight() {
+    let conn = db();
+    ensure_users(&conn);
+    let p = new_party(&conn, "壬", "341204199301272029");
+    let no = create(&conn, p, xm_id(&conn));
+    let e = cap(&conn, &no, "gross", 0, None).unwrap_err();
+    assert!(e.contains("大于 0"), "0 读数必须在服务端就被拒（P0-2）：{e}");
+}
+
+#[test]
+fn capture_rejects_tare_not_below_gross() {
+    let conn = db();
+    ensure_users(&conn);
+    seed_price(&conn, xm_id(&conn));
+    let p = new_party(&conn, "癸", "341204199301272030");
+    let no = create(&conn, p, xm_id(&conn));
+    capture_gross(&conn, &no, 80000);
+    // 皮重(90000) 高于 毛重(80000)：去掉 abs() 后应报错，而不是洗成 10000 的"合法"净重
+    let e = cap(&conn, &no, "tare", 90000, None).unwrap_err();
+    assert!(e.contains("毛重") || e.contains("净重"), "皮≥毛要拦下（C4）：{e}");
+    let o = load_order_full(&conn, &no).unwrap().unwrap();
+    assert!(o.net_weight_01kg.is_none(), "拦下不得写入净重，也不得留下已采用轨迹");
+}
+
+#[test]
+fn capture_reweigh_keeps_single_adopted_per_type() {
+    let conn = db();
+    ensure_users(&conn);
+    let p = new_party(&conn, "辛", "341204199301272028");
+    let no = create(&conn, p, xm_id(&conn));
+    capture_gross(&conn, &no, 200000);
+    cap(&conn, &no, "gross", 210000, None).unwrap(); // 复称：同类型再取一次
+
+    let oid: i64 = conn.query_row("SELECT id FROM weigh_order WHERE order_no=?1", params![no], |r| r.get(0)).unwrap();
+    let adopted: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM weigh_record WHERE order_id=?1 AND weigh_type='gross' AND is_adopted=1",
+        params![oid],
+        |r| r.get(0),
+    )
+    .unwrap();
+    assert_eq!(adopted, 1, "复称后同类只能有一条已采用（P0-3）");
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM weigh_record WHERE order_id=?1", params![oid], |r| r.get(0))
+        .unwrap();
+    assert_eq!(total, 2, "旧轨迹保留做留痕，只是降级为未采用");
+    assert_eq!(load_order_full(&conn, &no).unwrap().unwrap().gross_weight_01kg, Some(210000), "头值取最新采用值");
+}
+
+#[test]
+fn capture_tare_tolerance_gate_enforced_server_side() {
+    let conn = db();
+    ensure_users(&conn);
+    let p = new_party(&conn, "己", "341204199301272026");
+    let no = create(&conn, p, xm_id(&conn));
+    capture_gross(&conn, &no, 200000);
+    capture_tare(&conn, &no, 100000, None); // 首次无基准 → 放行并记为最近皮重
+
+    // 第二次皮重偏离基准 30%（远超 3% 容差），未带授权 → 服务端必须拦下（补 C2 的 fail-open）
+    let e = cap(&conn, &no, "tare", 130000, None).unwrap_err();
+    assert!(e.contains("容差"), "超差皮重要指路授权：{e}");
+
+    // 带在职站长授权后放行
+    let ok = cap(&conn, &no, "tare", 130000, Some(TareOverride { by: 1, reason: "车上加了备胎，站长现场确认".into() }));
+    assert!(ok.is_ok(), "站长授权的异常皮重应放行：{ok:?}");
+
+    // 异常皮重不得污染基准：last_tare 仍是 100000
+    let base: i64 = conn.query_row("SELECT last_tare_01kg FROM party WHERE id=?1", params![p], |r| r.get(0)).unwrap();
+    assert_eq!(base, 100000, "超差放行的皮重不得改写最近皮重基准");
+}
+
+#[test]
+fn settle_rejects_over_deduction_and_negative_payable() {
+    let conn = db();
+    ensure_users(&conn);
+    seed_price(&conn, xm_id(&conn));
+    let p = new_party(&conn, "庚", "341204199301272027");
+    let no = create(&conn, p, xm_id(&conn));
+    capture_gross(&conn, &no, 150000);
+    capture_tare(&conn, &no, 50000, None); // 净重 = 100000 (0.1kg)
+
+    // 扣量合计超过净重：以前静默 Ok(None)，现在必须明确报错（P0-5）
+    let e = settle_full(&conn, &no, |i| i.other_deduct_01kg = 120000).unwrap_err();
+    assert!(e.contains("结算重量"), "超扣要报结算重量不为正：{e}");
+
+    // 扣款大于货款 → 应付为负必须拒（P0-5）
+    let e2 = settle_full(&conn, &no, |i| i.deduction_fee_fen = 999_999_999).unwrap_err();
+    assert!(e2.contains("应付"), "扣款超货款要报应付不得为负：{e2}");
+
+    // 合法边界仍应通过：全额净重、无扣款
+    let ok = settle_full(&conn, &no, |_| {});
+    assert!(ok.is_ok(), "正常结算不应被新闸门误伤：{ok:?}");
+}
+
+#[test]
+fn list_parties_supports_type_and_keyword_together() {
+    let conn = db();
+    new_party(&conn, "甲张", "341204199301272031");
+    new_party(&conn, "乙李", "341204199301272032");
+    // 关键字 + 分类同时给：曾因 match 落到 query_map([]) 而绑定数不符直接报错（C8）
+    let hit = list_parties(&conn, "甲", Some("farmer")).expect("分类+关键字联合检索不应报错");
+    assert_eq!(hit.len(), 1);
+    assert_eq!(hit[0].name, "甲张");
+    let none = list_parties(&conn, "王", Some("farmer")).expect("无匹配同样应正常返回空集合");
+    assert!(none.is_empty());
 }

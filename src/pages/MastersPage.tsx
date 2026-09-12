@@ -1,9 +1,13 @@
 /**
  * 基础档案（05 §3 `/masters/$section`）。
  *
- * 五个分区共用一个页面壳，切片的导航在标题下方，链接可直接贴给同事。
- * 之所以不做成五个路由文件：它们的骨架（列表 + 抽屉表单 + 权限闸门）完全同构，
- * 分开五份只会让"改一处交互要改五个文件"。
+ * 四个分区共用一个页面壳，切片的导航在标题下方，链接可直接贴给同事。
+ * 之所以不做成四个路由文件：它们的骨架（列表 + 抽屉表单 + 权限闸门）完全同构，
+ * 分开四份只会让"改一处交互要改四个文件"。
+ *
+ * 「员工与岗位」不在这里：它是账号与权限的档案，改动会直接影响谁能登录、谁可见什么，
+ * 与操作审计、登录与权限属同一件事，因此挪到 `/system/staff` 与它们并列。
+ * 本页只剩下与业务作业直接相关的品种、仓房、价目、参数——这些改了只影响磅单怎么打。
  *
  * 权限：档案写入一律要 `setting.write` 或 `price.edit`，
  * 页面上的表现是按钮 disabled + 旁边一句话说明当前岗位为什么不能改，
@@ -12,39 +16,39 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, Navigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LockIcon, PlusIcon } from "lucide-react";
+import { LockIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import type { AppSetting, GrainVariety, PriceList, UserAccount, Warehouse } from "@/mock/types";
-import type { Grade, Role } from "@/lib/constants";
-import { GRADES, INDICATORS, ROLE } from "@/lib/constants";
-import { density, fromPercent, orDash, percent, price as fmtPrice, fromYuanPerTon, todayISO, weight } from "@/lib/format";
+import type { AppSetting, GrainVariety, PriceList, Warehouse } from "@/mock/types";
+import type { Grade } from "@/lib/constants";
+import { GRADES, INDICATORS } from "@/lib/constants";
+import { density, fromPercent, percent, price as fmtPrice, fromYuanPerTon, todayISO, weight } from "@/lib/format";
 import { needsPrintVerify, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import { SETTINGS_GROUP } from "@/lib/settings-catalog";
 import { useStaff, useVarieties, useWarehouses, usePrices, useSettings } from "@/hooks/useLookups";
-import { PERMISSIONS, actorId, useActor, useSession } from "@/store/session";
+import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge } from "@/components/business/badges";
 import { WeightField } from "@/components/business/NumField";
-import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
+import { CallOut, EmptyState, InfoGrid, PageHeader, SectionBar } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 
-export type MastersSection = "varieties" | "warehouses" | "prices" | "settings" | "staff";
+export type MastersSection = "varieties" | "warehouses" | "prices" | "settings";
 
 const SECTIONS: { key: MastersSection; label: string }[] = [
   { key: "varieties", label: "品种与指标" },
   { key: "warehouses", label: "仓房与货位" },
   { key: "prices", label: "收购价目表" },
   { key: "settings", label: "站点参数" },
-  { key: "staff", label: "员工与岗位" },
 ];
 
 export function MastersPage({ section }: { section: MastersSection }) {
@@ -81,7 +85,6 @@ export function MastersPage({ section }: { section: MastersSection }) {
         {section === "warehouses" && <WarehousesSection />}
         {section === "prices" && <PricesSection />}
         {section === "settings" && <SettingsSection />}
-        {section === "staff" && <StaffSection />}
       </div>
     </div>
   );
@@ -160,6 +163,7 @@ function VarietiesSection() {
   const editable = can("setting.write");
 
   const [open, setOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<GrainVariety | null>(null);
   const [form, setForm] = useState<VarietyForm>(() => varietyForm());
   const patch = (p: Partial<VarietyForm>) => setForm((f) => ({ ...f, ...p }));
 
@@ -188,6 +192,17 @@ function VarietiesSection() {
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
     },
     onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  });
+
+  const del = useMutation({
+    mutationFn: (id: number) => api.deleteVariety({ id, operator_id: actorId() }),
+    onSuccess: (v) => {
+      toast.success(`已删除品种「${v.name}」`);
+      setPendingDelete(null);
+      void queryClient.invalidateQueries({ queryKey: ["varieties"] });
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+    },
+    onError: (e: Error) => toast.error(`删除失败：${e.message}`),
   });
 
   const columns: Column<GrainVariety>[] = [
@@ -220,18 +235,32 @@ function VarietiesSection() {
       key: "op",
       header: "操作",
       cell: (v) => (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!editable}
-          onClick={(e) => {
-            e.stopPropagation();
-            setForm(varietyForm(v));
-            setOpen(true);
-          }}
-        >
-          编辑
-        </Button>
+        <span className="flex items-center gap-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setForm(varietyForm(v));
+              setOpen(true);
+            }}
+          >
+            编辑
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="text-destructive hover:text-destructive"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setPendingDelete(v);
+            }}
+          >
+            <Trash2Icon /> 删除
+          </Button>
+        </span>
       ),
     },
   ];
@@ -341,6 +370,36 @@ function VarietiesSection() {
             </Button>
             <Button disabled={errors.length > 0 || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? "保存中…" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingDelete !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingDelete(null);
+        }}
+      >
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">删除品种</DialogTitle>
+            <DialogDescription className="text-xs">
+              将彻底移除
+              {pendingDelete ? <span className="font-medium"> {pendingDelete.name} · {pendingDelete.code}</span> : null}
+              。已被价目表或历史磅单引用过的品种不可删除，只能「停用」（在编辑里关掉启用，留档保追溯）。此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={del.isPending}
+              onClick={() => pendingDelete && del.mutate(pendingDelete.id)}
+            >
+              {del.isPending ? "删除中…" : "确认删除"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -470,15 +529,17 @@ function WarehousesSection() {
         ) : (
           <span className="flex flex-wrap items-center gap-1">
             {w.slots.map((s) => (
-              <button
+              <Button
                 key={s.id}
                 type="button"
+                variant="outline"
+                size="xs"
                 disabled={!editable}
                 title={editable ? "点击改名或停用" : undefined}
                 className={
                   s.is_active === 1
-                    ? "border bg-muted/40 px-1.5 py-0.5 text-xs hover:bg-muted disabled:hover:bg-muted/40"
-                    : "border border-dashed px-1.5 py-0.5 text-xs text-muted-foreground line-through"
+                    ? "h-auto rounded-none bg-muted/40 px-1.5 py-0.5 text-xs hover:bg-muted"
+                    : "h-auto rounded-none border-dashed px-1.5 py-0.5 text-xs text-muted-foreground line-through"
                 }
                 onClick={(e) => {
                   e.stopPropagation();
@@ -494,7 +555,7 @@ function WarehousesSection() {
                 }}
               >
                 {s.label || s.code}
-              </button>
+              </Button>
             ))}
           </span>
         ),
@@ -549,7 +610,7 @@ function WarehousesSection() {
   return (
     <div className="flex flex-col gap-3">
       <SectionBar
-        note="仓房与货位是粮食去向的落点：一张磅单必须能回答「这批粮压在哪个货位」。停用只挡住新单，历史磅单上的货位照旧可查。"
+        note="仓房与货位是磅单「入仓去向」的备选项：多数站点制单时不登记，留空照样取号制单；只有要按去向统计的站点才需要维护到位。停用只挡住新单，历史磅单上的货位照旧可查。"
         action={
           <Button
             size="sm"
@@ -722,7 +783,6 @@ interface PriceForm {
   yuanPerTon: string;
   from: string;
   to: string;
-  basis: string;
   remark: string;
 }
 
@@ -752,7 +812,6 @@ function PricesSection() {
       yuanPerTon: "",
       from: today,
       to: `${today.slice(0, 4)}-12-31`,
-      basis: "",
       remark: "",
     };
   }
@@ -767,7 +826,7 @@ function PricesSection() {
         price_fen_per_ton: fromYuanPerTon(form.yuanPerTon),
         effective_from: form.from,
         effective_to: form.to,
-        basis: form.basis.trim(),
+        basis: "",
         remark: form.remark.trim() || null,
       }),
     onSuccess: (p) => {
@@ -785,7 +844,6 @@ function PricesSection() {
   if (!form.varietyId) errors.push("请选择品种");
   if (!(Number(form.yuanPerTon) > 0)) errors.push("单价必须是大于 0 的元/吨");
   if (form.from > form.to) errors.push("生效起始日不能晚于截止日");
-  if (form.basis.trim().length < 4) errors.push("定价依据必填（如「省内小麦收购指导价的公告文号」）");
 
   const columns: Column<PriceList>[] = [
     {
@@ -821,7 +879,6 @@ function PricesSection() {
       header: "当前生效",
       cell: (p) => (today >= p.effective_from && today <= p.effective_to ? <ToneBadge tone="success">生效中</ToneBadge> : <span className="text-xs text-muted-foreground">—</span>),
     },
-    { key: "basis", header: "定价依据", cell: (p) => <span className="block max-w-[18rem] truncate text-xs">{orDash(p.basis)}</span> },
     { key: "made", header: "制单", cell: (p) => <span className="text-xs">{staffName(p.made_by)}</span> },
     { key: "approved", header: "审批", cell: (p) => <span className="text-xs">{staffName(p.approved_by)}</span> },
     {
@@ -841,7 +898,6 @@ function PricesSection() {
               yuanPerTon: String(p.price_fen_per_ton / 100),
               from: p.effective_from,
               to: p.effective_to,
-              basis: p.basis,
               remark: p.remark ?? "",
             });
             setOpen(true);
@@ -914,20 +970,16 @@ function PricesSection() {
                 </span>
               )}
             </Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:col-span-2">
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 生效起始
-                <Input type="date" value={form.from} onChange={(e) => patch({ from: e.target.value })} className="tnum text-sm" />
+                <DatePicker value={form.from} onChange={(v) => patch({ from: v })} className="w-full tnum" />
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 生效截止
-                <Input type="date" value={form.to} onChange={(e) => patch({ to: e.target.value })} className="tnum text-sm" />
+                <DatePicker value={form.to} onChange={(v) => patch({ to: v })} className="w-full tnum" />
               </Label>
             </div>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
-              定价依据 *
-              <Input value={form.basis} onChange={(e) => patch({ basis: e.target.value })} placeholder="文件号 / 市场报价来源" className="text-sm" />
-            </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               备注
               <Input value={form.remark} onChange={(e) => patch({ remark: e.target.value })} className="text-sm" />
@@ -1075,229 +1127,7 @@ function SettingRow({ s, onSave, busy }: { s: AppSetting; onSave: (value: string
   );
 }
 
-/* ---------------------------------------------------------------- 员工 */
-
-const ROLE_LIST = Object.keys(ROLE) as Role[];
-
-interface StaffForm {
-  id: number | null;
-  username: string;
-  display_name: string;
-  role: Role;
-  phone: string;
-  active: boolean;
-}
-
-function StaffSection() {
-  const { data: rows = [] } = useStaff();
-  const queryClient = useQueryClient();
-  const actor = useActor();
-  const can = useSession((s) => s.can);
-  const editable = can("setting.write");
-
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState<StaffForm>({ id: null, username: "", display_name: "", role: "weigher", phone: "", active: true });
-  const patch = (p: Partial<StaffForm>) => setForm((f) => ({ ...f, ...p }));
-
-  const save = useMutation({
-    mutationFn: () =>
-      api.saveStaff({
-        id: form.id ?? undefined,
-        operator_id: actorId(),
-        username: form.username.trim(),
-        display_name: form.display_name.trim(),
-        role: form.role,
-        phone: form.phone.trim(),
-        is_active: form.active ? 1 : 0,
-      }),
-    onSuccess: (u) => {
-      toast.success(`员工「${u.display_name}」已保存`);
-      setOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ["staff"] });
-      void queryClient.invalidateQueries({ queryKey: ["audits"] });
-    },
-    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
-  });
-
-  const columns: Column<UserAccount>[] = [
-    { key: "username", header: "登录名", cell: (u) => <span className="tnum">{u.username}</span>, sortValue: (u) => u.username },
-    {
-      key: "display_name",
-      header: "姓名",
-      cell: (u) => (
-        <span className="flex items-center gap-1.5">
-          <span className="font-medium">{u.display_name}</span>
-          {actor?.id === u.id && <ToneBadge tone="info">当前值班</ToneBadge>}
-        </span>
-      ),
-      sortValue: (u) => u.display_name,
-    },
-    { key: "role", header: "岗位", cell: (u) => ROLE[u.role], sortValue: (u) => u.role },
-    { key: "phone", header: "电话", cell: (u) => <span className="tnum">{orDash(u.phone)}</span> },
-    {
-      key: "last",
-      header: "最近使用",
-      cell: (u) => <span className="tnum text-xs text-muted-foreground">{u.last_login_at ? u.last_login_at.slice(0, 16) : "从未"}</span>,
-    },
-    {
-      key: "active",
-      header: "状态",
-      cell: (u) => (u.is_active === 1 ? <ToneBadge tone="success">在职</ToneBadge> : <ToneBadge tone="neutral">停用</ToneBadge>),
-    },
-    {
-      key: "op",
-      header: "操作",
-      cell: (u) => (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!editable}
-          onClick={(e) => {
-            e.stopPropagation();
-            setForm({
-              id: u.id,
-              username: u.username,
-              display_name: u.display_name,
-              role: u.role,
-              phone: u.phone,
-              active: u.is_active === 1,
-            });
-            setOpen(true);
-          }}
-        >
-          编辑
-        </Button>
-      ),
-    },
-  ];
-
-  const perms = Object.entries(PERMISSIONS);
-
-  return (
-    <div className="flex flex-col gap-3">
-      <SectionBar
-        note="身份来源已从「选择操作员」换成密码登录：制单 / 称重 / 化验 / 结算的留痕一律署名当前登录人，署名机制未变，只是拿人的入口换了。"
-        action={
-          <Button
-            size="sm"
-            disabled={!editable}
-            onClick={() => {
-              setForm({ id: null, username: "", display_name: "", role: "weigher", phone: "", active: true });
-              setOpen(true);
-            }}
-          >
-            {editable ? <PlusIcon /> : <LockIcon />}
-            新增员工
-          </Button>
-        }
-      />
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(u) => u.id}
-        rowClassName={(u) => (u.is_active === 0 ? "text-muted-foreground" : undefined)}
-        empty={<EmptyState title="还没有员工档案" description="至少要有一名站长，否则授权类操作无法完成。" />}
-      />
-
-      <section className="border bg-card">
-        <header className="border-b px-3 py-2 text-sm font-semibold">
-          岗位权限矩阵
-          <span className="ml-2 text-xs font-normal text-muted-foreground">✔ 表示该岗位可直接执行；留空的必须站长授权</span>
-        </header>
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b text-xs text-muted-foreground">
-                <th className="px-3 py-1.5 text-left font-normal">权限</th>
-                {ROLE_LIST.map((r) => (
-                  <th key={r} className="px-3 py-1.5 text-center font-normal">
-                    {ROLE[r]}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {perms.map(([perm, roles]) => (
-                <tr key={perm} className="border-b last:border-0">
-                  <td className="px-3 py-1.5 font-mono text-xs">{perm}</td>
-                  {ROLE_LIST.map((r) => (
-                    <td key={r} className="px-3 py-1.5 text-center">
-                      {roles.includes(r) ? (
-                        <span className="text-success" aria-label="允许">
-                          ✔
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground" aria-label="不允许">
-                          ·
-                        </span>
-                      )}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle className="text-sm">{form.id == null ? "新增员工" : `编辑员工 ${form.display_name}`}</DialogTitle>
-            <DialogDescription className="text-xs">
-              登录名唯一，停用后不能再用该身份制单，但历史留痕保持不变。新员工首次登录用装机初始密码，进去后被强制改密，此后只有本人知道。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <Field label="登录名 *">
-              <Input value={form.username} onChange={(e) => patch({ username: e.target.value })} className="tnum text-sm" disabled={form.id != null} />
-            </Field>
-            <Field label="姓名 *">
-              <Input value={form.display_name} onChange={(e) => patch({ display_name: e.target.value })} className="text-sm" />
-            </Field>
-            <Field label="岗位">
-              <Choose
-                aria-label="岗位"
-                value={form.role}
-                onChange={(v) => patch({ role: v as Role })}
-                options={ROLE_LIST.map((r) => ({ value: r, label: ROLE[r] }))}
-              />
-            </Field>
-            <Field label="电话">
-              <Input value={form.phone} onChange={(e) => patch({ phone: e.target.value })} className="tnum text-sm" />
-            </Field>
-            <Label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="在职" />
-              在职
-            </Label>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setOpen(false)}>
-              取消
-            </Button>
-            <Button
-              disabled={!form.username.trim() || !form.display_name.trim() || save.isPending}
-              onClick={() => save.mutate()}
-            >
-              {save.isPending ? "保存中…" : "保存"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
 /* ---------------------------------------------------------------- 公共壳 */
-
-function SectionBar({ note, action }: { note: string; action?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <p className="min-w-[16rem] flex-1 text-xs text-muted-foreground">{note}</p>
-      {action}
-    </div>
-  );
-}
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (

@@ -10,14 +10,15 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { DownloadIcon } from "lucide-react";
+import { DownloadIcon, PrinterIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { PaymentRecord } from "@/mock/types";
 import { PAYMENT_METHOD, TONE_DOT } from "@/lib/constants";
 import { dateTime, money, orDash, shiftDay, todayISO } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
-import { useSetting, useStaffNames } from "@/hooks/useLookups";
+import { useSetting, useStaffNames, useStation } from "@/hooks/useLookups";
+import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useSession } from "@/store/session";
 import { BarList, StatCard } from "@/components/business/StatCard";
@@ -26,12 +27,14 @@ import { ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { cn } from "cn";
 
 export function PaymentsPage() {
   const names = useStaffNames();
+  const { data: station } = useStation();
+  const [printPayment, setPrintPayment] = useState<PaymentRecord | null>(null);
   const can = useSession((s) => s.can);
   /** 库里存小时（72 = 3 天），页面与 analytics 的 due_date 都按天算，除一次就够 */
   const dueDays = useSetting("payment_due_warn_hours").num / 24;
@@ -96,6 +99,15 @@ export function PaymentsPage() {
         key: "reversed",
         header: "状态",
         cell: (p) => (p.reversed === 1 ? <ToneBadge tone="danger">已冲销</ToneBadge> : <span className="text-xs text-muted-foreground">有效</span>),
+      },
+      {
+        key: "print",
+        header: "小票",
+        cell: (p) => (
+          <Button size="xs" variant="ghost" disabled={p.reversed === 1} onClick={() => setPrintPayment(p)} aria-label="打印付款小票">
+            <PrinterIcon />
+          </Button>
+        ),
       },
     ],
     [names],
@@ -228,11 +240,11 @@ export function PaymentsPage() {
           <div className="flex flex-wrap items-end gap-2 border bg-muted/20 p-2.5">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               起始日
-              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 w-40 text-sm" />
+              <DatePicker value={from} onChange={(v) => setFrom(v)} className="w-40" />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               截止日
-              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 w-40 text-sm" />
+              <DatePicker value={to} onChange={(v) => setTo(v)} className="w-40" />
             </Label>
             <div className="flex gap-1 pb-1">
               <Button size="xs" variant="ghost" onClick={() => { setFrom(todayISO()); setTo(todayISO()); }}>
@@ -268,6 +280,16 @@ export function PaymentsPage() {
               </span>
             }
           />
+
+          {station && printPayment && (
+            <ReceiptPrintPreview
+              open={!!printPayment}
+              onOpenChange={(v) => !v && setPrintPayment(null)}
+              scenario="payment_receipt"
+              context={{ station, names, payment: printPayment, reprint: true }}
+              docNo={printPayment.pay_no}
+            />
+          )}
         </div>
       </div>
     </div>

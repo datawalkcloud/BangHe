@@ -21,14 +21,16 @@ import { PARTY_TYPE, PAYMENT_METHOD, ROLE, TONE_DOT, WEIGHT_SOURCE } from "@/lib
 import { maskIdCard, money, orDash, percent, price as fmtPrice, ratioText, shiftDay, todayISO, weight } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
 import { useHotkey } from "@/hooks/useHotkey";
+import { useStation, useStaffNames } from "@/hooks/useLookups";
 import { useSession } from "@/store/session";
+import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { BarList, MiniBars, RatioBar, SplitBar, StatCard } from "@/components/business/StatCard";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { cn } from "cn";
 
@@ -112,14 +114,14 @@ function RangeBar({
     <div className="flex flex-wrap items-end gap-2 border bg-muted/20 p-2.5">
       <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
         {single ? singleLabel : "起始日"}
-        <Input type="date" value={from} onChange={(e) => onChange(e.target.value, single ? e.target.value : to)} className="h-8 w-40 text-sm" />
+        <DatePicker value={from} onChange={(v) => onChange(v, single ? v : to)} className="w-40" />
       </Label>
       {!single && (
         <>
           <span className="pb-2 text-xs text-muted-foreground">至</span>
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
             截止日
-            <Input type="date" value={to} onChange={(e) => onChange(from, e.target.value)} className="h-8 w-40 text-sm" />
+            <DatePicker value={to} onChange={(v) => onChange(from, v)} className="w-40" />
           </Label>
         </>
       )}
@@ -200,6 +202,9 @@ function LedgerReport() {
   const [from, setFrom] = useState(shiftDay(todayISO(), -6));
   const [to, setTo] = useState(todayISO());
   const exportGuard = useExportGuard();
+  const { data: station } = useStation();
+  const names = useStaffNames();
+  const [ledgerPrint, setLedgerPrint] = useState(false);
 
   const { data = [], isPending } = useQuery({
     queryKey: ["report", "ledger", from, to],
@@ -341,7 +346,7 @@ function LedgerReport() {
         }}
         extra={
           <div className="ml-auto flex gap-2 pb-0.5">
-            <Button size="sm" variant="outline" onClick={printReport} disabled={data.length === 0}>
+            <Button size="sm" variant="outline" onClick={() => setLedgerPrint(true)} disabled={data.length === 0}>
               <PrinterIcon />
               打印
             </Button>
@@ -388,6 +393,16 @@ function LedgerReport() {
           </span>
         }
       />
+
+      {station && ledgerPrint && (
+        <ReceiptPrintPreview
+          open={ledgerPrint}
+          onOpenChange={setLedgerPrint}
+          scenario="ledger"
+          context={{ station, names, ledgerRows: data }}
+          docNo={`台账 ${from}_${to}`}
+        />
+      )}
     </div>
   );
 }
@@ -409,6 +424,9 @@ function DailyReportView() {
   const [date, setDate] = useState(todayISO());
   const exportGuard = useExportGuard();
   const { data, isPending } = useQuery({ queryKey: ["report", "daily", date], queryFn: () => api.reportDaily(date) });
+  const { data: station } = useStation();
+  const names = useStaffNames();
+  const [dailyPrint, setDailyPrint] = useState(false);
 
   const total = data?.total;
   const vsDay = delta(total?.net_01kg ?? 0, data?.prevDayNet_01kg ?? 0);
@@ -473,7 +491,7 @@ function DailyReportView() {
         onChange={(f) => setDate(f)}
         extra={
           <div className="ml-auto flex gap-2 pb-0.5">
-            <Button size="sm" variant="outline" onClick={printReport} disabled={!data || data.rows.length === 0}>
+            <Button size="sm" variant="outline" onClick={() => setDailyPrint(true)} disabled={!data || data.rows.length === 0}>
               <PrinterIcon />
               打印
             </Button>
@@ -533,6 +551,15 @@ function DailyReportView() {
             </section>
           </div>
         </>
+      )}
+      {station && dailyPrint && (
+        <ReceiptPrintPreview
+          open={dailyPrint}
+          onOpenChange={setDailyPrint}
+          scenario="daily_report"
+          context={{ station, names, daily: data }}
+          docNo={`日报 ${date}`}
+        />
       )}
     </div>
   );

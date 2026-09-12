@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CreditCardIcon, SearchIcon, UserRoundPlusIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, CreditCardIcon, SearchIcon, UserRoundPlusIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/mock/types";
@@ -79,23 +79,34 @@ export function IdentityPanel({
   const actor = useActor();
   const can = useSession((s) => s.can);
   const mockOff = useDeviceStore((s) => s.mockOff);
-  const reading = useDeviceStore((s) => s.idcard.reading);
-  const cardError = useDeviceStore((s) => s.idcard.error);
-  const read = useDeviceStore((s) => s.idcard.read);
-  const lastCard = useDeviceStore((s) => s.idcard.last);
+  const reading = useDeviceStore((s) => s.reader.idcard.reading);
+  const cardError = useDeviceStore((s) => s.reader.idcard.error);
+  const read = useDeviceStore((s) => s.reader.idcard.read);
+  const lastCard = useDeviceStore((s) => s.reader.idcard.last);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** 去向默认折起来：多数站点制单时不登记仓房/货位，不该占住磅员的主视线 */
+  const [destOpen, setDestOpen] = useState(false);
   const qc = useQueryClient();
 
   // 读卡结果回填：命中档案就带出姓名/证号/默认车牌，未命中提示去建档
   useEffect(() => {
     if (!lastCard) return;
-    const p = parties.find((x) => x.id === lastCard.party_id);
-    if (p) {
-      onDraft({ party: p, vehicleNo: draft.vehicleNo || p.default_vehicle_no || "" });
-      toast.success(`读卡命中档案：${p.name}`);
-    } else {
-      toast.warning(`读到证号 ${maskIdCard(lastCard.id_card_no)}，但系统内没有对应档案，请先建档`);
+    // 一律以证号为准：party_id 只是真机回查档案的附带结果，演示卡那个是 mock 序号，
+    // 拿到真库档案里按 id 兜底会命中另一个无关的人
+    const hit =
+      parties.find((x) => x.id_card_no.trim().toUpperCase() === lastCard.id_card_no) ??
+      (lastCard.real ? parties.find((x) => x.id === lastCard.party_id) : undefined);
+    if (!hit) {
+      toast.warning(`读到证号 ${maskIdCard(lastCard.id_card_no)}（${lastCard.name}），但系统内没有对应档案，请先建档`);
+      return;
     }
+    // 读卡不能成为绕过停用的后门：停用档案只挡新单，历史磅单照旧可查
+    if (hit.status !== "active") {
+      toast.error(`档案「${hit.name}」已停用，不能制单；要续收粮请到农户档案重新启用`);
+      return;
+    }
+    onDraft({ party: hit, vehicleNo: draft.vehicleNo || hit.default_vehicle_no || "" });
+    toast.success(`读卡命中档案：${hit.name}`);
     // draft.vehicleNo 不入依赖，否则每次输入都会重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastCard]);
@@ -144,7 +155,16 @@ export function IdentityPanel({
   const activeSlots = slots.filter((s) => s.is_active !== 0);
   const slotPool = activeSlots.filter((s) => draft.warehouseId == null || s.warehouse_id === draft.warehouseId);
 
+  /** 折叠行上的去向摘要：只选到货位时按货位反查仓房，保证摘要与展开后的下拉说的是同一处 */
+  const chosenSlot = activeSlots.find((s) => s.id === draft.slotId) ?? null;
+  const chosenWarehouse =
+    activeWarehouses.find((w) => w.id === draft.warehouseId) ??
+    activeWarehouses.find((w) => w.id === chosenSlot?.warehouse_id) ??
+    null;
+  const destination = [chosenWarehouse?.name, chosenSlot?.label].filter(Boolean).join(" / ");
+
   if (order) {
+    const orderDestination = [order.warehouse_name, order.slot_label].filter(Boolean).join(" / ");
     return (
       <Card size="sm" className="py-0 gap-0">
         <CardHeader className="border-b py-1 px-2.5">
@@ -169,9 +189,8 @@ export function IdentityPanel({
             </p>
             <p className="text-muted-foreground">
               车牌 <span className="tnum text-foreground">{order.vehicle_no ?? "—"}</span> · 去向{" "}
-              <span className="text-foreground">
-                {order.warehouse_name ?? "—"}
-                {order.slot_label ? ` / ${order.slot_label}` : ""}
+              <span className={orderDestination ? "text-foreground" : "text-muted-foreground"}>
+                {orderDestination || "未登记"}
               </span>
             </p>
             <p className="text-muted-foreground">
@@ -209,7 +228,12 @@ export function IdentityPanel({
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 p-2">
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button size="sm" onClick={() => void read()} disabled={reading || !can("order.create")} className="h-7 text-xs">
+          <Button
+            size="sm"
+            onClick={() => void read()}
+            disabled={reading || mockOff || !can("order.create")}
+            className="h-7 text-xs"
+          >
             <CreditCardIcon />
             {reading ? "读卡中…" : "读卡（F8）"}
           </Button>
@@ -218,6 +242,11 @@ export function IdentityPanel({
             搜档案
           </Button>
         </div>
+        {mockOff && (
+          <p className="text-xs text-muted-foreground">
+            外设总开关已关闭，读卡不可用：请点「搜档案」选人，或手工录入证号后新建档案。
+          </p>
+        )}
 
         <div className="border bg-muted/30 p-1.5">
           {draft.party ? (
@@ -262,31 +291,59 @@ export function IdentityPanel({
               className="h-7 text-xs"
             />
           </Label>
-          <div className="grid grid-cols-2 gap-1.5">
-            <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-              入库仓房
-              <Choose
-                aria-label="仓房"
-                value={String(draft.warehouseId ?? "")}
-                onChange={(v) => onDraft({ warehouseId: v ? Number(v) : null, slotId: null })}
-                options={[
-                  { value: "", label: "未定" },
-                  ...activeWarehouses.map((w) => ({ value: String(w.id), label: w.name })),
-                ]}
-              />
-            </Label>
-            <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-              货位
-              <Choose
-                aria-label="货位"
-                value={String(draft.slotId ?? "")}
-                onChange={(v) => onDraft({ slotId: v ? Number(v) : null })}
-                options={[
-                  { value: "", label: "未定" },
-                  ...slotPool.map((s) => ({ value: String(s.id), label: s.label })),
-                ]}
-              />
-            </Label>
+          {/* 去向是可选登记项：默认折成一行，不跟品种/车牌抢主视线；填了就把值亮在行上，
+              免得磅员不知道这单到底带没带去向 */}
+          <div className="border-t pt-1">
+            <button
+              type="button"
+              aria-expanded={destOpen}
+              onClick={() => setDestOpen((v) => !v)}
+              className="flex w-full items-center gap-1 text-left text-xs text-muted-foreground"
+            >
+              {destOpen ? (
+                <ChevronDownIcon className="size-3 shrink-0" />
+              ) : (
+                <ChevronRightIcon className="size-3 shrink-0" />
+              )}
+              <span className="shrink-0">入仓去向</span>
+              <span className={cn("min-w-0 flex-1 truncate", destination && "text-foreground")}>
+                {destination || "未定（可不填）"}
+              </span>
+              <span className="shrink-0">{destOpen ? "收起" : destination ? "修改" : "选填"}</span>
+            </button>
+            {destOpen && (
+              <>
+                <div className="mt-1 grid grid-cols-2 gap-1.5">
+                  <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                    仓房
+                    <Choose
+                      aria-label="仓房"
+                      value={String(draft.warehouseId ?? "")}
+                      onChange={(v) => onDraft({ warehouseId: v ? Number(v) : null, slotId: null })}
+                      options={[
+                        { value: "", label: "未定" },
+                        ...activeWarehouses.map((w) => ({ value: String(w.id), label: w.name })),
+                      ]}
+                    />
+                  </Label>
+                  <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                    货位
+                    <Choose
+                      aria-label="货位"
+                      value={String(draft.slotId ?? "")}
+                      onChange={(v) => onDraft({ slotId: v ? Number(v) : null })}
+                      options={[
+                        { value: "", label: "未定" },
+                        ...slotPool.map((s) => ({ value: String(s.id), label: s.label })),
+                      ]}
+                    />
+                  </Label>
+                </div>
+                <p className="pt-0.5 text-[11px] text-muted-foreground">
+                  需要按去向统计的站点才登记，留空照样能取号制单；此处选了只对本单生效，下一单沿用上一张的去向。
+                </p>
+              </>
+            )}
           </div>
           <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             备注

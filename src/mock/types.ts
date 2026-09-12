@@ -321,7 +321,7 @@ export interface PaymentRecord {
 
 export interface PrintLog {
   id: ID;
-  doc_type: "weigh_order" | "quality_report" | "settlement_voucher" | "ledger" | "daily_report";
+  doc_type: "weigh_order" | "quality_report" | "settlement_voucher" | "payment_receipt" | "ledger" | "daily_report";
   doc_no: string;
   copies: number;
   paper: PaperKind;

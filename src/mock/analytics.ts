@@ -98,12 +98,15 @@ export function buildDashboard(): Dashboard {
       href: "/workstation",
     });
   }
-  const offline = devices.filter((d) => d.is_enabled === 1 && d.last_status !== "online");
+  // 未检测（unknown）不算故障：读卡器在首次自动探测前本来就没有状态，别凭空多报一条红灯
+  const offline = devices.filter((d) => d.is_enabled === 1 && (d.last_status === "offline" || d.last_status === "error"));
   if (offline.length) {
     alerts.push({
       level: "danger",
       title: `${offline.length} 台设备离线或故障`,
-      detail: offline.map((d) => `${d.name}（${d.last_error ?? "未连接"}）`).join("；"),
+      detail: offline
+        .map((d) => `${d.name}（${d.last_error ?? (d.last_status === "offline" ? "未连接" : "状态异常")}）`)
+        .join("；"),
       action: "打开设备中心",
       href: "/devices",
     });

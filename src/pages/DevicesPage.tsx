@@ -14,25 +14,29 @@ import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CameraIcon,
+  CheckIcon,
   CreditCardIcon,
   DownloadIcon,
+  PencilIcon,
   PlayIcon,
   PlusIcon,
   PrinterIcon,
   SquareIcon,
+  Trash2Icon,
   UsbIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { nativePrinter, toNativePaper, type NativePaper, type NativePrinterDevice, type NativePrinterStatus } from "@/lib/native";
+import { nativeCamera, nativeIdcard, nativePrinter, nativeSerial, runningInTauri, toNativePaper, type NativeLocalCamera, type NativePaper, type NativePrinterDevice, type NativePrinterStatus, type NativeReaderStatus, type NativeWindowsPrinter } from "@/lib/native";
+import { MEDIUM, READER_DRIVER_IDS, readerFields, readerSpec } from "@/lib/card-reader";
 import { PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import type { DeviceConfig } from "@/mock/types";
 import type { DeviceKind, DeviceStatus, Tone } from "@/lib/constants";
 import { DEVICE_KIND, DEVICE_STATUS, ROLE, TONE_BOX, TONE_DOT, TONE_TEXT } from "@/lib/constants";
-import { orDash, weight } from "@/lib/format";
+import { maskIdCard, orDash, weight } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
 import { actorId, useActor, useSession } from "@/store/session";
-import { useDeviceStore, useScaleTick } from "@/store/device";
+import { useDeviceStore, useScaleTick, type ReaderProbe } from "@/store/device";
 import { DeviceStatusLight, ToneBadge } from "@/components/business/badges";
 import { Choose } from "@/components/business/Choose";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
@@ -41,10 +45,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "cn";
 
 /** 卡片的分组顺序：地磅排第一，它是现场最高频的故障源 */
 const KIND_ORDER: DeviceKind[] = ["scale", "idcard", "camera", "printer", "led", "cashbox", "signpad"];
+
+/** 串口类设备：port 不由静态 fields 维护，而走本机扫描 + 下拉选择 */
+const SERIAL_KINDS: DeviceKind[] = ["scale", "cashbox"];
 
 const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
   scale: UsbIcon,
@@ -78,19 +86,20 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
     prefix: "scale",
     drivers: ["yaohua_xk3190", "toledo", "mock"],
     fields: [
-      { key: "port", label: "串口", placeholder: "COM3", required: true },
       { key: "baud", label: "波特率", options: ["9600", "4800", "2400", "19200", "38400"] },
       { key: "frameFamily", label: "帧族", options: ["A", "B"] },
     ],
   },
   idcard: {
     prefix: "idcard",
-    drivers: ["bridge_exe", "mock"],
-    fields: [{ key: "exe", label: "桥接程序", placeholder: "idcard-bridge-x86.exe", required: true }],
+    // 驱动能读什么卡、该露哪些参数，由 lib/card-reader 的登记表说，这里只引用
+    drivers: READER_DRIVER_IDS,
+    fields: readerFields("routon_sdtapi"),
   },
   camera: {
     prefix: "cam",
-    drivers: ["hikvision_isapi", "dahua_cgi", "mock"],
+    // local_uvc = 本机 USB / 内置摄像头（Media Foundation 扫描回填）；hikvision_isapi / dahua_cgi 走内网 IP
+    drivers: ["local_uvc", "hikvision_isapi", "dahua_cgi", "mock"],
     fields: [
       { key: "host", label: "地址（IP）", placeholder: "192.168.1.64", required: true },
       { key: "user", label: "登录用户", placeholder: "weigh" },
@@ -109,7 +118,7 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
   cashbox: {
     prefix: "cash",
     drivers: ["mock", "escpos_trigger"],
-    fields: [{ key: "port", label: "串口", placeholder: "COM2", required: true }],
+    fields: [],
   },
   signpad: {
     prefix: "sign",
@@ -120,6 +129,31 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
     ],
   },
 };
+
+/** ESC/POS 直写 usbprint.sys、靠 VID/PID 寻址的两类驱动（与 devices.rs probe_plan、PrinterPanel 同源判据） */
+const ESCPOS_DRIVERS = ["escpos_usbprint", "raw_escpos"];
+
+/**
+ * 纸型候选随驱动收敛：热敏只给 80/58、A4 只给 A4、针式只给 241。
+ * 修的是旧表单把四类纸型恒并列、和所选驱动对不上的问题（"表单不合理"点之一）。
+ */
+function paperOptionsFor(driver: string): string[] {
+  if (ESCPOS_DRIVERS.includes(driver)) return ["thermal80", "thermal58"];
+  if (driver === "raw_escp") return ["dot241"];
+  return ["A4"];
+}
+
+/** 一栏关键参数随驱动动态化：打印机纸型、本机摄像头靠扫描回填（无需手填 host），其余照 DEVICE_SPEC 原样 */
+function fieldsFor(kind: DeviceKind, driver: string): FieldSpec[] {
+  if (kind === "printer") return [{ key: "paper", label: "纸型", options: paperOptionsFor(driver), required: true }];
+  if (kind === "camera") return driver === "local_uvc" ? [] : DEVICE_SPEC.camera.fields;
+  return DEVICE_SPEC[kind].fields;
+}
+
+/** 把 USB 的 VID/PID 数字写成台账里那种 `0x0483`，与 devices.rs parse_hex、print-guard parseHex 同口径 */
+function toHexId(n: number | null): string {
+  return n == null ? "" : `0x${n.toString(16).toUpperCase().padStart(4, "0")}`;
+}
 
 interface DeviceForm {
   kind: DeviceKind;
@@ -147,6 +181,10 @@ export function DevicesPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const active = devices.find((d) => d.code === selected) ?? devices.find((d) => d.is_default === 1) ?? devices[0] ?? null;
 
+  /** 分组视图：all 平铺全部设备；其余每个值对应一种设备类型，点该 tab 只看这一类 */
+  const [groupTab, setGroupTab] = useState<"all" | DeviceKind>("all");
+  const visibleDevices = groupTab === "all" ? devices : devices.filter((d) => d.kind === groupTab);
+
   const toggle = useMutation({
     mutationFn: (input: { code: string; enabled?: boolean; mock?: boolean }) =>
       input.enabled !== undefined ? api.setDeviceEnabled(input.code, input.enabled) : api.setDeviceMock(input.code, input.mock ?? false),
@@ -168,6 +206,48 @@ export function DevicesPage() {
 
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState<DeviceForm>(emptyDeviceForm);
+  /** 非空＝编辑这台已登记设备；null＝新增。编辑复用同一张表单，但编码与类型锁定 */
+  const [editing, setEditing] = useState<DeviceConfig | null>(null);
+  const isEdit = editing !== null;
+
+  /** 待确认删除的设备（错录清理）；null＝无。有业务历史的真删会被后端拒 */
+  const [pendingDelete, setPendingDelete] = useState<DeviceConfig | null>(null);
+
+  /** 「扫描本机打印机」两路结果：热敏直连（VID/PID）与系统队列（按名字）各存一份，null＝还没扫过 */
+  const [printScan, setPrintScan] = useState<{ escpos: NativePrinterDevice[]; queues: NativeWindowsPrinter[] } | null>(null);
+  const [scanState, setScanState] = useState<"idle" | "running" | "done">("idle");
+  const [scanHint, setScanHint] = useState<string | null>(null);
+
+  /** 本机读卡器探测结果（进程内单台 USB 设备，非多选）：connected + SAM 号 + 是否支持指纹 */
+  const [readerProbe, setReaderProbe] = useState<NativeReaderStatus | null>(null);
+  const [readerScanState, setReaderScanState] = useState<"idle" | "running" | "done">("idle");
+  const [readerHint, setReaderHint] = useState<string | null>(null);
+
+  /** 本机 USB / 内置摄像头列表（Media Foundation 扫描回填，可多选一） */
+  const [cameraScan, setCameraScan] = useState<NativeLocalCamera[] | null>(null);
+  const [camScanState, setCamScanState] = useState<"idle" | "running" | "done">("idle");
+  const [camHint, setCamHint] = useState<string | null>(null);
+
+  /** 本机串口列表（地磅、钱箱登记表单「串口」下拉的数据源） */
+  const [serialScan, setSerialScan] = useState<string[] | null>(null);
+  const [serialScanState, setSerialScanState] = useState<"idle" | "running" | "done">("idle");
+  const [serialHint, setSerialHint] = useState<string | null>(null);
+
+  /** 重开表单或换设备类型时清掉两类探测缓存，让它们各自重新扫一遍（现场可能刚插线/换机） */
+  function resetDeviceProbeScans() {
+    setPrintScan(null);
+    setScanState("idle");
+    setScanHint(null);
+    setReaderProbe(null);
+    setReaderScanState("idle");
+    setReaderHint(null);
+    setCameraScan(null);
+    setCamScanState("idle");
+    setCamHint(null);
+    setSerialScan(null);
+    setSerialScanState("idle");
+    setSerialHint(null);
+  }
 
   /** 同类型已有编码里最大的序号 +1，作为默认建议编码（仍可手改） */
   function nextCode(kind: DeviceKind): string {
@@ -181,6 +261,26 @@ export function DevicesPage() {
 
   function openAdd() {
     setForm({ ...emptyDeviceForm(), code: nextCode("scale") });
+    setEditing(null);
+    resetDeviceProbeScans();
+    setAddOpen(true);
+  }
+
+  /** 编辑已登记设备：把台账行灌回同一张表单，编码与类型随后锁定 */
+  function openEdit(d: DeviceConfig) {
+    const cfg: Record<string, string> = {};
+    for (const [k, v] of Object.entries(d.config)) cfg[k] = String(v);
+    setForm({
+      kind: d.kind,
+      code: d.code,
+      name: d.name,
+      driver: d.driver,
+      cfg,
+      isDefault: d.is_default === 1,
+      isMock: d.is_mock === 1,
+    });
+    setEditing(d);
+    resetDeviceProbeScans();
     setAddOpen(true);
   }
 
@@ -191,6 +291,27 @@ export function DevicesPage() {
   /** 换类型时同步重置建议编码、驱动候选与关键参数，避免带着上一类的不兼容字段提交 */
   function patchKind(kind: DeviceKind) {
     setForm((f) => ({ ...f, kind, code: nextCode(kind), driver: DEVICE_SPEC[kind].drivers[0], cfg: {} }));
+    resetDeviceProbeScans();
+  }
+
+  /** 换驱动时把纸型收敛到该驱动合法值：旧纸型不在新候选里就清掉，交给 fieldValue 回填驱动默认纸型 */
+  function patchDriver(driver: string) {
+    setForm((f) => {
+      const cfg = { ...f.cfg };
+      if (f.kind === "printer" && cfg.paper && !paperOptionsFor(driver).includes(cfg.paper)) delete cfg.paper;
+      if (f.kind === "camera") {
+        // 本机 ↔ 内网两套寻址互斥：切走就把另一套的键清掉，别让 local 的 deviceId 混进网络机的配置
+        if (driver === "local_uvc") {
+          delete cfg.host;
+          delete cfg.user;
+        } else {
+          delete cfg.transport;
+          delete cfg.deviceName;
+          delete cfg.deviceId;
+        }
+      }
+      return { ...f, driver, cfg };
+    });
   }
 
   function patchCfg(key: string, v: string) {
@@ -202,45 +323,326 @@ export function DevicesPage() {
     return (form.cfg[f.key] ?? (f.options ? f.options[0] : "")).trim();
   }
 
-  const addSpec = DEVICE_SPEC[form.kind];
+  /**
+   * 扫描本机打印机：usbprint 直连小票机 + Windows 打印队列两路并发。
+   * 浏览器预览问不到设备，明说一句并允许退回盲登记（之后在右侧面板配置），不编一组假设备。
+   */
+  async function runPrinterScan() {
+    setScanState("running");
+    setScanHint(null);
+    if (!runningInTauri()) {
+      setPrintScan(null);
+      setScanState("done");
+      setScanHint("浏览器预览问不到本机打印机。请用桌面端（npm run tauri dev）扫描，或先按纸型登记、之后在右侧面板配置。");
+      return;
+    }
+    const [e, q] = await Promise.all([nativePrinter.list(), nativePrinter.listQueues()]);
+    const escpos = e.available && !e.error ? (e.data ?? []) : [];
+    const queues = q.available && !q.error ? (q.data ?? []) : [];
+    setPrintScan({ escpos, queues });
+    setScanState("done");
+    const errs = [e.error, q.error].filter((x): x is string => !!x);
+    if (escpos.length === 0 && queues.length === 0) {
+      setScanHint(errs.length ? `扫描失败：${errs.join("；")}` : "本机没有扫到打印机。确认已开机 / 接线，或改用手动登记后在右侧面板配置。");
+    } else if (errs.length) {
+      setScanHint(`部分通道未取到：${errs.join("；")}`);
+    }
+  }
+
+  /**
+   * 探测本机读卡器：进程内单台 USB 设备，走现成的 idcard_status（问得到 SAM 号才算真在线）。
+   * 它不是"多选一"，而是"这台机在不在、凭什么说它在"——探测到就把 SAM 号写进名称建议，
+   * 探测不到就明说原因，浏览器预览同样回退到手填，不编一个假读卡器。
+   */
+  async function runIdcardProbe() {
+    setReaderScanState("running");
+    setReaderHint(null);
+    if (!runningInTauri()) {
+      setReaderProbe(null);
+      setReaderScanState("done");
+      setReaderHint("浏览器预览探测不到读卡器。请用桌面端（npm run tauri dev）探测，或先按驱动登记、之后在工作台读卡时再验。");
+      return;
+    }
+    const r = await nativeIdcard.status();
+    setReaderScanState("done");
+    if (!r.available) {
+      setReaderProbe(null);
+      setReaderHint(r.error ?? "没有原生设备通道，无法探测读卡器");
+      return;
+    }
+    const st: NativeReaderStatus = r.data ?? { connected: false, samId: null, fingerprint: false, error: r.error ?? "探测失败" };
+    setReaderProbe(st);
+    if (st.connected) {
+      setForm((f) => (f.name.trim() ? f : { ...f, name: `读卡器${st.samId ? ` · SAM ${st.samId}` : ""}` }));
+    } else {
+      setReaderHint(st.error ?? "本机没有探测到读卡器：确认已插到位、是免驱 USB-HID，或在配置里指定 Sdtapi.dll 路径。");
+    }
+  }
+
+  /**
+   * 扫描本机 USB / 内置摄像头（Media Foundation）。这是"扫描本机连接的摄像头"里本轮能真做的那半——
+   * 局域网海康 / 大华摄像机没有可靠的本地枚举，走下面的手动登记（选内网 IP 驱动填地址）。
+   */
+  async function runCameraScan() {
+    setCamScanState("running");
+    setCamHint(null);
+    if (!runningInTauri()) {
+      setCameraScan(null);
+      setCamScanState("done");
+      setCamHint("浏览器预览扫描不到本机摄像头。请用桌面端（npm run tauri dev）扫描，或改用内网 IP 摄像机手动登记。");
+      return;
+    }
+    const r = await nativeCamera.listLocal();
+    setCamScanState("done");
+    if (!r.available) {
+      setCameraScan(null);
+      setCamHint(r.error ?? "没有原生设备通道，无法扫描摄像头");
+      return;
+    }
+    if (r.error) {
+      setCameraScan(null);
+      setCamHint(`扫描失败：${r.error}`);
+      return;
+    }
+    const list = r.data ?? [];
+    setCameraScan(list);
+    if (list.length === 0) setCamHint("本机没有扫到 USB / 内置摄像头。确认已插好并被系统识别（设备管理器 → 照相机），或改用内网 IP 摄像机手动登记。");
+  }
+
+  /**
+   * 扫描本机串口：地磅 / 钱箱都走 RS-232，现场通常记不住 COM 号。
+   * 扫到就给下拉选择，扫不到回退手填并说明原因（浏览器预览没有原生通道）。
+   */
+  async function runSerialScan() {
+    setSerialScanState("running");
+    setSerialHint(null);
+    if (!runningInTauri()) {
+      setSerialScan(null);
+      setSerialScanState("done");
+      setSerialHint("浏览器预览问不到本机串口。请用桌面端（npm run tauri dev）扫描，或先手动输入串口号。");
+      return;
+    }
+    const r = await nativeSerial.list();
+    setSerialScanState("done");
+    if (!r.available) {
+      setSerialScan(null);
+      setSerialHint(r.error ?? "没有原生设备通道，无法枚举串口");
+      return;
+    }
+    if (r.error) {
+      setSerialScan(null);
+      setSerialHint(`扫描失败：${r.error}`);
+      return;
+    }
+    const list = r.data ?? [];
+    setSerialScan(list);
+    if (list.length === 0) setSerialHint("本机没有扫到串口。确认称重仪表/钱箱已接电、USB 转串口驱动已安装，或改用手动输入。");
+  }
+
+  /** 选中一个扫到的串口：回填到 cfg.port（仍可手改） */
+  function pickSerial(v: string) {
+    setForm((f) => ({ ...f, cfg: { ...f.cfg, port: v } }));
+  }
+
+  const serialOptions = useMemo(() => (serialScan ?? []).map((p) => ({ value: p, label: p })), [serialScan]);
+  const currentSerialKey = serialScan?.includes(form.cfg.port ?? "") ? (form.cfg.port ?? "") : "";
+
+  /** 选中一台本机摄像头：驱动定为 local_uvc，记 deviceId / deviceName 与名称建议（可再手改） */
+  function pickCamera(v: string) {
+    if (!v || !cameraScan) return;
+    const dev = cameraScan.find((d) => d.deviceId === v);
+    if (!dev) return;
+    setForm((f) => ({
+      ...f,
+      kind: "camera",
+      driver: "local_uvc",
+      name: f.name.trim() ? f.name : `摄像头 ${dev.name}`,
+      cfg: { ...f.cfg, transport: "local", deviceName: dev.name, deviceId: dev.deviceId },
+    }));
+  }
+
+  const cameraOptions = useMemo(() => (cameraScan ?? []).map((d) => ({ value: d.deviceId, label: d.name || d.deviceId })), [cameraScan]);
+  const currentCameraKey = cameraScan?.some((d) => d.deviceId === form.cfg.deviceId) ? (form.cfg.deviceId ?? "") : "";
+
+  // 打开登记表单并选到打印机 / 读卡器 / 摄像头时各自动扫一次；换开表单或换类型（复位 idle）会重扫，现场可能刚插线
+  useEffect(() => {
+    if (!addOpen) return;
+    if (form.kind === "printer" && scanState === "idle") void runPrinterScan();
+    if (form.kind === "idcard" && readerScanState === "idle") void runIdcardProbe();
+    if (form.kind === "camera" && camScanState === "idle") void runCameraScan();
+    if (SERIAL_KINDS.includes(form.kind) && serialScanState === "idle") void runSerialScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addOpen, form.kind, scanState, readerScanState, camScanState, serialScanState]);
+
+  /** 选中一台扫到的设备：回填对应驱动、纸型、名称建议与寻址参数（VID/PID 或队列名），仍可手改 */
+  function pickPrinterScan(v: string) {
+    if (!v || !printScan) return;
+    if (v.startsWith("e:")) {
+      const dev = printScan.escpos.find((d) => `e:${d.devicePath}` === v);
+      if (!dev) return;
+      const vid = toHexId(dev.vendorId);
+      const pid = toHexId(dev.productId);
+      setForm((f) => ({
+        ...f,
+        kind: "printer",
+        driver: "escpos_usbprint",
+        name: f.name.trim() ? f.name : `小票机 ${dev.label}`,
+        cfg: { ...f.cfg, paper: "thermal80", transport: "usbprint.sys", ...(vid ? { vid } : {}), ...(pid ? { pid } : {}) },
+      }));
+      return;
+    }
+    const dev = printScan.queues.find((d) => `q:${d.name}` === v);
+    if (!dev) return;
+    setForm((f) => {
+      // 选队列机意味着走打印队列：热敏驱动下切回窗口预览；已是 preview / raw_escp 则尊重当前选择
+      const driver = ESCPOS_DRIVERS.includes(f.driver) ? "preview" : f.driver;
+      return { ...f, kind: "printer", driver, name: f.name.trim() ? f.name : dev.name, cfg: { ...f.cfg, paper: paperOptionsFor(driver)[0], rawQueue: dev.name } };
+    });
+  }
+
+  /** 分组下拉项：直连小票机在上、系统队列在下，标签带上端口 / 默认 / 网络帮现场对号入座 */
+  const scanGroups = useMemo(() => {
+    if (!printScan) return [];
+    const groups: { label: string; options: { value: string; label: string }[] }[] = [];
+    if (printScan.escpos.length) {
+      groups.push({ label: "直连小票机（USB · ESC/POS）", options: printScan.escpos.map((d) => ({ value: `e:${d.devicePath}`, label: d.label })) });
+    }
+    if (printScan.queues.length) {
+      groups.push({
+        label: "本机打印机队列（窗口预览 / 针式）",
+        options: printScan.queues.map((d) => ({ value: `q:${d.name}`, label: `${d.name}（${d.port}${d.isDefault ? " · 默认" : ""}${d.network ? " · 网络" : ""}）` })),
+      });
+    }
+    return groups;
+  }, [printScan]);
+  const hasScanHits = scanGroups.some((g) => g.options.length > 0);
+
+  /** 把当前配置回映到扫到的某台设备，让下拉显示"选中的是哪台"；改过参数对不上就是空（未选择） */
+  const currentScanKey = useMemo(() => {
+    if (!printScan) return "";
+    if (ESCPOS_DRIVERS.includes(form.driver) && form.cfg.vid && form.cfg.pid) {
+      const hit = printScan.escpos.find((d) => toHexId(d.vendorId) === form.cfg.vid && toHexId(d.productId) === form.cfg.pid);
+      if (hit) return `e:${hit.devicePath}`;
+    }
+    if (form.cfg.rawQueue && printScan.queues.some((d) => d.name === form.cfg.rawQueue)) return `q:${form.cfg.rawQueue}`;
+    return "";
+  }, [printScan, form.driver, form.cfg]);
+
+  const addFields = fieldsFor(form.kind, form.driver);
   const addErrors: string[] = [];
   const trimmedCode = form.code.trim();
   if (!form.name.trim()) addErrors.push("名称必填");
-  if (!trimmedCode) addErrors.push("编码必填");
-  else if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmedCode)) addErrors.push("编码需字母开头，仅含字母/数字/下划线/连字符");
-  else if (devices.some((d) => d.code === trimmedCode)) addErrors.push(`编码 ${trimmedCode} 已存在`);
-  for (const f of addSpec.fields) {
+  // 编辑时编码锁定（台账主键），不再校验其格式/唯一性
+  if (!isEdit) {
+    if (!trimmedCode) addErrors.push("编码必填");
+    else if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmedCode)) addErrors.push("编码需字母开头，仅含字母/数字/下划线/连字符");
+    else if (devices.some((d) => d.code === trimmedCode)) addErrors.push(`编码 ${trimmedCode} 已存在`);
+  }
+  for (const f of addFields) {
     if (f.required && !fieldValue(f)) addErrors.push(`${f.label}必填`);
+  }
+  // 串口类设备的 port 由扫描区/手动输入维护，不在 addFields 里
+  if (SERIAL_KINDS.includes(form.kind) && !(form.cfg.port ?? "").trim()) {
+    addErrors.push("串口必填");
+  }
+
+  /** 表单 → config：字段值 + 扫描/手填的寻址参数（这些键不在 addFields 里） */
+  function buildSubmitConfig(): Record<string, string> {
+    const config: Record<string, string> = {};
+    for (const f of addFields) {
+      const v = fieldValue(f);
+      if (v) config[f.key] = v;
+    }
+    // 打印机：纸型之外的 vid/pid/transport/rawQueue 一并落库
+    if (form.kind === "printer") {
+      for (const k of ["vid", "pid", "transport", "rawQueue"]) {
+        const v = (form.cfg[k] ?? "").trim();
+        if (v) config[k] = v;
+      }
+    }
+    // 摄像头：本机 USB 摄像头靠 deviceId / deviceName 寻址（transport=local），网络机走 host/user fields
+    if (form.kind === "camera") {
+      for (const k of ["transport", "deviceName", "deviceId"]) {
+        const v = (form.cfg[k] ?? "").trim();
+        if (v) config[k] = v;
+      }
+    }
+    // 串口类设备：port 由扫描区/手动输入维护，不在 addFields 里
+    if (SERIAL_KINDS.includes(form.kind)) {
+      const v = (form.cfg.port ?? "").trim();
+      if (v) config.port = v;
+    }
+    return config;
+  }
+  const submitConfig = buildSubmitConfig();
+
+  function afterSave(d: DeviceConfig, added: boolean) {
+    toast.success(added ? `已登记「${d.name}」，请在右侧做联机测试` : `已更新「${d.name}」${d.last_status === "unknown" ? "，改动使驱动/配置回到未检测，请重测" : ""}`);
+    setSelected(d.code);
+    setAddOpen(false);
+    setEditing(null);
+    setForm(emptyDeviceForm());
+    void queryClient.invalidateQueries({ queryKey: ["devices"] });
+    void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    void queryClient.invalidateQueries({ queryKey: ["audits"] });
   }
 
   const createDevice = useMutation({
-    mutationFn: () => {
-      const config: Record<string, string> = {};
-      for (const f of DEVICE_SPEC[form.kind].fields) {
-        const v = fieldValue(f);
-        if (v) config[f.key] = v;
-      }
-      return api.createDevice({
-        code: form.code.trim(),
+    mutationFn: () =>
+      api.createDevice({
+        code: trimmedCode,
         name: form.name.trim(),
         kind: form.kind,
         driver: form.driver,
-        config,
+        config: submitConfig,
         is_default: form.isDefault,
         is_mock: form.isMock,
         operator_id: actorId(),
-      });
-    },
-    onSuccess: (d) => {
-      toast.success(`已登记「${d.name}」，请在右侧做联机测试`);
-      setSelected(d.code);
+      }),
+    onSuccess: (d) => afterSave(d, true),
+    onError: (e: Error) => toast.error(`登记失败：${e.message}`),
+  });
+
+  const updateDevice = useMutation({
+    mutationFn: () =>
+      api.updateDevice({
+        code: (editing as DeviceConfig).code,
+        name: form.name.trim(),
+        kind: form.kind,
+        driver: form.driver,
+        config: submitConfig,
+        is_default: form.isDefault,
+        operator_id: actorId(),
+      }),
+    onSuccess: (d) => afterSave(d, false),
+    onError: (e: Error) => toast.error(`修改失败：${e.message}`),
+  });
+
+  const deviceSaving = createDevice.isPending || updateDevice.isPending;
+  function submitDevice() {
+    if (isEdit) updateDevice.mutate();
+    else createDevice.mutate();
+  }
+
+  const deleteDevice = useMutation({
+    mutationFn: (code: string) => api.deleteDevice(code, actorId()),
+    onSuccess: (_list, code) => {
+      const name = devices.find((d) => d.code === code)?.name ?? code;
+      toast.success(`已删除「${name}」`);
+      setPendingDelete(null);
+      // 删除是从「编辑」弹窗里发起的，成功后一并关掉编辑弹窗并复位表单
       setAddOpen(false);
+      setEditing(null);
       setForm(emptyDeviceForm());
+      if (selected === code) setSelected(null);
       void queryClient.invalidateQueries({ queryKey: ["devices"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
     },
-    onError: (e: Error) => toast.error(`登记失败：${e.message}`),
+    onError: (e: Error) => {
+      // 有业务历史时后端拒删：把原因原样透出去，并保留确认框让用户改点「停用」
+      toast.error(e.message);
+    },
   });
 
   const offlineCount = devices.filter((d) => d.is_enabled === 1 && d.last_status !== "online").length;
@@ -273,6 +675,25 @@ export function DevicesPage() {
       <PageHeader
         title="设备中心"
         description={`${devices.length} 台已登记设备，${offlineCount > 0 ? `${offlineCount} 台已启用但非在线` : "启用设备全部在线"}`}
+        tabs={
+          <Tabs value={groupTab} onValueChange={(v) => setGroupTab(v as "all" | DeviceKind)} className="gap-0">
+            <TabsList variant="line" className="mb-[-1px]">
+              <TabsTrigger value="all" className="text-sm">
+                全部
+                {devices.length > 0 && <span className="tnum text-muted-foreground">（{devices.length}）</span>}
+              </TabsTrigger>
+              {KIND_ORDER.map((kind) => {
+                const n = devices.filter((d) => d.kind === kind).length;
+                return (
+                  <TabsTrigger key={kind} value={kind} className="text-sm">
+                    {DEVICE_KIND[kind]}
+                    <span className="tnum text-muted-foreground">（{n}）</span>
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
+          </Tabs>
+        }
         actions={
           <>
             <Button
@@ -324,7 +745,7 @@ export function DevicesPage() {
             tone="info"
             title="只读视图：当前操作员无权改动设备"
             action={
-              <Button size="xs" variant="outline" render={<Link to="/masters/$section" params={{ section: "staff" }} />}>
+              <Button size="xs" variant="outline" render={<Link to="/system/$section" params={{ section: "staff" }} />}>
                 去员工与岗位
               </Button>
             }
@@ -338,30 +759,50 @@ export function DevicesPage() {
         ) : (
           <div className="mt-3 grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
             <div className="flex min-w-0 flex-col gap-4">
-              {KIND_ORDER.map((kind) => {
-                const list = devices.filter((d) => d.kind === kind);
-                if (list.length === 0) return null;
-                return (
-                  <section key={kind} className="flex min-w-0 flex-col gap-2">
-                    <SectionTitle extra={<span className="text-xs text-muted-foreground">{list.length} 台</span>}>
-                      {DEVICE_KIND[kind]}
-                    </SectionTitle>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {list.map((d) => (
-                        <DeviceCard
-                          key={d.code}
-                          d={d}
-                          active={active?.code === d.code}
-                          locked={!can("device.manage")}
-                          onSelect={() => setSelected(d.code)}
-                          onToggleEnabled={(v) => toggle.mutate({ code: d.code, enabled: v })}
-                          onToggleMock={(v) => toggle.mutate({ code: d.code, mock: v })}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                );
-              })}
+              {groupTab === "all" ? (
+                KIND_ORDER.map((kind) => {
+                  const list = devices.filter((d) => d.kind === kind);
+                  if (list.length === 0) return null;
+                  return (
+                    <section key={kind} className="flex min-w-0 flex-col gap-2">
+                      <SectionTitle extra={<span className="text-xs text-muted-foreground">{list.length} 台</span>}>
+                        {DEVICE_KIND[kind]}
+                      </SectionTitle>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {list.map((d) => (
+                          <DeviceCard
+                            key={d.code}
+                            d={d}
+                            active={active?.code === d.code}
+                            locked={!can("device.manage")}
+                            onSelect={() => setSelected(d.code)}
+                            onEdit={() => openEdit(d)}
+                            onToggleEnabled={(v) => toggle.mutate({ code: d.code, enabled: v })}
+                            onToggleMock={(v) => toggle.mutate({ code: d.code, mock: v })}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })
+              ) : visibleDevices.length === 0 ? (
+                <EmptyState title="该分类下还没有设备" description="点击顶部「添加设备」登记一台。" />
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {visibleDevices.map((d) => (
+                    <DeviceCard
+                      key={d.code}
+                      d={d}
+                      active={active?.code === d.code}
+                      locked={!can("device.manage")}
+                      onSelect={() => setSelected(d.code)}
+                      onEdit={() => openEdit(d)}
+                      onToggleEnabled={(v) => toggle.mutate({ code: d.code, enabled: v })}
+                      onToggleMock={(v) => toggle.mutate({ code: d.code, mock: v })}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex min-w-0 flex-col gap-3 border bg-card p-3 xl:sticky xl:top-4">
@@ -399,24 +840,30 @@ export function DevicesPage() {
         open={addOpen}
         onOpenChange={(v) => {
           setAddOpen(v);
-          if (!v) createDevice.reset();
+          if (!v) {
+            setEditing(null);
+            createDevice.reset();
+            updateDevice.reset();
+          }
         }}
       >
         <DialogContent className="max-w-[600px]">
           <DialogHeader>
-            <DialogTitle className="text-sm">添加设备</DialogTitle>
+            <DialogTitle className="text-sm">{isEdit ? `编辑设备 · ${editing?.code}` : "添加设备"}</DialogTitle>
             <DialogDescription className="text-xs">
-              登记现场硬件到台账。新设备一律先记「未检测」，保存后在右侧面板做一次联机测试通过才会转绿——
-              登记不等于验证（02 §M9）。编码是台账主键，导出配置与换机重建都按它核对，需唯一。
+              {isEdit
+                ? "改名称、驱动、关键参数与是否默认。编码是台账主键、类型换了就是一整套配置语义，两者都不可改；错录类型请停用本台后重新登记。改了驱动或配置会把上次的联机结论作废、回到未检测，需重测才转绿（02 §M9）。"
+                : "登记现场硬件到台账。新设备一律先记「未检测」，保存后在右侧面板做一次联机测试通过才会转绿——登记不等于验证（02 §M9）。编码是台账主键，导出配置与换机重建都按它核对，需唯一。"}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              设备类型
+              设备类型{isEdit ? "（不可改）" : ""}
               <Choose
                 aria-label="设备类型"
                 value={form.kind}
+                disabled={isEdit}
                 onChange={(v) => patchKind(v as DeviceKind)}
                 options={KIND_ORDER.map((k) => ({ value: k, label: DEVICE_KIND[k] }))}
               />
@@ -426,8 +873,8 @@ export function DevicesPage() {
               <Choose
                 aria-label="驱动协议"
                 value={form.driver}
-                onChange={(v) => patchDeviceForm({ driver: v })}
-                options={addSpec.drivers.map((d) => ({ value: d, label: d }))}
+                onChange={(v) => patchDriver(v)}
+                options={DEVICE_SPEC[form.kind].drivers.map((d) => ({ value: d, label: d }))}
               />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -440,16 +887,136 @@ export function DevicesPage() {
               />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              设备编码 *
+              设备编码 {isEdit ? "（不可改）" : "*"}
               <Input
                 value={form.code}
                 onChange={(e) => patchDeviceForm({ code: e.target.value })}
                 placeholder={nextCode(form.kind)}
+                disabled={isEdit}
                 className="tnum text-sm font-mono"
               />
             </Label>
 
-            {addSpec.fields.map((f) => (
+            {form.kind === "printer" && (
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">本机打印机（自动扫描，选中即回填下方参数）</span>
+                  <Button size="xs" variant="outline" onClick={() => void runPrinterScan()} disabled={scanState === "running"}>
+                    {scanState === "running" ? "扫描中…" : "重新扫描"}
+                  </Button>
+                </div>
+                {scanState === "running" ? (
+                  <p className="text-xs text-muted-foreground">正在枚举 usbprint 直连设备与系统打印队列…</p>
+                ) : hasScanHits ? (
+                  <Choose
+                    size="sm"
+                    aria-label="本机打印机"
+                    value={currentScanKey}
+                    onChange={pickPrinterScan}
+                    options={[{ value: "", label: "— 手动填写，不从扫描结果回填 —" }]}
+                    groups={scanGroups}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">{scanHint ?? "尚未扫描到本机打印机，可先按下方纸型手动登记。"}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  选直连小票机会把驱动定为 <span className="font-mono">escpos_usbprint</span> 并回填 VID/PID；选系统打印队列则回填打印机名到
+                  <span className="font-mono"> rawQueue</span>。两者都会给出设备名称建议、并按驱动收敛纸型——都可再手改。
+                </p>
+              </div>
+            )}
+
+            {form.kind === "idcard" && (
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">本机读卡器（自动探测 · 一台进程内设备，非多选）</span>
+                  <Button size="xs" variant="outline" onClick={() => void runIdcardProbe()} disabled={readerScanState === "running"}>
+                    {readerScanState === "running" ? "探测中…" : "重新探测"}
+                  </Button>
+                </div>
+                {readerScanState === "running" ? (
+                  <p className="text-xs text-muted-foreground">正在打开设备并向安全模块问 SAM 号…</p>
+                ) : readerProbe?.connected ? (
+                  <div className={cn("flex flex-col gap-1 border p-2 text-xs", TONE_BOX.success)}>
+                    <span className={cn("font-medium", TONE_TEXT.success)}>已探测到读卡器，登记后即可联机读卡</span>
+                    <span className="tnum text-muted-foreground">
+                      SAM 序列号 {readerProbe.samId ?? "未读到"} · 指纹 {readerProbe.fingerprint ? "支持" : "不支持"}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{readerHint ?? "尚未探测到读卡器，可先按驱动登记，之后在工作台读卡时再验。"}</p>
+                )}
+              </div>
+            )}
+
+            {form.kind === "camera" && (
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">本机摄像头（自动扫描 USB / 内置，选一台即回填）</span>
+                  <Button size="xs" variant="outline" onClick={() => void runCameraScan()} disabled={camScanState === "running"}>
+                    {camScanState === "running" ? "扫描中…" : "重新扫描"}
+                  </Button>
+                </div>
+                {camScanState === "running" ? (
+                  <p className="text-xs text-muted-foreground">正在通过 Media Foundation 枚举本机视频输入设备…</p>
+                ) : cameraOptions.length > 0 ? (
+                  <Choose
+                    size="sm"
+                    aria-label="本机摄像头"
+                    value={currentCameraKey}
+                    onChange={pickCamera}
+                    options={[{ value: "", label: "— 手动填内网 IP 摄像机（海康 ISAPI / 大华 CGI）—" }, ...cameraOptions]}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">{camHint ?? "尚未扫描到本机摄像头，可改用内网 IP 摄像机手动登记。"}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  选中本机摄像机会把驱动定为 <span className="font-mono">local_uvc</span> 并记 <span className="font-mono">deviceId</span>；
+                  要登记内网 IP 摄像机，选上面「手动填」项后在下方填地址与登录用户。注意：本机 USB 摄像头的抓拍通道本轮尚未接入过磅链路（抓拍当前只走内网 IP 摄像机），先入台账、抓拍后续接入。
+                </p>
+              </div>
+            )}
+
+            {SERIAL_KINDS.includes(form.kind) && (
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">本机串口（自动扫描，选中即回填）</span>
+                  <Button size="xs" variant="outline" onClick={() => void runSerialScan()} disabled={serialScanState === "running"}>
+                    {serialScanState === "running" ? "扫描中…" : "重新扫描"}
+                  </Button>
+                </div>
+                {serialScanState === "running" ? (
+                  <p className="text-xs text-muted-foreground">正在枚举本机串口…</p>
+                ) : serialOptions.length > 0 ? (
+                  <Choose
+                    size="sm"
+                    aria-label="本机串口"
+                    value={currentSerialKey}
+                    onChange={pickSerial}
+                    options={[{ value: "", label: "— 手动输入串口号 —" }, ...serialOptions]}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">{serialHint ?? "尚未扫描到本机串口，可在下方手动输入。"}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  扫描依赖桌面端原生通道；浏览器预览只能手动填写。选中的串口号会写进设备配置。
+                </p>
+              </div>
+            )}
+
+            {SERIAL_KINDS.includes(form.kind) && (
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                串口 *
+                <Input
+                  value={form.cfg.port ?? ""}
+                  onChange={(e) => patchCfg("port", e.target.value)}
+                  placeholder="COM3"
+                  className="tnum text-sm font-mono"
+                />
+              </Label>
+            )}
+
+            {addFields.map((f) => (
               <Label key={f.key} className="flex flex-col gap-1 text-xs text-muted-foreground">
                 {f.label}
                 {f.required ? " *" : ""}
@@ -475,10 +1042,12 @@ export function DevicesPage() {
               <Switch checked={form.isDefault} onCheckedChange={(v) => patchDeviceForm({ isDefault: v === true })} aria-label="设为默认" />
               设为该类默认设备（工作台优先用它）
             </Label>
-            <Label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Switch checked={form.isMock} onCheckedChange={(v) => patchDeviceForm({ isMock: v === true })} aria-label="Mock 模拟" />
-              先按 Mock 登记（培训/演示用，正式收粮前应切回真实设备）
-            </Label>
+            {!isEdit && (
+              <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Switch checked={form.isMock} onCheckedChange={(v) => patchDeviceForm({ isMock: v === true })} aria-label="Mock 模拟" />
+                先按 Mock 登记（培训/演示用，正式收粮前应切回真实设备）
+              </Label>
+            )}
           </div>
 
           {addErrors.length > 0 && (
@@ -491,13 +1060,61 @@ export function DevicesPage() {
             </CallOut>
           )}
 
+          <DialogFooter className="gap-2 sm:justify-between">
+            {isEdit ? (
+              <Button
+                variant="ghost"
+                className="text-destructive hover:text-destructive"
+                title="从台账删除这台设备（有业务历史的会被拒，只能停用）"
+                onClick={() => editing && setPendingDelete(editing)}
+              >
+                <Trash2Icon />
+                删除设备
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" onClick={() => setAddOpen(false)}>
+                取消
+              </Button>
+              <Button onClick={submitDevice} disabled={addErrors.length > 0 || deviceSaving}>
+                {isEdit ? <CheckIcon /> : <PlusIcon />}
+                {deviceSaving ? (isEdit ? "保存中…" : "登记中…") : isEdit ? "保存修改" : "登记设备"}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingDelete !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingDelete(null);
+        }}
+      >
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">删除设备</DialogTitle>
+            <DialogDescription className="text-xs">
+              将从台账移除
+              {pendingDelete ? (
+                <span className="font-medium"> {pendingDelete.name} · {pendingDelete.code}</span>
+              ) : null}
+              。只有没被任何称重记录或抓拍附件引用的设备才允许删除——被引用的会被拒，那种只能
+              「停用」（留在台账、不再参与作业，保住可追溯）。此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setAddOpen(false)}>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>
               取消
             </Button>
-            <Button onClick={() => createDevice.mutate()} disabled={addErrors.length > 0 || createDevice.isPending}>
-              <PlusIcon />
-              {createDevice.isPending ? "登记中…" : "登记设备"}
+            <Button
+              variant="destructive"
+              disabled={deleteDevice.isPending}
+              onClick={() => pendingDelete && deleteDevice.mutate(pendingDelete.code)}
+            >
+              {deleteDevice.isPending ? "删除中…" : "确认删除"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -513,6 +1130,7 @@ function DeviceCard({
   active,
   locked,
   onSelect,
+  onEdit,
   onToggleEnabled,
   onToggleMock,
 }: {
@@ -520,6 +1138,7 @@ function DeviceCard({
   active: boolean;
   locked: boolean;
   onSelect: () => void;
+  onEdit: () => void;
   onToggleEnabled: (v: boolean) => void;
   onToggleMock: (v: boolean) => void;
 }) {
@@ -536,18 +1155,19 @@ function DeviceCard({
         d.is_enabled === 0 && "opacity-70",
       )}
     >
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={(e) => {
           e.stopPropagation();
           onSelect();
         }}
-        className="flex min-w-0 items-center gap-2 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="h-auto w-full min-w-0 shrink justify-start gap-2 px-0 text-left hover:bg-transparent"
       >
         <Icon className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate font-medium">{d.name}</span>
         <span className={cn("ml-auto size-2.5 shrink-0 rounded-full", TONE_DOT[st.tone])} aria-hidden />
-      </button>
+      </Button>
       <span className="flex flex-wrap items-center gap-1 text-xs">
         <ToneBadge tone={st.tone}>{st.label}</ToneBadge>
         {d.is_default === 1 && <ToneBadge tone="info">默认</ToneBadge>}
@@ -560,6 +1180,19 @@ function DeviceCard({
       </span>
       {d.last_error && <span className="truncate text-xs text-destructive">{d.last_error}</span>}
       <span className="flex flex-wrap gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={locked}
+          title={locked ? "修改设备需要站长岗位（device.manage）" : "编辑名称 / 驱动 / 参数 / 默认"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit();
+          }}
+        >
+          <PencilIcon />
+          编辑
+        </Button>
         <Button
           size="xs"
           variant="ghost"
@@ -621,6 +1254,10 @@ function TestPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
           <p className="text-xs text-muted-foreground">
             这台机的联机测试在下方小票机面板里，走真设备状态查询（<span className="font-mono">DLE EOT</span>），不用这里的模拟探测。
           </p>
+        ) : d.kind === "idcard" ? (
+          <p className="text-xs text-muted-foreground">
+            这台机的联机测试在下方读卡器面板里，走真机打开设备 + 问 SAM 号，不用这里的模拟探测。
+          </p>
         ) : (
           <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending || mockOff}>
             {testing.isPending ? "正在握手…" : "联机测试"}
@@ -648,7 +1285,7 @@ function TestPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
       </div>
 
       {d.kind === "scale" && <ScalePanel mockOff={mockOff} />}
-      {d.kind === "idcard" && <IdCardPanel mockOff={mockOff} />}
+      {d.kind === "idcard" && <CardReaderPanel key={d.code} d={d} mockOff={mockOff} />}
       {d.kind === "camera" && <CameraPanel />}
       {d.kind === "printer" && <PrinterPanel key={d.code} d={d} mockOff={mockOff} />}
       {(d.kind === "led" || d.kind === "cashbox" || d.kind === "signpad") && (
@@ -775,37 +1412,229 @@ function ScalePanel({ mockOff }: { mockOff: boolean }) {
   );
 }
 
-/* ------------------------------------------------------ 身份证阅读器 */
+/* -------------------------------------- 读卡器（一台机 · 身份证 / IC 两通道） */
 
-function IdCardPanel({ mockOff }: { mockOff: boolean }) {
-  const idcard = useDeviceStore((s) => s.idcard);
-  const read = useDeviceStore((s) => s.idcard.read);
+/** 芯片里的日期是 CCYYMMDD；"长期"这类非数字值原样透出，不假装格式化成功 */
+function chipDate(v: string | null | undefined): string {
+  return /^\d{8}$/.test(v ?? "") ? `${v!.slice(0, 4)}-${v!.slice(4, 6)}-${v!.slice(6, 8)}` : orDash(v);
+}
+
+/**
+ * 读卡器面板：一台设备 + 若干介质通道。
+ *
+ * 上半部分是设备级的（这台机此刻在不在、凭什么说它在），下半部分按 `lib/card-reader`
+ * 登记表里这台驱动声明的 media 逐节渲染，所以面板不会替硬件编它没有的能力。
+ */
+function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
+  const queryClient = useQueryClient();
+  const reader = useDeviceStore((s) => s.reader);
+  const probe = useDeviceStore((s) => s.reader.probe);
+  const spec = readerSpec(d.driver);
+
+  // 选中这台机就探一次：卡片状态灯读的是台账 last_status，不主动探测会一直挂着安装时录入的旧值
+  useEffect(() => {
+    void probe();
+  }, [probe, mockOff, d.is_mock]);
+
+  // 探测结论回写台账（只动状态四字段），面板与卡片因此不会出现两种说法
+  const report = useMutation({
+    mutationFn: (p: ReaderProbe) => api.reportDeviceProbe(d.code, { status: p.status, error: p.error, at: p.at }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["devices"] }),
+    onError: (e: Error) => toast.error(`状态回写失败：${e.message}`),
+  });
+  const lastProbe = reader.lastProbe;
+  useEffect(() => {
+    if (!lastProbe) return;
+    if (lastProbe.status === d.last_status && (lastProbe.error ?? null) === (d.last_error ?? null)) return;
+    report.mutate(lastProbe);
+  }, [lastProbe, d.last_status, d.last_error, report.mutate]);
+
+  const st = DEVICE_STATUS[reader.status];
+  const demoMode = mockOff || d.is_mock === 1 || !runningInTauri();
+  const headline = mockOff
+    ? "外设总开关已关闭，不做真机探测"
+    : !runningInTauri()
+      ? "浏览器预览：没有原生设备通道"
+      : spec.onlineProof === "none"
+        ? "该驱动不做真机校验，状态只能停在未检测"
+        : d.is_mock === 1
+          ? "台账里这台机是 Mock：身份证通道回演示卡，IC 通道不造假"
+          : lastProbe?.connected
+            ? "设备已打开，SAM 应答正常"
+            : "设备未连通";
 
   return (
     <div className="flex flex-col gap-2">
-      <SectionTitle extra={<span className="text-xs text-muted-foreground">x86 桥接子进程</span>}>读卡测试</SectionTitle>
-      <Button size="sm" variant="outline" disabled={mockOff || idcard.status !== "online"} onClick={() => void read()}>
-        {idcard.reading ? "正在读卡…" : "读一张卡"}
-      </Button>
-      {idcard.error && <p className="text-xs text-destructive">{idcard.error}</p>}
-      {idcard.reading && <p className="text-xs text-muted-foreground">冷启动 300–1500 ms，别重复点。</p>}
-      {idcard.last && (
+      <SectionTitle extra={<span className="text-xs text-muted-foreground">{spec.label}</span>}>读卡器状态</SectionTitle>
+
+      <div className={cn("flex flex-col gap-1 border p-2 text-xs", TONE_BOX[st.tone])}>
+        <div className="flex items-center justify-between gap-2">
+          <span className={cn("font-medium", TONE_TEXT[st.tone])}>{headline}</span>
+          <Button size="xs" variant="ghost" disabled={mockOff || reader.probing} onClick={() => void probe()}>
+            {reader.probing ? "正在探测…" : "重新探测"}
+          </Button>
+        </div>
+        <InfoGrid
+          cols={2}
+          items={[
+            { label: "台账状态", value: <span className={TONE_TEXT[st.tone]}>{st.label}</span> },
+            // 没有 SAM 可问的驱动就别摆两行永远划横杠的字段出来
+            ...(spec.onlineProof === "sam"
+              ? [
+                  { label: "SAM 序列号", value: <span className="tnum">{orDash(lastProbe?.samId ?? null)}</span> },
+                  { label: "指纹模块", value: lastProbe ? (lastProbe.fingerprint ? "支持" : "不支持") : "—" },
+                ]
+              : []),
+            { label: "探测时刻", value: <span className="tnum">{orDash(lastProbe?.at ?? null)}</span> },
+          ]}
+        />
+        {lastProbe?.error && <span className="text-destructive">{lastProbe.error}</span>}
+        <span className="text-muted-foreground">
+          {spec.onlineProof === "sam"
+            ? "SAM 号只有设备真被打开、安全模块应答之后才有，所以它是\"在线\"的唯一凭据；没有它就不报绿。"
+            : "这台驱动没有可校验的在线凭据，面板不会替它报绿。"}
+        </span>
+      </div>
+
+      {/* 一节一种介质：能读什么卡由登记表决定，换一台只读身份证的机型就不会多出 IC 这节 */}
+      {spec.media.map((medium) =>
+        medium === "idcard" ? (
+          <IdCardMedium key={medium} d={d} mockOff={mockOff} demoMode={demoMode} canPhoto={spec.photo} />
+        ) : (
+          <IcMedium key={medium} d={d} mockOff={mockOff} />
+        ),
+      )}
+    </div>
+  );
+}
+
+/** 介质通道一：身份证（SAM 解密芯片） */
+function IdCardMedium({
+  d,
+  mockOff,
+  demoMode,
+  canPhoto,
+}: {
+  d: DeviceConfig;
+  mockOff: boolean;
+  demoMode: boolean;
+  canPhoto: boolean;
+}) {
+  const card = useDeviceStore((s) => s.reader.idcard);
+  const read = useDeviceStore((s) => s.reader.idcard.read);
+  const [photo, setPhoto] = useState(String(d.config.photo ?? "false") === "true");
+  const m = MEDIUM.idcard;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <SectionTitle extra={<span className="text-xs text-muted-foreground">{m.qualifier}</span>}>{m.label}</SectionTitle>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" disabled={mockOff || card.reading} onClick={() => void read({ photo })}>
+          {card.reading ? m.pending : m.action}
+        </Button>
+        {canPhoto && (
+          <Label className="flex h-8 items-center gap-2 border px-2.5 text-xs">
+            <Switch
+              checked={photo}
+              disabled={mockOff || demoMode}
+              onCheckedChange={setPhoto}
+              aria-label="读卡同时取照片"
+            />
+            同时取照片
+          </Label>
+        )}
+      </div>
+      {card.error && <p className="text-xs text-destructive">{card.error}</p>}
+      {card.reading && (
+        <p className="text-xs text-muted-foreground">
+          放卡后约 0.3–2 秒出结果（芯片读不出来会自动重寻卡 5 次），别连着点。
+        </p>
+      )}
+      {demoMode && !card.reading && (
+        <p className="text-xs text-muted-foreground">
+          {mockOff
+            ? "总开关关闭期间不做任何读卡，工作台请改用「搜档案」或手工录入证号。"
+            : !runningInTauri()
+              ? "此刻不碰真设备，读出来的是演示卡；用桌面版（npm run tauri dev）才会走 Sdtapi 真机读卡。"
+              : "此刻不碰真设备，读出来的是演示卡；要让现场证号进这里，把这台机切回真实设备。"}
+        </p>
+      )}
+
+      {card.last && (
         <div className="flex flex-col gap-1 border p-2 text-xs">
-          <p className="font-medium">{idcard.last.name}</p>
-          <p className="tnum text-muted-foreground">
-            证号 {idcard.last.id_card_no.slice(0, 6)}********{idcard.last.id_card_no.slice(-4)}
+          <p className="flex flex-wrap items-center gap-2 font-medium">
+            {card.last.name}
+            <ToneBadge tone={card.last.real ? "success" : "warning"}>{card.last.real ? "真机读取" : "演示卡"}</ToneBadge>
+            {card.last.party_id == null && <ToneBadge tone="warning">未建档</ToneBadge>}
           </p>
-          <p className="text-muted-foreground">{idcard.last.address}</p>
+          <p className="tnum text-muted-foreground">证号 {maskIdCard(card.last.id_card_no)}</p>
           <p className="text-muted-foreground">
-            出生 {idcard.last.born.slice(0, 4)}-{idcard.last.born.slice(4, 6)}-{idcard.last.born.slice(6, 8)} · {idcard.last.sex}
+            {card.last.sex} · {orDash(card.last.nation)} · 出生 {chipDate(card.last.born)}
           </p>
+          <p className="text-muted-foreground">{card.last.address}</p>
+          {(card.last.agency || card.last.valid_to) && (
+            <p className="text-muted-foreground">
+              签发 {orDash(card.last.agency)} · 有效 {chipDate(card.last.valid_from)} — {chipDate(card.last.valid_to)}
+            </p>
+          )}
+          {card.last.photo_path && <p className="break-all text-muted-foreground">照片 {card.last.photo_path}</p>}
           <p className="text-muted-foreground">
-            命中档案 <span className="tnum">#{idcard.last.party_id}</span>
+            命中档案{" "}
+            {card.last.party_id == null ? (
+              <span className="text-warning">无（系统里没有这个证号，请到「农户与往来单位」建档）</span>
+            ) : (
+              <span className="tnum">#{card.last.party_id}</span>
+            )}
           </p>
         </div>
       )}
+      <p className="text-xs text-muted-foreground">{m.note}</p>
+    </div>
+  );
+}
+
+/** 介质通道二：IC（Mifare）卡，只读探测；结果与原因都取自 store 的 reader.ic */
+function IcMedium({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
+  const ic = useDeviceStore((s) => s.reader.ic);
+  const readIc = useDeviceStore((s) => s.reader.ic.read);
+  const m = MEDIUM.ic;
+  const keyHex = typeof d.config.icKey === "string" && d.config.icKey ? d.config.icKey : null;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <SectionTitle extra={<span className="text-xs text-muted-foreground">{m.qualifier}</span>}>{m.label}</SectionTitle>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={mockOff || ic.reading}
+        onClick={() => void readIc(keyHex ? { keyHex } : undefined)}
+      >
+        {ic.reading ? m.pending : m.action}
+      </Button>
+      {ic.error && <p className="text-xs text-destructive">{ic.error}</p>}
+      {ic.last && (
+        <div className="flex flex-col gap-1 border p-2 text-xs">
+          <p className="font-medium">
+            {ic.last.kind_label} · 卡号 <span className="tnum">{ic.last.sn}</span>
+            <span className="tnum ml-2 text-muted-foreground">{ic.last.at}</span>
+          </p>
+          {ic.last.blocks.map((b) => (
+            <p key={`${b.sector}-${b.block}`} className="flex gap-2">
+              <span className="tnum shrink-0 text-muted-foreground">
+                扇区{b.sector} 块{b.block}
+              </span>
+              <span className={cn("tnum min-w-0 flex-1 truncate", b.ok ? "" : "text-destructive")}>
+                {b.ok ? b.hex : (b.error ?? "读取失败")}
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">
-        读到的明文只存在内存，界面一律脱敏显示；写库时按 03 §4 的字段级加密处理。
+        {keyHex && keyHex.toUpperCase() !== "FFFFFFFFFFFF" && (
+          <>本机登记的 IC 密钥为 <span className="tnum">{keyHex}</span>。</>
+        )}{" "}
+        {m.note}
       </p>
     </div>
   );

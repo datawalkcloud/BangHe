@@ -21,8 +21,7 @@ import { OrderStatusBadge, PaymentStatusBadge, ToneBadge } from "@/components/bu
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { MoneyLine } from "@/components/business/NumField";
-import { PrintPreview } from "@/components/print/PrintPreview";
-import { SettlementVoucherSheet } from "@/components/print/sheets";
+import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { Button } from "@/components/ui/button";
 import { Choose } from "@/components/business/Choose";
 import { Input } from "@/components/ui/input";
@@ -288,13 +287,14 @@ export function SettlementDetailPage() {
                       className="tnum text-sm"
                     />
                     {unpaidFen > 0 && (
-                      <button
+                      <Button
                         type="button"
-                        className="self-start text-xs text-info underline underline-offset-2"
+                        variant="link"
+                        className="h-auto self-start p-0 text-xs font-normal text-info underline underline-offset-2"
                         onClick={() => setAmountYuan(String(unpaidFen / 100))}
                       >
                         填为全部未付 {money(unpaidFen)}
-                      </button>
+                      </Button>
                     )}
                   </Label>
                   <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -343,19 +343,13 @@ export function SettlementDetailPage() {
       </div>
 
       {station && (
-        <PrintPreview open={printOpen} onOpenChange={setPrintOpen} docType="settlement_voucher" docNo={s.settle_no}>
-          <SettlementVoucherSheet
-            settlement={s}
-            station={station}
-            names={names}
-            orders={orders.map((o) => ({
-              order_no: o.order_no,
-              settlement_weight_01kg: o.settlement_weight_01kg ?? 0,
-              price_fen_per_ton: o.price_fen_per_ton ?? 0,
-              goods_amount_fen: o.goods_amount_fen ?? 0,
-            }))}
-          />
-        </PrintPreview>
+        <ReceiptPrintPreview
+          open={printOpen}
+          onOpenChange={setPrintOpen}
+          scenario="settlement_voucher"
+          context={{ station, names, settlement: s }}
+          docNo={s.settle_no}
+        />
       )}
     </div>
   );

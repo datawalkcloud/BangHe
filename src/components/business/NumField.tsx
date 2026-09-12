@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, Ref } from "react";
 import { fromKg, fromPercent, fromYuanPerTon, money, pricePerTonNumber, toKg, toYuanPerJin, weight } from "@/lib/format";
+import { Input } from "@/components/ui/input";
 import { cn } from "cn";
 
 export interface NumFieldProps {
@@ -73,18 +74,19 @@ export function NumField({
         {label}
       </label>
       <div className="relative">
-        <input
+        <Input
           id={id}
           ref={inputRef}
           inputMode="decimal"
           autoComplete="off"
           disabled={disabled}
+          aria-invalid={invalid || undefined}
           placeholder={placeholder}
           value={text}
           onChange={(e) => onText(sanitize(e.target.value, decimals))}
           onKeyDown={onKeyDown}
           className={cn(
-            "w-full rounded-none border bg-input-bg px-2 font-medium tnum tabular-nums outline-none",
+            "rounded-none border bg-input-bg px-2 font-medium tnum tabular-nums",
             size === "default" ? "h-9" : "h-8 text-xs",
             align === "right" ? "text-right" : "text-left",
             unit && "pr-10",

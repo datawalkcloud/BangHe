@@ -30,6 +30,32 @@ export interface NativePrinterStatus {
   note: string;
 }
 
+/**
+ * 与 Rust `printer::WindowsPrinter` 对齐（camelCase）。
+ *
+ * 一条本机已安装的 Windows 打印队列（A4 / 针式这类走假脱机的打印机），与
+ * {@link NativePrinterDevice}（usbprint 直连小票机、按 VID/PID 寻址）互补：
+ * 这条靠 `name` 认机器，`port`/`isDefault` 帮现场把队列名对上桌上那台。
+ */
+export interface NativeWindowsPrinter {
+  name: string;
+  driver: string;
+  port: string;
+  share: string;
+  isDefault: boolean;
+  network: boolean;
+}
+
+/**
+ * 与 Rust `camera::LocalCamera` 对齐（camelCase）。本机接的一个视频输入设备
+ * （内置 / USB 摄像头），由 Media Foundation 枚举而来；`deviceId` 是稳定符号链接，
+ * 与网络摄像机按 IP 寻址是两套。
+ */
+export interface NativeLocalCamera {
+  name: string;
+  deviceId: string;
+}
+
 /** 与 Rust `printer::PrintOutcome` 对齐 */
 export interface NativePrintOutcome {
   ok: boolean;
@@ -74,6 +100,32 @@ export interface ReceiptTicket {
   open_drawer: boolean;
 }
 
+/**
+ * 一条通用小票行，与 Rust `ticket_core::model::PrintLine` 对齐。
+ *
+ * 这是**自定义模板的打印出口**：票面由前端按用户当前模板排好交过来，Rust 只把每行
+ * 翻成 ESC/POS 指令，不再认任何一种写死的票面结构。字段名一律单词、与 Rust 同形——
+ * 大小写约定只在一处（`#[serde(tag = "kind", rename_all = "camelCase")]`）。
+ */
+export type NativePrintLine =
+  | {
+      kind: "text";
+      text: string;
+      align?: "left" | "center" | "right";
+      bold?: boolean;
+      underline?: boolean;
+      reverse?: boolean;
+      /** 字宽倍数，1 = 常规 */
+      wide?: number;
+      /** 字高倍数 */
+      tall?: number;
+    }
+  | { kind: "kv"; label: string; value: string }
+  | { kind: "pair"; l1: string; v1: string; l2: string; v2: string }
+  | { kind: "rule" }
+  | { kind: "feed"; n: number }
+  | { kind: "qr"; text: string };
+
 export type NativeResult<T> =
   | { available: true; data?: T; error?: string }
   | { available: false; error: string };
@@ -108,6 +160,9 @@ export const nativePrinter = {
   /** 可直连的小票机列表（设备中心下拉的数据源） */
   list: () => call<NativePrinterDevice[]>("printer_list"),
 
+  /** 本机已安装的 Windows 打印队列（A4 / 针式按打印机名挑机），与 list 的 usbprint 直连互补 */
+  listQueues: () => call<NativeWindowsPrinter[]>("printer_list_queues"),
+
   /** 问一次实时状态，不出纸 */
   status: (dev?: { vid?: number; pid?: number }) =>
     call<{ device: NativePrinterDevice; status: NativePrinterStatus }>("printer_status", {
@@ -126,6 +181,32 @@ export const nativePrinter = {
   /** 打过磅码单（票面内容由调用方快照好交过来） */
   weighTicket: (ticket: ReceiptTicket) =>
     call<NativePrintOutcome>("print_weigh_ticket", { ticket }),
+
+  /**
+   * 打「前端按用户模板排好版」的通用小票。
+   *
+   * 与 {@link weighTicket} 的分工：那张票的版式写死在 Rust（热敏码单标准版），
+   * 这里的票面完全由前端当前模板决定——新增票据、勾掉字段都不必改 Rust。
+   * 只吃 58 / 80 热敏纸：A4 与针式要走系统打印队列，不是同一台机器。
+   *
+   * `cols` 是现场实测列数（汉字占 2 列），传了就覆盖纸宽标称。票面折行几乎都是
+   * "标称列数比实机大"，实测入口在「小票模板 → 小票机列数」，值由自检票上的标尺读出。
+   */
+  receipt: (
+    lines: NativePrintLine[],
+    opts?: { paper?: NativePaper; vid?: number; pid?: number; copies?: number; openDrawer?: boolean; cols?: number },
+  ) =>
+    call<NativePrintOutcome>("print_receipt", {
+      input: {
+        lines,
+        paper: opts?.paper ?? null,
+        cols: opts?.cols ?? null,
+        vid: opts?.vid ?? null,
+        pid: opts?.pid ?? null,
+        copies: opts?.copies ?? null,
+        openDrawer: opts?.openDrawer ?? false,
+      },
+    }),
 };
 
 /* ------------------------------------------------------------------ *
@@ -190,4 +271,23 @@ export const nativeIdcard = {
       keyHex: opts?.keyHex ?? null,
       blocks: opts?.blocks ?? null,
     }),
+};
+
+/* ------------------------------------------------------------------ *
+ * 摄像机。网络摄像机（海康 ISAPI / 大华 CGI）走台账 host，不在此枚举；
+ * 这里只补「本机连接的 USB / 内置摄像头」的发现（Media Foundation）。
+ * ------------------------------------------------------------------ */
+
+export const nativeCamera = {
+  /** 本机接的摄像头列表（添加设备表单「扫描本机摄像头」的数据源） */
+  listLocal: () => call<NativeLocalCamera[]>("camera_list_local"),
+};
+
+/* ------------------------------------------------------------------ *
+ * 串口（地磅、钱箱等 RS-232 设备）。按名称选端口，避免手填 COM 号出错。
+ * ------------------------------------------------------------------ */
+
+export const nativeSerial = {
+  /** 本机串口列表（添加设备表单「串口」下拉的数据源） */
+  list: () => call<string[]>("serial_list"),
 };

@@ -211,6 +211,14 @@ pub struct VarietyInput {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DeleteVarietyInput {
+    pub id: i64,
+    /// 前端透传，后端以会话为准忽略
+    #[serde(default)]
+    pub operator_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct WarehouseInput {
     pub id: Option<i64>,
     pub code: String,
@@ -402,6 +410,49 @@ pub fn save_variety(conn: &Connection, actor: &AuthProfile, input: VarietyInput)
             Ok(row)
         }
     }
+}
+
+/// 删除品种（§3.4 档案表软删除：置 `deleted_at`，历史单据照旧能读回品种名）。
+///
+/// 先查引用：品种一旦被价目表 / 磅单 / 化验单挂过，就不能删——删掉会让历史价目与
+/// 台账找不到品种来源，那种只能「停用」（`is_active = 0`，留档保追溯）。这与设备删
+/// 除同一套纪律：有业务历史的拒删，只允许清理错录。
+pub fn delete_variety(conn: &Connection, actor: &AuthProfile, id: i64) -> Result<Variety, String> {
+    let row = variety_by_id(conn, id)?;
+    let refs = |sql: &str| -> Result<i64, String> {
+        conn.query_row(sql, params![id], |r| r.get(0))
+            .map_err(|e| format!("检查品种引用失败：{e}"))
+    };
+    let in_price = refs("SELECT COUNT(*) FROM price_list WHERE variety_id = ?1")?;
+    let in_order = refs("SELECT COUNT(*) FROM weigh_order WHERE variety_id = ?1")?;
+    let in_qc = refs("SELECT COUNT(*) FROM qc_report WHERE variety_id = ?1")?;
+    if in_price > 0 || in_order > 0 || in_qc > 0 {
+        let mut parts: Vec<String> = Vec::new();
+        if in_price > 0 {
+            parts.push(format!("价目表 {in_price} 条"));
+        }
+        if in_order > 0 {
+            parts.push(format!("磅单 {in_order} 条"));
+        }
+        if in_qc > 0 {
+            parts.push(format!("化验单 {in_qc} 条"));
+        }
+        let reason = format!(
+            "品种「{}」仍被{}引用，不能删除；如不再使用请改为「停用」",
+            row.name,
+            parts.join("、")
+        );
+        audit(conn, actor, "variety.delete", "grain_variety", &row.code, Some(&reason));
+        return Err(reason);
+    }
+    conn.execute(
+        "UPDATE grain_variety SET deleted_at = ?1, is_active = 0, updated_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        params![now_iso(), id],
+    )
+    .map_err(|e| format!("品种删除失败：{e}"))?;
+    audit(conn, actor, "variety.delete", "grain_variety", &row.code, None);
+    Ok(row)
 }
 
 const SLOT_COLS: &str = "id, warehouse_id, code, COALESCE(label, code), is_active";
@@ -626,10 +677,6 @@ pub fn save_price(conn: &Connection, actor: &AuthProfile, input: PriceInput) -> 
     }
     if input.effective_from > input.effective_to {
         return Err("生效起始日不能晚于截止日".into());
-    }
-    if input.basis.trim().is_empty() {
-        // 01 §F2.3：历史价是已结算单的计算依据，定价依据是它唯一的可追溯出处
-        return Err("定价依据必填（文件号或市场报价来源）".into());
     }
     let variety: i64 = conn
         .query_row(
@@ -1071,6 +1118,15 @@ pub async fn master_save_variety(app: AppHandle, input: VarietyInput) -> Result<
     tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| save_variety(conn, &actor, input)))
         .await
         .map_err(|e| format!("品种保存任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn master_delete_variety(app: AppHandle, input: DeleteVarietyInput) -> Result<Variety, String> {
+    let pool = pool_of(&app)?;
+    let actor = operator(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| delete_variety(conn, &actor, input.id)))
+        .await
+        .map_err(|e| format!("品种删除任务失败：{e}"))?
 }
 
 #[tauri::command]

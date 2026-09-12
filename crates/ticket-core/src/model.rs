@@ -30,6 +30,19 @@ impl Paper {
             Paper::P80 => "80mm 热敏",
         }
     }
+
+    /// 实际排版用的列数：`override_cols` 是现场实测值，`None` 时用纸宽标称。
+    ///
+    /// 为什么必须留这个口子：票面折行的头号原因不是版式，而是"声明 48 列、实机只有 32 列"。
+    /// 真实列数随机型、驱动、纸宽、字库模式而变，标称值只能当默认。实测入口在
+    /// 「小票模板 → 小票机列数」，自检票上的标尺就是用来读这个数的。
+    /// 小于 16 列的输入按无效处理——连一个"身份证号(脱敏)"都放不下，必是误填。
+    pub fn cols_with(&self, override_cols: Option<u8>) -> usize {
+        match override_cols {
+            Some(c) if c >= 16 => c as usize,
+            _ => self.cols(),
+        }
+    }
 }
 
 /// 过磅码单（热敏小票）。与 A4/针式套打的 `sheets.tsx` 同源同字段，只是版式随纸。
@@ -113,4 +126,66 @@ impl WeighTicket {
             self.copies.min(6)
         }
     }
+}
+
+/// 文本行的水平对齐。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// 通用小票行：**自定义模板的打印出口**。
+///
+/// 与 [`WeighTicket`] 的分工——那张票的版式写死在本 crate（热敏码单的标准版），
+/// 而这里不含任何业务字段：票面由前端按用户当前模板一行行排好交过来，Rust 只把每行
+/// 翻成 ESC/POS 指令。于是"改版式不动 Rust"这条承诺才成立——新增一种票据、
+/// 勾掉一个字段，变的都只是这个行序列。
+///
+/// 字段名一律用单词（text / label / value / …），serde 只重命名 variant；
+/// 这样前后端不必为 camelCase 还是 snake_case 互猜，也对齐 `WeighTicket` 的既有约定。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PrintLine {
+    /// 整行文本。样式只作用于这一行——`write_lines` 打完立即复位，不串到下一行去
+    Text {
+        text: String,
+        #[serde(default)]
+        align: TextAlign,
+        #[serde(default)]
+        bold: bool,
+        #[serde(default)]
+        underline: bool,
+        #[serde(default)]
+        reverse: bool,
+        /// 字宽倍数（1 = 常规，2 = 倍宽）
+        #[serde(default = "scale_one")]
+        wide: u8,
+        /// 字高倍数
+        #[serde(default = "scale_one")]
+        tall: u8,
+    },
+    /// 标签 + 右对齐数值（热敏票最常见的"项目 …… 数值"）
+    Kv { label: String, value: String },
+    /// 一行两组键值，用于"水分 / 杂质"这类并列项
+    Pair {
+        l1: String,
+        v1: String,
+        l2: String,
+        v2: String,
+    },
+    /// 铺满一行的分隔线
+    Rule,
+    /// 走纸 n 行
+    Feed { n: u8 },
+    /// 二维码；内容为空则整行跳过，不留一个空码
+    Qr { text: String },
+}
+
+/// serde 缺省字号：1 倍（常规）。0 会被 escpos 当作非法尺寸，不能让它成为默认值。
+fn scale_one() -> u8 {
+    1
 }

@@ -20,7 +20,6 @@ const MASTERS_SECTIONS: Record<string, string> = {
   warehouses: "仓房与货位",
   prices: "收购价目表",
   settings: "站点参数",
-  staff: "员工与岗位",
 };
 
 const REPORTS_KINDS: Record<string, string> = {
@@ -33,10 +32,12 @@ const REPORTS_KINDS: Record<string, string> = {
 
 const SYSTEM_SECTIONS: Record<string, string> = {
   users: "登录与权限",
+  staff: "员工与岗位",
   audit: "操作审计",
   backup: "备份与恢复",
   shift: "日结交班",
   appearance: "外观与主题",
+  templates: "小票模板",
 };
 
 export function getBreadcrumbItems(pathname: string, search?: Record<string, unknown>): BreadcrumbItemDef[] {

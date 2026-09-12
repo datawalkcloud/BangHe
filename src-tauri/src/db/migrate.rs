@@ -5,8 +5,9 @@
 //! 更到 0.2.0 时会自动补跑中间每个脚本，不存在"漏跑一个语句"这种状态。
 //!
 //! 三条硬规矩（改这里之前先读）：
-//!   1. 每个脚本在**单个事务**内执行，DDL 与记账一起提交：失败整体回滚，
-//!      绝不会留下"改了一半、账上没记"的库（`app_meta.schema_version` 同理）。
+//!   1. 每个脚本各自在**单个事务**内执行，DDL 与记账一起提交：任一脚本失败只回滚它自己，
+//!      绝不会留下"这一条改了一半、账上没记"的库（`app_meta.schema_version` 同理）。
+//!      注意粒度是逐脚本——序号更早的脚本此时已经提交，数据库不保证回到迁移前的原样。
 //!   2. 已应用的脚本被改动 → 校验和比对失败，直接拒绝启动。要修数据请新开一个脚本。
 //!      校验和按内容算（哈希前 CRLF→LF 归一），换行符差异不算改动。
 //!   3. 库结构版本高于本程序能理解的版本 → 拒绝启动并提示从 `backup/` 恢复迁移前快照，
@@ -91,6 +92,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0007_user_preference.sql",
         sql: include_str!("migrations/0007_user_preference.sql"),
     },
+    Migration {
+        name: "0008_backup_auto_interval.sql",
+        sql: include_str!("migrations/0008_backup_auto_interval.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]
@@ -99,7 +104,7 @@ pub enum MigrateError {
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("迁移脚本 {name} 执行失败，已整体回滚，数据库保持原样：\n{reason}")]
+    #[error("迁移脚本 {name} 执行失败并已回滚；注意本次运行中更早序号的脚本已经单独提交，数据库并非保持原样——\n请按 schema_migration 台账核对当前实际版本，必要时从 backup/ 下的 pre-migrate 快照恢复：\n{reason}")]
     Failed { name: String, reason: String },
     #[error("已应用的迁移脚本 {name} 与程序内嵌的内容不一致（库内记录 {recorded}，当前 {current}）。\n历史脚本一律不允许修改；需要修正数据请新增一个脚本。")]
     ChecksumMismatch {

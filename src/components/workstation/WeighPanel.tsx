@@ -88,7 +88,11 @@ export function WeighPanel({
         weight_01kg: args.weight_01kg,
         source: args.source,
         operator_id: actorId(),
-        raw_frame: args.source === "scale" ? `=W${(args.weight_01kg / 10).toFixed(1)}kg ST` : undefined,
+        raw_frame:
+          args.source === "scale"
+            ? // 真机流的原帧是迎检时唯一能对回仪表报文的证据；只有模拟流才用合成句占位
+              (scale.rawFrame ?? `=W${(args.weight_01kg / 10).toFixed(1)}kg ST`)
+            : undefined,
         has_photo: cameraOnline,
         tare_override: args.override ?? null,
       }),
@@ -146,7 +150,7 @@ export function WeighPanel({
 
   function captureLive(type: "gross" | "tare") {
     if (!scale.connected) {
-      toast.error("仪表离线，请改用手工录入");
+      toast.error(scale.error ? `仪表离线：${scale.error}` : "仪表离线，请改用手工录入");
       return;
     }
     if (!scale.stable) {
@@ -242,7 +246,9 @@ export function WeighPanel({
         </div>
         {!order && <p className="text-xs text-warning">尚未制单，取号后才能捕获重量。</p>}
         {order && !scale.connected && (
-          <p className="text-xs text-destructive">仪表离线：可打开下方手工录入继续作业，本单将永久标记为「手录」。</p>
+          <p className="text-xs text-destructive">
+            仪表离线{scale.error ? `：${scale.error}` : ""}。可打开下方手工录入继续作业，本单将永久标记为「手录」。
+          </p>
         )}
         {order && scale.connected && !scale.stable && (
           <p className="text-xs text-warning">读数未稳定（窗口内波动超容差），捕获按钮已锁定。</p>
@@ -309,28 +315,30 @@ export function WeighPanel({
           </div>
         )}
 
-        {/* mock 专用：没有真车，用这组按钮把"上磅/下磅"演出来 */}
-        <div className="flex flex-wrap items-center gap-1.5 border-t pt-1.5 text-[11px]">
-          <span className="flex items-center gap-1 text-muted-foreground">
-            <KeyboardIcon className="size-3" />
-            演示
-          </span>
-          <Input
-            aria-label="模拟载重"
-            value={simKg}
-            onChange={(e) => setSimKg(e.target.value)}
-            className="tnum h-7 w-20 text-xs px-1.5"
-          />
-          <span className="text-muted-foreground">kg</span>
-          <Button size="xs" variant="outline" onClick={() => scale.driveOn(Number(simKg) || 0)} className="h-7 text-xs">
-            <CarFrontIcon />
-            上磅
-          </Button>
-          <Button size="xs" variant="outline" onClick={() => scale.driveOff()} className="h-7 text-xs">
-            <CarIcon />
-            下磅
-          </Button>
-        </div>
+        {/* 演示专用：没有真车，用这组按钮把"上磅/下磅"演出来；真机流的上磅由车说了算 */}
+        {scale.source === "demo" && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t pt-1.5 text-[11px]">
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <KeyboardIcon className="size-3" />
+              演示
+            </span>
+            <Input
+              aria-label="模拟载重"
+              value={simKg}
+              onChange={(e) => setSimKg(e.target.value)}
+              className="tnum h-7 w-20 text-xs px-1.5"
+            />
+            <span className="text-muted-foreground">kg</span>
+            <Button size="xs" variant="outline" onClick={() => scale.driveOn(Number(simKg) || 0)} className="h-7 text-xs">
+              <CarFrontIcon />
+              上磅
+            </Button>
+            <Button size="xs" variant="outline" onClick={() => scale.driveOff()} className="h-7 text-xs">
+              <CarIcon />
+              下磅
+            </Button>
+          </div>
+        )}
       </CardContent>
 
       <AlertDialog

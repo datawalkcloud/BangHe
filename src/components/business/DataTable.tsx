@@ -173,11 +173,12 @@ export function DataTable<T>({
                     )}
                   >
                     {c.sortValue ? (
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
                         onClick={() => toggleSort(c.key)}
                         className={cn(
-                          "inline-flex items-center gap-1 hover:text-foreground",
+                          "h-auto gap-1 px-0 hover:bg-transparent hover:text-foreground",
                           c.align === "right" && "flex-row-reverse",
                           active && "text-foreground",
                         )}
@@ -188,7 +189,7 @@ export function DataTable<T>({
                         ) : (
                           <ArrowUpDownIcon className="size-3.5 opacity-40" />
                         )}
-                      </button>
+                      </Button>
                     ) : (
                       c.header
                     )}

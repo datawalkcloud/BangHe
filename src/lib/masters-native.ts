@@ -51,6 +51,7 @@ function routeSave<T, I>(cmd: string, demo: (input: I) => Promise<T>) {
 }
 
 export type VarietyInput = Parameters<typeof mock.saveVariety>[0];
+export type DeleteVarietyInput = { id: number; operator_id: number };
 export type PriceInput = Parameters<typeof mock.savePrice>[0];
 export type StaffInput = Parameters<typeof mock.saveStaff>[0];
 /** 仓房/货位的写入接口 mock 层从来没有（那个分区一直标着"只读"），签名按 Rust 的 Input 定 */
@@ -86,6 +87,7 @@ export const mastersApi = {
     runningInTauri() ? call<SettingRow[]>("master_settings").then(mergeSettings) : mock.settings(),
 
   saveVariety: routeSave<GrainVariety, VarietyInput>("master_save_variety", (i) => mock.saveVariety(i)),
+  deleteVariety: routeSave<GrainVariety, DeleteVarietyInput>("master_delete_variety", (i) => mock.deleteVariety(i.id, i.operator_id)),
   savePrice: routeSave<PriceList, PriceInput>("master_save_price", (i) => mock.savePrice(i)),
   saveStaff: routeSave<UserAccount, StaffInput>("master_save_staff", (i) => mock.saveStaff(i)),
 

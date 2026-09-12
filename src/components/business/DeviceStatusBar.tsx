@@ -6,6 +6,7 @@
  *
  * 状态同时用图形符号 + 中文文字表达，不依赖颜色（色弱、黑白打印、远程截图）。
  */
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { KeyboardIcon, VolumeXIcon } from "lucide-react";
@@ -64,7 +65,9 @@ function Chip({
 
 export function DeviceStatusBar() {
   const scale = useDeviceStore((s) => s.scale);
-  const idcard = useDeviceStore((s) => s.idcard);
+  const reader = useDeviceStore((s) => s.reader);
+  const probeReader = useDeviceStore((s) => s.reader.probe);
+  const setReaderMocked = useDeviceStore((s) => s.reader.setMocked);
   const camera = useDeviceStore((s) => s.camera);
   const printer = useDeviceStore((s) => s.printer);
   const mockOff = useDeviceStore((s) => s.mockOff);
@@ -78,12 +81,36 @@ export function DeviceStatusBar() {
   const cfg = (code: string) => devices.find((d) => d.code === code);
 
   const scaleCfg = cfg("scale1");
+  const readerCfg = cfg("idcard1");
   const camCfg = cfg("cam1");
   const prtCfg = devices.find((d) => d.kind === "printer" && d.is_default === 1) ?? cfg("prt1");
+
+  // 台账的 Mock 标记决定读卡走真机还是演示卡。底栏常驻、且已经加载了设备清单，
+  // 就由它把这条同步进 store，工作台和档案页的读卡按钮因此不必各判一遍。
+  useEffect(() => {
+    setReaderMocked(readerCfg?.is_mock === 1);
+  }, [readerCfg?.is_mock, setReaderMocked]);
+
+  // 启动时探一次，底栏那颗灯才有真机依据；探测只开设备问 SAM，不占读卡时序
+  useEffect(() => {
+    void probeReader();
+  }, [probeReader, mockOff, readerCfg?.is_mock]);
 
   const scaleDetail = scale.connected
     ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg)} · ${scale.stable ? "稳" : "不稳"}`
     : `${String(scaleCfg?.config.port ?? "COM3")} 离线，可改手录`;
+
+  // 两条通道各自刚读了谁／哪张卡，底栏只放得下一句，按最近一次成功的那条说
+  const readerDetail =
+    reader.status === "online"
+      ? reader.idcard.last
+        ? `在线 · 刚读 ${reader.idcard.last.name}`
+        : reader.ic.last
+          ? `在线 · 刚读 IC ${reader.ic.last.sn}`
+          : "在线"
+      : reader.status === "unknown"
+        ? "未检测，读卡时自动探测"
+        : (reader.lastProbe?.error ?? "离线，可手工输入身份证号");
 
   return (
     <footer className="flex h-8 shrink-0 items-center gap-3 border-t bg-muted/40 px-3 select-none">
@@ -96,17 +123,8 @@ export function DeviceStatusBar() {
           deviceCode="scale1"
         />
         <Separator orientation="vertical" className="h-4 shrink-0" />
-        {/* 底栏给磅房操作员看，不摆驱动代码（bridge_exe 这类），只说能不能读卡、刚读了谁 */}
-        <Chip
-          title="证"
-          status={idcard.status}
-          detail={
-            idcard.status === "online"
-              ? `在线${idcard.last ? ` · 刚读 ${idcard.last.name}` : ""}`
-              : "离线，可手工输入身份证号"
-          }
-          deviceCode="idcard1"
-        />
+        {/* 底栏给磅房操作员看，不摆驱动代码（routon_sdtapi 这类），只说能不能读卡、刚读了谁 */}
+        <Chip title="卡" status={reader.status} detail={readerDetail} deviceCode="idcard1" />
         <Separator orientation="vertical" className="h-4 shrink-0" />
         <Chip
           title="像"

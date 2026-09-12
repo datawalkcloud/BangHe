@@ -66,8 +66,7 @@ import {
   WeightSourceBadge,
 } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid } from "@/components/business/layout";
-import { PrintPreview } from "@/components/print/PrintPreview";
-import { QcReportSheet, SettlementVoucherSheet, WeighOrderSheet } from "@/components/print/sheets";
+import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { cn } from "cn";
 
 export type QuickDetailType = "order" | "party" | "qc" | "settlement";
@@ -89,6 +88,14 @@ export const useQuickDetail = create<QuickDetailStore>((set) => ({
   close: () => set({ target: null }),
 }));
 
+/**
+ * 抽屉内联跳转链接。
+ *
+ * 用 shadcn Button 的 link 变体而不是裸 <button>：底色/下划线/悬停/焦点环都跟
+ * 全站其它可点元素走同一套 token。Button 自带 h-9 + px-3 + text-sm，
+ * 在正文里要按"行内文本"用，所以 h-auto/p-0 压掉盒子，字号仍由调用方的 className 决定
+ * （InfoGrid 的 dd 本身就是 text-sm，明细行里则显式传 text-xs）。
+ */
 export function QuickDetailLink({
   type,
   id,
@@ -102,16 +109,17 @@ export function QuickDetailLink({
 }) {
   const open = useQuickDetail((s) => s.open);
   return (
-    <button
+    <Button
       type="button"
+      variant="link"
       onClick={(e) => {
         e.stopPropagation();
         open(type, id);
       }}
-      className={cn("cursor-pointer underline underline-offset-2 hover:opacity-80", className)}
+      className={cn("h-auto cursor-pointer p-0 underline underline-offset-2 hover:opacity-80", className)}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -122,7 +130,6 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
   const { data: staff = [] } = useQuery({ queryKey: ["staff"], queryFn: () => api.staff() });
-  const openQuickDetail = useQuickDetail((s) => s.open);
 
   const [printDoc, setPrintDoc] = useState<"weigh_order" | "quality_report" | null>(null);
   const [voidOpen, setVoidOpen] = useState(false);
@@ -250,13 +257,9 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           {
             label: "售粮人 / 单位",
             value: (
-              <button
-                type="button"
-                onClick={() => openQuickDetail("party", order.party_id)}
-                className="text-primary underline underline-offset-2"
-              >
+              <QuickDetailLink type="party" id={order.party_id}>
                 {order.party_name}
-              </button>
+              </QuickDetailLink>
             ),
           },
           { label: "车牌号", value: <span className="tnum font-medium">{orDash(order.vehicle_no)}</span> },
@@ -271,14 +274,10 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           {
             label: "化验结果",
             value: qc ? (
-              <button
-                type="button"
-                onClick={() => openQuickDetail("qc", qc.report_no)}
-                className="inline-flex items-center gap-1.5 text-primary underline underline-offset-2"
-              >
+              <QuickDetailLink type="qc" id={qc.report_no}>
                 <QcDecisionBadge decision={qc.decision} />
                 <span className="tnum">{qc.report_no}</span>
-              </button>
+              </QuickDetailLink>
             ) : (
               "无质检"
             ),
@@ -286,13 +285,9 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           {
             label: "结算单号",
             value: settlement ? (
-              <button
-                type="button"
-                onClick={() => openQuickDetail("settlement", settlement.settlement.settle_no)}
-                className="tnum text-primary underline underline-offset-2"
-              >
+              <QuickDetailLink type="settlement" id={settlement.settlement.settle_no} className="tnum">
                 {settlement.settlement.settle_no}
-              </button>
+              </QuickDetailLink>
             ) : (
               "未结算"
             ),
@@ -326,19 +321,20 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
         </div>
       )}
 
-      <PrintPreview
-        open={!!printDoc}
-        onOpenChange={(open) => !open && setPrintDoc(null)}
-        title={printDoc === "weigh_order" ? `过磅单 ${order.order_no}` : `质检单 ${qc?.report_no ?? ""}`}
-        docType={printDoc ?? "weigh_order"}
-      >
-        {printDoc === "weigh_order" && station && (
-          <WeighOrderSheet order={order} station={station} operatorName={names(order.operator_id)} />
-        )}
-        {printDoc === "quality_report" && qc && station && (
-          <QcReportSheet report={qc} station={station} inspectorName={names(qc.inspector_id)} />
-        )}
-      </PrintPreview>
+      {station && printDoc && (
+        <ReceiptPrintPreview
+          open={!!printDoc}
+          onOpenChange={(open) => !open && setPrintDoc(null)}
+          scenario={printDoc === "quality_report" ? "quality_report" : "weigh_order"}
+          context={
+            printDoc === "quality_report" && qc
+              ? { station, names, qc, reprint: true }
+              : { station, names, order, qc, reprint: true }
+          }
+          isReprint
+          docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
+        />
+      )}
 
       <AlertDialog open={voidOpen} onOpenChange={setVoidOpen}>
         <AlertDialogContent>
@@ -385,7 +381,6 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
 
 // ---------------- 2. 农户档案详情抽屉 ----------------
 function PartyQuickDetailContent({ partyId }: { partyId: number }) {
-  const openQuickDetail = useQuickDetail((s) => s.open);
   const { data: detail, isLoading } = useQuery({
     queryKey: ["party", partyId],
     queryFn: () => api.getParty(partyId),
@@ -441,13 +436,9 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
             {myCredits.map((c) => (
               <div key={c.settlement.settle_no} className="flex items-center justify-between border p-2 text-xs">
                 <div>
-                  <button
-                    type="button"
-                    onClick={() => openQuickDetail("settlement", c.settlement.settle_no)}
-                    className="tnum font-medium text-primary underline"
-                  >
+                  <QuickDetailLink type="settlement" id={c.settlement.settle_no} className="tnum font-medium text-xs">
                     {c.settlement.settle_no}
-                  </button>
+                  </QuickDetailLink>
                   <span className="text-muted-foreground ml-2">{c.settlement.settle_date}</span>
                 </div>
                 <div className="tnum font-bold text-destructive">未付：{money(c.unpaid_fen)}</div>
@@ -464,13 +455,9 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
             {detail.recentOrders.slice(0, 10).map((r) => (
               <div key={r.order_no} className="flex items-center justify-between border-b py-1.5 text-xs last:border-b-0">
                 <div>
-                  <button
-                    type="button"
-                    onClick={() => openQuickDetail("order", r.order_no)}
-                    className="tnum font-medium text-primary underline"
-                  >
+                  <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-xs">
                     {r.order_no}
-                  </button>
+                  </QuickDetailLink>
                   <span className="text-muted-foreground ml-2">{r.business_date} · {r.variety_name}</span>
                 </div>
                 <div className="text-right">
@@ -608,13 +595,9 @@ function SettlementQuickDetailContent({ settleNo }: { settleNo: string }) {
           {orders.map((o) => (
             <div key={o.order_no} className="flex items-center justify-between border-b py-1.5 text-xs last:border-b-0">
               <div>
-                <button
-                  type="button"
-                  onClick={() => openQuickDetail("order", o.order_no)}
-                  className="tnum font-medium text-primary underline"
-                >
+                <QuickDetailLink type="order" id={o.order_no} className="tnum font-medium text-xs">
                   {o.order_no}
-                </button>
+                </QuickDetailLink>
                 <span className="text-muted-foreground ml-2">{o.variety_name}</span>
               </div>
               <div className="text-right">

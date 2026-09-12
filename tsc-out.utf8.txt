@@ -1,0 +1,42 @@
+﻿src/components/business/QuickDetailSheet.tsx(5,3): error TS6133: 'AlertTriangleIcon' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(6,3): error TS6133: 'BanknoteIcon' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(10,3): error TS6133: 'UserIcon' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(16,3): error TS6133: 'GRADES' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(21,3): error TS6133: 'PAYMENT_STATUS' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(23,3): error TS6133: 'WEIGHT_SOURCE' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(34,10): error TS6133: 'useSetting' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(59,1): error TS6133: 'MoneyLine' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(153,9): error TS6133: 'partyDetail' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(197,9): error TS6133: 'prints' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(244,61): error TS2339: Property 'authorized_by' does not exist on type 'WeighOrder'.
+src/components/business/QuickDetailSheet.tsx(270,83): error TS2551: Property 'deduction_weight_01kg' does not exist on type 'WeighOrder'. Did you mean 'net_weight_01kg'?
+src/components/business/QuickDetailSheet.tsx(272,58): error TS2322: Type '{ perTon: string; perJin: string; perKg: string; }' is not assignable to type 'ReactNode'.
+src/components/business/QuickDetailSheet.tsx(272,74): error TS2339: Property 'unit_price_fen' does not exist on type 'WeighOrder'.
+src/components/business/QuickDetailSheet.tsx(288,65): error TS2339: Property 'settlement' does not exist on type 'Settlement'.
+src/components/business/QuickDetailSheet.tsx(289,29): error TS2339: Property 'settlement' does not exist on type 'Settlement'.
+src/components/business/QuickDetailSheet.tsx(300,35): error TS2322: Type 'Column<WeighRecord>[]' is not assignable to type 'Column<unknown>[]'.
+  Type 'Column<WeighRecord>' is not assignable to type 'Column<unknown>'.
+    Type 'unknown' is not assignable to type 'WeighRecord'.
+src/components/business/QuickDetailSheet.tsx(300,74): error TS18046: 'r' is of type 'unknown'.
+src/components/business/QuickDetailSheet.tsx(300,83): error TS18046: 'r' is of type 'unknown'.
+src/components/business/QuickDetailSheet.tsx(309,29): error TS2339: Property 'url' does not exist on type 'CapturePhoto'.
+src/components/business/QuickDetailSheet.tsx(353,57): error TS2339: Property 'name' does not exist on type 'UserAccount'.
+src/components/business/QuickDetailSheet.tsx(354,17): error TS2322: Type '{ value: string; onChange: Dispatch<SetStateAction<string>>; options: { label: any; value: string; }[]; placeholder: string; }' is not assignable to type 'IntrinsicAttributes & { value: string; onChange: (v: string) => void; options?: readonly Option<string>[] | undefined; groups?: readonly { label: string; options: readonly Option<string>[]; }[] | undefined; ... 4 more ...; id?: string | undefined; }'.
+  Property 'placeholder' does not exist on type 'IntrinsicAttributes & { value: string; onChange: (v: string) => void; options?: readonly Option<string>[] | undefined; groups?: readonly { label: string; options: readonly Option<string>[]; }[] | undefined; ... 4 more ...; id?: string | undefined; }'.
+src/components/business/QuickDetailSheet.tsx(422,66): error TS2339: Property 'summary' does not exist on type 'PartyDetail'.
+src/components/business/QuickDetailSheet.tsx(423,72): error TS2339: Property 'summary' does not exist on type 'PartyDetail'.
+src/components/business/QuickDetailSheet.tsx(427,78): error TS2339: Property 'summary' does not exist on type 'PartyDetail'.
+src/components/business/QuickDetailSheet.tsx(428,81): error TS2339: Property 'summary' does not exist on type 'PartyDetail'.
+src/components/business/QuickDetailSheet.tsx(442,78): error TS2551: Property 'settle_date' does not exist on type 'Settlement'. Did you mean 'settled_at'?
+src/components/business/QuickDetailSheet.tsx(451,15): error TS2339: Property 'recentOrders' does not exist on type 'PartyDetail'.
+src/components/business/QuickDetailSheet.tsx(455,21): error TS2339: Property 'recentOrders' does not exist on type 'PartyDetail'.
+src/components/business/QuickDetailSheet.tsx(455,52): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/components/business/QuickDetailSheet.tsx(489,19): error TS6133: 'first' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(523,32): error TS2339: Property 'items' does not exist on type 'QcReport'.
+src/components/business/QuickDetailSheet.tsx(523,65): error TS2339: Property 'items' does not exist on type 'QcReport'.
+src/components/business/QuickDetailSheet.tsx(528,35): error TS2367: This comparison appears to be unintentional because the types 'IndicatorUnit' and '"%"' have no overlap.
+src/components/business/QuickDetailSheet.tsx(547,9): error TS6133: 'names' is declared but its value is never read.
+src/components/business/QuickDetailSheet.tsx(569,16): error TS2551: Property 'settle_date' does not exist on type 'Settlement'. Did you mean 'settled_at'?
+src/components/workstation/IdentityPanel.tsx(11,1): error TS6133: 'Link' is declared but its value is never read.
+src/pages/MastersPage.tsx(44,1): error TS6133: 'cn' is declared but its value is never read.
+src/pages/PaymentsPage.tsx(11,1): error TS6133: 'Link' is declared but its value is never read.

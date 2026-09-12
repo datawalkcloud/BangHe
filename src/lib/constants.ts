@@ -201,7 +201,9 @@ export type DeviceKind = "scale" | "idcard" | "camera" | "printer" | "led" | "ca
 
 export const DEVICE_KIND: Record<DeviceKind, string> = {
   scale: "称重仪表",
-  idcard: "身份证阅读器",
+  // 枚举值是数据库 CHECK 约束里的 'idcard'，改它要重建 device_config；精伦这台机兼读
+  // 身份证与 IC 卡，所以文案按能力说，具体能读哪几种由 lib/card-reader 的登记表决定
+  idcard: "证卡阅读器",
   camera: "抓拍摄像机",
   printer: "打印机",
   led: "户外显示屏",

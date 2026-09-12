@@ -3,8 +3,11 @@
  *
  * 现场真实诉求是"客户报个车牌或姓氏，我要立刻找到那张单"，
  * 所以命中项直接带出可跳转的单据/档案/结算单，而不是只给一个列表页链接。
+ *
+ * 列表用 shadcn 的 Command（cmdk）：上下键选择、回车打开、Esc 关闭都由它托管，
+ * 不必再自己维护 cursor 状态。检索本身在服务端做，因此要关掉 cmdk 的本地过滤。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { CreditCardIcon, FileTextIcon, UsersIcon } from "lucide-react";
@@ -16,9 +19,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Kbd } from "@/components/business/layout";
-import { cn } from "cn";
 
 interface Hit {
   key: string;
@@ -31,9 +40,11 @@ interface Hit {
   params?: Record<string, string | number>;
 }
 
+/** 结果分组的固定顺序：先单后档再结算，跟现场"手上有单就先找单"的习惯一致 */
+const GROUP_ORDER: Hit["group"][] = ["磅单", "售粮人", "结算单"];
+
 export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [kw, setKw] = useState("");
-  const [cursor, setCursor] = useState(0);
   const navigate = useNavigate();
 
   const { data } = useQuery({
@@ -77,8 +88,6 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     ];
   }, [data]);
 
-  useEffect(() => setCursor(0), [kw]);
-
   function go(h: Hit) {
     onOpenChange(false);
     // 命中项的 to/params 是从三个不同路由拼出来的 union，
@@ -95,52 +104,41 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
             <span className="text-xs font-normal text-muted-foreground">单号 / 姓名 / 证号后 4 位 / 车牌</span>
           </DialogTitle>
         </DialogHeader>
-        <div className="px-4 py-3">
-          <Input
-            autoFocus
-            value={kw}
-            onChange={(e) => setKw(e.target.value)}
-            placeholder="输入关键词…"
-            onKeyDown={(e) => {
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setCursor((c) => Math.min(hits.length - 1, c + 1));
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setCursor((c) => Math.max(0, c - 1));
-              } else if (e.key === "Enter" && hits[cursor]) {
-                e.preventDefault();
-                go(hits[cursor]);
-              }
-            }}
-          />
-        </div>
-        <ul className="max-h-[320px] overflow-y-auto pb-2">
-          {hits.map((h, i) => (
-            <li key={h.key}>
-              <button
-                type="button"
-                onClick={() => go(h)}
-                onMouseEnter={() => setCursor(i)}
-                className={cn(
-                  "flex w-full items-center gap-2 px-4 py-2 text-left text-sm",
-                  i === cursor && "bg-accent text-accent-foreground",
-                )}
-              >
-                <h.icon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="w-12 shrink-0 text-xs text-muted-foreground">{h.group}</span>
-                <span className="min-w-0 flex-1 truncate">{h.title}</span>
-                <span className="min-w-0 shrink basis-1/2 truncate text-xs text-muted-foreground">{h.desc}</span>
-                {h.trailing && <span className="tnum shrink-0 text-xs tabular-nums">{h.trailing}</span>}
-              </button>
-            </li>
-          ))}
-          {kw.trim() && hits.length === 0 && (
-            <li className="px-4 py-6 text-center text-sm text-muted-foreground">
-              没有匹配结果，换个关键词或到磅单中心按日期查
-            </li>
-          )}
-        </ul>
+        {/* 输入框容器自带 p-1，这里按对话框的 16 px 栅格纠正为 px-3。 */}
+        <Command
+          shouldFilter={false}
+          className="rounded-none bg-transparent p-0 [&_[data-slot=command-input-wrapper]]:px-3 [&_[data-slot=command-input-wrapper]]:pt-3"
+        >
+          <CommandInput autoFocus value={kw} onValueChange={setKw} placeholder="输入关键词…" />
+          <CommandList className="max-h-[320px] scroll-py-1">
+            <CommandEmpty className="px-4 py-6 text-muted-foreground">
+              {kw.trim() ? "没有匹配结果，换个关键词或到磅单中心按日期查" : "输入单号 / 姓名 / 证号后 4 位"}
+            </CommandEmpty>
+            {GROUP_ORDER.map((g) => {
+              const rows = hits.filter((h) => h.group === g);
+              if (rows.length === 0) return null;
+              return (
+                <CommandGroup key={g} heading={g}>
+                  {rows.map((h) => (
+                    <CommandItem
+                      key={h.key}
+                      value={h.key}
+                      onSelect={() => go(h)}
+                      // CommandItem 末尾挂了一个恒为 opacity-0 的选中勾（给可勾选命令用），
+                      // 这里不做勾选，直接藏掉，免得右端白留 1em
+                      className="gap-2 [&>svg:last-child]:hidden"
+                    >
+                      <h.icon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">{h.title}</span>
+                      <span className="min-w-0 shrink basis-1/2 truncate text-xs text-muted-foreground">{h.desc}</span>
+                      {h.trailing && <span className="tnum shrink-0 text-xs tabular-nums">{h.trailing}</span>}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              );
+            })}
+          </CommandList>
+        </Command>
         <div className="flex items-center gap-3 border-t px-4 py-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <Kbd>↑</Kbd>

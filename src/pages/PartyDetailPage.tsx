@@ -26,12 +26,21 @@ import { StatCard } from "@/components/business/StatCard";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "cn";
+
+/**
+ * 详情页只读明细表的紧凑排版（同 OrderDetailPage / QcDetailPage）。
+ * shadcn Table 默认的 h-12 表头 / p-3 单元格会把卡片撑开，这里用后代选择器压回
+ * py-1.5 / 无左右内边距 / 表头随行取色，特异性高于组件内置类，能稳定覆盖。
+ */
+const DETAIL_TABLE =
+  "border-collapse text-sm [&_th]:h-auto [&_th]:px-0 [&_th]:py-1.5 [&_th]:font-normal [&_th]:text-inherit [&_td]:px-0 [&_td]:py-1.5";
 
 export function PartyDetailPage() {
   const { id } = useParams({ from: "/parties/$id" });
   const partyId = Number(id);
-  const readCard = useDeviceStore((s) => s.idcard.read);
+  const readCard = useDeviceStore((s) => s.reader.idcard.read);
   const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
 
   const { data: detail, isLoading } = useQuery({
@@ -173,7 +182,8 @@ export function PartyDetailPage() {
                   { label: "证件号", value: <span className="tnum">{maskIdCard(detail.id_card_no)}</span> },
                   {
                     label: "证件核验",
-                    value: detail.id_card_verified === 1 ? <ToneBadge tone="success">已读卡核验</ToneBadge> : <ToneBadge tone="warning">仅手工录入</ToneBadge>,
+                    // 用词与 /parties 列表一致：同一状态不在两处叫两个名字（读卡带入即已核验）
+                    value: detail.id_card_verified === 1 ? <ToneBadge tone="success">已核验</ToneBadge> : <ToneBadge tone="warning">未核验</ToneBadge>,
                   },
                   { label: "联系电话", value: <span className="tnum">{orDash(detail.phone)}</span> },
                   { label: "默认车牌", value: <span className="tnum">{orDash(detail.default_vehicle_no)}</span> },
@@ -195,41 +205,41 @@ export function PartyDetailPage() {
                 <p className="text-sm text-muted-foreground">还没有皮重记录，第一次过磅后自动生成。</p>
               ) : (
                 <div className="flex flex-col gap-2">
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr className="border-b text-xs text-muted-foreground">
-                        <th className="py-1.5 text-left font-normal">日期</th>
-                        <th className="py-1.5 text-right font-normal">皮重</th>
-                        <th className="py-1.5 text-left font-normal">来源</th>
-                        <th className="py-1.5 text-right font-normal">与均值偏差</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                  <Table className={DETAIL_TABLE}>
+                    <TableHeader>
+                      <TableRow className="border-b text-xs text-muted-foreground hover:bg-transparent">
+                        <TableHead>日期</TableHead>
+                        <TableHead className="text-right">皮重</TableHead>
+                        <TableHead>来源</TableHead>
+                        <TableHead className="text-right">与均值偏差</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {detail.tareHistory.map((t, i) => {
                         const dev =
                           tareMean01kg != null && tolerancePct > 0
                             ? Math.abs(t.tare_01kg - tareMean01kg) > Math.round((tareMean01kg * tolerancePct) / 100)
                             : false;
                         return (
-                          <tr key={`${t.date}-${i}`} className={cn("border-b last:border-0", dev && "bg-warning-bg")}>
-                            <td className="tnum py-1.5">{t.date}</td>
-                            <td className="tnum py-1.5 text-right">{weight(t.tare_01kg)}</td>
-                            <td className="py-1.5">
+                          <TableRow key={`${t.date}-${i}`} className={cn("border-b hover:bg-transparent", dev && "bg-warning-bg")}>
+                            <TableCell className="tnum">{t.date}</TableCell>
+                            <TableCell className="tnum text-right">{weight(t.tare_01kg)}</TableCell>
+                            <TableCell>
                               {t.source === WEIGHT_SOURCE.scale.label ? (
                                 <span className="text-xs text-muted-foreground">{t.source}</span>
                               ) : (
                                 <ToneBadge tone="warning">{t.source}</ToneBadge>
                               )}
-                            </td>
-                            <td className="tnum py-1.5 text-right text-xs">
+                            </TableCell>
+                            <TableCell className="tnum text-right text-xs">
                               {tareMean01kg == null ? "—" : `${t.tare_01kg >= tareMean01kg ? "+" : "−"}${weight(Math.abs(t.tare_01kg - tareMean01kg), false)} kg`}
                               {dev && <span className="ml-1 text-warning">超容差</span>}
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                         );
                       })}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                   <p className="text-xs text-muted-foreground">
                     近 5 次均值 {tareMean01kg == null ? "—" : weight(tareMean01kg)}，
                     比对基准来自站点参数「皮重容差比例」；超容差时磅房会要求站长授权并留痕。

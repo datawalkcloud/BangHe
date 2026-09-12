@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "@/lib/api";
+import { runningInTauri } from "@/lib/native";
 import { DEFAULT_MODE, THEME_MODE_KEY } from "@/lib/theme";
 import { money, ton, weight } from "@/lib/format";
 import { useDeviceStore, useScaleTick } from "@/store/device";
@@ -14,19 +15,46 @@ import { cn } from "cn";
 export function DisplayView({ onExit }: { onExit: () => void }) {
   const scale = useDeviceStore((s) => s.scale);
   useScaleTick(220);
+  /** 只有独立展示窗能整屏；浏览器预览里这层是主窗口的覆盖层，没有窗口可全屏 */
+  const inWindow = runningInTauri();
+  const [fullscreen, setFullscreen] = useState(false);
   const { data } = useQuery({
     queryKey: ["dashboard"],
     queryFn: () => api.dashboard(),
     staleTime: 30_000,
   });
 
+  /**
+   * 只切 `setFullscreen`：无边框全屏在 Windows 上是 tao 按窗口 flag 重算样式，
+   * 退出时标题栏自己回来，不需要也不该再调 `setDecorations`。
+   */
+  const toggleFullscreen = useCallback(async () => {
+    const win = getCurrentWindow();
+    const next = !(await win.isFullscreen());
+    await win.setFullscreen(next);
+    setFullscreen(next);
+  }, []);
+
+  useEffect(() => {
+    if (!inWindow) return;
+    void getCurrentWindow()
+      .isFullscreen()
+      .then(setFullscreen)
+      .catch(() => {});
+  }, [inWindow]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onExit();
+      // 整屏之后没有标题栏可拖，F11 是不用摸黑找按钮的退路
+      if (event.key === "F11" && inWindow) {
+        event.preventDefault();
+        void toggleFullscreen();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onExit]);
+  }, [onExit, inWindow, toggleFullscreen]);
 
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center gap-6 bg-background px-8">
@@ -49,12 +77,26 @@ export function DisplayView({ onExit }: { onExit: () => void }) {
           金额 <span className="tnum text-3xl font-semibold text-foreground">{money(data?.today.goods_fen ?? 0)}</span>
         </p>
       </div>
-      <p className="mt-6 text-sm text-muted-foreground">
-        <Kbd>Esc</Kbd> 退出展示模式
+      <p className="mt-6 flex items-center gap-6 text-sm text-muted-foreground">
+        {inWindow && (
+          <span className="flex items-center gap-1.5">
+            <Kbd>F11</Kbd> 全屏 / 退出全屏
+          </span>
+        )}
+        <span className="flex items-center gap-1.5">
+          <Kbd>Esc</Kbd> 退出展示模式
+        </span>
       </p>
-      <Button variant="outline" size="sm" className="absolute top-4 right-4" onClick={onExit}>
-        退出
-      </Button>
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        {inWindow && (
+          <Button variant="outline" size="sm" onClick={() => void toggleFullscreen()}>
+            {fullscreen ? "退出全屏" : "全屏"}
+          </Button>
+        )}
+        <Button variant="outline" size="sm" onClick={onExit}>
+          退出
+        </Button>
+      </div>
     </div>
   );
 }

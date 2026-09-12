@@ -92,7 +92,11 @@ export function SettlePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order?.order_no, order?.settled_at]);
 
+  // 只有「现行价目原价取值」才算命中价目表；否则一律是手填价
+  const matchesList = listed != null && priceFenPerTon != null && priceFenPerTon === listed.price_fen_per_ton;
   const deviates = listed != null && priceFenPerTon != null && priceFenPerTon !== listed.price_fen_per_ton;
+  // 无生效价目时的手工定价与偏离价目同责，都必须留改价事由（01 §F2.3，与后端 settle 同口径）
+  const needsReason = priceFenPerTon != null && !matchesList;
 
   const preview = previewSettlement({
     net_weight_01kg: order?.net_weight_01kg ?? null,
@@ -119,8 +123,8 @@ export function SettlePanel({
         pay_now: payNow,
         payment_method: method,
         settler_id: actorId(),
-        price_list_id: !deviates && listed ? listed.id : null,
-        price_override_reason: deviates ? overrideReason.trim() : null,
+        price_list_id: matchesList && listed ? listed.id : null,
+        price_override_reason: needsReason ? overrideReason.trim() : null,
         party_signed: signed,
       }),
     onSuccess: (r) => {
@@ -148,8 +152,10 @@ export function SettlePanel({
         ? preview.blocked
         : priceFenPerTon == null
           ? "请填写单价，或按 F6 从价目表带出"
-          : deviates && overrideReason.trim().length < 4
-            ? "偏离价目表，必须填写改价事由"
+          : needsReason && overrideReason.trim().length < 4
+            ? deviates
+              ? "偏离价目表，必须填写改价事由"
+              : "当前无生效价目，手工定价必须填写改价事由"
             : payNow
               ? null
               : !allowCredit
@@ -191,7 +197,7 @@ export function SettlePanel({
             valueFenPerTon={priceFenPerTon}
             onChange={setPrice}
             disabled={settled}
-            hint={deviates ? "已偏离价目表现行价" : undefined}
+            hint={deviates ? "已偏离价目表现行价" : listed == null && priceFenPerTon != null ? "无生效价目，手工定价" : undefined}
           />
           <div className="flex items-center justify-between gap-1">
             <span className="text-[11px] text-muted-foreground truncate">
@@ -201,7 +207,7 @@ export function SettlePanel({
               从价目带出（F6）
             </Button>
           </div>
-          {deviates && (
+          {needsReason && (
             <Label className="flex flex-col gap-0.5 text-xs text-warning">
               改价事由（迎检必查）
               <Input

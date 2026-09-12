@@ -134,6 +134,10 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
     hint: "留空即应用数据目录下的 backup",
   },
   { key: "backup_keep_count", demo: "30", label: "备份保留份数", group: "retain", kind: "number" },
+  {
+    key: "backup_auto_interval_days", demo: "1", label: "自动备份间隔（天）", group: "retain", kind: "number",
+    hint: "程序每小时醒一次比对上次副本的时间，够数才补一份；填 0 按 1 天处理",
+  },
 ];
 
 /** 浏览器演示模式：目录 + 演示值，字段形状与桌面端返回的 `AppSetting` 完全一致 */

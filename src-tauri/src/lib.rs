@@ -3,14 +3,21 @@ mod idcard;
 mod printer;
 
 pub mod auth;
+pub mod camera;
 pub mod dashboard;
 pub mod db;
+pub mod devices;
 pub mod domain;
 pub mod ledger;
 pub mod masters;
 pub mod orders;
+pub mod payments;
 pub mod prefs;
+pub mod qc;
 pub mod reports;
+pub mod scale;
+pub mod search;
+pub mod serial;
 pub mod settlements;
 pub mod system;
 
@@ -34,6 +41,8 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // 只用到"选一个已存在的文件"这一个能力：备份页导入外部副本的原生文件选择框
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app
                 .path()
@@ -54,6 +63,11 @@ pub fn run() {
                     }
                     app.manage(database);
                     app.manage(auth::AuthState::default());
+                    // 地磅读线程的归宿：start/stop/status 三个命令共用这一个通道句柄
+                    app.manage(scale::ScaleHub::default());
+                    // 自动备份线程必须在上面几个 manage 之后起：它第一轮就要取 `Db` 与
+                    // 备份目录，早一步只会拿到"数据库尚未就绪"然后整天空转。
+                    system::spawn_auto_backup(app.handle().clone());
                     Ok(())
                 }
                 Err(e) => {
@@ -66,9 +80,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             printer::printer_list,
+            printer::printer_list_queues,
             printer::printer_status,
             printer::printer_self_test,
             printer::print_weigh_ticket,
+            printer::print_receipt,
+            camera::camera_list_local,
             auth::auth_login,
             auth::auth_session,
             auth::auth_touch,
@@ -83,6 +100,7 @@ pub fn run() {
             masters::master_prices,
             masters::master_staff,
             masters::master_save_variety,
+            masters::master_delete_variety,
             masters::master_save_warehouse,
             masters::master_save_slot,
             masters::master_save_price,
@@ -104,6 +122,7 @@ pub fn run() {
             orders::print_log_add,
             orders::order_void,
             orders::settlement_of_order,
+            orders::order_assign_destination,
             reports::report_daily,
             reports::settlement_list,
             ledger::report_ledger,
@@ -122,12 +141,31 @@ pub fn run() {
             system::backup_run,
             system::backup_verify,
             system::backup_reveal,
+            system::backup_import,
             system::db_health,
             system::restore_preflight,
             system::restore_apply,
             system::app_restart,
             prefs::prefs_read,
-            prefs::prefs_write
+            prefs::prefs_write,
+            qc::qc_get,
+            qc::qc_queue_list,
+            devices::device_list,
+            devices::device_test,
+            devices::device_enabled,
+            devices::device_mock,
+            devices::device_config_update,
+            devices::device_probe_report,
+            devices::device_create,
+            devices::device_update,
+            devices::device_delete,
+            payments::payment_list,
+            payments::payment_method_dist,
+            search::search_global,
+            scale::scale_start,
+            scale::scale_stop,
+            scale::scale_status,
+            serial::serial_list
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -135,6 +173,11 @@ pub fn run() {
     app.run(|app_handle, event| {
         // §7 WAL 收尾：退出时收敛 -wal 文件并更新统计，防止它无限增长
         if let tauri::RunEvent::Exit = event {
+            // 串口先还回去：读线程不退，进程就带着开着的 COM 口消失，
+            // 下次接上仪表可能直接报"端口被占用"。
+            if let Some(hub) = app_handle.try_state::<scale::ScaleHub>() {
+                hub.shutdown();
+            }
             if let Some(database) = app_handle.try_state::<db::Db>() {
                 database.checkpoint_wal();
             }

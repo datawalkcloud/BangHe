@@ -17,7 +17,11 @@
 //!  5. **预检**：不存在的名字、含 `..`/反斜杠的名字、被篡改的副本一律 `ok=false` 且
 //!     `errors` 是人话；无旁文件的迁移前快照只给 warning（它是"装错版本"唯一的退路）；
 //!  6. **恢复**：确认文案不对、岗位不对都要被拒；成功路径必须走到"当前库被改名保留 +
-//!     现库内容等于备份 + 退路副本里还能查到备份之后那张单"。
+//!     现库内容等于备份 + 退路副本里还能查到备份之后那张单"；
+//!  7. **自动备份**：只有超过 `backup_auto_interval_days` 或目录里只剩 `pre_migrate_` 快照时
+//!     才补副本；没到点一个文件都不许多；留痕的 `actor_id` 必须是 NULL（不挂真实账号）；
+//!  8. **导入外部副本**：规范命名的副本沿用原名（导入时刻不能把旧库伪装成新备份），
+//!     旁文件对不上、同名不同内容都不许落进备份目录；导进来的副本要能直接走恢复。
 //!
 //! 站点参数只从库里读：`retention_sample_days` / `pii_mask_id_card` 由 0006 补种，
 //! 这里断言的是**键在就给值、键删了就给 null**，不写死具体数值——键的存在与否会变，
@@ -417,6 +421,20 @@ fn backup_run_prunes_only_older_copies_and_deletes_pairs() {
     assert_eq!(newest.prune_error, None);
     assert!(!Path::new(&first.path).exists(), "最旧的那份应被删除");
     assert!(!PathBuf::from(format!("{}.sha256", first.path)).exists(), "旁文件必须成对删除");
+
+    // 淘汰动作必须留在留痕里：备份回执上只显示文件名，删不掉旧备份时审计事由是唯一线索
+    let reason: String = locked(&pool, |conn| {
+        conn.query_row(
+            "SELECT reason FROM audit_log WHERE action = 'backup' AND entity_no = ?1",
+            params![newest.name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    });
+    assert!(
+        reason.contains(&first.name) && reason.contains("清理"),
+        "留痕要写出这次按保留数清掉了哪份：{reason}"
+    );
     for f in &names {
         let p = dir.join(f);
         assert!(p.is_file());
@@ -869,6 +887,203 @@ fn filename_grammar_helpers_stay_inside_their_grammar() {
     assert!(!dir.join("banghe_20260101-000001_manual.db.sha256").exists(), "旁文件成对删除");
     let listed: Vec<String> = list_backups(&dir).iter().map(|f| f.name.clone()).collect();
     assert_eq!(listed, vec![newest.to_string(), "banghe_20260101-000003_manual.db".to_string()]);
+}
+
+// ---------------------------------------------------------------------- 自动备份
+
+#[test]
+fn auto_backup_makes_a_copy_only_when_the_gap_is_due() {
+    let (_tmp, pool, loc) = file_db("auto-due");
+    let dir = backup_dir_of(&pool, &loc);
+
+    // 新装的站点一份副本都没有：第一轮判定就得落下第一份退路
+    let made = locked(&pool, |conn| system::auto_backup_if_due(conn, &loc)).unwrap();
+    let file = made.expect("备份目录空着时必须自动备份一份");
+    assert_eq!(file.kind, "auto");
+    assert!(file.name.ends_with("_auto.db"), "文件名要能自证身份：{}", file.name);
+    assert!(dir.join(&file.name).is_file());
+
+    // 刚备份过就什么都不做：轮询每小时一次，"没到点也生成"会在一天内占满保留数，
+    // 反而把真正更老但还没到期的副本挤掉。
+    assert!(
+        locked(&pool, |conn| system::auto_backup_if_due(conn, &loc)).unwrap().is_none(),
+        "未到间隔不该再生成副本"
+    );
+    assert_eq!(list_backups(&dir).len(), 1);
+
+    // 库里显式设了间隔就照它跑；0 与负数夹到 1 天，不当成"关掉"也不当成"每轮都备份"
+    locked(&pool, |conn| {
+        set_setting(conn, "backup_auto_interval_days", "0");
+        assert_eq!(system::auto_interval_days(conn), 1);
+        set_setting(conn, "backup_auto_interval_days", "999");
+        assert_eq!(system::auto_interval_days(conn), 999);
+    });
+
+    // 换一份**很久以前**的普通副本 → 到期；只剩 pre_migrate 快照时同样算到期
+    locked(&pool, |conn| {
+        let actor = actor("station_master");
+        let old = create_backup(conn, &loc, &actor, "manual", "20200101-000000", &[]).unwrap();
+        std::fs::remove_file(dir.join(&file.name)).unwrap();
+        let fresh = system::auto_backup_if_due(conn, &loc).unwrap().expect("最新副本是 2020 年的，应当补一份");
+        std::fs::remove_file(dir.join(&old.name)).unwrap();
+        std::fs::remove_file(dir.join(&fresh.name)).unwrap();
+        std::fs::write(dir.join("pre_migrate_0005_to_0006_20200101-000000.db"), "快照占位".as_bytes()).unwrap();
+        assert!(
+            system::auto_backup_if_due(conn, &loc).unwrap().is_some(),
+            "只剩 pre_migrate 快照时不算数：它撑不起\"数据留存\"这件事"
+        );
+    });
+}
+
+#[test]
+fn auto_backup_records_an_audit_row_without_a_person() {
+    let (_tmp, pool, loc) = file_db("auto-audit");
+    let before = locked(&pool, audit_count);
+
+    let file = locked(&pool, |conn| system::auto_backup_if_due(conn, &loc)).unwrap().expect("首轮应当生成");
+    assert_eq!(locked(&pool, audit_count), before + 1, "自动备份同样要留痕");
+
+    // 无人值守时 actor_id 必须是 NULL：拿 0 或某个真实账号顶名，等于替一个没动手的人签字
+    let (actor_id, actor_name, reason): (Option<i64>, String, String) = locked(&pool, |conn| {
+        conn.query_row(
+            "SELECT actor_id, actor_name, reason FROM audit_log WHERE action = 'backup' ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    });
+    assert_eq!(actor_id, None, "自动备份不许挂到任何真实账号上：{actor_name}");
+    assert_eq!(actor_name, system::SYSTEM_ACTOR_NAME);
+    assert!(reason.contains(&file.name), "事由要能对上磁盘上的文件：{reason}");
+
+    // 备份页的读数：间隔按缺省 1 天，线程结果在测试里如实为 null（本次运行没跑过）
+    let status = locked(&pool, |conn| system::collect_backup_status(conn, &loc)).unwrap();
+    assert_eq!(status.auto_interval_days, 1, "backup_auto_interval_days 没进种子，缺省按 1 天");
+    assert_eq!(status.auto_last, None, "线程没跑过时如实给 null，页面显示\"还没查过\"");
+    assert!(status.backups.iter().any(|b| b.kind == "auto"));
+}
+
+// ------------------------------------------------------------------ 导入外部副本
+
+#[test]
+fn import_backup_takes_an_usb_copy_back_and_restores_it() {
+    let (tmp, pool, loc) = file_db("import-usb");
+    let owner = actor("station_master");
+    let dir = backup_dir_of(&pool, &loc);
+
+    // 8 月做的备份，连同旁文件一起拷去了"U 盘"；本机这份随后被删掉
+    let usb = tmp.path.join("usb");
+    std::fs::create_dir_all(&usb).unwrap();
+    let name = locked(&pool, |conn| {
+        seed_order(conn, "BD01202608000001", "2026-08-20");
+        create_backup(conn, &loc, &owner, "manual", "20260820-090000", &[])
+    })
+    .unwrap()
+    .name;
+    let usb_copy = usb.join(&name);
+    std::fs::copy(dir.join(&name), &usb_copy).unwrap();
+    std::fs::copy(format!("{}.sha256", dir.join(&name).display()), format!("{}.sha256", usb_copy.display())).unwrap();
+    locked(&pool, |conn| seed_order(conn, "BD01202609000002", "2026-09-12"));
+    std::fs::remove_file(dir.join(&name)).unwrap();
+    std::fs::remove_file(format!("{}.sha256", dir.join(&name).display())).unwrap();
+    assert!(!list_backups(&dir).iter().any(|f| f.name == name), "本机那份要真的没了才像在 U 盘上");
+
+    let imported = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &usb_copy)).unwrap();
+    assert_eq!(imported.name, name, "规范命名的副本沿用原名：导入时刻不能把三年前的库伪装成新备份");
+    assert_eq!(imported.kind, "manual", "kind 取自原名，页面按它给标签");
+    assert_eq!(imported.sha256_ok, Some(true));
+    assert!(dir.join(&name).is_file() && dir.join(format!("{name}.sha256")).is_file(), "副本与旁文件要成对落进备份目录");
+    assert_eq!(sha256_of(&dir.join(&name)).unwrap(), imported.sha256.clone().unwrap());
+    assert!(usb_copy.is_file(), "源文件只读不动");
+    let reason: String = locked(&pool, |conn| {
+        conn.query_row("SELECT reason FROM audit_log WHERE action = 'backup' ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap()
+    });
+    assert!(reason.contains(&usb_copy.to_string_lossy().to_string()), "留痕要写清从哪儿来的：{reason}");
+
+    // 导进来的副本走的就是原来那条恢复路，站长不必再手工挪文件
+    let out = restore_apply_guard(&pool, &loc, &owner, &name, "恢复备份").expect("导入的副本必须能直接恢复");
+    assert!(out.ok && out.restart_required);
+    assert_eq!(locked(&pool, order_count), 1, "换库后应当只剩 U 盘那份里的单");
+}
+
+#[test]
+fn import_backup_refuses_paths_it_should_not_touch() {
+    let (tmp, pool, loc) = file_db("import-guard");
+    let owner = actor("station_master");
+    let dir = backup_dir_of(&pool, &loc);
+
+    for bad in ["", "backup/x.db", r"..\.db", "nope.txt"] {
+        let e = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, Path::new(bad))).unwrap_err();
+        assert!(e.contains("绝对路径") || e.contains("请先选择"), "入参「{bad}」应被拒在碰磁盘之前，实际：{e}");
+    }
+
+    // 后缀不符（用绝对路径才测得到这一条，否则先被"必须绝对路径"挡下）
+    let txt = tmp.path.join("nope.txt");
+    std::fs::write(&txt, b"not a db").unwrap();
+    let e = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &txt)).unwrap_err();
+    assert!(e.contains(".db"), "非 .db 副本要拒在后缀上：{e}");
+
+    // 正在使用的库文件不能当备份导入：文件级 copy 不带 -wal 里已提交未合并的页
+    let live = loc.db_path();
+    let e = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &live)).unwrap_err();
+    assert!(e.contains("正在使用的库文件"), "{e}");
+
+    // 已经在备份目录里的副本本来就在列表上
+    let own = locked(&pool, |conn| create_backup(conn, &loc, &owner, "manual", &stamps(1)[0], &[])).unwrap();
+    let e = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &dir.join(&own.name))).unwrap_err();
+    assert!(e.contains("已经在备份目录里"), "{e}");
+
+    // 空文件
+    let empty = tmp.path.join("banghe_20200101-000000_manual.db");
+    std::fs::write(&empty, []).unwrap();
+    let e = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &empty)).unwrap_err();
+    assert!(e.contains("空文件"), "{e}");
+}
+
+#[test]
+fn import_backup_never_overwrites_and_drops_a_broken_copy() {
+    let (tmp, pool, loc) = file_db("import-clash");
+    let owner = actor("station_master");
+    let dir = backup_dir_of(&pool, &loc);
+    let outside = tmp.path.join("usb");
+    std::fs::create_dir_all(&outside).unwrap();
+
+    let good = locked(&pool, |conn| create_backup(conn, &loc, &owner, "manual", &stamps(1)[0], &[])).unwrap();
+
+    // ① 旁文件对不上的外部副本 = 拷坏了。必须在进目录之前就被拒，且一个文件都不许多出来
+    let broken = outside.join(&good.name);
+    std::fs::write(&broken, std::fs::read(dir.join(&good.name)).unwrap()).unwrap();
+    std::fs::write(
+        format!("{}.sha256", broken.display()),
+        format!("{}\n", "0".repeat(64)),
+    )
+    .unwrap();
+    let before = listing(&dir);
+    let e = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &broken)).unwrap_err();
+    assert!(e.contains("校验和对不上"), "坏副本要说清是校验和拦住的：{e}");
+    assert_eq!(listing(&dir), before, "被拒的副本不该进备份目录");
+
+    // ② 同名但内容不同：绝不覆盖已有那份，退到 imported 名
+    std::fs::remove_file(&broken).unwrap();
+    let other = outside.join(&good.name);
+    std::fs::write(&other, "完全不同的内容，不是同一份库".as_bytes()).unwrap();
+    let h = sha256_of(&other).unwrap();
+    std::fs::write(format!("{}.sha256", other.display()), format!("{h}\n")).unwrap();
+    let want = sha256_of(&dir.join(&good.name)).unwrap();
+    let second = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &other)).unwrap();
+    assert_ne!(second.name, good.name, "同名不同内容不能覆盖，否则等于删掉别人的退路");
+    assert!(second.name.ends_with("_imported.db"), "名字已被占时不许覆盖，走兜底名：{}", second.name);
+    assert_eq!(sha256_of(&dir.join(&good.name)).unwrap(), want, "原来那份必须一字未动");
+    assert!((dir.join(&second.name)).is_file());
+
+    // ③ 同一份内容再导一次不该在磁盘上长出第二份
+    let again = locked(&pool, |conn| system::import_backup(conn, &loc, &owner, &other)).unwrap();
+    assert_eq!(again.name, second.name, "同一份内容重复导入应当直接命中已有副本");
+    assert_eq!(
+        list_backups(&dir).iter().filter(|f| f.name.ends_with("_imported.db")).count(),
+        1,
+        "重复导入不许堆文件"
+    );
 }
 
 fn listing(dir: &Path) -> Vec<String> {
