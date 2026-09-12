@@ -17,7 +17,7 @@ export type PrintVerify =
 
 /** 这个参数改动是否需要先验一次小票机（只有会把单据打到热敏机的选项才要） */
 export function needsPrintVerify(key: string, value: string): boolean {
-  if (key === "print_channel") return value === "raw";
+  // print_channel 已退役：工作台一律无预览直打，通道按模板纸型自动分流，没有可配的"通道"了
   if (key === "print_paper") return value === "thermal80" || value === "thermal58";
   return false;
 }

@@ -104,6 +104,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0010_card_required_on_create.sql",
         sql: include_str!("migrations/0010_card_required_on_create.sql"),
     },
+    Migration {
+        name: "0011_retire_print_channel.sql",
+        sql: include_str!("migrations/0011_retire_print_channel.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

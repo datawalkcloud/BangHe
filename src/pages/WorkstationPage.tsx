@@ -35,8 +35,6 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
 import { printReceiptSilently } from "@/components/print/receipt/silent";
-import { effectiveTemplate } from "@/components/print/receipt/store";
-import type { PaperKind, PrintChannel } from "@/lib/constants";
 import { useQuickDetail } from "@/components/business/QuickDetailSheet";
 import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";

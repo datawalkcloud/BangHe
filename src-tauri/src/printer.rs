@@ -16,7 +16,7 @@ use ticket_core::model::{Paper, PrintLine, WeighTicket};
 use ticket_core::render::{new_printer, write_lines, write_self_test, write_weigh_ticket};
 
 /// 一次打印的完整回执，可直接作为 print_log 的留痕内容。
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintOutcome {
     pub ok: bool,

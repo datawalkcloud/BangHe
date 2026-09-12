@@ -235,7 +235,9 @@ export type PrintChannel = "preview" | "pdf_silent" | "raw";
 
 export const PRINT_CHANNEL: Record<PrintChannel, string> = {
   preview: "窗口预览",
-  pdf_silent: "PDF 静默",
+  // 值键沿用 pdf_silent（print_log 的 CHECK 锁死了三个值）；实现已从"导出 PDF"改为
+  // GDI 直打 Windows 打印队列——通道选择器上说的是行为（无预览直打），不是实现细节
+  pdf_silent: "静默直打",
   raw: "RAW 直连",
 };
 

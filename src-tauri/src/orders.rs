@@ -1546,7 +1546,7 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
             tare_override_by = NULL,
             tare_override_reason = COALESCE(?8, tare_override_reason),
             updated_at = ?4, updated_by = ?7
-         WHERE id = ?10",
+         WHERE id = ?9",
         params![
             new_gross, new_tare, net, now, new_status,
             if manual { "manual" } else { "scale" }, actor.id,

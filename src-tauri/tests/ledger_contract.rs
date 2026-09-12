@@ -86,7 +86,8 @@ struct Order<'a> {
     weight_source: &'a str,
     weigher: Option<i64>,
     registrar: i64,
-    override_by: Option<i64>,
+    /// 皮重偏差超容差的警示文案（非空即计入本单磅员的"超差"作业量；授权人列已废弃不再统计）
+    override_reason: Option<&'a str>,
     /// 红冲单指向的原单。库里有 CHECK：`goods_amount_fen` 为负必须有 `reversed_order_id`
     reversed_of: Option<i64>,
     /// 作废时间。`build_staff_load` 照 mock 只算 `voided_at` 非空的作废单
@@ -112,7 +113,7 @@ impl<'a> Default for Order<'a> {
             weight_source: "scale",
             weigher: None,
             registrar: 1,
-            override_by: None,
+            override_reason: None,
             reversed_of: None,
             voided_at: None,
         }
@@ -125,13 +126,13 @@ fn insert_order(conn: &Connection, o: Order<'_>) -> i64 {
             order_no, station_id, business_date, status, party_id, variety_id, grade,
             tare_weight_01kg, net_weight_01kg, deduct_total_01kg, settlement_weight_01kg,
             goods_amount_fen, payable_amount_fen, paid_amount_fen, weight_source,
-            weigher_id, registered_by, tare_override_by, reversed_order_id, voided_at,
+            weigher_id, registered_by, tare_override_reason, reversed_order_id, voided_at,
             registered_at, created_at, created_by)
          VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, 1)",
         params![
             o.no, o.business_date, o.status, o.party, o.variety, o.grade,
             o.tare, o.net, o.deduct, o.settle, o.goods, o.payable, o.paid, o.weight_source,
-            o.weigher, o.registrar, o.override_by, o.reversed_of, o.voided_at,
+            o.weigher, o.registrar, o.override_reason, o.reversed_of, o.voided_at,
             iso_now(),
         ],
     )
@@ -379,7 +380,7 @@ fn party_rank_sorted_by_net_weight_descending() {
     assert_eq!(rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["大户", "散户"], "排行默认按净重倒序");
 }
 
-// ============================== 5. 作业量：同一单两人各计一次 + 授权/补打归属
+// ============================== 5. 作业量：同一单两人各计一次 + 超容差/补打归属
 
 #[test]
 fn staff_load_counts_one_order_for_both_weigher_and_registrar() {
@@ -401,7 +402,7 @@ fn staff_load_counts_one_order_for_both_weigher_and_registrar() {
             weigher: Some(weigher),
             registrar,
             weight_source: "manual",
-            override_by: Some(registrar),
+            override_reason: Some("实测皮重偏差超容差"),
             ..Default::default()
         },
     );
@@ -418,10 +419,10 @@ fn staff_load_counts_one_order_for_both_weigher_and_registrar() {
     assert_eq!((w.orders, w.manual_count, w.void_count), (1, 1, 0));
     assert_eq!(w.manual_ratio, 1.0);
     assert_eq!(w.reprint_count, 1, "只算区间内的补打");
-    assert_eq!(w.override_count, 0, "皮重授权归放行的人");
+    assert_eq!(w.override_count, 1, "皮重超容差计入捕获该皮重的磅员（不再归授权人）");
 
     let g = rows.iter().find(|r| r.user_id == registrar).unwrap();
-    assert_eq!((g.orders, g.manual_count, g.override_count), (1, 1, 1), "手录占比按经手单数算，登记员也看得到手录单");
+    assert_eq!((g.orders, g.manual_count, g.override_count), (1, 1, 0), "手录占比按经手单数算，登记员也看得到手录单；超容差不再挂登记员");
 }
 
 #[test]

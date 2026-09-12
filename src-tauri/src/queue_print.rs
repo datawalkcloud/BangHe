@@ -153,7 +153,7 @@ mod imp {
                 bottom = phys_h.max(top + 200);
             }
 
-            let em = mm_px(12, dpi_y).max(8); // 正文 12pt（小四），磅房票的标准起步字号
+            let em = pt_px(12, dpi_y).max(8); // 正文 12pt（小四），磅房票的标准起步字号
             let _ = SetTextColor(hdc, COLORREF(0));
             let _ = SetBkMode(hdc, TRANSPARENT);
 
@@ -400,7 +400,7 @@ mod imp {
                 };
                 let _ = DrawTextW(self.hdc, &mut w, &mut rc2, flags);
                 SelectObject(self.hdc, old);
-                DeleteObject(font.into());
+                let _ = DeleteObject(font.into());
                 Some(used)
             }
         }
@@ -494,7 +494,75 @@ mod imp {
 
     /// 毫米 → 设备像素（按给定 dpi）。
     fn mm_px(mm: i32, dpi: i32) -> i32 {
-        (mm * dpi * 5 + 127) / 254
+        // mm·dpi/25.4 写成整数运算：×10/254，+127 即 0.5px 的四舍五入
+        (mm * dpi * 10 + 127) / 254
+    }
+
+    /// 磅（pt）→ 设备像素：字号只有 DPI 一个换算分母（1pt = 1/72 英寸）。
+    fn pt_px(pt: i32, dpi: i32) -> i32 {
+        (pt * dpi + 36) / 72
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn millimetres_round_trip_through_dpi() {
+            // 254mm @ 10dpi = 100px；25.4mm @ 300dpi ≈ 300px（各向都差不过半格）
+            assert_eq!(mm_px(254, 10), 100);
+            assert_eq!(mm_px(25, 300), 295);
+            assert_eq!(mm_px(28, 600), 661);
+            assert_eq!(mm_px(0, 300), 0);
+        }
+
+        #[test]
+        fn points_convert_by_seventy_twoth_inch() {
+            assert_eq!(pt_px(72, 300), 300); // 72pt = 1 英寸 = dpi 个像素
+            assert_eq!(pt_px(12, 300), 50); // 小四在 300dpi 打印机上 50px
+            assert_eq!(pt_px(12, 600), 100);
+        }
+
+        /// 真机冒烟：打一张最小样例票到**系统默认打印机**。
+        /// 自动化环境不跑（`#[ignore]`）；磅房装机自检时手动执行，看驱动是否收下任务：
+        /// `cargo test -p banghe --lib queue_print -- --ignored`
+        #[test]
+        #[ignore = "会真的往默认打印机提交任务，只在实机手动跑"]
+        fn prints_a_sample_ticket_to_the_default_printer() {
+            let lines = vec![
+                PrintLine::Text {
+                    text: "队列直打自检票".into(),
+                    align: TextAlign::Center,
+                    bold: true,
+                    underline: false,
+                    reverse: false,
+                    wide: 2,
+                    tall: 2,
+                },
+                PrintLine::Rule,
+                PrintLine::Kv {
+                    label: "单号".into(),
+                    value: "QTEST-000001".into(),
+                },
+                PrintLine::Pair {
+                    l1: "毛重".into(),
+                    v1: "50,000 kg".into(),
+                    l2: "皮重".into(),
+                    v2: "20,000 kg".into(),
+                },
+                PrintLine::Qr {
+                    text: "BH1:BD100120260912000001".into(),
+                },
+                PrintLine::Feed { n: 2 },
+            ];
+            let out = print_queue_blocking(ReceiptQueuePrintInput {
+                lines,
+                printer: None,
+                copies: Some(1),
+            });
+            println!("→ {}: {:#?}", out.device, out);
+            assert!(out.ok, "直打失败：{}", out.error.unwrap_or_default());
+        }
     }
 }
 

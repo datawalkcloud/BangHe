@@ -516,14 +516,14 @@ fn settings_read_the_whole_table_with_the_station_name_synthetised_first() {
     assert_eq!(rows[0].key, "station_name", "站名固定排第一");
     assert!(!rows[0].value.is_empty(), "站名读成空串，参数页的抬头预览就是空的");
 
-    // 界面拿到的必须是解好引号的值：`"preview"` 漏出去就成了输入框里带引号的一个字
-    assert_eq!(raw_json(&conn, "print_channel"), "\"preview\"");
-    assert_eq!(only(&rows, "print_channel").value, "preview");
+    // 界面拿到的必须是解好引号的值：`"A4"` 漏出去就成了下拉框里带引号的一个字
+    assert_eq!(raw_json(&conn, "print_paper"), "\"A4\"");
+    assert_eq!(only(&rows, "print_paper").value, "A4");
     assert_eq!(only(&rows, "tare_tolerance_pct").value, "300", "§9.3.1 的皮重容差基线动过就要改这里");
 }
 
 #[test]
-fn the_eight_interface_keys_came_in_with_the_parity_migration() {
+fn the_seven_interface_keys_came_in_with_the_parity_migration() {
     let conn = db();
     let rows = list_settings(&conn).unwrap();
     for key in [
@@ -531,13 +531,14 @@ fn the_eight_interface_keys_came_in_with_the_parity_migration() {
         "stable_tolerance_01kg",
         "open_order_alert_minutes",
         "settle_merge_by_day",
-        "print_channel",
         "reprint_need_auth",
         "retention_sample_days",
         "pii_mask_id_card",
     ] {
         assert!(rows.iter().any(|s| s.key == key), "「{key}」没进库，设置页改了也不生效");
     }
+    // 0011 起 print_channel 已退役（工作台无预览直打，通道按纸型自动分流），不该复活
+    assert!(!rows.iter().any(|s| s.key == "print_channel"), "退役的打印通道参数还留在库里");
 }
 
 #[test]
@@ -591,14 +592,14 @@ fn a_setting_change_leaves_one_audit_row_naming_old_and_new() {
         &conn,
         &a,
         SettingInput {
-            key: "print_channel".into(),
-            value: "raw".into(),
+            key: "print_paper".into(),
+            value: "thermal80".into(),
             verify_note: Some("未经真机验证".into()),
         },
     )
     .unwrap();
-    let reason = audit_reason(&conn, "print_channel");
-    assert!(reason.contains("preview → raw") && reason.contains("未经真机验证"), "{reason}");
+    let reason = audit_reason(&conn, "print_paper");
+    assert!(reason.contains("A4 → thermal80") && reason.contains("未经真机验证"), "{reason}");
 }
 
 #[test]

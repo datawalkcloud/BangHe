@@ -127,21 +127,9 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
       { value: "thermal58", label: "58 热敏" },
       { value: "thermal80", label: "80 热敏" },
     ],
-  },
-  {
-    key: "print_channel", demo: "preview", label: "打印通道", group: "print", kind: "select",
-    options: [
-      { value: "preview", label: "窗口预览" },
-      { value: "pdf_silent", label: "PDF 静默" },
-      { value: "raw", label: "RAW 直连" },
-    ],
-    hint: "Tauri v2 没有静默打印 API：A4 与 241 针式默认窗口预览；热敏小票走 ESC/POS 直写 usbprint.sys，不弹对话框",
+    hint: "工作台不弹预览：热敏走 ESC/POS 直连，A4/针式直接进打印队列，纸张等按打印机自身配置",
   },
   { key: "print_default_copies", demo: "3", label: "联数（存根/财务/客户）", group: "print", kind: "number" },
-  {
-    key: "print_silent", demo: "false", label: "PDF 静默打印", group: "print", kind: "bool",
-    hint: "打开前必须真机验一次，否则单子会静默进队列看不见",
-  },
   { key: "reprint_need_auth", demo: "true", label: "补打需站长授权", group: "print", kind: "bool" },
 
   { key: "attachment_max_kb", demo: "500", label: "抓拍压缩上限（KB）", group: "retain", kind: "number" },
