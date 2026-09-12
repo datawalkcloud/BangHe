@@ -9,7 +9,7 @@
 //! 的 `PaymentRecord`，两处各写一份迟早漂移（`settlements.rs` 复用
 //! `reports::list_settlements` 是同一个理由）。列映射也与 `settlement_detail` 里的
 //! 付款流水 SELECT 逐字同构：**写侧怎么落库（`orders::settle` 当场结清、
-//! `settlements::record_payment` 补录收款），读侧就怎么出来**。
+//! `settlements::record_payment` 补录付款），读侧就怎么出来**。
 //!
 //! 取数口径对齐 mock（`mock/api.ts::listPayments`、`mock/analytics.ts::paymentMethodDist`）：
 //!  - 日期用 `substr(pr.paid_at, 1, 10)` 与 `YYYY-MM-DD` 做**闭区间**字符串比较，与 mock 的

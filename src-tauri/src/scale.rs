@@ -46,13 +46,16 @@ const BAD_FRAME_STREAK: u64 = 20;
 const READ_CHUNK: usize = 1024;
 /// 连续多少个串口 I/O 错误就认为设备已经掉了，退掉线程而不是空转
 const IO_ERROR_LIMIT: u64 = 5;
+/// 判稳窗口最多保留多少帧样本。正常配置永远碰不到（默认 5 帧 / 400 ms，连 1 ms 一帧的
+/// 离谱仪表也只要 405 帧），它只兜 `stable_ms` 写错成几十秒时把读线程内存吃光这一种事故。
+const MAX_WINDOW_SAMPLES: usize = 512;
 
 // ====================================================================== 配置模板
 
 /// 04 §2.3 通用帧模板，存 `device_config.config_json`（`kind='scale'`）。
 ///
 /// 六段字段名与文档逐字一致；**整段缺、字段缺都落到文档默认值**（`window_frames=5`、
-/// `max_spread_divisions=2`、`min_weight_01kg=2000`、`stable_ms=400`、`division_01kg=100`），
+/// `max_spread_divisions=2`、`min_weight_01kg=0`（不设起称限制）、`stable_ms=400`、`division_01kg=100`），
 /// 现场从 `{}` 起步、只填 `transport.port` 就能跑。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", default)]
@@ -112,7 +115,15 @@ pub struct Payload {
     pub digits: String,
     /// 小数位数。帧内**有**小数点时按点的位置取（位数不足右补 0）；
     /// **无**小数点时按 §2.3 的"按 kg 直接换算"。
+    /// 与 [`Payload::decimal_count_index`] 互斥：后者配了就以帧内那一位为准，本字段忽略。
     pub decimal_places: u8,
+    /// **小数位数标志位**所在下标（帧含起始符，与 [`Payload::sign_index`] 同口径）。
+    ///
+    /// 耀华 XK3190-A9 连续帧里**没有真正的小数点**，而是在 6 位重量数字之后跟一位数字，
+    /// 表示"小数点从右往左数几位"（0～4）。配了本字段时：数字扫描到该下标为止（不把这一位
+    /// 当重量数字吃进去），再取该下标的数字当小数位数，重量 = 帧内整数 / 10^该位数。
+    /// `null` = 不用此机制，回落到帧内小数点 / [`Payload::decimal_places`] 的老口径。
+    pub decimal_count_index: Option<i32>,
     /// 扫描途中可跳过的填充字符（空格填充的仪表用 `" "`)
     pub skip_chars: String,
     /// 单位换算：`kg`（默认）| `g` | `t` | `0.1kg`
@@ -131,6 +142,8 @@ pub struct Payload {
 pub struct Stability {
     pub window_frames: usize,
     pub max_spread_divisions: i64,
+    /// 起称阈值（0.1 kg）。**默认 0 = 不设任何起称限制**，任何读数都照常判稳/判上磅。
+    /// 只有现场确实要用阈值挡掉空磅漂移时才配一个正数；配了之后低于它的读数不算稳、不算上磅。
     pub min_weight_01kg: i64,
     pub stable_ms: u64,
 }
@@ -206,6 +219,7 @@ impl Default for Payload {
             sign_index: 1,
             digits: "0123456".into(),
             decimal_places: 1,
+            decimal_count_index: None,
             skip_chars: " ".into(),
             unit: "kg".into(),
             status_bytes: Vec::new(),
@@ -220,7 +234,7 @@ impl Default for Stability {
         Self {
             window_frames: 5,
             max_spread_divisions: 2,
-            min_weight_01kg: 2000,
+            min_weight_01kg: 0,
             stable_ms: 400,
         }
     }
@@ -500,8 +514,14 @@ pub fn parse_weight(frame: &[u8], payload: &Payload) -> Result<i64, String> {
     let mut frac_digits = 0usize;
     let mut seen_dot = false;
     let limit = payload.digit_limit();
+    // 小数位数标志位（A9 式）：数字扫描到该下标为止，绝不把这一位当重量数字吃进去。
+    // 用 `i >= s` 而不是 `i == s`：sign_index 配得比它还靠后时也要当场收住，别越界乱吃。
+    let dec_stop = payload.decimal_count_index.filter(|i| *i >= 0).map(|i| i as usize);
     let mut i = cursor;
     while i < frame.len() {
+        if dec_stop.is_some_and(|s| i >= s) {
+            break;
+        }
         let c = ascii[i];
         i += 1;
         if payload.is_skip(c as u8) {
@@ -535,26 +555,51 @@ pub fn parse_weight(frame: &[u8], payload: &Payload) -> Result<i64, String> {
         return Err("帧里找不到数字位（sign_index / start 与实帧对不上？用帧监视器看原帧）".into());
     }
 
-    // 帧内数字先构成"以 payload.unit 为单位的定值小数"：value = num / 10^eff
-    let eff = frac_digits.max(payload.decimal_places as usize);
-    if eff > 18 {
-        // 10^eff 已超出 i64：无论来自帧内小数位还是配错的 decimal_places，都按坏帧处理。
-        // 绝不能让下面 `10i64.pow(eff)` 在 release(panic=abort) 下把整个进程带走（04 §2.4）。
-        return Err(format!(
-            "小数定值位宽 eff={eff} 超出可解析范围，请核对帧模板 payload.decimal_places"
-        ));
-    }
-    let mut num = int_part;
-    if seen_dot || eff > 0 {
-        for _ in 0..eff - frac_digits {
-            frac_part *= 10; // 右补：52.3 配 dp=2 视作 52.30
+    // 帧内数字先构成"以 payload.unit 为单位的定值小数"：value = num / den
+    let (num, den) = match dec_stop {
+        // A9 式：帧内整数就是"去掉小数点后的数字"，量级由标志位那一位数字定死。
+        Some(s) => {
+            let dec_count = match frame.get(s) {
+                Some(b @ b'0'..=b'9') => (*b - b'0') as usize,
+                Some(_) => {
+                    return Err(format!(
+                        "小数位数标志位（帧第 {s} 字节 = '{}'）不是数字，请核对 payload.decimal_count_index 与实帧",
+                        frame[s] as char
+                    ));
+                }
+                None => {
+                    return Err(format!("帧只有 {} 字节，取不到第 {s} 字节的小数位数标志位", frame.len()));
+                }
+            };
+            if dec_count > 18 {
+                return Err(format!("小数位数标志位 = {dec_count} 超出可解析范围（0～18）"));
+            }
+            (int_part, 10i64.pow(dec_count as u32))
         }
-        for _ in 0..eff {
-            num *= 10;
+        // 老口径：帧内小数点 / 固定 decimal_places
+        None => {
+            let eff = frac_digits.max(payload.decimal_places as usize);
+            if eff > 18 {
+                // 10^eff 已超出 i64：无论来自帧内小数位还是配错的 decimal_places，都按坏帧处理。
+                // 绝不能让下面 `10i64.pow(eff)` 在 release(panic=abort) 下把整个进程带走（04 §2.4）。
+                return Err(format!(
+                    "小数定值位宽 eff={eff} 超出可解析范围，请核对帧模板 payload.decimal_places"
+                ));
+            }
+            let mut num = int_part;
+            if seen_dot || eff > 0 {
+                for _ in 0..eff - frac_digits {
+                    frac_part *= 10; // 右补：52.3 配 dp=2 视作 52.30
+                }
+                for _ in 0..eff {
+                    num *= 10;
+                }
+                num += frac_part;
+            }
+            let den = 10i64.pow(if seen_dot || eff > 0 { eff as u32 } else { 0 });
+            (num, den)
         }
-        num += frac_part;
-    }
-    let den = 10i64.pow(if seen_dot || eff > 0 { eff as u32 } else { 0 });
+    };
     // 再按单位换算到 0.1 kg（§2.3：无小数点时按 kg 直接换算；有小数点时量级由点定死）
     let (factor_num, factor_den): (i64, i64) = match payload.unit.trim().to_ascii_lowercase().as_str() {
         "" | "kg" => (10, 1),
@@ -589,15 +634,18 @@ pub struct Judgement {
 /// 滑动窗口判稳器。
 ///
 /// **与前端 `src/store/device.ts:165` 的 `tick()` 的等价关系**（本轮替换的就是那段模拟）：
-///  - `WINDOW = 5`              ↔ `stability.window_frames = 5`（都要攒满窗口才判，`len >= 窗口`）
+///  - `WINDOW = 5`              ↔ `stability.window_frames = 5`（**帧数只是下限**：窗口还得
+///    真持续满 `stable_ms` 才算数，所以 20 ms 一帧的快仪表会多留几帧，慢仪表就是模拟流那 5 帧）
 ///  - `TOLERANCE = 50`（0.1kg）  ↔ `max_spread_divisions × division_01kg`；配
 ///    `{max_spread_divisions:1, division_01kg:50}` 就是 `max-min <= 50` 的同一条线。
 ///    文档默认 2 分度（=200 个 0.1 kg=20 kg）**比模拟流宽松 4 倍**：稳定来得更快，
 ///    但 10–20 kg 的真实晃动也会被判稳，这正是 H9 的取整争议源。
 ///  - `aligned = Math.round(raw/DIVISION)*DIVISION` ↔ [`Align::apply`] 的 `nearest_div`，
 ///    同样作用于**当前帧读数**而非窗口均值，所以定格瞬间数字不会莫名跳一格。
-///  - 模拟流没有、真机必须有的两条：`min_weight_01kg`（空磅噪声不算有效读数，代价是
-///    **空磅不会被判稳**）与 `stable_ms`（窗口要真的持续 400 ms，否则 20 ms 一帧的仪表会"秒稳"）。
+///  - 模拟流没有、真机可选的一条：`min_weight_01kg`（**默认 0 = 不设起称限制**；只有配了正数
+///    才把低于阈值的读数挡在"有效/判稳/上磅"之外，代价是空磅或轻载不会被判稳）；以及真机必须的
+///    `stable_ms`（窗口要真的持续 400 ms 才算稳——帧攒够但时长不够时**继续多攒几帧**，
+///    而不是像旧写法那样把窗口封死在 5 帧、让快仪表永远判不稳）。
 #[derive(Debug, Clone)]
 pub struct StabilityJudge {
     stability: Stability,
@@ -624,14 +672,51 @@ impl StabilityJudge {
         self.samples.iter().map(|(w, _)| *w).collect()
     }
 
+    /// 当前窗口的（极差 0.1 kg，首尾帧实际时长 ms）。
+    ///
+    /// 与 [`Self::window`] 一起下发，界面才能解释"为什么还不稳"：极差与时长都必须按
+    /// **此刻窗口里这几帧**算，不能拿上一次已发出事件的结论来配这一批样本（帧被节流挡掉时
+    /// 两者会错位，界面就成了"样本在跳、极差却是 0"的谜）。
+    pub fn stats(&self) -> (i64, u64) {
+        let spread = match (self.samples.iter().map(|(w, _)| *w).max(), self.samples.iter().map(|(w, _)| *w).min()) {
+            (Some(hi), Some(lo)) => hi - lo,
+            _ => 0,
+        };
+        let span = match (self.samples.first(), self.samples.last()) {
+            (Some((_, t0)), Some((_, t1))) => t1.saturating_sub(*t0),
+            _ => 0,
+        };
+        (spread, span)
+    }
+
     /// 推入一帧读数并判稳。`device_stable` = 仪表自报已稳（B 族）时把本地窗口条件
     /// **减半而不是免除**——04 §2.2 明确"有帧即稳仍需本地二次确认"。
     pub fn push(&mut self, weight_01kg: i64, now_ms: u64, device_stable: Option<bool>) -> Judgement {
         let window = self.stability.window_frames.max(1);
-        if self.samples.len() >= window {
-            self.samples.remove(0);
-        }
+        let flagged = device_stable == Some(true);
+        let need_frames = if flagged { (window + 1) / 2 } else { window };
+        let need_ms = if flagged { self.stability.stable_ms / 2 } else { self.stability.stable_ms };
+
         self.samples.push((weight_01kg, now_ms));
+        // 窗口先"够长"、再"够帧数"。旧写法是**先按帧数封顶**（攒满 window_frames 就挤掉最老的），
+        // 于是 20 ms 一帧的快仪表永远只有 100 ms 的窗口，`span_ms >= stable_ms` 这一条
+        // 数学上就不可能成立：磅上明明压着车，判稳灯却永远灰着，操作员只能一直手录。
+        // 现在保留"覆盖到 need_ms 所需的最少样本"，一旦去掉最老一帧仍然够长就收掉它——
+        // 慢仪表（周期 > need_ms/窗口数）行为与从前逐帧一致，仍是那 5 帧窗口。
+        while self.samples.len() > window {
+            let span_without_oldest = now_ms.saturating_sub(self.samples[1].1);
+            if span_without_oldest >= need_ms {
+                self.samples.remove(0);
+            } else {
+                break;
+            }
+        }
+        if self.samples.len() > MAX_WINDOW_SAMPLES {
+            // 兜底：`stable_ms` 写错成几十秒 + 毫秒级仪表会把缓冲撑到无限大。
+            // 宁可退回"判不稳"（现场看得见、还能手录），也不让读线程吃光内存。
+            let cut = self.samples.len() - MAX_WINDOW_SAMPLES;
+            self.samples.drain(..cut);
+        }
 
         let values: Vec<i64> = self.samples.iter().map(|(w, _)| *w).collect();
         let sum: i64 = values.iter().sum();
@@ -644,9 +729,6 @@ impl StabilityJudge {
             .stability
             .max_spread_divisions
             .saturating_mul(self.align.division_01kg.max(1));
-        let flagged = device_stable == Some(true);
-        let need_frames = if flagged { (window + 1) / 2 } else { window };
-        let need_ms = if flagged { self.stability.stable_ms / 2 } else { self.stability.stable_ms };
 
         let stable = values.len() >= need_frames
             && spread <= tolerance
@@ -717,6 +799,21 @@ pub struct ScaleEvent {
     pub division_01kg: i64,
     pub frame_count: u64,
     pub err_count: u64,
+    // ---- 判稳依据快照：设备中心帧监视器解释"为什么还在波动中"就靠这五项 ----
+    //
+    // 界面自己算不出这些：极差要按 0.1 kg 整数算（浮点显示值会丢位）、窗口时长只有读线程
+    // 知道、容差是 `max_spread_divisions × division_01kg` 的乘积。把判据连同结论一起下发，
+    // 现场才能一眼看出卡在"帧数不够"还是"晃得太厉害"，而不是对着一个"波动中"猜。
+    /// 当前窗口的极差（0.1 kg）
+    pub spread_01kg: i64,
+    /// 当前窗口首尾帧的实际时长（ms）
+    pub window_ms: u64,
+    /// 配置的判稳窗口帧数（`stability.window_frames`，至少 1）
+    pub window_frames: u64,
+    /// 容差（0.1 kg）= `max_spread_divisions × division_01kg`
+    pub tolerance_01kg: i64,
+    /// 窗口要真实持续多久（ms，`stability.stable_ms`）
+    pub stable_ms: u64,
 }
 
 impl Default for ScaleEvent {
@@ -739,6 +836,11 @@ impl Default for ScaleEvent {
             division_01kg: 100,
             frame_count: 0,
             err_count: 0,
+            spread_01kg: 0,
+            window_ms: 0,
+            window_frames: 5,
+            tolerance_01kg: 200,
+            stable_ms: 400,
         }
     }
 }
@@ -1011,6 +1113,10 @@ impl StreamCore {
 
     /// 用当前状态拼一条事件。`connected` 一律先置 false，由调用方按语义覆写。
     fn event(&self, _now_ms: u64) -> ScaleEvent {
+        // 极差与窗口时长都按**此刻窗口里这几帧**现算，和下面的 `samples` 出自同一批数据；
+        // 拿上一次已发出事件的结论来配这一批样本，帧被节流挡掉时就会错位
+        //（界面成了"样本在跳、极差却是 0"的谜）。
+        let (spread_01kg, window_ms) = self.judge.stats();
         ScaleEvent {
             connected: false,
             on_scale: self.last_on_scale,
@@ -1029,11 +1135,25 @@ impl StreamCore {
             division_01kg: self.tpl.align.division_01kg,
             frame_count: self.frame_count,
             err_count: self.err_count,
+            spread_01kg,
+            window_ms,
+            window_frames: self.tpl.stability.window_frames.max(1) as u64,
+            // 与 StabilityJudge::push 里那条 tolerance 同一个乘式：界面上说的就是判的
+            tolerance_01kg: self
+                .tpl
+                .stability
+                .max_spread_divisions
+                .saturating_mul(self.tpl.align.division_01kg.max(1)),
+            stable_ms: self.tpl.stability.stable_ms,
         }
     }
 }
 
-/// 帧尾校验和：body = 去掉起始符与终止符后的中段，最后一字节为校验字节。
+/// 帧尾校验和。
+///
+/// - `sum8` / `sum8_comp` / `xor8`：`body` = 去掉起始符与终止符后的中段，**最后一字节**为原始校验字节。
+/// - `xor_ascii_hex`（耀华 XK3190-A9 连续帧）：校验 = 中段各字节异或，输出成**终止符前的两个
+///   ASCII 十六进制字符**（高字节在前、大小写不敏感），而不是一个原始字节。
 fn verify_checksum(frame: &[u8], framing: &Framing) -> Result<(), String> {
     let kind = framing.checksum.trim().to_ascii_lowercase();
     if kind.is_empty() || kind == "none" {
@@ -1044,22 +1164,46 @@ fn verify_checksum(frame: &[u8], framing: &Framing) -> Result<(), String> {
     let head = if !start.is_empty() && frame.starts_with(start) { start.len() } else { 0 };
     let tail = if !term.is_empty() && frame.ends_with(term) { term.len() } else { 0 };
     let end = frame.len().saturating_sub(tail);
-    if end <= head + 1 {
-        return Err("帧太短，没有校验字节的位置".into());
-    }
-    let body = &frame[head..end - 1];
-    let got = frame[end - 1];
-    let sum: u8 = body.iter().fold(0u8, |a, b| a.wrapping_add(*b));
-    let want = match kind.as_str() {
-        "sum8" => sum,
-        "sum8_comp" => sum.wrapping_neg(),
-        "xor8" => body.iter().fold(0u8, |a, b| a ^ *b),
-        other => return Err(format!("不支持的校验方式「{other}」，可选 none/sum8/sum8_comp/xor8")),
-    };
-    if want == got {
-        Ok(())
+
+    if kind == "xor_ascii_hex" {
+        // 中段至少 1 字节 + 2 个 ASCII 十六进制字符
+        if end < head + 3 {
+            return Err("帧太短，放不下校验体与两字符 ASCII 十六进制校验".into());
+        }
+        let body = &frame[head..end - 2];
+        let got = &frame[end - 2..end];
+        let xor = body.iter().fold(0u8, |a, b| a ^ *b);
+        let want = format!("{xor:02X}");
+        if got.eq_ignore_ascii_case(want.as_bytes()) {
+            Ok(())
+        } else {
+            Err(format!(
+                "校验和不对：帧尾 ASCII 校验「{}{}」，按 xor_ascii_hex 应为 {want}",
+                got[0] as char, got[1] as char
+            ))
+        }
     } else {
-        Err(format!("校验和不对：帧尾 0x{got:02X}，按 {kind} 应为 0x{want:02X}"))
+        if end <= head + 1 {
+            return Err("帧太短，没有校验字节的位置".into());
+        }
+        let body = &frame[head..end - 1];
+        let got = frame[end - 1];
+        let sum: u8 = body.iter().fold(0u8, |a, b| a.wrapping_add(*b));
+        let want = match kind.as_str() {
+            "sum8" => sum,
+            "sum8_comp" => sum.wrapping_neg(),
+            "xor8" => body.iter().fold(0u8, |a, b| a ^ *b),
+            other => {
+                return Err(format!(
+                    "不支持的校验方式「{other}」，可选 none/sum8/sum8_comp/xor8/xor_ascii_hex"
+                ));
+            }
+        };
+        if want == got {
+            Ok(())
+        } else {
+            Err(format!("校验和不对：帧尾 0x{got:02X}，按 {kind} 应为 0x{want:02X}"))
+        }
     }
 }
 
@@ -1088,6 +1232,118 @@ pub fn load_device(conn: &Connection, code: &str) -> Result<Option<DeviceRow>, S
     .map_err(|e| format!("读设备台账失败：{e}"))
 }
 
+// ====================================================================== 型号预设
+
+/// 耀华 XK3190-A9 **连续发送**这一档的完整帧模板（04 §2.2 A 族、§2.3 通用模板的一个预设）。
+///
+/// 真机实测（2026-09-12，现场 62 kg）一帧：
+/// `02 2B 30 30 30 30 36 32 30 31 46 03`
+/// = `STX` `+` `000062` `0` `1F` `ETX`，即：
+///  - 起始符 `STX(0x02)`、终止符 `ETX(0x03)`（**不是** `=` … `\r\n`）；
+///  - 符号位在下标 1、6 位重量数字在下标 2..7、下标 8 是**小数位数标志位**（`0` = 整数 kg）；
+///  - 下标 9..10 是**两字符 ASCII 十六进制异或校验**（`+`~小数位这 8 字节异或 = 0x1F → `"1F"`）。
+///
+/// 这是"通用帧模板 + 型号预设"里的**预设**：现场只填 `port`/`baud` 就能跑；要微调仍可在
+/// `config_json` 写完整的嵌套模板（那时 [`maybe_apply_driver_preset`] 不再套本预设）。
+pub fn yaohua_xk3190_cont() -> FrameTemplate {
+    FrameTemplate {
+        transport: Transport {
+            kind: "serial".into(),
+            port: String::new(),
+            baud: 9600,
+            data_bits: 8,
+            parity: "none".into(),
+            stop_bits: 1,
+            host: String::new(),
+            tcp_port: 0,
+        },
+        framing: Framing {
+            mode: "delimited".into(),
+            start: "\u{02}".into(),
+            terminator: "\u{03}".into(),
+            encoding: "ascii".into(),
+            max_len: 24,
+            fixed_len: 0,
+            checksum: "xor_ascii_hex".into(),
+        },
+        payload: Payload {
+            sign_index: 1,
+            digits: "0123456".into(),
+            decimal_places: 1,
+            decimal_count_index: Some(8),
+            skip_chars: String::new(),
+            unit: "kg".into(),
+            status_bytes: Vec::new(),
+            status_stable_byte: None,
+            status_stable_mask: None,
+        },
+        stability: Stability::default(),
+        align: Align {
+            division_01kg: 100,
+            mode: "nearest_div".into(),
+        },
+        query: Query::default(),
+    }
+}
+
+/// 驱动 → 预设模板。认不出的驱动回 `None`（那就完全按 `config_json` 里的嵌套模板走）。
+pub fn driver_preset(driver: &str) -> Option<FrameTemplate> {
+    match driver.trim().to_ascii_lowercase().as_str() {
+        "yaohua_xk3190" | "yaohua_xk3190_cont" | "xk3190" => Some(yaohua_xk3190_cont()),
+        _ => None,
+    }
+}
+
+/// 台账存的是**扁平表单**（`{port, baud, frameFamily}` 这类）还是**完整嵌套模板**？
+/// 只有前者才套驱动预设；后者是运维手调或帧监视器校准过的，必须原样生效，不能被预设悄悄改掉。
+fn maybe_apply_driver_preset(
+    row: &DeviceRow,
+    parsed: FrameTemplate,
+) -> Result<FrameTemplate, String> {
+    let obj: serde_json::Value = serde_json::from_str(&row.config_json).unwrap_or(serde_json::Value::Null);
+    let has_template_section = ["transport", "framing", "payload", "stability", "align", "query"]
+        .iter()
+        .any(|k| obj.get(*k).is_some());
+    if has_template_section {
+        return Ok(parsed);
+    }
+    let Some(mut preset) = driver_preset(&row.driver) else {
+        return Ok(parsed);
+    };
+    // 把扁平表单里的串口参数覆盖到预设上（现场只改这两个字段就能对上真机）
+    if let Some(map) = obj.as_object() {
+        if let Some(p) = map.get("port").and_then(|v| v.as_str()) {
+            preset.transport.port = p.to_string();
+        }
+        if let Some(b) = map.get("baud").and_then(json_u32) {
+            preset.transport.baud = b;
+        }
+        if let Some(d) = map.get("data_bits").and_then(json_u8) {
+            preset.transport.data_bits = d;
+        }
+        if let Some(p) = map.get("parity").and_then(|v| v.as_str()) {
+            preset.transport.parity = p.to_string();
+        }
+        if let Some(s) = map.get("stop_bits").and_then(json_u8) {
+            preset.transport.stop_bits = s;
+        }
+    }
+    Ok(preset)
+}
+
+/// 前端表单常把数字存成字符串（`"9600"`），台账里也可能是数字（`9600`）——两种都吃。
+fn json_u32(v: &serde_json::Value) -> Option<u32> {
+    match v {
+        serde_json::Value::Number(n) => n.as_u64().map(|x| x as u32),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn json_u8(v: &serde_json::Value) -> Option<u8> {
+    json_u32(v).and_then(|x| u8::try_from(x).ok())
+}
+
 /// 一行台账 → 可跑的模板。Mock / 停用 / 没配串口都在这里挡掉，
 /// 回的必须是现场能照着做的中文短句。
 pub fn resolve_template(row: &DeviceRow) -> Result<FrameTemplate, String> {
@@ -1097,7 +1353,7 @@ pub fn resolve_template(row: &DeviceRow) -> Result<FrameTemplate, String> {
     if !row.is_enabled {
         return Err(format!("这台磅「{}」在台账里已停用，先在设备中心把它启用", row.name));
     }
-    let mut tpl = parse_template(&row.config_json)?;
+    let mut tpl = maybe_apply_driver_preset(row, parse_template(&row.config_json)?)?;
     let kind = tpl.transport.kind.trim();
     if !kind.is_empty() && !kind.eq_ignore_ascii_case("serial") {
         // D 族（TCP 透传）没接：在配置阶段就说清，别等读线程起来才发现
@@ -1485,6 +1741,83 @@ fn hub_of(app: &AppHandle) -> Result<ScaleHub, String> {
     app.try_state::<ScaleHub>()
         .map(|h| (*h).clone())
         .ok_or_else(|| "地磅通道未托管：lib.rs 里缺 app.manage(scale::ScaleHub::default())".to_string())
+}
+
+/// 当前读数流的快照；**通道没托管时回 `None` 而不是报错**。
+///
+/// 给设备中心的联机自检（`crate::devices::probe_plan` 的 Scale 分支）用：正在收数这件事本身
+/// 就是这台磅在线的凭据，没必要为了"测一下"再去抢一次串口。
+pub fn live_snapshot(app: &AppHandle) -> Option<ScaleStatus> {
+    hub_of(app).ok().map(|h| h.snapshot())
+}
+
+/// [`probe_once`] 的结论。字段都是"给现场看的一句话"要用的，不做界面绑定。
+#[derive(Debug, Clone, Default)]
+pub struct ProbeOutcome {
+    /// 试读期间解析成功的帧数（**0 = 一帧都没读到**）
+    pub good_frames: u64,
+    /// 最后一帧的读数（0.1 kg）
+    pub weight_01kg: Option<i64>,
+    /// 首帧解析成功的时刻（自开端口起算，ms）——就是现场要的"响应时间"
+    pub first_good_ms: Option<u64>,
+    /// 解析失败次数（校验不过 / 取不到数）
+    pub bad_frames: u64,
+    /// 打不开端口等原因（中文短句）；与"打得开但读不到数"分开，两者的处置动作不一样
+    pub error: Option<String>,
+}
+
+/// 一次性开端口试读：`budget` 内凑够 `want_good` 帧就收工，**退出前把端口句柄还掉**。
+///
+/// 为什么设备中心需要它：读数流是工作台挂载时才开的，而站长常常是**先开设备中心验货**
+/// （新装磅、换 COM 口、仪表刚上电）。那时 `live_snapshot` 是"没在流"，若据此回"探不到"，
+/// 现场拿到的是一个既不能证明通、也不能证明不通的空结论——和 mock 时代的假失败没有区别。
+/// 所以没在流时就直接开一次端口读几帧：这是本机真通道，代价只是最多 `budget` 的阻塞。
+///
+/// 与读线程共用同一套 [`StreamCore`]（切帧、校验、取数一条逻辑），自检通过即等价于读数流能跑。
+pub fn probe_once(tpl: &FrameTemplate, budget: Duration, want_good: u64) -> ProbeOutcome {
+    let mut out = ProbeOutcome::default();
+    let mut core = StreamCore::new(tpl.clone(), "probe", 0);
+    let mut port = match open_port(&tpl.transport) {
+        Ok(p) => p,
+        Err(msg) => {
+            out.error = Some(msg);
+            return out;
+        }
+    };
+    let t0 = Instant::now();
+    let mut buf = [0u8; READ_CHUNK];
+    while t0.elapsed() < budget {
+        match port.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                let now = elapsed_ms(t0);
+                let before_err = core.err_count;
+                for ev in core.feed(&buf[..n], now) {
+                    if ev.error.is_some() {
+                        continue;
+                    }
+                    out.good_frames += 1;
+                    out.weight_01kg = Some(ev.weight_01kg);
+                    if out.first_good_ms.is_none() {
+                        out.first_good_ms = Some(now);
+                    }
+                }
+                out.bad_frames += core.err_count.saturating_sub(before_err);
+                if out.good_frames >= want_good.max(1) {
+                    break;
+                }
+            }
+            Ok(_) => {}
+            // 超时/没数据是正常空转：预算时间就是靠它走完的
+            Err(ref e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {}
+            Err(e) => {
+                out.error = Some(format!("串口 {} 读不动了：{}", tpl.transport.port, describe_io(e.to_string().as_str())));
+                break;
+            }
+        }
+    }
+    // 句柄必须在这里归还：自检开过端口之后，工作台的读数流才还能打开同一个 COM 口
+    drop(port);
+    out
 }
 
 /// 开始读这台磅。`code` = `device_config.code`（如 `scale1`）。

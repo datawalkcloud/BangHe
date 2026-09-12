@@ -1,0 +1,6 @@
+﻿G:\Github\BangHe\node_modules\lucide-react\dynamic.d.ts
+G:\Github\BangHe\node_modules\lucide-react\dynamicIconImports.d.ts
+G:\Github\BangHe\node_modules\lucide-react\dist\lucide-react.d.ts
+G:\Github\BangHe\node_modules\lucide-react\dist\lucide-react.prefixed.d.ts
+G:\Github\BangHe\node_modules\lucide-react\dist\lucide-react.suffixed.d.ts
+count=5

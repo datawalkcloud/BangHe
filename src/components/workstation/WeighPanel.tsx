@@ -6,13 +6,10 @@
  *  2. 仪表离线时必须能改手录，但手录会永久标记在磅单上，迎检必查
  *  3. 皮重与历史偏差超容差 → **不拦下这次捕获**：数据照常有效，只给一句警告，
  *     并在磅单上留醒目提醒（本面板醒目条、详情页、码单票面「皮重警示」栏、审计）
- *
- * 底部那组"模拟载重 / 开上磅 / 开下磅"是 mock 专用的演示开关：
- * 真实环境里这三件事由车辆与仪表完成，界面上不会出现。
  */
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CarFrontIcon, CarIcon, KeyboardIcon, PenLineIcon } from "lucide-react";
+import { PenLineIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
@@ -26,7 +23,6 @@ import { NumField } from "@/components/business/NumField";
 import { ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "cn";
@@ -53,14 +49,12 @@ export function WeighPanel({
 }) {
   const scale = useDeviceStore((s) => s.scale);
   const setCamera = useDeviceStore((s) => s.setCamera);
-  const mockOff = useDeviceStore((s) => s.mockOff);
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
 
   const [manual, setManual] = useState(false);
   const [manualTare, setManualTare] = useState<number | null>(null);
   const [manualGross, setManualGross] = useState<number | null>(null);
-  const [simKg, setSimKg] = useState("32000");
   const [flash, setFlash] = useState<"gross" | "tare" | null>(null);
 
   /** 待捕项：缺哪项就优先提示哪项，两项都有则为复称 */
@@ -332,43 +326,6 @@ export function WeighPanel({
           </div>
         )}
 
-        {/* Mock / 演示专用：没有真车，用这组控件把读数演出来；真机流的上磅由车说了算。
-            「外设关闭」验收态（mockOff）下不出现——那一态只留手工录入。 */}
-        {(scale.source === "demo" || scale.mocked) && !mockOff && (
-          <div className="flex flex-col gap-1 border-t pt-1.5 text-[11px]">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="flex items-center gap-1 text-muted-foreground">
-                <KeyboardIcon className="size-3" />
-                {scale.mocked ? "台账 Mock 模拟" : "演示"}
-              </span>
-              <Input
-                aria-label="手输重量"
-                value={simKg}
-                onChange={(e) => setSimKg(e.target.value)}
-                className="tnum h-7 w-20 text-xs px-1.5"
-              />
-              <span className="text-muted-foreground">kg</span>
-              <Button
-                size="xs"
-                onClick={() => scale.setDemoWeight(Number(simKg) || 0)}
-                className="h-7 text-xs"
-                title="把读数直接置为输入值（稳定，可立即捕获）"
-              >
-                <PenLineIcon />
-                置为读数
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => scale.driveOn(Number(simKg) || 0)} className="h-7 text-xs">
-                <CarFrontIcon />
-                上磅
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => scale.driveOff()} className="h-7 text-xs">
-                <CarIcon />
-                下磅
-              </Button>
-            </div>
-            <p className="text-muted-foreground">手输重量后点「置为读数」，再按 空格/P 捕获毛重、皮重。</p>
-          </div>
-        )}
       </CardContent>
     </Card>
   );

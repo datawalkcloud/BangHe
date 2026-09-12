@@ -47,6 +47,12 @@ export interface ScaleFrame {
   samples: number[];
   mean_01kg: number;
   division_01kg: number;
+  /** 判稳依据快照（与 Rust `scale::ScaleEvent` 逐字一致）：极差 / 窗口时长 / 帧数下限 / 容差 / 所需时长 */
+  spread_01kg: number;
+  window_ms: number;
+  window_frames: number;
+  tolerance_01kg: number;
+  stable_ms: number;
   frame_count: number;
   err_count: number;
 }
@@ -68,6 +74,11 @@ export interface ScaleReading {
   samples: number[];
   mean01kg: number;
   division01kg: number;
+  spread01kg: number;
+  windowMs: number;
+  windowFrames: number;
+  tolerance01kg: number;
+  stableMs: number;
   frameCount: number;
   errCount: number;
 }
@@ -128,6 +139,11 @@ export function toReading(f: ScaleFrame): ScaleReading {
     samples: f.samples ?? [],
     mean01kg: f.mean_01kg,
     division01kg: f.division_01kg,
+    spread01kg: f.spread_01kg ?? 0,
+    windowMs: f.window_ms ?? 0,
+    windowFrames: f.window_frames ?? 0,
+    tolerance01kg: f.tolerance_01kg ?? 0,
+    stableMs: f.stable_ms ?? 0,
     frameCount: f.frame_count,
     errCount: f.err_count,
   };

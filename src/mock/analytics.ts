@@ -17,9 +17,10 @@ import type {
 } from "./types";
 import type { PartyType, Tone } from "@/lib/constants";
 import { GRADES, PARTY_TYPE, PAYMENT_METHOD } from "@/lib/constants";
-import { CASHIERS, HISTORY_DAYS, INSPECTORS, REGISTRARS, STATION_MASTER_ID, TODAY, WEIGHERS, devices, partyOf, settingValue, userName, varietySpec } from "./masters";
+import { CASHIERS, INSPECTORS, REGISTRARS, STATION_MASTER_ID, TODAY, WEIGHERS, devices, partyOf, settingValue, userName, varietySpec } from "./masters";
 import { durationText, money } from "@/lib/format";
 import { addDays, dateKey } from "./rng";
+import { enumerateDays } from "@/lib/date-range";
 import { orders, payments, printLogs, qcOf, settlements } from "./orders";
 import type { WeighOrder } from "./types";
 
@@ -56,13 +57,20 @@ function minutesSince(iso: string): number {
 
 const OPEN = new Set(["draft", "registered", "qc_done", "gross_weighed", "tare_weighed", "reweigh", "to_settle"]);
 
-export function buildDashboard(): Dashboard {
-  const tk = todayKey();
+/**
+ * 首页看板聚合。`from`/`to` 是 business_date 闭区间（`YYYY-MM-DD`，含端点），
+ * 由页面时间选择器解析后传入（今天/昨天/近 7 天/近 30 天/本月/上月）。
+ *
+ * 区间只作用于"历史类"数字：汇总卡、趋势、品种占比、售粮人构成、时段分布。
+ * 在途作业、告警、设备状态是"当下此刻"的事实，与所选区间无关，保持实时。
+ */
+export function buildDashboard(from: string, to: string): Dashboard {
   const dueDays = Number(settingValue("payment_due_warn_hours")) / 24;
   const alertMinutes = Number(settingValue("open_order_alert_minutes"));
+  const inRange = (o: WeighOrder) => o.business_date >= from && o.business_date <= to;
 
-  const todayRows = orders.filter((o) => o.business_date === tk);
-  const s = sumW(todayRows.filter(stat2));
+  const rangeRows = orders.filter(inRange);
+  const s = sumW(rangeRows.filter(stat2));
   const open = orders
     .filter((o) => OPEN.has(o.status))
     .map((o) => ({
@@ -111,25 +119,24 @@ export function buildDashboard(): Dashboard {
       href: "/devices",
     });
   }
-  const manualToday = todayRows.filter((o) => o.weight_source === "manual");
-  if (manualToday.length) {
+  const manualInRange = rangeRows.filter((o) => o.weight_source === "manual");
+  if (manualInRange.length) {
     alerts.push({
       level: "warning",
-      title: `今日 ${manualToday.length} 单为手录称重`,
+      title: `本期 ${manualInRange.length} 单为手录称重`,
       detail: "手录单据迎检必查，请核对仪表日志",
       action: "查看手录清单",
       href: "/orders?weightSource=manual",
     });
   }
 
-  const trend = Array.from({ length: HISTORY_DAYS + 1 }, (_, i) => {
-    const d = dateKey(addDays(TODAY, i - HISTORY_DAYS));
+  const trend = enumerateDays({ from, to, label: "" }).map((d) => {
     const rows = orders.filter((o) => o.business_date === d).filter(stat2);
     return { date: d, net_01kg: rows.reduce((t, o) => t + (o.net_weight_01kg ?? 0), 0), goods_fen: rows.reduce((t, o) => t + (o.goods_amount_fen ?? 0), 0), orders: rows.length };
   });
 
   const byVariety = varietySpecAll().map((v) => {
-    const rows = orders.filter((o) => o.business_date >= dateKey(addDays(TODAY, -HISTORY_DAYS)) && o.variety_code === v.code).filter(stat2);
+    const rows = rangeRows.filter((o) => o.variety_code === v.code).filter(stat2);
     return {
       variety_code: v.code,
       variety_name: v.name,
@@ -139,7 +146,7 @@ export function buildDashboard(): Dashboard {
   });
 
   const typeAgg = new Map<PartyType, { orders: number; net_01kg: number }>();
-  for (const o of orders.filter((x) => x.business_date >= dateKey(addDays(TODAY, -HISTORY_DAYS)))) {
+  for (const o of rangeRows) {
     if (!stat2(o)) continue;
     const cur = typeAgg.get(o.party_type) ?? { orders: 0, net_01kg: 0 };
     cur.orders += 1;
@@ -147,13 +154,15 @@ export function buildDashboard(): Dashboard {
     typeAgg.set(o.party_type, cur);
   }
 
+  // 时段分布：把区间内每一天按"几点来过车"叠到 06:00–20:00 的 15 个桶上，
+  // 与真库口径一致（多日区间下这是"哪个时段最忙"的热力，而非某一天的流水）。
   const hourCurve = Array.from({ length: 15 }, (_, i) => {
     const h = i + 6;
-    return { hour: h, orders: todayRows.filter((o) => new Date(o.registered_at).getHours() === h).length };
+    return { hour: h, orders: rangeRows.filter((o) => new Date(o.registered_at).getHours() === h).length };
   });
 
   return {
-    today: {
+    summary: {
       orders: s.count,
       net_01kg: s.net_01kg,
       settle_01kg: s.settle_01kg,
@@ -161,8 +170,8 @@ export function buildDashboard(): Dashboard {
       payable_fen: s.payable_fen,
       paid_fen: s.paid_fen,
       credit_fen: s.payable_fen - s.paid_fen,
-      manualCount: manualToday.length,
-      rejectCount: todayRows.filter((o) => o.status === "rejected").length,
+      manualCount: manualInRange.length,
+      rejectCount: rangeRows.filter((o) => o.status === "rejected").length,
     },
     openOrders: open,
     alerts,

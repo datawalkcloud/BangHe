@@ -12,7 +12,7 @@
  *  3. 多路摄像头（磅区 / 卸粮口）在同一块里切换，避免为了看第二路再加一个窗口。
  */
 import { useEffect, useMemo, useState } from "react";
-import { CctvIcon, CctvOffIcon, ClockIcon } from "lucide-react";
+import { CctvIcon, ClockIcon } from "lucide-react";
 import type { CapturePhoto, DeviceConfig, WeighOrder } from "@/mock/types";
 import { DEVICE_STATUS } from "@/lib/constants";
 import { dateTime, nowLocalISO } from "@/lib/format";
@@ -30,12 +30,10 @@ export function CameraPanel({
   cameras,
   order,
   photos,
-  mockOff,
 }: {
   cameras: DeviceConfig[];
   order: WeighOrder | null;
   photos: CapturePhoto[];
-  mockOff: boolean;
 }) {
   const lastCaptureAt = useDeviceStore((s) => s.camera.lastCaptureAt);
   const [pickId, setPickId] = useState<number | null>(null);
@@ -54,7 +52,7 @@ export function CameraPanel({
     return () => window.clearInterval(id);
   }, []);
 
-  const online = !mockOff && cam?.last_status === "online";
+  const online = cam?.last_status === "online";
   const snapshotHint = cam ? `${cam.config?.host ?? "—"}${String(cam.config?.snapshotUrl ?? "")}` : "未配置摄像头";
 
   return (
@@ -110,10 +108,8 @@ export function CameraPanel({
               )
             ) : (
               <p className="flex flex-col items-center gap-0.5 text-[11px] text-muted-foreground">
-                {mockOff ? <CctvOffIcon className="size-4" /> : <CctvIcon className="size-4" />}
-                {mockOff
-                  ? "外设已关闭（Mock 关闭），本单将标「无抓拍」"
-                  : (cam?.last_error ?? "摄像机离线，本单将标「无抓拍」")}
+                <CctvIcon className="size-4" />
+                {cam?.last_error ?? "摄像机离线，本单将标「无抓拍」"}
               </p>
             )}
           </div>

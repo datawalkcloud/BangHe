@@ -5,7 +5,6 @@
  * 唯一能自证的说法就是"首检多少、复检多少、差多少、谁测的、用哪台方法"。
  * 所以这个页面在复检时强制渲染对比列，而不是藏在折叠里。
  */
-import { useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon, PrinterIcon } from "lucide-react";
@@ -18,7 +17,7 @@ import { DocTimeline } from "@/components/business/DocTimeline";
 import { QcDecisionBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
 import { useQuickDetail } from "@/components/business/QuickDetailSheet";
-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -37,7 +36,8 @@ export function QcDetailPage() {
   const names = useStaffNames();
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
-  const [printOpen, setPrintOpen] = useState(false);
+  /** 出票走与磅房工作台同一条路：无预览直打 → 失败才回退预览框，出纸口由设备中心台账决定 */
+  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
 
   const { data, isLoading } = useQuery({
     queryKey: ["qc-report", reportNo],
@@ -105,7 +105,15 @@ export function QcDetailPage() {
             <Button size="sm" onClick={() => openQuickDetail("order", report.order_no)}>
               对应磅单
             </Button>
-            <Button size="sm" variant="outline" disabled={!can("print") || !station} onClick={() => setPrintOpen(true)}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!can("print") || !station}
+              onClick={() => {
+                if (!station) return;
+                void printReceipt({ scenario: "quality_report", docNo: report.report_no, isReprint: true, context: { station, names, qc: report } });
+              }}
+            >
               <PrinterIcon />
               打印质检单
             </Button>
@@ -251,15 +259,8 @@ export function QcDetailPage() {
         </div>
       </div>
 
-      {station && (
-        <ReceiptPrintPreview
-          open={printOpen}
-          onOpenChange={setPrintOpen}
-          scenario="quality_report"
-          context={{ station, names, qc: report, reprint: true }}
-          docNo={report.report_no}
-        />
-      )}
+      {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
+      {printFallback}
     </div>
   );
 }

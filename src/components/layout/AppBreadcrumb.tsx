@@ -36,6 +36,7 @@ const SYSTEM_SECTIONS: Record<string, string> = {
   audit: "操作审计",
   backup: "备份与恢复",
   shift: "日结交班",
+  window: "窗口",
   appearance: "外观与主题",
   templates: "小票模板",
 };

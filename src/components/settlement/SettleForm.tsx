@@ -1,5 +1,5 @@
 /**
- * 结算计价与收款表单（02 §F1.4「结算与打印」拆出来的"结算"那一半）。
+ * 结算计价与付款表单（02 §F1.4「结算与打印」拆出来的"结算"那一半）。
  *
  * 为什么单独成文件：结算的入口从工作台挪到了扫码窗口（先打票、后凭码集中算钱），
  * 但算钱的规则一条都没变——单价来自价目表或手填、偏离必留事由、扣重四项、
@@ -16,7 +16,7 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, PriceList, QcReport, Settlement, WeighOrder } from "@/mock/types";
 import type { PaymentMethod } from "@/lib/constants";
-import { PAYMENT_METHOD } from "@/lib/constants";
+import { GRADES, PAYMENT_METHOD } from "@/lib/constants";
 import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
 import { actorId, useSession } from "@/store/session";
@@ -53,7 +53,7 @@ export function SettleForm({
   prices,
   allowCredit,
   onSettled,
-  submitLabel = "确认结算并收款（F10）",
+  submitLabel = "确认结算并付款（F10）",
   submitHotkey = "f10",
 }: {
   order: WeighOrder;
@@ -70,6 +70,7 @@ export function SettleForm({
 }) {
   const can = useSession((s) => s.can);
 
+  const [grade, setGrade] = useState<string>("");
   const [priceFenPerTon, setPrice] = useState<number | null>(null);
   const [pkg, setPkg] = useState<number>(0);
   const [moisture, setMoisture] = useState<number>(0);
@@ -80,18 +81,21 @@ export function SettleForm({
   const [payNow, setPayNow] = useState(true);
   const [signed, setSigned] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
-  /** 现金收款口算找零用，只在前端活着：入库的是应付，实收多少是出纳的手的事 */
+  /** 现金付款口算找零用，只在前端活着：入库的是应付，实付多少是出纳的手的事 */
   const [tenderedFen, setTenderedFen] = useState<number | null>(null);
 
-  const grade = order.grade ?? qc?.grade ?? null;
+  // 等级是**结算时**定的：化验单上的判定只是建议，现场常按实际议价改判，
+  // 所以这里存的是本单要按几等结钱，改了就随结算落库（化验报告本身永不改写）。
   const listed = useMemo(
-    () => lookupPrice(prices, order.variety_id, grade, order.business_date),
+    () => lookupPrice(prices, order.variety_id, grade || null, order.business_date),
     [prices, order.variety_id, grade, order.business_date],
   );
 
-  // 换单时把默认值铺好：价目表价、品种袋重、化验单扣水扣杂
+  // 换单时把默认值铺好：等级、价目表价、品种袋重、化验单扣水扣杂
   useEffect(() => {
-    const l = lookupPrice(prices, order.variety_id, order.grade ?? qc?.grade ?? null, order.business_date);
+    const g = order.grade ?? qc?.grade ?? "";
+    setGrade(g);
+    const l = lookupPrice(prices, order.variety_id, g || null, order.business_date);
     setPrice(order.price_fen_per_ton ?? l?.price_fen_per_ton ?? null);
     setPkg(order.package_deduct_01kg ?? variety?.default_package_deduct_01kg ?? 0);
     setMoisture(order.moisture_deduct_01kg || qc?.moisture_deduct_01kg || 0);
@@ -137,6 +141,7 @@ export function SettleForm({
         price_list_id: matchesList && listed ? listed.id : null,
         price_override_reason: needsReason ? overrideReason.trim() : null,
         party_signed: signed,
+        grade: grade || null,
       }),
     onSuccess: (r) => {
       if (!r) {
@@ -145,7 +150,7 @@ export function SettleForm({
         return;
       }
       // 收尾这一声最值钱：钱在手里、票在打，屏幕上那行绿字没人回头确认
-      announce(payNow ? "结算完成，钱已收清" : "结算完成，这一单挂账", `settle:${order.order_no}`);
+      announce(payNow ? "结算完成，款已付清" : "结算完成，这一单挂账", `settle:${order.order_no}`);
       onSettled(r);
     },
     // 改价事由缺失、重复结算等闸门原因要原样送到操作员眼前，不许翻译成"操作失败"
@@ -178,6 +183,19 @@ export function SettleForm({
                   ? "站点参数已关闭「允许挂账」，只能当场付清"
                   : null;
 
+  /** 改等级：价目表带出的价跟着新等级走；手填/已偏离的价不动——那通常是现场议价的结果 */
+  function changeGrade(next: string) {
+    setGrade(next);
+    if (!matchesList) return;
+    const nextListed = lookupPrice(prices, order.variety_id, next || null, order.business_date);
+    if (nextListed && nextListed.price_fen_per_ton !== priceFenPerTon) {
+      setPrice(nextListed.price_fen_per_ton);
+      toast.success(`等级改为 ${next || "未定级"}，单价跟进价目表 ${money(nextListed.price_fen_per_ton)}/吨`);
+      // 只报"跟着改了"：新单价归屏幕与码单（05 §6.5 规矩①）
+      announce("等级改了，单价已按新等级带出", `settle-grade:${order.order_no}`);
+    }
+  }
+
   function pickFromList() {
     if (!listed) {
       toast.error("该品种该等级当前没有生效价，请到「收购价目表」维护");
@@ -195,7 +213,7 @@ export function SettleForm({
       ? tenderedFen - preview.payableAmountFen
       : null;
 
-  // 光标停在改价事由、实收现金这些框里也得能按——结算这一下就是本窗口的收尾动作
+  // 光标停在改价事由、实付现金这些框里也得能按——结算这一下就是本窗口的收尾动作
   useHotkey(
     submitHotkey ?? "",
     () => {
@@ -214,6 +232,23 @@ export function SettleForm({
 
   return (
     <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-0.5">
+        <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          等级（本单按此等级计价）
+          <Choose
+            aria-label="等级"
+            value={grade}
+            onChange={changeGrade}
+            options={[{ value: "", label: "未定级" }, ...GRADES.map((g) => ({ value: g, label: g }))]}
+          />
+        </Label>
+        {qc?.grade && qc.grade !== grade && (
+          <p className="text-xs text-warning">
+            化验定级 {qc.grade}，本单按 {grade || "未定级"} 结算（留痕可查）
+          </p>
+        )}
+      </div>
+
       <div className="flex flex-col gap-0.5">
         <PriceField
           label="单价"
@@ -301,7 +336,7 @@ export function SettleForm({
         {!payNow && !allowCredit && <p className="text-xs text-warning">站点参数已关闭挂账，本单必须当场付清。</p>}
         {payNow && method === "cash" && (
           <div className="flex items-end gap-1.5">
-            <MoneyField label="实收现金（算找零用）" valueFen={tenderedFen ?? 0} onChange={setTenderedFen} />
+            <MoneyField label="实付现金（算找零用）" valueFen={tenderedFen ?? 0} onChange={setTenderedFen} />
             {change != null && (
               <span className={`tnum shrink-0 pb-1 text-xs ${change < 0 ? "text-destructive" : "text-muted-foreground"}`}>
                 {change < 0 ? `还差 ${money(-change)}` : `找零 ${money(change)}`}

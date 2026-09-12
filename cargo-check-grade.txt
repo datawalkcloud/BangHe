@@ -1,0 +1,9 @@
+﻿cargo :     Checking banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 42
++ ... hub\BangHe\src-tauri; cargo check --message-format short 2>&1 | Out-F ...
++                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking ba...ngHe\src-tauri) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.62s

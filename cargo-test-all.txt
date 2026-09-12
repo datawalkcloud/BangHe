@@ -1,0 +1,328 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 44
++ Set-Location "G:\Github\BangHe\src-tauri"; cargo test 2>&1 | Out-File ...
++                                            ~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\
+target\debug\incremental\schema_contract-3syvaqmo9yra4\s-hm85m68mgx-1yk02db-57qd1agiu42owxil6hlezbwwr`: 鎷掔粷璁块棶銆?(os err
+or 5)
+
+error[E0308]: mismatched types
+   --> tests\schema_contract.rs:907:63
+    |
+907 |         let r1 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+    |                                                          ---- ^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&PathBu
+f`
+    |                                                          |
+    |                                                          arguments to this enum variant are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&PathBuf`
+help: the type constructed contains `&PathBuf` due to the type of the argument passed
+   --> tests\schema_contract.rs:907:58
+    |
+907 |         let r1 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+    |                                                          ^^^^^-------------------^
+    |                                                               |
+    |                                                               this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\option.rs:606:4
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> tests\schema_contract.rs:907:18
+    |
+907 |         let r1 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+    |                  ^^^^^^^^^^^^^^---------------------------------------------------- argument #4 of type `Option<&
+Path>` is missing
+    |
+note: function defined here
+   --> src\db\migrate.rs:186:8
+    |
+186 | pub fn apply(
+    |        ^^^^^
+help: provide the argument
+    |
+907 |         let r1 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup")), /* Option<&Path> */).unwrap()
+;
+    |                                                                                   +++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> tests\schema_contract.rs:910:63
+    |
+910 |         let r2 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+    |                                                          ---- ^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&PathBu
+f`
+    |                                                          |
+    |                                                          arguments to this enum variant are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&PathBuf`
+help: the type constructed contains `&PathBuf` due to the type of the argument passed
+   --> tests\schema_contract.rs:910:58
+    |
+910 |         let r2 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+    |                                                          ^^^^^-------------------^
+    |                                                               |
+    |                                                               this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\option.rs:606:4
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> tests\schema_contract.rs:910:18
+    |
+910 |         let r2 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+    |                  ^^^^^^^^^^^^^^---------------------------------------------------- argument #4 of type `Option<&
+Path>` is missing
+    |
+note: function defined here
+   --> src\db\migrate.rs:186:8
+    |
+186 | pub fn apply(
+    |        ^^^^^
+help: provide the argument
+    |
+910 |         let r2 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup")), /* Option<&Path> */).unwrap()
+;
+    |                                                                                   +++++++++++++++++++++
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+   --> tests\schema_contract.rs:929:17
+    |
+929 |         let r = migrate::apply_with(&mut conn, "0.1.3", None, OLD).unwrap();
+    |                 ^^^^^^^^^^^^^^^^^^^                           --- argument #4 of type `Option<&Path>` is missing
+    |
+note: function defined here
+   --> src\db\migrate.rs:196:8
+    |
+196 | pub fn apply_with(
+    |        ^^^^^^^^^^
+help: provide the argument
+    |
+929 |         let r = migrate::apply_with(&mut conn, "0.1.3", None, /* Option<&Path> */, OLD).unwrap();
+    |                                                               ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> tests\schema_contract.rs:938:57
+    |
+938 |         let r = migrate::apply(&mut conn, "0.2.0", Some(&dir.join("backup"))).unwrap();
+    |                                                    ---- ^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&PathBuf`
+    |                                                    |
+    |                                                    arguments to this enum variant are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&PathBuf`
+help: the type constructed contains `&PathBuf` due to the type of the argument passed
+   --> tests\schema_contract.rs:938:52
+    |
+938 |         let r = migrate::apply(&mut conn, "0.2.0", Some(&dir.join("backup"))).unwrap();
+    |                                                    ^^^^^-------------------^
+    |                                                         |
+    |                                                         this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\option.rs:606:4
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> tests\schema_contract.rs:938:17
+    |
+938 |         let r = migrate::apply(&mut conn, "0.2.0", Some(&dir.join("backup"))).unwrap();
+    |                 ^^^^^^^^^^^^^^----------------------------------------------- argument #4 of type `Option<&Path>`
+ is missing
+    |
+note: function defined here
+   --> src\db\migrate.rs:186:8
+    |
+186 | pub fn apply(
+    |        ^^^^^
+help: provide the argument
+    |
+938 |         let r = migrate::apply(&mut conn, "0.2.0", Some(&dir.join("backup")), /* Option<&Path> */).unwrap();
+    |                                                                             +++++++++++++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> tests\schema_contract.rs:970:13
+    |
+970 |     let e = migrate::apply(conn, "0.1.0-test", None).unwrap_err();
+    |             ^^^^^^^^^^^^^^-------------------------- argument #4 of type `Option<&Path>` is missing
+    |
+note: function defined here
+   --> src\db\migrate.rs:186:8
+    |
+186 | pub fn apply(
+    |        ^^^^^
+help: provide the argument
+    |
+970 |     let e = migrate::apply(conn, "0.1.0-test", None, /* Option<&Path> */).unwrap_err();
+    |                                                    +++++++++++++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+    --> tests\schema_contract.rs:1009:13
+     |
+1009 |     let r = migrate::apply(conn, "0.1.0-test", None).expect("鑰佸搱甯屽簲琛ヨ鍚庢斁琛岋紝鑰屼笉鏄嫆鍚?);
+     |             ^^^^^^^^^^^^^^-------------------------- argument #4 of type `Option<&Path>` is missing
+     |
+note: function defined here
+    --> src\db\migrate.rs:186:8
+     |
+ 186 | pub fn apply(
+     |        ^^^^^
+help: provide the argument
+     |
+1009 |     let r = migrate::apply(conn, "0.1.0-test", None, /* Option<&Path> */).expect("鑰佸搱甯屽簲琛ヨ鍚庢斁琛岋紝鑰屼笉鏄嫆鍚?);
+     |                                                    +++++++++++++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+    --> tests\schema_contract.rs:1020:14
+     |
+1020 |     let r2 = migrate::apply(conn, "0.1.0-test", None).unwrap();
+     |              ^^^^^^^^^^^^^^-------------------------- argument #4 of type `Option<&Path>` is missing
+     |
+note: function defined here
+    --> src\db\migrate.rs:186:8
+     |
+ 186 | pub fn apply(
+     |        ^^^^^
+help: provide the argument
+     |
+1020 |     let r2 = migrate::apply(conn, "0.1.0-test", None, /* Option<&Path> */).unwrap();
+     |                                                     +++++++++++++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+    --> tests\schema_contract.rs:1031:13
+     |
+1031 |             migrate::apply(conn, "0.1.0-test", None).unwrap_err(),
+     |             ^^^^^^^^^^^^^^-------------------------- argument #4 of type `Option<&Path>` is missing
+     |
+note: function defined here
+    --> src\db\migrate.rs:186:8
+     |
+ 186 | pub fn apply(
+     |        ^^^^^
+help: provide the argument
+     |
+1031 |             migrate::apply(conn, "0.1.0-test", None, /* Option<&Path> */).unwrap_err(),
+     |                                                    +++++++++++++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+    --> tests\schema_contract.rs:1048:13
+     |
+1048 |     let e = migrate::apply(conn, "0.1.0-test", None).unwrap_err();
+     |             ^^^^^^^^^^^^^^-------------------------- argument #4 of type `Option<&Path>` is missing
+     |
+note: function defined here
+    --> src\db\migrate.rs:186:8
+     |
+ 186 | pub fn apply(
+     |        ^^^^^
+help: provide the argument
+     |
+1048 |     let e = migrate::apply(conn, "0.1.0-test", None, /* Option<&Path> */).unwrap_err();
+     |                                                    +++++++++++++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+    --> tests\schema_contract.rs:1062:13
+     |
+1062 |     let e = migrate::apply(conn, "0.1.0-test", None).unwrap_err();
+     |             ^^^^^^^^^^^^^^-------------------------- argument #4 of type `Option<&Path>` is missing
+     |
+note: function defined here
+    --> src\db\migrate.rs:186:8
+     |
+ 186 | pub fn apply(
+     |        ^^^^^
+help: provide the argument
+     |
+1062 |     let e = migrate::apply(conn, "0.1.0-test", None, /* Option<&Path> */).unwrap_err();
+     |                                                    +++++++++++++++++++++
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+    --> tests\schema_contract.rs:1081:13
+     |
+1081 |     let e = migrate::apply_with(&mut conn, "0.1.0-test", None, BROKEN).unwrap_err();
+     |             ^^^^^^^^^^^^^^^^^^^                                ------ argument #4 of type `Option<&Path>` is mis
+sing
+     |
+note: function defined here
+    --> src\db\migrate.rs:196:8
+     |
+ 196 | pub fn apply_with(
+     |        ^^^^^^^^^^
+help: provide the argument
+     |
+1081 |     let e = migrate::apply_with(&mut conn, "0.1.0-test", None, /* Option<&Path> */, BROKEN).unwrap_err();
+     |                                                                ++++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0308.
+For more information about an error, try `rustc --explain E0061`.
+warning: `banghe` (test "schema_contract") generated 1 warning
+error: could not compile `banghe` (test "schema_contract") due to 14 previous errors; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\
+target\debug\incremental\banghe_lib-0owtv7v0nhbh4\s-hm85m67l26-1p6q3wu-dkxe4lmqk3wi0ogyz0gh1lh23`: 鎷掔粷璁块棶銆?(os error 5)
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\
+target\debug\incremental\command_wiring_contract-0i4elurapv81y\s-hm85n0ycs3-0oj9vx6-8cd6rxunztkh8c1wsh20u1759`: 鎷掔粷璁块棶銆
+?(os error 5)
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\
+target\debug\incremental\orders_contract-3k1pxqz1sf3d5\s-hm85m69pbp-119lekh-5415mafyqwc5scq6ci2jbahil`: 鎷掔粷璁块棶銆?(os err
+or 5)
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\
+target\debug\incremental\masters_contract-34y20ys2p37ix\s-hm820ku6yf-1vl42lo-1sv7vlj38hqsb687xs4omxexc`: 鎷掔粷璁块棶銆?(os er
+ror 5)
+
+warning: failed to garbage collect incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\target\deb
+ug\incremental\cards_contract-1mi9s1c6iem7t\s-hm85m69w4r-19kl9wb-working`: 鎷掔粷璁块棶銆?(os error 5)
+
+error[E0308]: mismatched types
+   --> tests\cards_contract.rs:139:143
+    |
+139 | ....into(), operator_id: None, authorized_by: 1 })
+    |                                               ^ expected `Option<i64>`, found integer
+    |
+    = note: expected enum `Option<i64>`
+               found type `{integer}`
+help: try wrapping the expression in `Some`
+    |
+139 |     void_order(&conn, &actor(1, "station_master"), VoidOrderInput { order_no: no, reason: "璇彂锛屼綔搴熼噸寮€".into(), o
+perator_id: None, authorized_by: Some(1) })
+    |                                                                                                                  
+                                    +++++ +
+
+For more information about this error, try `rustc --explain E0308`.
+warning: `banghe` (test "cards_contract") generated 1 warning
+error: could not compile `banghe` (test "cards_contract") due to 1 previous error; 1 warning emitted
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\
+target\debug\incremental\camera_contract-1q09esqlv0ovo\s-hm7z100rku-1en6l9f-20ggmg5g1ddwv1g14jh3sy9ea`: 鎷掔粷璁块棶銆?(os err
+or 5)
+
+warning: failed to garbage collect incremental compilation session directory `\\?\G:\Github\BangHe\src-tauri\target\deb
+ug\incremental\qc_contract-0e2h7dzok4t4y\s-hm85n1r6wk-0ddcye7-working`: 鎷掔粷璁块棶銆?(os error 5)
+
+error[E0308]: mismatched types
+   --> tests\qc_contract.rs:261:114
+    |
+261 |         VoidOrderInput { order_no: draft.clone(), reason: "鐧昏閿欎汉浜嗭紝閲嶆柊鍒跺崟".into(), operator_id: None, authorized
+_by: 1 },
+    |                                                                                                                  
+          ^ expected `Option<i64>`, found integer
+    |
+    = note: expected enum `Option<i64>`
+               found type `{integer}`
+help: try wrapping the expression in `Some`
+    |
+261 |         VoidOrderInput { order_no: draft.clone(), reason: "鐧昏閿欎汉浜嗭紝閲嶆柊鍒跺崟".into(), operator_id: None, authorized
+_by: Some(1) },
+    |                                                                                                                  
+          +++++ +
+
+warning: `banghe` (test "qc_contract") generated 1 warning
+error: could not compile `banghe` (test "qc_contract") due to 1 previous error; 1 warning emitted
+warning: `banghe` (test "orders_contract") generated 1 warning
+warning: `banghe` (test "camera_contract") generated 1 warning
+warning: `banghe` (test "masters_contract") generated 1 warning
+warning: `banghe` (test "command_wiring_contract") generated 1 warning
+warning: `banghe` (lib test) generated 1 warning
+exit=101

@@ -2,7 +2,7 @@
  * 顶部工具条（原「文件/业务/报表/档案/设备/帮助」菜单的落点）。
  *
  * 菜单里的跳转类能力侧栏与页内 tab 已经全覆盖，这里只留真正的全局动作：
- * 新建过磅单（弹制单框，与工作台「制单」同一张）、全局检索、折叠侧栏、展示模式、
+ * 新建过磅单（弹制单框，与工作台「制单」同一张）、全局检索、折叠侧栏、对外大屏、
  * 显示模式、快捷键一览与版本。会改数据的动作在命令层还有二次权限校验，
  * 工具条不做唯一防线（05 §5 末尾要求）。
  */
@@ -54,9 +54,9 @@ const SHORTCUTS: { keys: string[]; act: string; scope: string }[] = [
   { keys: ["F5"], act: "保存化验", scope: "工作台 / 化验" },
   { keys: ["F6"], act: "从价目表带出单价", scope: "扫码结算" },
   { keys: ["F9"], act: "打印当前单据（工作台=码单）", scope: "工作台 / 详情" },
-  { keys: ["F10"], act: "提交结算（计价与收款）", scope: "扫码结算" },
+  { keys: ["F10"], act: "提交结算（计价与付款）", scope: "扫码结算" },
   { keys: ["扫码枪"], act: "直接扫，不必先点进输入框", scope: "扫码结算" },
-  { keys: ["F2"], act: "展示模式切换", scope: "全局" },
+  { keys: ["F2"], act: "对外大屏开关", scope: "全局" },
   { keys: ["Alt", "1…9"], act: "跳转侧栏第 N 项", scope: "全局" },
   { keys: ["Ctrl", "K"], act: "全局检索", scope: "全局" },
   { keys: ["Ctrl", "B"], act: "折叠 / 展开侧栏", scope: "全局" },
@@ -64,7 +64,7 @@ const SHORTCUTS: { keys: string[]; act: string; scope: string }[] = [
   { keys: ["Ctrl", "Alt", "D"], act: "打开设备中心", scope: "全局" },
   { keys: ["Alt", "←"], act: "返回上一页", scope: "全局" },
   { keys: ["F1"], act: "快捷键一览", scope: "全局" },
-  { keys: ["Esc"], act: "关闭弹层 / 退出展示模式", scope: "全局" },
+  { keys: ["Esc"], act: "关闭弹层 / 退出对外大屏", scope: "全局" },
 ];
 
 const MODE_ICONS: Record<ThemeMode, typeof SunIcon> = {
@@ -136,7 +136,7 @@ export function AppTopbar({
 
           <Button variant="ghost" size="xs" onClick={onToggleDisplay} className="text-muted-foreground">
             <MonitorIcon />
-            展示模式
+            对外大屏
             <Kbd>F2</Kbd>
           </Button>
 
@@ -181,7 +181,7 @@ export function AppTopbar({
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               {/* 版本号是脚注说明，不属于任何分组，Label 在组外会降级为普通文本行 */}
-              <DropdownMenuLabel>磅禾 · 粮站收粮系统 0.1.0（Mock 数据）</DropdownMenuLabel>
+              <DropdownMenuLabel>磅禾 · 粮站收粮系统 0.1.0</DropdownMenuLabel>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

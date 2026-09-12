@@ -17,7 +17,7 @@ import { PAYMENT_METHOD, TONE_DOT } from "@/lib/constants";
 import { dateTime, money, orDash, shiftDay, todayISO } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
 import { useSetting, useStaffNames, useStation } from "@/hooks/useLookups";
-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useSession } from "@/store/session";
 import { BarList, StatCard } from "@/components/business/StatCard";
@@ -26,14 +26,15 @@ import { ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
-import { DatePicker } from "@/components/ui/date-picker";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { cn } from "cn";
 
 export function PaymentsPage() {
   const names = useStaffNames();
   const { data: station } = useStation();
-  const [printPayment, setPrintPayment] = useState<PaymentRecord | null>(null);
+  /** 出票走与磅房工作台同一条路：无预览直打 → 失败才回退预览框，出纸口由设备中心台账决定 */
+  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
   const can = useSession((s) => s.can);
   /** 库里存小时（72 = 3 天），页面与 analytics 的 due_date 都按天算，除一次就够 */
   const dueDays = useSetting("payment_due_warn_hours").num / 24;
@@ -103,13 +104,22 @@ export function PaymentsPage() {
         key: "print",
         header: "小票",
         cell: (p) => (
-          <Button size="xs" variant="ghost" disabled={p.reversed === 1} onClick={() => setPrintPayment(p)} aria-label="打印付款小票">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={p.reversed === 1 || !station}
+            aria-label="打印付款小票"
+            onClick={() => {
+              if (!station) return;
+              void printReceipt({ scenario: "payment_receipt", docNo: p.pay_no, isReprint: true, context: { station, names, payment: p } });
+            }}
+          >
             <PrinterIcon />
           </Button>
         ),
       },
     ],
-    [names],
+    [names, station, printReceipt],
   );
 
   function exportCsv() {
@@ -232,33 +242,15 @@ export function PaymentsPage() {
 
           {!allowCredit && creditTotal > 0 && (
             <CallOut tone="danger" title="站点参数已关闭挂账，但仍有未付清的结算单">
-              这些单是在关闭挂账之前产生的。要么收款结清，要么把「允许挂账」重新打开，不要让未付清状态长期悬空。
+              这些单是在关闭挂账之前产生的。要么付款结清，要么把「允许挂账」重新打开，不要让未付清状态长期悬空。
             </CallOut>
           )}
 
           <div className="flex flex-wrap items-end gap-2 border bg-muted/20 p-2.5">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              起始日
-              <DatePicker value={from} onChange={(v) => setFrom(v)} className="w-40" />
+              统计期间
+              <DateRangePicker value={{ from, to }} onChange={(f, t) => { setFrom(f); setTo(t); }} className="w-64" />
             </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              截止日
-              <DatePicker value={to} onChange={(v) => setTo(v)} className="w-40" />
-            </Label>
-            <div className="flex gap-1 pb-1">
-              <Button size="xs" variant="ghost" onClick={() => { setFrom(todayISO()); setTo(todayISO()); }}>
-                今天
-              </Button>
-              <Button size="xs" variant="ghost" onClick={() => { setFrom(shiftDay(todayISO(), -6)); setTo(todayISO()); }}>
-                近 7 天
-              </Button>
-              <Button size="xs" variant="ghost" onClick={() => { setFrom(shiftDay(todayISO(), -13)); setTo(todayISO()); }}>
-                近 14 天
-              </Button>
-              <Button size="xs" variant="ghost" onClick={() => { setFrom(todayISO().slice(0, 8) + "01"); setTo(todayISO()); }}>
-                本月
-              </Button>
-            </div>
           </div>
 
           <DataTable
@@ -270,7 +262,7 @@ export function PaymentsPage() {
             empty={
               <EmptyState
                 title="该期间没有付款流水"
-                description="换一段日期试试；当场收款的单在结算单详情里登记后，这里立刻出现记录。"
+                description="换一段日期试试；当场付款的单在结算单详情里登记后，这里立刻出现记录。"
               />
             }
             toolbar={
@@ -280,15 +272,8 @@ export function PaymentsPage() {
             }
           />
 
-          {station && printPayment && (
-            <ReceiptPrintPreview
-              open={!!printPayment}
-              onOpenChange={(v) => !v && setPrintPayment(null)}
-              scenario="payment_receipt"
-              context={{ station, names, payment: printPayment, reprint: true }}
-              docNo={printPayment.pay_no}
-            />
-          )}
+          {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
+          {printFallback}
         </div>
       </div>
     </div>

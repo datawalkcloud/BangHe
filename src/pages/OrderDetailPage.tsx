@@ -14,17 +14,18 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangleIcon, ArrowLeftIcon, FlaskConicalIcon, MapPinIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
+import { AlertTriangleIcon, ArrowLeftIcon, BadgeCheckIcon, FlaskConicalIcon, MapPinIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
-import { INDICATORS, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
+import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
 import { useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -41,7 +42,7 @@ import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { cn } from "cn";
 
 /**
@@ -63,13 +64,21 @@ export function OrderDetailPage() {
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
 
-  const [printDoc, setPrintDoc] = useState<"weigh_order" | "quality_report" | null>(null);
+  /**
+   * 出票走与磅房工作台同一条路（无预览直打 → 失败才回退预览框），出纸口由设备中心台账决定。
+   * 这里不再自己开预览框：那会让配好的打印机被 `window.print()` 的系统默认队列顶掉。
+   */
+  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   /** 去向弹窗：Choose 的 value 一律是字符串，"" 表示"未定"（清空也是合法写入） */
   const [destOpen, setDestOpen] = useState(false);
   const [destWh, setDestWh] = useState("");
   const [destSlot, setDestSlot] = useState("");
+  /** 调整等级：改的是磅单上的业务定级，化验报告上的判定永不改写 */
+  const [gradeOpen, setGradeOpen] = useState(false);
+  const [gradeValue, setGradeValue] = useState("");
+  const [gradeReason, setGradeReason] = useState("");
 
   const { data: order, isLoading } = useQuery({
     queryKey: ["order", orderNo],
@@ -154,6 +163,34 @@ export function OrderDetailPage() {
     onError: (e: Error) => toast.error(e.message || "去向登记失败，请重试"),
   });
 
+  /** 打开时以本单现状为准，与改派同一条规矩：不预先清空 */
+  const openGrade = () => {
+    setGradeValue(order?.grade ?? "");
+    setGradeReason("");
+    setGradeOpen(true);
+  };
+
+  const gradeMut = useMutation({
+    mutationFn: () =>
+      api.setOrderGrade({
+        order_no: orderNo,
+        grade: gradeValue || null,
+        reason: gradeReason.trim(),
+        operator_id: actorId(),
+      }),
+    onSuccess: (o) => {
+      if (!o) {
+        toast.error("调整失败：未找到该磅单");
+        return;
+      }
+      toast.success(`本单等级已改为 ${o.grade ?? "未定级"}，事由已记入审计日志`);
+      setGradeOpen(false);
+      invalidate();
+    },
+    // 真库把"为什么不能改"说得很具体（值域 / 已结算 / 已作废 / 已拒收），固定文案会把原因吞掉
+    onError: (e: Error) => toast.error(e.message || "调整等级失败，请重试"),
+  });
+
   if (isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
@@ -191,6 +228,43 @@ export function OrderDetailPage() {
   const locked = order.status === "voided" || order.status === "rejected";
   const manual = order.weight_source === "manual";
   const statusDesc = ORDER_STATUS[order.status].desc;
+
+  /**
+   * 等级的闸门比去向严：结算完成（settled/paid）后等级就是"钱"的一部分，
+   * 想改只能走红冲——否则会出现"结算单上是二等、台账里是三等"的对不上账。
+   */
+  const gradeBlocked =
+    locked
+      ? "作废/拒收的单不能再调整等级"
+      : ["settled", "paid", "archived", "reversed"].includes(order.status)
+        ? "本单已结算，改等级请先由站长红冲（02 §F6.3）"
+        : !can("order.grade")
+          ? "当前岗位无权调整等级（需化验员、出纳或站长）"
+          : null;
+  /** 补打角标只看 print_log 里真正出过纸的那几条，与工作台同一口径 */
+  const weighPrinted = prints.filter((p) => p.doc_type === "weigh_order" && p.result === "success").length;
+  /**
+   * 补打：无预览直打，出纸口/纸型全交给设备中心台账（与磅房工作台 F9 同一条路）；
+   * 直打失败时 hook 自己弹预览框兜底。
+   */
+  const reprintWeighOrder = () => {
+    if (!station) return;
+    void printReceipt({
+      scenario: "weigh_order",
+      docNo: order.order_no,
+      isReprint: weighPrinted > 0,
+      context: { station, names, order, qc },
+    });
+  };
+  const reprintQcReport = () => {
+    if (!station || !qc) return;
+    void printReceipt({
+      scenario: "quality_report",
+      docNo: qc.report_no,
+      isReprint: true,
+      context: { station, names, qc },
+    });
+  };
   /** 停用只挡住新指定，历史单据上的去向照旧显示（与工作台同一口径） */
   const activeWarehouses = warehouses.filter((w) => w.is_active !== 0);
   const slotPool = slots
@@ -259,11 +333,11 @@ export function OrderDetailPage() {
               <ArrowLeftIcon />
               返回列表
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setPrintDoc("quality_report")} disabled={!qc || !can("print")}>
+            <Button size="sm" variant="outline" onClick={reprintQcReport} disabled={!qc || !can("print")}>
               <FlaskConicalIcon />
               质检单
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setPrintDoc("weigh_order")} disabled={!can("print")}>
+            <Button size="sm" variant="outline" onClick={reprintWeighOrder} disabled={!can("print")}>
               <PrinterIcon />
               补打码单
             </Button>
@@ -318,22 +392,34 @@ export function OrderDetailPage() {
                 <CardTitle className="text-sm">基本信息</CardTitle>
                 {/* CardHeader 是 grid，右侧动作必须走 CardAction 槽位才不会被挤成整宽 */}
                 <CardAction>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={openDest}
-                    disabled={locked || !can("order.destination")}
-                    title={
-                      locked
-                        ? "作废/拒收的单不再登记入仓去向"
-                        : !can("order.destination")
-                          ? "登记入仓去向需保管员或站长岗位（02 §11 权限矩阵）"
-                          : undefined
-                    }
-                  >
-                    <MapPinIcon />
-                    {order.warehouse_id || order.slot_id ? "改派去向" : "登记去向"}
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={openGrade}
+                      disabled={!!gradeBlocked}
+                      title={gradeBlocked ?? "调整磅单上的业务定级（化验单判定不受影响）"}
+                    >
+                      <BadgeCheckIcon />
+                      {order.grade ? "调整等级" : "定级"}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={openDest}
+                      disabled={locked || !can("order.destination")}
+                      title={
+                        locked
+                          ? "作废/拒收的单不再登记入仓去向"
+                          : !can("order.destination")
+                            ? "登记入仓去向需保管员或站长岗位（02 §11 权限矩阵）"
+                            : undefined
+                      }
+                    >
+                      <MapPinIcon />
+                      {order.warehouse_id || order.slot_id ? "改派去向" : "登记去向"}
+                    </Button>
+                  </div>
                 </CardAction>
               </CardHeader>
               <CardContent>
@@ -577,7 +663,7 @@ export function OrderDetailPage() {
                 )}
                 {order.status !== "voided" && order.status !== "rejected" && order.settled_at == null && (
                   <CallOut tone="info" title="下一步">
-                    结算在「扫码结算」窗口做：凭这张码单上的二维码取单、现场计价收款，结完本页自动出现金额明细。
+                    结算在「扫码结算」窗口做：凭这张码单上的二维码取单、现场计价付款，结完本页自动出现金额明细。
                     <Link to="/scan-settle" search={{ orderNo: order.order_no }} className="ml-1 underline underline-offset-2">
                       带去扫码结算
                     </Link>
@@ -687,20 +773,8 @@ export function OrderDetailPage() {
         </div>
       </div>
 
-      {station && (
-        <ReceiptPrintPreview
-          open={printDoc !== null}
-          onOpenChange={(v) => !v && setPrintDoc(null)}
-          scenario={printDoc === "quality_report" ? "quality_report" : "weigh_order"}
-          context={
-            printDoc === "quality_report" && qc
-              ? { station, names, qc, reprint: true }
-              : { station, names, order, qc, reprint: true }
-          }
-          isReprint
-          docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
-        />
-      )}
+      {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
+      {printFallback}
 
       <Dialog open={destOpen} onOpenChange={setDestOpen}>
         <DialogContent className="max-w-[460px]">
@@ -748,6 +822,65 @@ export function OrderDetailPage() {
             </Button>
             <Button disabled={destMut.isPending} onClick={() => destMut.mutate()}>
               {destMut.isPending ? "保存中…" : "保存去向"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 调整等级：只改磅单业务定级，化验报告（qc_report.grade）永不改写 */}
+      <Dialog open={gradeOpen} onOpenChange={setGradeOpen}>
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">调整业务定级 · {order.order_no}</DialogTitle>
+            <DialogDescription className="text-xs">
+              本单按此等级参与结算与台账汇总。化验报告上的判定不受影响——复检另立新单。
+              已结算/已作废的单不能再改，要更正经站长走红冲（02 §F6.3）。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <Label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+              目标等级
+              <Choose
+                aria-label="目标等级"
+                value={gradeValue}
+                onChange={setGradeValue}
+                options={[{ value: "", label: "未定级" }, ...GRADES.map((g) => ({ value: g, label: g }))]}
+              />
+            </Label>
+            <Label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+              现状
+              <span className="tnum rounded border bg-muted/30 px-2 py-1 text-xs">
+                {order.grade ?? "未定级"}
+                {qc?.grade && qc.grade !== order.grade ? `（化验 ${qc.grade}）` : ""}
+              </span>
+            </Label>
+          </div>
+          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            改判事由（可选，填了会一起写进审计）
+            <Input
+              value={gradeReason}
+              onChange={(e) => setGradeReason(e.target.value)}
+              placeholder="如：水分超基准 1.2%，议价下调一档"
+              className="h-8 text-sm"
+            />
+          </Label>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setGradeOpen(false)}>
+              取消
+            </Button>
+            <Button
+              disabled={
+                gradeMut.isPending ||
+                (gradeValue || null) === (order.grade ?? null)
+              }
+              onClick={() => gradeMut.mutate()}
+              title={
+                (gradeValue || null) === (order.grade ?? null)
+                  ? "等级未变化，无需保存"
+                  : undefined
+              }
+            >
+              {gradeMut.isPending ? "保存中…" : "保存"}
             </Button>
           </DialogFooter>
         </DialogContent>

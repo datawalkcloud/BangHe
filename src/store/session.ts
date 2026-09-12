@@ -23,6 +23,8 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "order.reverse": ["station_master"],
   /** 补录/改派入仓去向：值仓的活（02 §11），站长兜底 */
   "order.destination": ["station_master", "keeper"],
+  /** 调整业务定级：化验员定级、出纳结算时改判，站长兜底（与 Rust GRADE_ROLES 同源） */
+  "order.grade": ["station_master", "inspector", "cashier"],
   "tare.override": ["station_master"],
   "price.edit": ["station_master"],
   "price.override": ["station_master"],

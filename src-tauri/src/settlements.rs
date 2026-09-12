@@ -1,7 +1,7 @@
 //! 结算台账（05 §3 `/settlements`、`/settlements/$settleNo`；01 §F5.2）
 //!
 //! 工作台 `orders::settle` 早已把 settlement / payment_record 写进真库，
-//! 但台账页的读（详情 / 待结算池 / 挂账账龄）与补录收款仍指向 mock——
+//! 但台账页的读（详情 / 待结算池 / 挂账账龄）与补录付款仍指向 mock——
 //! 桌面端出现「当场结清的钱在台账里查无此单」的裂缺，本模块把它接上。
 //! 台账**列表**复用 `crate::reports::list_settlements`（命令 settlement_list），
 //! 那份筛选是超集（收款人匹配 / 关键字转义 / 日期与 limit），这里不再造第二份。
@@ -10,8 +10,8 @@
 //! 岗位闸门以会话为准（入参 `operator_id` 一律忽略）。
 //!
 //! 与 mock 的**有意差异**（都是真库才立得住的口径）：
-//!  - **补录收款不再顺手打上「售粮人已签」**（mock 付款即 `signed_by_party=1`）。
-//!    签字发生在工作台结算屏（`party_signed`），出纳收款不等于农户签字。
+//!  - **补录付款不再顺手打上「售粮人已签」**（mock 付款即 `signed_by_party=1`）。
+//!    签字发生在工作台结算屏（`party_signed`），出纳付款不等于农户签字。
 //!  - **超额付款被拦**（mock 直接把 paid_fen 加超、状态转 paid）。台账页本来就
 //!    禁着超额提交，真库把这条约束落到命令层，并发双开时不会付重。
 //!  - **磅单已付数按结算明细逐单填满应付再轮到下一单**（mock 用
@@ -211,9 +211,9 @@ pub fn credits(conn: &Connection) -> Result<Vec<CreditRow>, String> {
     Ok(out)
 }
 
-// ---------------------------------------------------------------- 登记收款
+// ---------------------------------------------------------------- 登记付款
 
-/// 出纳补录收款。字段沿用 mock.recordPayment 入参（snake_case 直传）；
+/// 出纳补录付款。字段沿用 mock.recordPayment 入参（snake_case 直传）；
 /// `operator_id` 以会话为准，这里只为兼容前端签名而保留。
 #[derive(Debug, Deserialize)]
 pub struct RecordPaymentInput {
@@ -253,7 +253,7 @@ pub fn record_payment(conn: &Connection, actor: &AuthProfile, input: RecordPayme
         return Ok(None);
     };
     if status == "revoked" {
-        return Err("本结算单已撤销，不能再登记收款".into());
+        return Err("本结算单已撤销，不能再登记付款".into());
     }
     let unpaid = payable - paid;
     if input.amount_fen > unpaid {
@@ -318,14 +318,14 @@ pub fn record_payment(conn: &Connection, actor: &AuthProfile, input: RecordPayme
         "pay.record",
         "settlement",
         &settle_no,
-        Some(&format!("登记收款 {pay_no} {} 元（{}）", yuan_text(input.amount_fen), input.method)),
+        Some(&format!("登记付款 {pay_no} {} 元（{}）", yuan_text(input.amount_fen), input.method)),
         None,
     );
     load_settlement_by_id(conn, id)
 }
 
 // ----------------------------------------------------------------- Tauri 命令
-// 读不设岗（与 orders.rs 同口径）；补录收款限出纳/站长（05 §6.1 pay.record）。
+// 读不设岗（与 orders.rs 同口径）；补录付款限出纳/站长（05 §6.1 pay.record）。
 
 #[tauri::command]
 pub async fn settlement_get(app: AppHandle, no: String) -> Result<Option<SettlementDetail>, String> {
@@ -344,5 +344,5 @@ pub async fn settlement_credits(app: AppHandle) -> Result<Vec<CreditRow>, String
 
 #[tauri::command]
 pub async fn payment_add(app: AppHandle, input: RecordPaymentInput) -> Result<Option<Settlement>, String> {
-    write_tx(&app, move |conn, actor| record_payment(conn, actor, input), SETTLE_ROLES, "登记收款").await
+    write_tx(&app, move |conn, actor| record_payment(conn, actor, input), SETTLE_ROLES, "登记付款").await
 }

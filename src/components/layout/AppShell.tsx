@@ -4,7 +4,7 @@
  * 三条硬约束在代码里的落点：
  *  1. 设备状态条常驻不可隐藏——它挂在 SidebarProvider 之外，侧栏折叠不影响它
  *  2. 全局快捷键集中在本文件注册，权限校验在命令层另做（05 §5 要求）
- *  3. 展示模式（F2）：桌面端一律另起独立窗口，多屏整屏贴外屏、单屏开浮动窗，
+ *  3. 对外大屏（F2）：桌面端一律另起独立窗口，多屏整屏贴外屏、单屏开浮动窗，
  *     主窗口始终留给操作员；本文件内的覆盖层只服务浏览器预览，见 `lib/display-window.ts`
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -120,7 +120,7 @@ export function AppShell() {
   const demo = useSession((s) => s.demo);
   // 展开宽度拖到哪就记到哪（跟着账号走），拖完刷新还在原处
   const sidebarWidth = useSidebarWidth();
-  useScaleTick(220);
+  useScaleTick();
 
   /**
    * 空闲失效（02 §11 M10，具体时长由后端下发）。两条线各管一段：
@@ -168,7 +168,7 @@ export function AppShell() {
     try {
       await toggleDisplayWindow();
     } catch (error) {
-      toast.error(`无法打开展示窗口：${error instanceof Error ? error.message : String(error)}`);
+      toast.error(`无法打开对外大屏：${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
 

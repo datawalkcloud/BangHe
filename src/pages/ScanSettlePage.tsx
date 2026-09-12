@@ -16,7 +16,7 @@
  *
  * 客户把票弄丢了也能结：左边「待结算池」按售粮人列出所有没结的磅单，点一下等同扫一下。
  */
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightIcon, BanknoteIcon, FileScanIcon, PrinterIcon, ScanLineIcon, WalletIcon } from "lucide-react";
@@ -30,7 +30,7 @@ import { useScannerCapture } from "@/hooks/useScannerCapture";
 import { useSession } from "@/store/session";
 import { parseScannedCode } from "@/lib/ticket-code";
 import { SettleForm, type SettleOutcome } from "@/components/settlement/SettleForm";
-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
@@ -64,9 +64,13 @@ export function ScanSettlePage() {
   const [done, setDone] = useState<SettledItem[]>([]);
   /**
    * 要打的票：结算凭证（财务入账那一联）或付款小票（客户要的那张）。
-   * 两者都从同一个结算单详情取数，所以只存"哪张结算单 + 哪一种"。
+   * 两者都从同一个结算单详情取数，所以只存"哪张结算单 + 哪一种 + 是不是补打"。
    */
-  const [print, setPrint] = useState<{ settleNo: string; kind: "voucher" | "payment" } | null>(null);
+  const [print, setPrint] = useState<{ settleNo: string; kind: "voucher" | "payment"; reprint: boolean } | null>(null);
+  /** 出票走与磅房工作台同一条路：无预览直打 → 失败才回退预览框，出纸口由设备中心台账决定 */
+  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
+  /** 同一次请求只打一张：兑付窗口的节奏是"扫一张结一张"，重复触发会白出纸 */
+  const printedFor = useRef<string | null>(null);
 
   const { data: order, isFetching } = useQuery({
     queryKey: ["order", orderNo],
@@ -158,7 +162,7 @@ export function ScanSettlePage() {
         ...s,
       ]);
       toast.success(`已结算 ${r.order.order_no} · 应付 ${money(r.settlement.payable_fen)}${paidNow ? "，已付清" : "，已挂账"}`, {
-        description: paidNow ? "结算凭证已弹出打印；先关掉也行，客户要走时再补一张。" : "这张凭证日后凭票面上的码到「付款与挂账」核销。",
+        description: paidNow ? "结算凭证已送打印机；没出纸会弹预览框，先关掉也行，客户要走时再补一张。" : "这张凭证日后凭票面上的码到「付款与挂账」核销。",
       });
       const keys: string[][] = [
         ["order", r.order.order_no],
@@ -169,8 +173,8 @@ export function ScanSettlePage() {
         ["dashboard"],
       ];
       for (const key of keys) qcClient.invalidateQueries({ queryKey: key });
-      // 结算完自动弹凭证：老流程里"结完顺手打一张"是习惯，那一联是财务入账的依据，不能指望人记得打
-      setPrint({ settleNo: r.settlement.settle_no, kind: "voucher" });
+      // 结算完自动出凭证：老流程里"结完顺手打一张"是习惯，那一联是财务入账的依据，不能指望人记得打
+      setPrint({ settleNo: r.settlement.settle_no, kind: "voucher", reprint: false });
       setManual("");
     },
     [qcClient],
@@ -181,6 +185,42 @@ export function ScanSettlePage() {
   const printSettlement = printDetail?.settlement ?? null;
   /** 付款小票打最后一笔：当场结清时只有一条；挂账后分次核销，打的正是刚发生的这一笔 */
   const printPayment = print?.kind === "payment" ? (printDetail?.payments?.at(-1) ?? null) : null;
+
+  /**
+   * 出票收尾：把注意力交回扫码口。
+   * rAF 是等弹窗自己把焦点还给触发元素之后再抢回来，否则会被它盖回去。
+   */
+  const finishPrint = useCallback(() => {
+    setPrint(null);
+    printedFor.current = null;
+    window.requestAnimationFrame(() => scanRef.current?.focus());
+    void navigate({ to: "/scan-settle", search: {} });
+  }, [navigate]);
+
+  /** 结算/补打触发点：先无预览直打，只有真打不出去（浏览器演示、设备不可用）才回退预览框 */
+  useEffect(() => {
+    if (!print || !station) return;
+    // 结算单查不到了（例如刚被撤销）：别把扫码口卡在这张票上
+    if (printDetail === null) {
+      finishPrint();
+      return;
+    }
+    if (!printSettlement) return;
+    if (print.kind === "payment" && !printPayment) return;
+    const key = `${print.settleNo}:${print.kind}:${printPayment?.pay_no ?? ""}`;
+    if (printedFor.current === key) return;
+    printedFor.current = key;
+    void printReceipt({
+      scenario: print.kind === "payment" ? "payment_receipt" : "settlement_voucher",
+      docNo: print.kind === "payment" ? printPayment?.pay_no ?? printSettlement.settle_no : printSettlement.settle_no,
+      isReprint: print.reprint,
+      context: { station, names, settlement: printSettlement, payment: printPayment ?? undefined },
+      onFallbackClose: finishPrint,
+    }).then((out) => {
+      // 直打成功就不该再拦着：窗口的节奏是"扫一张结一张"，纸出去了就交回扫码口
+      if (out !== "preview") finishPrint();
+    });
+  }, [print, station, printDetail, printSettlement, printPayment, names, printReceipt, finishPrint]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -303,7 +343,11 @@ export function ScanSettlePage() {
             </CallOut>
           ) : (
             <div className="flex flex-col gap-3">
-              <OrderCard order={order} bill={bill ?? null} onPrint={(kind) => bill && setPrint({ settleNo: bill.settle_no, kind })} />
+              <OrderCard
+                order={order}
+                bill={bill ?? null}
+                onPrint={(kind) => bill && setPrint({ settleNo: bill.settle_no, kind, reprint: true })}
+              />
               {gate ? (
                 <CallOut tone={gate.tone} title={gate.title} action={gate.action}>
                   {gate.body}
@@ -311,7 +355,7 @@ export function ScanSettlePage() {
               ) : (
                 <Card size="sm" className="py-0 gap-0">
                   <CardHeader className="card-header-compact border-b px-2.5">
-                    <CardTitle className="text-xs font-semibold">计价与收款 · {order.order_no}</CardTitle>
+                    <CardTitle className="text-xs font-semibold">计价与付款 · {order.order_no}</CardTitle>
                   </CardHeader>
                   <CardContent className="p-2">
                     <SettleForm
@@ -330,22 +374,8 @@ export function ScanSettlePage() {
         </div>
       </div>
 
-      {station && printSettlement && (
-        <ReceiptPrintPreview
-          open={!!print && (print.kind === "voucher" || !!printPayment)}
-          onOpenChange={(v) => {
-            if (v) return;
-            setPrint(null);
-            // 关掉凭证就把注意力交回扫码口：这一屏是"一张接一张"的节奏，不该停在原地找键盘。
-            // rAF 是等 Dialog 自己把焦点还给触发元素之后再抢回来，否则会被它盖回去。
-            window.requestAnimationFrame(() => scanRef.current?.focus());
-            void navigate({ to: "/scan-settle", search: {} });
-          }}
-          scenario={print?.kind === "payment" ? "payment_receipt" : "settlement_voucher"}
-          context={{ station, names, settlement: printSettlement, payment: printPayment ?? undefined }}
-          docNo={print?.kind === "payment" ? printPayment?.pay_no ?? printSettlement.settle_no : printSettlement.settle_no}
-        />
-      )}
+      {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
+      {printFallback}
     </div>
   );
 }
@@ -519,7 +549,7 @@ function gateOf(order: WeighOrder | null, bill: Settlement | null, maySettle: bo
       tone: paid ? "info" : "warning",
       title: paid ? "这张单已经结算并付清了" : "这张单已经结算过，还没付清",
       body: `结算单 ${bill?.settle_no ?? "已生成"} 于 ${dateTime(bill?.settled_at ?? order.settled_at)}，重复结算在库里就被拦（不变式 6）。${
-        paid ? "客户要再拿一张纸，点上方「结算凭证」或「付款小票」即可。" : allowCredit ? "挂账的到「付款与挂账」按结算单核销。" : "本站已关闭挂账，请把尾款当场收清。"
+        paid ? "客户要再拿一张纸，点上方「结算凭证」或「付款小票」即可。" : allowCredit ? "挂账的到「付款与挂账」按结算单核销。" : "本站已关闭挂账，请把尾款当场付清。"
       }`,
       action: bill ? (
         <Button size="xs" variant="outline" render={<Link to="/settlements/$settleNo" params={{ settleNo: bill.settle_no }} />}>

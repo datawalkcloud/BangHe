@@ -1,0 +1,289 @@
+﻿diff --git a/src/components/business/QuickDetailSheet.tsx b/src/components/business/QuickDetailSheet.tsx
+index e06d573..107194e 100644
+--- a/src/components/business/QuickDetailSheet.tsx
++++ b/src/components/business/QuickDetailSheet.tsx
+@@ -58,7 +58,7 @@ import {
+   WeightSourceBadge,
+ } from "@/components/business/badges";
+ import { CallOut, EmptyState, InfoGrid } from "@/components/business/layout";
+-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
++import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
+ import { cn } from "cn";
+ 
+ export type QuickDetailType = "order" | "party" | "qc" | "settlement";
+@@ -122,7 +122,11 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
+   const can = useSession((s) => s.can);
+   const { data: station } = useStation();
+ 
+-  const [printDoc, setPrintDoc] = useState<"weigh_order" | "quality_report" | null>(null);
++  /**
++   * 鍑虹エ璧颁笌纾呮埧宸ヤ綔鍙板悓涓€鏉¤矾锛堟棤棰勮鐩存墦 鈫?澶辫触鎵嶅洖閫€棰勮妗嗭級锛屽嚭绾稿彛鐢辫澶囦腑蹇冨彴璐﹀喅瀹氥€?+   * 鎶藉眽閲屽悓鏍蜂笉璇ョ洿鎺ュ紑棰勮妗嗏€斺€旈偅浼氳閰嶅ソ鐨勬墦鍗版満琚?`window.print()` 鐨勭郴缁熼粯璁ら槦鍒楅《鎺夈€?+   */
++  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
+   const [voidOpen, setVoidOpen] = useState(false);
+   const [voidReason, setVoidReason] = useState("");
+ 
+@@ -179,6 +183,27 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
+   const locked = order.status === "voided" || order.status === "rejected";
+   const manual = order.weight_source === "manual";
+   const statusDesc = ORDER_STATUS[order.status].desc;
++  /** 琛ユ墦瑙掓爣鍙湅 print_log 閲岀湡姝ｅ嚭杩囩焊鐨勯偅鍑犳潯锛屼笌宸ヤ綔鍙板悓涓€鍙ｅ緞 */
++  const weighPrinted = (order.prints ?? []).filter((p) => p.doc_type === "weigh_order" && p.result === "success").length;
++  /** 琛ユ墦锛氭棤棰勮鐩存墦锛屽嚭绾稿彛/绾稿瀷浜ょ粰璁惧涓績鍙拌处锛涚洿鎵撳け璐ユ椂 hook 鑷繁寮归瑙堟鍏滃簳 */
++  const reprintWeighOrder = () => {
++    if (!station) return;
++    void printReceipt({
++      scenario: "weigh_order",
++      docNo: order.order_no,
++      isReprint: weighPrinted > 0,
++      context: { station, names, order, qc },
++    });
++  };
++  const reprintQcReport = () => {
++    if (!station || !qc) return;
++    void printReceipt({
++      scenario: "quality_report",
++      docNo: qc.report_no,
++      isReprint: true,
++      context: { station, names, qc },
++    });
++  };
+ 
+   const recordCols: Column<WeighRecord>[] = [
+     { key: "seq", header: "搴忓彿", cell: (r) => <span className="tnum">{r.seq}</span> },
+@@ -205,10 +230,10 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
+           </p>
+         </div>
+         <div className="flex flex-wrap gap-2">
+-          <Button size="xs" variant="outline" onClick={() => setPrintDoc("quality_report")} disabled={!qc || !can("print")}>
++          <Button size="xs" variant="outline" onClick={reprintQcReport} disabled={!qc || !can("print")}>
+             <FlaskConicalIcon /> 璐ㄦ鍗?           </Button>
+-          <Button size="xs" variant="outline" onClick={() => setPrintDoc("weigh_order")} disabled={!can("print")}>
++          <Button size="xs" variant="outline" onClick={reprintWeighOrder} disabled={!can("print")}>
+             <PrinterIcon /> 琛ユ墦鐮佸崟
+           </Button>
+           {!locked && can("order.void") && (
+@@ -303,20 +328,8 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
+         </div>
+       )}
+ 
+-      {station && printDoc && (
+-        <ReceiptPrintPreview
+-          open={!!printDoc}
+-          onOpenChange={(open) => !open && setPrintDoc(null)}
+-          scenario={printDoc === "quality_report" ? "quality_report" : "weigh_order"}
+-          context={
+-            printDoc === "quality_report" && qc
+-              ? { station, names, qc, reprint: true }
+-              : { station, names, order, qc, reprint: true }
+-          }
+-          isReprint
+-          docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
+-        />
+-      )}
++      {/* 鐩存墦澶辫触鏃剁殑鍏滃簳棰勮妗嗭細娌″彂璧疯繃鍑虹エ灏辨槸 null锛屼笉鍗?DOM */}
++      {printFallback}
+ 
+       <AlertDialog open={voidOpen} onOpenChange={setVoidOpen}>
+         <AlertDialogContent>
+diff --git a/src/pages/OrderDetailPage.tsx b/src/pages/OrderDetailPage.tsx
+index 5c6f019..b18254e 100644
+--- a/src/pages/OrderDetailPage.tsx
++++ b/src/pages/OrderDetailPage.tsx
+@@ -41,7 +41,7 @@ import { MoneyLine } from "@/components/business/NumField";
+ import { DocTimeline } from "@/components/business/DocTimeline";
+ import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
+ import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
+-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
++import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
+ import { cn } from "cn";
+ 
+ /**
+@@ -63,7 +63,11 @@ export function OrderDetailPage() {
+   const can = useSession((s) => s.can);
+   const { data: station } = useStation();
+ 
+-  const [printDoc, setPrintDoc] = useState<"weigh_order" | "quality_report" | null>(null);
++  /**
++   * 鍑虹エ璧颁笌纾呮埧宸ヤ綔鍙板悓涓€鏉¤矾锛堟棤棰勮鐩存墦 鈫?澶辫触鎵嶅洖閫€棰勮妗嗭級锛屽嚭绾稿彛鐢辫澶囦腑蹇冨彴璐﹀喅瀹氥€?+   * 杩欓噷涓嶅啀鑷繁寮€棰勮妗嗭細閭ｄ細璁╅厤濂界殑鎵撳嵃鏈鸿 `window.print()` 鐨勭郴缁熼粯璁ら槦鍒楅《鎺夈€?+   */
++  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
+   const [voidOpen, setVoidOpen] = useState(false);
+   const [voidReason, setVoidReason] = useState("");
+   /** 鍘诲悜寮圭獥锛欳hoose 鐨?value 涓€寰嬫槸瀛楃涓诧紝"" 琛ㄧず"鏈畾"锛堟竻绌轰篃鏄悎娉曞啓鍏ワ級 */
+@@ -191,6 +195,30 @@ export function OrderDetailPage() {
+   const locked = order.status === "voided" || order.status === "rejected";
+   const manual = order.weight_source === "manual";
+   const statusDesc = ORDER_STATUS[order.status].desc;
++  /** 琛ユ墦瑙掓爣鍙湅 print_log 閲岀湡姝ｅ嚭杩囩焊鐨勯偅鍑犳潯锛屼笌宸ヤ綔鍙板悓涓€鍙ｅ緞 */
++  const weighPrinted = prints.filter((p) => p.doc_type === "weigh_order" && p.result === "success").length;
++  /**
++   * 琛ユ墦锛氭棤棰勮鐩存墦锛屽嚭绾稿彛/绾稿瀷鍏ㄤ氦缁欒澶囦腑蹇冨彴璐︼紙涓庣鎴垮伐浣滃彴 F9 鍚屼竴鏉¤矾锛夛紱
++   * 鐩存墦澶辫触鏃?hook 鑷繁寮归瑙堟鍏滃簳銆?+   */
++  const reprintWeighOrder = () => {
++    if (!station) return;
++    void printReceipt({
++      scenario: "weigh_order",
++      docNo: order.order_no,
++      isReprint: weighPrinted > 0,
++      context: { station, names, order, qc },
++    });
++  };
++  const reprintQcReport = () => {
++    if (!station || !qc) return;
++    void printReceipt({
++      scenario: "quality_report",
++      docNo: qc.report_no,
++      isReprint: true,
++      context: { station, names, qc },
++    });
++  };
+   /** 鍋滅敤鍙尅浣忔柊鎸囧畾锛屽巻鍙插崟鎹笂鐨勫幓鍚戠収鏃ф樉绀猴紙涓庡伐浣滃彴鍚屼竴鍙ｅ緞锛?*/
+   const activeWarehouses = warehouses.filter((w) => w.is_active !== 0);
+   const slotPool = slots
+@@ -259,11 +287,11 @@ export function OrderDetailPage() {
+               <ArrowLeftIcon />
+               杩斿洖鍒楄〃
+             </Button>
+-            <Button size="sm" variant="outline" onClick={() => setPrintDoc("quality_report")} disabled={!qc || !can("print")}>
++            <Button size="sm" variant="outline" onClick={reprintQcReport} disabled={!qc || !can("print")}>
+               <FlaskConicalIcon />
+               璐ㄦ鍗?             </Button>
+-            <Button size="sm" variant="outline" onClick={() => setPrintDoc("weigh_order")} disabled={!can("print")}>
++            <Button size="sm" variant="outline" onClick={reprintWeighOrder} disabled={!can("print")}>
+               <PrinterIcon />
+               琛ユ墦鐮佸崟
+             </Button>
+@@ -687,20 +715,8 @@ export function OrderDetailPage() {
+         </div>
+       </div>
+ 
+-      {station && (
+-        <ReceiptPrintPreview
+-          open={printDoc !== null}
+-          onOpenChange={(v) => !v && setPrintDoc(null)}
+-          scenario={printDoc === "quality_report" ? "quality_report" : "weigh_order"}
+-          context={
+-            printDoc === "quality_report" && qc
+-              ? { station, names, qc, reprint: true }
+-              : { station, names, order, qc, reprint: true }
+-          }
+-          isReprint
+-          docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
+-        />
+-      )}
++      {/* 鐩存墦澶辫触鏃剁殑鍏滃簳棰勮妗嗭細娌″彂璧疯繃鍑虹エ灏辨槸 null锛屼笉鍗?DOM */}
++      {printFallback}
+ 
+       <Dialog open={destOpen} onOpenChange={setDestOpen}>
+         <DialogContent className="max-w-[460px]">
+diff --git a/src/pages/WorkstationPage.tsx b/src/pages/WorkstationPage.tsx
+index 5daf66c..7b5fb29 100644
+--- a/src/pages/WorkstationPage.tsx
++++ b/src/pages/WorkstationPage.tsx
+@@ -33,10 +33,9 @@ import { SettleForm } from "@/components/settlement/SettleForm";
+ import { TicketPrintSection } from "@/components/settlement/TicketPrintSection";
+ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+-import { printReceiptSilently } from "@/components/print/receipt/silent";
++import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
+ import { useQuickDetail } from "@/components/business/QuickDetailSheet";
+-import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
++import { Kbd, PageHeader } from "@/components/business/layout";
+ import { Button } from "@/components/ui/button";
+ import { Skeleton } from "@/components/ui/skeleton";
+ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+@@ -68,17 +67,20 @@ export function WorkstationPage() {
+ 
+   /** 鍒跺崟寮圭獥 */
+   const [regOpen, setRegOpen] = useState(false);
++  /** 鍒峰崱甯﹁繘鏉ョ殑閭ｅ紶鍗★細鍒峰埌绌洪棽鍗″嵈娌℃湁鍦ㄩ€斿崟鏃剁敱 `useIcWorkflow` 浜や笅鏉ワ紝鍒跺崟鍗崇粦瀹?*/
++  const [regCard, setRegCard] = useState<string | null>(null);
+   /** 绗笁鍒疯缁撶畻鐨勫崟鍙凤紙null = 缁撶畻妗嗗叧鐫€锛?*/
+   const [settleNo, setSettleNo] = useState<string | null>(null);
+   /** 鎵撳嵃鐩爣锛氳嚜鍔ㄥ嚭鐮佸崟鏃舵槸琚О鐨勯偅寮犲崟锛屾墜鍔ㄦ墦鍗版椂鏄綋鍓嶅崟锛沶ull 鍥炶惤鍒板綋鍓?order */
+   const [printTarget, setPrintTarget] = useState<string | null>(null);
+-  const [printOpen, setPrintOpen] = useState(false);
+   /**
+    * 銆岀洿鎵撱€嶈Е鍙戝櫒锛氱浜屽埛鐨噸鍚庤嚜鍔ㄥ嚭鐮佸崟銆丗9銆佺粨绠楀脊绐楃殑銆屽嚟绁ㄦ墦鍗般€嶄笌椤堕儴鎸夐挳鍏辩敤杩欎竴鏉¤矾鈥斺€?    * 鏃犻瑙堢洿鎺ユ墦锛坰ilent.ts 鎸夋ā鏉跨焊鍨嬪垎娴佺儹鏁忕洿杩?/ 鎵撳嵃闃熷垪鐩存墦锛岀焊寮犻殢鎵撳嵃鏈洪厤缃級锛?    * 鍙湁鐪熸墦涓嶅嚭鍘伙紙娴忚鍣ㄦ紨绀恒€佽澶囩绾裤€侀槦鍒楁姤閿欙級鎵嶅洖閫€寮归瑙堟銆?+   * 杩欐潯璺笌纾呭崟璇︽儏鐨勮ˉ鎵撳叡鐢?`useSilentReceiptPrint`锛屽嚭绾稿彛瑙ｆ瀽鍙湁涓€浠藉疄鐜般€?    */
+   const [directPrint, setDirectPrint] = useState(false);
++  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
+   const printedFor = useRef<string | null>(null);
+   const [focusMode, setFocusMode] = useState(false);
+   const [editing, setEditing] = useState(false);
+@@ -105,6 +107,11 @@ export function WorkstationPage() {
+       setPrintTarget(o.order_no);
+       setDirectPrint(true);
+     },
++    onRequestRegister: (card) => {
++      // 鍗¤繕鍦ㄦ劅搴斿尯涓婏細寮瑰埗鍗曟骞堕濉繖寮犲崱锛屽彇鍙烽偅涓€鍒讳竴璧风粦涓婏紙06 搂4.0 鍚屼簨鍔★級
++      setRegCard(card);
++      setRegOpen(true);
++    },
+   });
+ 
+   // F7锛堝埗鍗曪級宸叉敹杩涢《閮ㄥ伐鍏锋潯浣滃叏灞€閿細浠讳綍椤甸潰閮藉脊鍚屼竴寮?RegistrationDialog锛?@@ -215,19 +222,14 @@ export function WorkstationPage() {
+     if (!directPrint || !printTarget || !station || !printOrder) return;
+     if (printedFor.current === printTarget) return;
+     printedFor.current = printTarget;
+-    void (async () => {
+-      const out = await printReceiptSilently({
+-        scenario: "weigh_order",
+-        docNo: printTarget,
+-        isReprint: printTimes > 0,
+-        context: { station, names, order: printOrder, qc: printQc },
+-        devices,
+-      });
+-      if (out === "preview") setPrintOpen(true);
+-      else qcClient.invalidateQueries({ queryKey: ["order", printTarget] });
+-      setDirectPrint(false);
+-    })();
+-  }, [directPrint, printTarget, station, printOrder, printQc, names, devices, printTimes, qcClient]);
++    void printReceipt({
++      scenario: "weigh_order",
++      docNo: printTarget,
++      isReprint: printTimes > 0,
++      context: { station, names, order: printOrder, qc: printQc },
++    });
++    setDirectPrint(false);
++  }, [directPrint, printTarget, station, printOrder, printQc, names, printTimes, printReceipt]);
+ 
+   /** 闈㈡澘鏈綋鎸?id 鏀跺湪杩欏効锛涜韩浠戒笌鍒跺崟銆佸嚟绁ㄤ笌鎵撳嵃閮藉凡绉诲嚭鏍煎瓙锛堝墠鑰呰繘鍒跺崟寮圭獥锛屽悗鑰呰繘缁撶畻寮圭獥锛?*/
+   const bodies: Record<PanelId, ReactNode> = {
+@@ -358,7 +360,11 @@ export function WorkstationPage() {
+       {/* 鍒跺崟寮圭獥锛堣韩浠戒笌鍒跺崟锛?5 搂4.0锛?*/}
+       <RegistrationDialog
+         open={regOpen}
+-        onOpenChange={setRegOpen}
++        onOpenChange={(v) => {
++          setRegOpen(v);
++          if (!v) setRegCard(null); // 鍏虫鍗充涪鎺夐偅寮犲崱锛屼笅娆″紑绐椾笉璇ュ甫鐫€涓婁竴寮?+        }}
++        cardNo={regCard}
+         parties={parties}
+         varieties={varieties}
+         warehouses={warehouses}
+@@ -402,23 +408,9 @@ export function WorkstationPage() {
+         </DialogContent>
+       </Dialog>
+ 
+-      {/* 鍑虹爜鍗曪細鑷姩锛堢鈶″埛锛夋垨鎵嬪姩锛團9 / 椤堕儴鎸夐挳 / 缁撶畻寮圭獥銆屽嚟绁ㄦ墦鍗般€嶏級锛屾墦鐨勬槸 printOrder */}
+-      {printOrder && station ? (
+-        <ReceiptPrintPreview
+-          open={printOpen}
+-          onOpenChange={(v) => {
+-            setPrintOpen(v);
+-            if (!v) setPrintTarget(null);
+-          }}
+-          scenario="weigh_order"
+-          context={{ station, names, order: printOrder, qc: printQc, reprint: printTimes > 0 }}
+-          isReprint={printTimes > 0}
+-          docNo={printOrder.order_no}
+-          onPrinted={() => qcClient.invalidateQueries({ queryKey: ["order", printOrder.order_no] })}
+-        />
+-      ) : (
+-        printOpen && <EmptyState title="杩樻病鏈夊彲鎵撳嵃鐨勭鍗? description="璇峰厛鍙栧彿鍒跺崟骞跺畬鎴愮О閲嶃€? />
+-      )}
++      {/* 鍑虹爜鍗曪細鑷姩锛堢鈶″埛锛夋垨鎵嬪姩锛團9 / 椤堕儴鎸夐挳 / 缁撶畻寮圭獥銆屽嚟绁ㄦ墦鍗般€嶏級锛屾墦鐨勬槸 printOrder銆?+          鐩存墦澶辫触鏃剁殑鍏滃簳棰勮妗嗙敱 hook 缁欏嚭锛屾病鍙戣捣杩囧嚭绁ㄥ氨鏄?null */}
++      {printFallback}
+ 
+       {focusMode && (
+         <div className="absolute right-3 top-3 z-50">

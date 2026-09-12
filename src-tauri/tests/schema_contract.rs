@@ -5,7 +5,9 @@
 //!   2. 建表脚本漏写/多写了一列、索引、CHECK，谁发现？→ `doc_section9_contract_*`
 //!   3. 枚举值域在 SQLite / Rust / 前端 constants.ts 三处分叉（80mm 小票 `thermal80`
 //!      真就这么漏过一次），谁拦下？→ `enums_are_single_sourced_across_three_places`
-//!   4. 现场从旧版本跳级升级、脚本被改动、装回老版本，行为对不对？→ 迁移行为那几条
+//!   4. 现场从旧版本跳级升级、脚本被改动、装回老版本，行为对不对？→ 迁移行为那几条；
+//!      覆盖安装（安装器落 `install.stamp` 记号）与纯升版本号的"升级首启"必须先拍到
+//!      `pre_upgrade_` 快照、且同一次安装只拍一次 → `overwrite_install_*` / `version_bump_*`
 //!
 //! 重新生成快照：`BANGHE_BLESS_SCHEMA=1 cargo test --test schema_contract`
 //! 生成后必须 review diff：快照是"期望结构"的账本，不是自动通过的橡皮章。
@@ -904,11 +906,12 @@ fn migrate_is_idempotent_across_restarts() {
     {
         let mut conn = Connection::open(&path).unwrap();
         banghe_lib::db::setup_pragmas(&conn).unwrap();
-        let r1 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+        let r1 = migrate::apply(&mut conn, "0.1.0-test", None, Some(&dir.join("backup"))).unwrap();
         assert_eq!(r1.applied.len(), MIGRATIONS.len(), "首装应跑全部脚本");
         assert!(r1.backup_path.is_none(), "空库首装不该做迁移前备份");
-        let r2 = migrate::apply(&mut conn, "0.1.0-test", Some(&dir.join("backup"))).unwrap();
+        let r2 = migrate::apply(&mut conn, "0.1.0-test", None, Some(&dir.join("backup"))).unwrap();
         assert!(r2.applied.is_empty(), "第二次启动不应再执行任何脚本：{:?}", r2.applied);
+        assert!(r2.backup_path.is_none(), "普通重启（版本没变、没有新的安装记号）不该备份");
     }
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -926,7 +929,7 @@ fn upgrade_from_older_version_backs_up_and_fills_gap() {
             name: "0001_init.sql",
             sql: include_str!("../src/db/migrations/0001_init.sql"),
         }];
-        let r = migrate::apply_with(&mut conn, "0.1.3", None, OLD).unwrap();
+        let r = migrate::apply_with(&mut conn, "0.1.3", None, None, OLD).unwrap();
         assert_eq!(r.applied, vec!["0001_init.sql".to_string()]);
         assert_eq!(r.to_version, 1);
         // 老版本没有种子的 22 个参数键
@@ -935,7 +938,7 @@ fn upgrade_from_older_version_backs_up_and_fills_gap() {
     {
         let mut conn = Connection::open(&path).unwrap();
         banghe_lib::db::setup_pragmas(&conn).unwrap();
-        let r = migrate::apply(&mut conn, "0.2.0", Some(&dir.join("backup"))).unwrap();
+        let r = migrate::apply(&mut conn, "0.2.0", None, Some(&dir.join("backup"))).unwrap();
         let expected: Vec<String> = MIGRATIONS[1..].iter().map(|m| m.name.to_string()).collect();
         assert_eq!(r.applied, expected, "只补跑缺的那几个（按清单顺序）");
         assert_eq!((r.from_version, r.to_version), (1, MIGRATIONS.len() as u32));
@@ -958,6 +961,65 @@ fn upgrade_from_older_version_backs_up_and_fills_gap() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// 覆盖安装端到端：走生产同一条 `open_and_migrate`，记号是临时目录里**真的**
+/// `install.stamp` 文件（安装包 NSIS 钩子写的），只认它的修改时间。
+/// 「首装 → 重启若干 → 再覆盖装 → 重启」全程：每次"新安装"恰好一份快照，普通重启零噪音。
+#[test]
+fn overwrite_install_snapshots_once_per_install() {
+    let dir = temp_dir("stamp-e2e");
+    let stamp = dir.join(banghe_lib::db::INSTALL_STAMP_FILE);
+    {
+        let (_db, r) = banghe_lib::db::open_and_migrate(&dir, "0.1.0-e2e").unwrap();
+        assert!(r.backup_path.is_none(), "空库首装没有可回退的东西，不拍快照");
+    }
+    std::fs::write(&stamp, b"banghe").unwrap();
+    {
+        let (_db, r) = banghe_lib::db::open_and_migrate(&dir, "0.1.0-e2e").unwrap();
+        let b = r.backup_path.expect("覆盖安装后的首次启动必须在写入前留下快照");
+        let name = b.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.starts_with("pre_upgrade_0.1.0-e2e_"), "同版本重装的名字只带当前版本：{name}");
+        assert!(b.exists() && b.metadata().unwrap().len() > 0, "快照没落盘：{b:?}");
+    }
+    {
+        // 记号没变（之后都是普通重启）：不重复备份
+        let (_db, r) = banghe_lib::db::open_and_migrate(&dir, "0.1.0-e2e").unwrap();
+        assert!(r.backup_path.is_none(), "同一次安装只备份一次，不能被同一记号反复触发");
+    }
+    // 第二次覆盖安装：安装器重写记号，mtime 必变。睡 1.1 秒是因为快照名按秒打戳，
+    // 同秒撞名走的是 fail-closed（宁可拒启也不覆盖退路），测试不该去踩这条生产守卫。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&stamp, b"banghe").unwrap();
+    {
+        let (_db, r) = banghe_lib::db::open_and_migrate(&dir, "0.1.0-e2e").unwrap();
+        assert!(r.backup_path.is_some(), "每一次覆盖安装都要各留一份退路");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 版本号变了就是升级——哪怕没有安装器记号（绿色拷贝、老安装包）：
+/// 先拍 `pre_upgrade_<旧版>_to_<新版>_` 快照，记账之后普通重启不再触发。
+#[test]
+fn version_bump_without_marker_snapshots_pre_upgrade() {
+    let dir = temp_dir("ver-bump");
+    {
+        let (_db, r) = banghe_lib::db::open_and_migrate(&dir, "0.1.0-a").unwrap();
+        assert!(r.backup_path.is_none(), "首装不拍");
+    }
+    {
+        let (_db, r) = banghe_lib::db::open_and_migrate(&dir, "0.2.0").unwrap();
+        let b = r.backup_path.expect("版本变了、开库写入前必须备份");
+        assert!(
+            b.file_name().unwrap().to_string_lossy().starts_with("pre_upgrade_0.1.0-a_to_0.2.0_"),
+            "名字要能看出从哪个版本升到哪个版本：{b:?}"
+        );
+    }
+    {
+        let (_db, r) = banghe_lib::db::open_and_migrate(&dir, "0.2.0").unwrap();
+        assert!(r.backup_path.is_none(), "新版本已经记进账，重启就是普通启动");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// 改了历史脚本 → 校验和拦下，绝不"顺手再跑一遍"
 #[test]
 fn tampered_applied_script_refuses_startup() {
@@ -967,7 +1029,7 @@ fn tampered_applied_script_refuses_startup() {
         [],
     )
     .unwrap();
-    let e = migrate::apply(conn, "0.1.0-test", None).unwrap_err();
+    let e = migrate::apply(conn, "0.1.0-test", None, None).unwrap_err();
     assert!(
         matches!(e, migrate::MigrateError::ChecksumMismatch { .. }),
         "应当报校验和不一致，实际：{e:?}"
@@ -1006,7 +1068,7 @@ fn legacy_crlf_checksum_is_healed_once_and_accepted() {
     )
     .unwrap();
 
-    let r = migrate::apply(conn, "0.1.0-test", None).expect("老哈希应补记后放行，而不是拒启");
+    let r = migrate::apply(conn, "0.1.0-test", None, None).expect("老哈希应补记后放行，而不是拒启");
     assert_eq!(r.healed, vec![m.name.to_string()], "补记要报告是哪支脚本");
     let stored: String = conn
         .query_row(
@@ -1017,7 +1079,7 @@ fn legacy_crlf_checksum_is_healed_once_and_accepted() {
         .unwrap();
     assert_eq!(stored, m.checksum(), "补记后库里应当是规范值");
 
-    let r2 = migrate::apply(conn, "0.1.0-test", None).unwrap();
+    let r2 = migrate::apply(conn, "0.1.0-test", None, None).unwrap();
     assert!(r2.healed.is_empty(), "第二次启动不该再补记");
 
     // 反向：既不是规范值也不是 CRLF 值 → 照样拒启，补记不能变成后门
@@ -1028,7 +1090,7 @@ fn legacy_crlf_checksum_is_healed_once_and_accepted() {
     .unwrap();
     assert!(
         matches!(
-            migrate::apply(conn, "0.1.0-test", None).unwrap_err(),
+            migrate::apply(conn, "0.1.0-test", None, None).unwrap_err(),
             migrate::MigrateError::ChecksumMismatch { .. }
         ),
         "对不上任何合法 flavor 的哈希必须仍然拦下"
@@ -1045,7 +1107,7 @@ fn newer_database_version_refuses_startup() {
         [],
     )
     .unwrap();
-    let e = migrate::apply(conn, "0.1.0-test", None).unwrap_err();
+    let e = migrate::apply(conn, "0.1.0-test", None, None).unwrap_err();
     assert!(
         matches!(e, migrate::MigrateError::Downgrade { db: 99, app } if app == MIGRATIONS.len() as u32),
         "实际：{e:?}"
@@ -1059,7 +1121,7 @@ fn newer_database_version_refuses_startup() {
         [],
     )
     .unwrap();
-    let e = migrate::apply(conn, "0.1.0-test", None).unwrap_err();
+    let e = migrate::apply(conn, "0.1.0-test", None, None).unwrap_err();
     assert!(matches!(e, migrate::MigrateError::UnknownScript { .. }), "实际：{e:?}");
 }
 
@@ -1078,7 +1140,7 @@ fn failed_script_rolls_back_and_is_not_recorded() {
     ];
     let mut conn = Connection::open_in_memory().unwrap();
     banghe_lib::db::setup_pragmas_memory(&conn).unwrap();
-    let e = migrate::apply_with(&mut conn, "0.1.0-test", None, BROKEN).unwrap_err();
+    let e = migrate::apply_with(&mut conn, "0.1.0-test", None, None, BROKEN).unwrap_err();
     assert!(matches!(e, migrate::MigrateError::Failed { .. }), "实际：{e:?}");
     let recorded: Vec<String> = conn
         .prepare("SELECT name FROM schema_migration ORDER BY name")

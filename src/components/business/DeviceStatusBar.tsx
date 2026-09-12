@@ -9,14 +9,13 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { KeyboardIcon, VolumeXIcon } from "lucide-react";
+import { KeyboardIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDeviceStore } from "@/store/device";
-import { useActor, useSession } from "@/store/session";
+import { useActor } from "@/store/session";
 import { weight } from "@/lib/format";
 import { DEVICE_STATUS } from "@/lib/constants";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dot } from "@/components/business/badges";
 import { operatorLabel } from "@/components/business/OperatorSwitch";
@@ -70,12 +69,7 @@ export function DeviceStatusBar() {
   const setReaderMocked = useDeviceStore((s) => s.reader.setMocked);
   const camera = useDeviceStore((s) => s.camera);
   const printer = useDeviceStore((s) => s.printer);
-  const mockOff = useDeviceStore((s) => s.mockOff);
-  const setMockOff = useDeviceStore((s) => s.setMockOff);
   const actor = useActor();
-  // 底栏这个开关与设备中心页的总开关改的是同一个 mockOff，得用同一个权限门禁，
-  // 否则只在一处设限制等于没设
-  const canManage = useSession((s) => s.can("device.manage"));
 
   const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices() });
   const cfg = (code: string) => devices.find((d) => d.code === code);
@@ -86,7 +80,7 @@ export function DeviceStatusBar() {
 
   // 读卡器的台账判据按「kind + 启用态」整体算，不写死设备码：登记新设备的编码是自动生成的，
   // 认死 idcard1 会让"根本没登记"与"登记成别的码"两种情况都静默走真机——那正是这次的漏洞。
-  // 判据与 useScaleTick 的 scaleMocked 同式：有真机用真机；只剩 Mock 才算 mocked；一台没有 = 闸门关。
+  // 判据：有真机用真机；只剩 Mock 才算 mocked；一台没有 = 闸门关。
   const readers = devices.filter((d) => d.kind === "idcard" && d.is_enabled === 1);
   const realReaders = readers.filter((d) => d.is_mock === 0);
   const readerRegistered = readers.length > 0;
@@ -111,7 +105,7 @@ export function DeviceStatusBar() {
   // 台账查清后闸门翻真会自动重探，未登记的灰灯不必等用户点读卡才见到原因
   useEffect(() => {
     void probeReader();
-  }, [probeReader, mockOff, readerRegistered, readerMocked]);
+  }, [probeReader, readerRegistered, readerMocked]);
 
   const scaleDetail = scale.connected
     ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg)} · ${scale.stable ? "稳" : "不稳"}`
@@ -168,31 +162,6 @@ export function DeviceStatusBar() {
       </div>
 
       <span className="ml-auto flex shrink-0 items-center gap-3">
-        {mockOff && (
-          <span className="inline-flex items-center gap-1 text-xs text-warning">
-            <VolumeXIcon />
-            外设已全部关闭，仅可手录作业
-          </span>
-        )}
-        <Tooltip>
-          <TooltipTrigger render={<span className="inline-flex items-center gap-1.5" />}>
-            <Switch
-              id="mock-off"
-              size="sm"
-              checked={mockOff}
-              disabled={!canManage}
-              onCheckedChange={(v) => setMockOff(v === true)}
-              className="ml-1"
-            />
-            <label htmlFor="mock-off" className={cn("text-xs", canManage ? "cursor-pointer" : "cursor-not-allowed")}>
-              Mock 关
-            </label>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            关掉后四类外设全部离线，用于验收"无外设也能手工完成一车闭环"（05 §10-1）
-            {!canManage && <p className="text-muted-foreground">改动需 device.manage（仅站长）。当前账号不够，用左侧栏底部「换人」以站长密码重新登录</p>}
-          </TooltipContent>
-        </Tooltip>
         <Separator orientation="vertical" className="h-4" />
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
@@ -201,7 +170,7 @@ export function DeviceStatusBar() {
           <TooltipContent side="top">
             <p className="font-medium">主要快捷键</p>
             <p className="text-muted-foreground">空格 捕获 · F7 下一单 · F8 读卡 · F5 化验 · F6 带价</p>
-            <p className="text-muted-foreground">F9 打码单 · F10 扫码结算 · F2 展示模式 · Ctrl+K 检索 · Ctrl+B 折叠侧栏</p>
+            <p className="text-muted-foreground">F9 打码单 · F10 扫码结算 · F2 对外大屏 · Ctrl+K 检索 · Ctrl+B 折叠侧栏</p>
           </TooltipContent>
         </Tooltip>
         <Separator orientation="vertical" className="h-4" />

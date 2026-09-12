@@ -12,8 +12,8 @@
  *  - `ordersApi` 工作台录单全链路（档案/磅单/化验/结算/打印）、`ordersCenterApi` 磅单中心补口
  *    （作废、本单所属结算单）、`qcApi` 化验队列与单项
  *  - `reportsApi` 日报 + 未付清 + 结算列表、`ledgerApi` 另外四张台账报表，两条共用
- *    `STAT_WHERE` 同一条汇总口径；`settlementsApi` 结算详情/待结算池/挂账账龄/补录收款、
- *    `paymentsApi` 收款流水与口径分布
+ *    `STAT_WHERE` 同一条汇总口径；`settlementsApi` 结算详情/待结算池/挂账账龄/补录付款、
+ *    `paymentsApi` 付款流水与口径分布
  *  - `systemApi` 审计留痕与备份/校验/体检/恢复、`prefsApi` 工作台布局偏好、
  *    `devicesApi` 设备台账、`searchApi` 全局搜索
  *

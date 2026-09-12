@@ -33,10 +33,9 @@ import { SettleForm } from "@/components/settlement/SettleForm";
 import { TicketPrintSection } from "@/components/settlement/TicketPrintSection";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
-import { printReceiptSilently } from "@/components/print/receipt/silent";
+import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { useQuickDetail } from "@/components/business/QuickDetailSheet";
-import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
+import { Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -45,7 +44,6 @@ export function WorkstationPage() {
   const { orderNo } = useSearch({ from: "/workstation" });
   const navigate = useNavigate();
   const qcClient = useQueryClient();
-  const mockOff = useDeviceStore((s) => s.mockOff);
   const openQuickDetail = useQuickDetail((s) => s.open);
   const names = useStaffNames();
   const { data: varieties = [] } = useVarieties();
@@ -68,17 +66,20 @@ export function WorkstationPage() {
 
   /** 制单弹窗 */
   const [regOpen, setRegOpen] = useState(false);
+  /** 刷卡带进来的那张卡：刷到空闲卡却没有在途单时由 `useIcWorkflow` 交下来，制单即绑它 */
+  const [regCard, setRegCard] = useState<string | null>(null);
   /** 第三刷要结算的单号（null = 结算框关着） */
   const [settleNo, setSettleNo] = useState<string | null>(null);
   /** 打印目标：自动出码单时是被称的那张单，手动打印时是当前单；null 回落到当前 order */
   const [printTarget, setPrintTarget] = useState<string | null>(null);
-  const [printOpen, setPrintOpen] = useState(false);
   /**
    * 「直打」触发器：第二刷皮重后自动出码单、F9、结算弹窗的「凭票打印」与顶部按钮共用这一条路——
    * 无预览直接打（silent.ts 按模板纸型分流热敏直连 / 打印队列直打，纸张随打印机配置），
    * 只有真打不出去（浏览器演示、设备离线、队列报错）才回退弹预览框。
+   * 这条路与磅单详情的补打共用 `useSilentReceiptPrint`，出纸口解析只有一份实现。
    */
   const [directPrint, setDirectPrint] = useState(false);
+  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
   const printedFor = useRef<string | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -104,6 +105,11 @@ export function WorkstationPage() {
       printedFor.current = null;
       setPrintTarget(o.order_no);
       setDirectPrint(true);
+    },
+    onRequestRegister: (card) => {
+      // 卡还在感应区上：弹制单框并预填这张卡，取号那一刻一起绑上（06 §4.0 同事务）
+      setRegCard(card);
+      setRegOpen(true);
     },
   });
 
@@ -178,7 +184,7 @@ export function WorkstationPage() {
   const scaleDevice = devices.find((d) => d.kind === "scale");
   const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
   const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
-  const cameraOnline = !mockOff && cameraDevice?.last_status === "online";
+  const cameraOnline = cameraDevice?.last_status === "online";
   const photos = order?.photos ?? [];
 
   // ── 第三刷结算框：拿 settleNo 对应单的 order / variety / qc ──
@@ -215,24 +221,19 @@ export function WorkstationPage() {
     if (!directPrint || !printTarget || !station || !printOrder) return;
     if (printedFor.current === printTarget) return;
     printedFor.current = printTarget;
-    void (async () => {
-      const out = await printReceiptSilently({
-        scenario: "weigh_order",
-        docNo: printTarget,
-        isReprint: printTimes > 0,
-        context: { station, names, order: printOrder, qc: printQc },
-        devices,
-      });
-      if (out === "preview") setPrintOpen(true);
-      else qcClient.invalidateQueries({ queryKey: ["order", printTarget] });
-      setDirectPrint(false);
-    })();
-  }, [directPrint, printTarget, station, printOrder, printQc, names, devices, printTimes, qcClient]);
+    void printReceipt({
+      scenario: "weigh_order",
+      docNo: printTarget,
+      isReprint: printTimes > 0,
+      context: { station, names, order: printOrder, qc: printQc },
+    });
+    setDirectPrint(false);
+  }, [directPrint, printTarget, station, printOrder, printQc, names, printTimes, printReceipt]);
 
   /** 面板本体按 id 收在这儿；身份与制单、凭票与打印都已移出格子（前者进制单弹窗，后者进结算弹窗） */
   const bodies: Record<PanelId, ReactNode> = {
     tare: <TarePanel recent={tareRecent.slice(0, 5)} last01kg={partyDetail?.last_tare_01kg ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} currentTare01kg={currentTare01kg} alert={tareAlert} partyId={partyId} />,
-    camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} mockOff={mockOff} />,
+    camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} />,
     weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} cameraOnline={cameraOnline} />,
     qc: <QcPanel order={order ?? null} variety={variety} />,
   };
@@ -358,7 +359,11 @@ export function WorkstationPage() {
       {/* 制单弹窗（身份与制单，05 §4.0） */}
       <RegistrationDialog
         open={regOpen}
-        onOpenChange={setRegOpen}
+        onOpenChange={(v) => {
+          setRegOpen(v);
+          if (!v) setRegCard(null); // 关框即丢掉那张卡，下次开窗不该带着上一张
+        }}
+        cardNo={regCard}
         parties={parties}
         varieties={varieties}
         warehouses={warehouses}
@@ -381,7 +386,7 @@ export function WorkstationPage() {
                 qc={settleQc}
                 prices={prices}
                 allowCredit={allowCredit}
-                submitLabel="确认结算并收款"
+                submitLabel="确认结算并付款"
                 submitHotkey={null}
                 onSettled={(r) => {
                   toast.success(`已结算 ${r.order.order_no}，本单卡自动回池`);
@@ -402,23 +407,9 @@ export function WorkstationPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 出码单：自动（第②刷）或手动（F9 / 顶部按钮 / 结算弹窗「凭票打印」），打的是 printOrder */}
-      {printOrder && station ? (
-        <ReceiptPrintPreview
-          open={printOpen}
-          onOpenChange={(v) => {
-            setPrintOpen(v);
-            if (!v) setPrintTarget(null);
-          }}
-          scenario="weigh_order"
-          context={{ station, names, order: printOrder, qc: printQc, reprint: printTimes > 0 }}
-          isReprint={printTimes > 0}
-          docNo={printOrder.order_no}
-          onPrinted={() => qcClient.invalidateQueries({ queryKey: ["order", printOrder.order_no] })}
-        />
-      ) : (
-        printOpen && <EmptyState title="还没有可打印的磅单" description="请先取号制单并完成称重。" />
-      )}
+      {/* 出码单：自动（第②刷）或手动（F9 / 顶部按钮 / 结算弹窗「凭票打印」），打的是 printOrder。
+          直打失败时的兜底预览框由 hook 给出，没发起过出票就是 null */}
+      {printFallback}
 
       {focusMode && (
         <div className="absolute right-3 top-3 z-50">

@@ -19,7 +19,9 @@
 //!    迁移前、恢复前。站长连续几周不点按钮，磁盘上就一份副本都没有。现在起由 `lib.rs` 起的
 //!    守护线程每小时查一次，超过 `backup_auto_interval_days`（缺省 1 天）没有新副本就补一份
 //!    `kind = auto`。无人值守时没有登录人，留痕的 `actor_id` 如实留 NULL、名字写"系统自动"
-//!    （与 `authorized_by` 那条同口径：不拿 0 冒充一个不存在的人）。
+//!    （与 `authorized_by` 那条同口径：不拿 0 冒充一个不存在的人）。第四个触发点在
+//!    `migrate.rs`：安装包（NSIS 钩子）每次覆盖安装都落 `install.stamp` 记号，新程序
+//!    **首次启动**在做任何写入前先拍一份 `pre_upgrade_` 快照——装坏了版本的退路。
 //!  - **从备份目录之外导入副本**：现场把副本拷去 U 盘之后，**拷回来恢复**曾经做不到——
 //!    [`resolve_backup`] 拒绝任何路径分隔符，页面只能列 `backup_dir` 里的名字。新增
 //!    [`import_backup`]：认一个绝对路径，验完校验和再落进备份目录，之后走的就是原来那条
@@ -408,8 +410,10 @@ fn write_sidecar(db: &Path, hex: &str) -> Result<(), String> {
     std::fs::write(sidecar_path(db), format!("{hex}\n")).map_err(|e| format!("写入校验和文件失败：{e}"))
 }
 
-/// 副本的"类型"：`banghe_<时间>_<kind>.db` 取尾段，`pre_migrate_*` 取头段。纯展示用
-/// （页面按它给个"手动 / 迁移前 / 恢复前"标签），认不出来就退回文件名主干。
+/// 副本的"类型"：`banghe_<时间>_<kind>.db` 取尾段，`pre_migrate_*` / `pre_upgrade_*`
+/// 取头**两**段（只取一段会把两种快照都糊成 `pre`，页面分不出迁移还是覆盖安装），
+/// 其余名字取头段。纯展示用（页面按它给个"手动 / 迁移前 / 覆盖安装前 / 恢复前"标签），
+/// 认不出来就退回文件名主干。
 pub fn kind_of(name: &str) -> String {
     let stem = name.trim_end_matches(".db");
     if let Some(rest) = stem.strip_prefix("banghe_") {
@@ -418,6 +422,11 @@ pub fn kind_of(name: &str) -> String {
             return rest[idx + 1..].to_string();
         }
     } else if let Some(idx) = stem.find('_') {
+        if let Some(idx2) = stem[idx + 1..].find('_') {
+            if stem.starts_with("pre_") {
+                return stem[..idx + 1 + idx2].to_string();
+            }
+        }
         return stem[..idx].to_string();
     }
     stem.to_string()
@@ -784,17 +793,25 @@ pub fn list_backups(backup_dir: &Path) -> Vec<BackupFile> {
     out
 }
 
+/// 迁移执行器（`migrate.rs`）生成的**结构性快照**：`pre_migrate_`（要跑脚本了）与
+/// `pre_upgrade_`（覆盖安装后的首次启动、库结构未必变）。两处口径共用这个判据：
+/// 不参与 [`prune_backups`] 淘汰，也不算 [`auto_backup_needed`] 的"最新普通副本"。
+pub fn is_guard_snapshot(name: &str) -> bool {
+    name.starts_with("pre_migrate_") || name.starts_with("pre_upgrade_")
+}
+
 /// 按 `backup_keep_count` 淘汰更旧的副本，**成对**删 `.db` 与 `.sha256`（留下孤零零的
 /// 旁文件会让下一次校验把"文件不存在"当成篡改）。三条刻意的例外：
 ///  - `protect` 列出的名字永不删：调用方会把"刚生成的那一份"放进来——哪怕保留数被填成
 ///    0/1，也不能把用户这一次备份吃掉；恢复流程还会把**待恢复的那份副本**放进来，
 ///    否则淘汰会先把要换上去的文件删掉（自毁退路）；
-///  - `pre_migrate_` 快照不参与淘汰：它是"库结构版本超前"时唯一的退路
-///    （见 `migrate.rs` 的 Downgrade 文案），不该被手动备份的次数挤掉。
+///  - [`is_guard_snapshot`]（`pre_migrate_` / `pre_upgrade_`）快照不参与淘汰：前者是
+///    "库结构版本超前"时唯一的退路（见 `migrate.rs` 的 Downgrade 文案），后者是新
+///    版本翻车时退回旧版本的退路，都不该被手动备份的次数挤掉。
 /// 删除失败既不 panic 也不否决已经成功的备份——失败项原样回给界面。
 pub fn prune_backups(backup_dir: &Path, keep: i64, protect: &[&str]) -> (Vec<String>, Vec<String>) {
     let all = list_backups(backup_dir);
-    let is_plain = |f: &BackupFile| !f.name.starts_with("pre_migrate_");
+    let is_plain = |f: &BackupFile| !is_guard_snapshot(&f.name);
     // keep 是"普通副本的总份数"，受保护的这几份也占名额；否则每备份一次就多留一份，
     // 页面上写着"保留 30 份"、磁盘上却是 31、32 份在长。
     let held = all.iter().filter(|f| is_plain(f) && protect.contains(&f.name.as_str())).count();
@@ -934,13 +951,14 @@ fn stamp_age_days(stamp: &str) -> Option<i64> {
 }
 
 /// 该不该补一份自动备份：只看**最新那份普通副本**的名字时间戳。
-/// `pre_migrate_*` 不算数——它只在库结构要变时才有，一个从不备份的站点光靠它撑不起
-/// "数据留存"这件事；淘汰规则同样不计它（见 [`prune_backups`]），两处口径保持一致。
+/// `pre_migrate_*` / `pre_upgrade_*` 快照不算数——它们只在结构要变或覆盖安装时才出生，
+/// 一个从不备份的站点光靠它们撑不起"数据留存"这件事；淘汰规则同样不计它（见
+/// [`prune_backups`]），两处口径保持一致。
 fn auto_backup_needed(conn: &Connection, backup_dir: &Path) -> bool {
     let interval = auto_interval_days(conn);
     let newest_plain = list_backups(backup_dir)
         .into_iter()
-        .find(|f| !f.name.starts_with("pre_migrate_"));
+        .find(|f| !is_guard_snapshot(&f.name));
     match newest_plain.as_ref().and_then(|f| name_stamp(&f.name)).as_deref().and_then(stamp_age_days) {
         // 认不出时间戳的副本（手工拷进来的怪名字）按"过期"处理：宁可多备份一次
         None => true,
@@ -1765,4 +1783,16 @@ pub async fn app_restart(app: AppHandle) -> Result<(), String> {
     }
     eprintln!("[banghe] 站长 {} 确认重启应用（恢复后换库）", actor.username);
     app.restart()
+}
+
+/// 退出应用。与 [`app_restart`] 同一条口径：走 [`tauri::AppHandle::exit`] 才会触发
+/// `RunEvent::Exit`，`lib.rs` 里的串口归还与 WAL 收尾照常跑；`std::process::exit`
+/// 会跳过它们，把 -wal 和没写完的页留在盘上。
+///
+/// 这个按钮的存在理由见 [`crate::window`]：一旦把主窗口的 ✕ 设成"隐藏到系统托盘"，
+/// 界面上就再没有能关掉程序的入口了——这台机器一开一整天，收工总得有人能把它关掉。
+/// 所以**不设岗位闸门**：站在机器前的人要关机，不该被自己的岗位挡住。
+#[tauri::command]
+pub async fn app_exit(app: AppHandle) {
+    app.exit(0);
 }

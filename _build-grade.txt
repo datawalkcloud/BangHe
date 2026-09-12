@@ -1,0 +1,37 @@
+﻿node.exe : [33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0mnode_modules/@tauri-apps/
+api/core.js is dynamically imported by src/lib/auth.ts, src/lib/cards-native.ts
+, src/lib/dashboard-native.ts, src/lib/devices-native.ts, src/lib/ledger-native
+.ts, ... but also statically imported by node_modules/@tauri-apps/api/dpi.js, n
+ode_modules/@tauri-apps/api/event.js, node_modules/@tauri-apps/api/image.js, no
+de_modules/@tauri-apps/api/webview.js, node_modules/@tauri-apps/api/webviewWind
+ow.js, ..., dynamic import will not move module into another chunk.
+所在位置 行:1 字符: 1
++ & "C:\Users\Sprin\.workbuddy\binaries\node\versions\22.22.2-3/node.ex ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33m[33m[INEF... another chunk. 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[39m
+[33m[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://r
+olldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39
+m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0mnode_modules/@tauri-apps/api/event.j
+s is dynamically imported by src/lib/scale-native.ts but also statically import
+ed by node_modules/@tauri-apps/api/webview.js, node_modules/@tauri-apps/api/web
+viewWindow.js, node_modules/@tauri-apps/api/window.js, dynamic import will not 
+move module into another chunk.
+[39m
+[33m[33m[PLUGIN_TIMINGS] [0mPlugin hooks ran for 6.0s of this 6.7s build (90
+%).
+The slowest hooks, timed inside each callback (the wait before a callback start
+s is excluded, the time it awaits is included):
+  - @tailwindcss/vite:generate:build transform (80%, 5.4s, 1 call)
+Additional hook time came from hooks under 1s.
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more de
+tails.
+[39m

@@ -136,7 +136,7 @@ fn terminal_state_auto_releases_card() {
     issue(&conn, &actor(2, "weigher"), IssueInput { order_no: Some(no.clone()), card_no: "04A21F06".into() }).unwrap();
     assert_eq!(locate(&conn, "04A21F06").unwrap().status, "in_use");
     // 作废即终态：release_for_order 在同事务内把卡打回 in_pool（card_release_on_terminal 默认开）
-    void_order(&conn, &actor(1, "station_master"), VoidOrderInput { order_no: no, reason: "误发，作废重开".into(), operator_id: None, authorized_by: 1 })
+    void_order(&conn, &actor(1, "station_master"), VoidOrderInput { order_no: no, reason: "误发，作废重开".into(), operator_id: None, authorized_by: Some(1) })
         .expect("作废应成功");
     assert_eq!(locate(&conn, "04A21F06").unwrap().status, "in_pool", "作废后卡应自动回池");
 }

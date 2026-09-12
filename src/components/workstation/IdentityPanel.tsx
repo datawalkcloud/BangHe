@@ -4,7 +4,7 @@
  * 制单前是一段"草稿态"（还没号），制单后同一栏退化为只读摘要 + 新建下一单，
  * 这样磅员的目光始终落在同一块位置，不必在两屏之间来回找。
  *
- * 读卡是可选路径：阅读器离线（mockOff）时必须能搜档案或手工输入，
+ * 读卡是可选路径：阅读器离线时必须能搜档案或手工输入，
  * 这是 05 §10-1「无外设也要能完成闭环」的硬要求。
  *
  * **流转卡不是可选的**（06 §4.0）：站点参数「制单必须绑卡」默认开着，点「取号并制单」
@@ -72,6 +72,7 @@ export function IdentityPanel({
   varieties,
   warehouses,
   slots,
+  presetCardNo = null,
   onCreated,
   onNewOrder,
 }: {
@@ -82,12 +83,13 @@ export function IdentityPanel({
   varieties: GrainVariety[];
   warehouses: Warehouse[];
   slots: StorageSlot[];
+  /** 刷卡带进来的卡（后台常听发现没有在途单可发时）：就位即取号，不必再刷一次 */
+  presetCardNo?: string | null;
   onCreated: (orderNo: string) => void;
   onNewOrder: () => void;
 }) {
   const actor = useActor();
   const can = useSession((s) => s.can);
-  const mockOff = useDeviceStore((s) => s.mockOff);
   const reading = useDeviceStore((s) => s.reader.idcard.reading);
   const lastCard = useDeviceStore((s) => s.reader.idcard.last);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -98,7 +100,11 @@ export function IdentityPanel({
   /** 「制单请放流转卡」弹窗：点「取号并制单」时卡还没就位就弹它（06 §4.0） */
   const [bindOpen, setBindOpen] = useState(false);
   /** 这次制单要绑的卡（刷到才非空）。绑卡与取号同一次事务，所以它只在号取成之前存在 */
-  const [cardNo, setCardNo] = useState<string | null>(null);
+  const [cardNo, setCardNo] = useState<string | null>(presetCardNo);
+  // 卡已经贴在感应区上、由刷卡推进带进来：本框挂载即就位（换卡/失败清空后不回弹，见 create.onError）
+  useEffect(() => {
+    if (presetCardNo) setCardNo(presetCardNo);
+  }, [presetCardNo]);
   /** 去向默认折起来：多数站点制单时不登记仓房/货位，不该占住磅员的主视线 */
   const [destOpen, setDestOpen] = useState(false);
   const qc = useQueryClient();
@@ -151,8 +157,7 @@ export function IdentityPanel({
         remark: draft.remark.trim() || null,
         card_no: card,
         registered_by: actorId(),
-        // 外设关掉后只能手录，来源标记必须诚实（05 §6.1）
-        weight_source: mockOff ? "manual" : "scale",
+        weight_source: "scale",
       }),
     onSuccess: (o) => {
       toast.success(o.card_no ? `已取号 ${o.order_no} · 已绑卡 ${o.card_no}` : `已取号 ${o.order_no}`);
@@ -284,7 +289,7 @@ export function IdentityPanel({
               useDeviceStore.getState().reader.idcard.clear();
               setScanOpen(true);
             }}
-            disabled={reading || mockOff || !can("order.create")}
+            disabled={reading || !can("order.create")}
             className="h-7 text-xs"
           >
             <CreditCardIcon />
@@ -295,7 +300,7 @@ export function IdentityPanel({
             搜档案
           </Button>
           {/* 无外设 / 证号在档案里录错时的那条路：手录一张新档案，不用离开制单去档案页
-              （05 §4.0 的"手录证号建档"、mockOff 提示语都靠这个按钮兑现） */}
+              （05 §4.0 的"手录证号建档"靠这个按钮兑现） */}
           <Button
             size="sm"
             variant="outline"
@@ -310,11 +315,6 @@ export function IdentityPanel({
             新档案
           </Button>
         </div>
-        {mockOff && (
-          <p className="text-xs text-muted-foreground">
-            外设总开关已关闭，读卡不可用：请点「搜档案」选人，或点「新档案」手工录入证号建档。
-          </p>
-        )}
 
         <div className="border bg-muted/30 p-1.5">
           {draft.party ? (

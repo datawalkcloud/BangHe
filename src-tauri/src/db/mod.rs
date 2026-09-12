@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use chrono::{DateTime, Local, SecondsFormat};
 use rusqlite::Connection;
 
 pub use migrate::{MigrateError, Migration, Report, MIGRATIONS};
@@ -16,6 +17,22 @@ pub use migrate::{MigrateError, Migration, Report, MIGRATIONS};
 /// §7：库文件名。与附件、备份同在 `AppDataDir`，**不得**放安装目录（升级会覆盖）
 /// 或 OneDrive 同步目录（会引发文件锁与损坏）。
 pub const DB_FILE: &str = "banghe.db";
+
+/// 安装包（NSIS POSTINSTALL 钩子，见 `src-tauri/nsis-hooks.nsh`）在每次安装收尾时
+/// 写进 `AppDataDir` 的记号文件。内容恒定，程序只认它的**修改时间**：与库里
+/// `app_meta.install_stamp_seen` 记的上次消费值不一致，就说明「装过新包、还没启动过」，
+/// 首次启动先给数据库补一份 `pre_upgrade_` 快照再干活。两处文件名是契约，改一必须改二。
+pub const INSTALL_STAMP_FILE: &str = "install.stamp";
+
+/// `install.stamp` 的修改时间（§3.2 口径的 ISO 本地时间）。
+/// `None` = 记号不存在：开发调试、绿色目录拷贝、或装了还没带钩子的老安装包。
+pub fn install_stamp(app_dir: &Path) -> Option<String> {
+    let modified = std::fs::metadata(app_dir.join(INSTALL_STAMP_FILE))
+        .ok()?
+        .modified()
+        .ok()?;
+    Some(DateTime::<Local>::from(modified).to_rfc3339_opts(SecondsFormat::Millis, false))
+}
 
 pub fn db_path(app_dir: &Path) -> PathBuf {
     app_dir.join(DB_FILE)
@@ -94,11 +111,15 @@ pub fn locked<T>(pool: &Arc<Mutex<Connection>>, f: impl FnOnce(&Connection) -> T
 /// 打开（必要时创建）站点库并完成启动迁移。
 pub fn open_and_migrate(app_dir: &Path, app_version: &str) -> Result<(Db, Report), MigrateError> {
     std::fs::create_dir_all(app_dir)?;
+    // 先读安装记号再开库：迁移和一切写入之前，migrate::apply 会据此决定要不要
+    // 先落一份 pre_upgrade_ 快照（「覆盖安装后的首次启动」的退路）。
+    let stamp = install_stamp(app_dir);
     let mut conn = Connection::open(db_path(app_dir))?;
     setup_pragmas(&conn)?;
     let report = migrate::apply(
         &mut conn,
         app_version,
+        stamp.as_deref(),
         Some(&backup_dir(app_dir)),
     )?;
     Ok((Db::new(conn), report))
@@ -111,6 +132,6 @@ pub fn in_memory_migrated(
 ) -> Result<Connection, MigrateError> {
     let mut conn = Connection::open_in_memory()?;
     setup_pragmas_memory(&conn)?;
-    migrate::apply_with(&mut conn, app_version, None, migrations)?;
+    migrate::apply_with(&mut conn, app_version, None, None, migrations)?;
     Ok(conn)
 }

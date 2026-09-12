@@ -23,6 +23,7 @@ pub mod search;
 pub mod serial;
 pub mod settlements;
 pub mod system;
+pub mod window;
 
 use tauri::Manager;
 
@@ -59,6 +60,12 @@ pub fn run() {
                             report.from_version, report.to_version, report.applied
                         );
                     }
+                    if let Some(path) = &report.backup_path {
+                        // 覆盖安装后的首次启动往往没有任何待跑脚本（结构没变），
+                        // 上面那条迁移日志不会响——快照必须单独留一行，现场翻
+                        // startup 输出时能确认"这次安装确实拍了退路"。
+                        eprintln!("[banghe] 升级快照已生成：{}", path.display());
+                    }
                     if !report.healed.is_empty() {
                         // 只在「脚本内容一字未改、老库记的是换行归一之前的字节哈希」时发生，
                         // 补记一次即永久收敛。留日志是为了现场排查时看得出来。
@@ -71,6 +78,11 @@ pub fn run() {
                     // 自动备份线程必须在上面几个 manage 之后起：它第一轮就要取 `Db` 与
                     // 备份目录，早一步只会拿到"数据库尚未就绪"然后整天空转。
                     system::spawn_auto_backup(app.handle().clone());
+                    // 托盘：主窗口可以被设成"关闭时藏进去"，所以图标必须在进事件循环之前
+                    // 就在。建不出来不拦启动——`window::close_behavior` 会因此回落到退出。
+                    if let Err(e) = window::setup_tray(app.handle()) {
+                        eprintln!("[banghe] {e}；本次运行的「隐藏到托盘」不可用，关闭窗口一律退出");
+                    }
                     Ok(())
                 }
                 Err(e) => {
@@ -125,6 +137,7 @@ pub fn run() {
             orders::qc_save,
             orders::qc_list,
             orders::order_settle,
+            orders::order_set_grade,
             orders::print_log_add,
             orders::order_void,
             orders::settlement_of_order,
@@ -158,6 +171,7 @@ pub fn run() {
             system::restore_preflight,
             system::restore_apply,
             system::app_restart,
+            system::app_exit,
             prefs::prefs_read,
             prefs::prefs_write,
             qc::qc_get,
@@ -182,9 +196,19 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app_handle, event| {
+    app.run(|app_handle, event| match event {
+        // 主窗口的 ✕ 先拦下来，由 `window` 模块按偏好决定是退出还是藏进托盘
+        // （外接展示窗不拦，关它就是关它）。
+        tauri::RunEvent::WindowEvent { label, event, .. } => {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if label == window::MAIN_LABEL {
+                    api.prevent_close();
+                    window::on_main_close_requested(app_handle.clone());
+                }
+            }
+        }
         // §7 WAL 收尾：退出时收敛 -wal 文件并更新统计，防止它无限增长
-        if let tauri::RunEvent::Exit = event {
+        tauri::RunEvent::Exit => {
             // 串口先还回去：读线程不退，进程就带着开着的 COM 口消失，
             // 下次接上仪表可能直接报"端口被占用"。
             if let Some(hub) = app_handle.try_state::<scale::ScaleHub>() {
@@ -194,5 +218,6 @@ pub fn run() {
                 database.checkpoint_wal();
             }
         }
+        _ => {}
     });
 }

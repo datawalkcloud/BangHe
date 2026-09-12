@@ -20,6 +20,7 @@ import type { Grade, Tone } from "@/lib/constants";
 import { PARTY_TYPE, PAYMENT_METHOD, ROLE, TONE_DOT, WEIGHT_SOURCE } from "@/lib/constants";
 import { maskIdCard, money, orDash, percent, price as fmtPrice, ratioText, shiftDay, todayISO, weight } from "@/lib/format";
 import { csvName, downloadCsv } from "@/lib/csv";
+import { RANGE_PRESETS, resolveRange } from "@/lib/date-range";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useStation, useStaffNames } from "@/hooks/useLookups";
 import { useSession } from "@/store/session";
@@ -31,6 +32,7 @@ import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/compo
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { cn } from "cn";
 
@@ -85,8 +87,8 @@ export function ReportsPage({ kind }: { kind: ReportKind }) {
 
 /* ------------------------------------------------------------ 公共零件 */
 
-/** 期间选择：四段快捷 + 手改起止，报表口径以 business_date 而非结算日。
- *  single 用于日报——它只看一天，摆两个日期框会让人以为能选区间 */
+/** 期间选择：区间报表用单个 range 日期控件（快捷预设内置在下拉里）；
+ *  single 用于日报——它只看一天，保持单个日期选择，不摆成会让人误以为能选区间的控件 */
 function RangeBar({
   from,
   to,
@@ -103,35 +105,33 @@ function RangeBar({
   singleLabel?: string;
 }) {
   const today = todayISO();
-  const presets: { label: string; range: [string, string] }[] = [
-    { label: "今天", range: [today, today] },
-    { label: "昨天", range: [shiftDay(today, -1), shiftDay(today, -1)] },
-    { label: "近 7 天", range: [shiftDay(today, -6), today] },
-    { label: "本月", range: [today.slice(0, 8) + "01", today] },
-    { label: "上月", range: [shiftDay(today.slice(0, 8) + "01", -(new Date().getDate() - 1)), shiftDay(today.slice(0, 8) + "01", -1)] },
-  ];
+  // single 模式仍展示全部预设，点击回填同一天区间。
+  const presets = RANGE_PRESETS.map((preset) => ({
+    label: preset.label,
+    range: [resolveRange(preset.key, today).from, resolveRange(preset.key, today).to] as [string, string],
+  }));
   return (
     <div className="flex flex-wrap items-end gap-2 border bg-muted/20 p-2.5">
-      <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-        {single ? singleLabel : "起始日"}
-        <DatePicker value={from} onChange={(v) => onChange(v, single ? v : to)} className="w-40" />
-      </Label>
-      {!single && (
-        <>
-          <span className="pb-2 text-xs text-muted-foreground">至</span>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            截止日
-            <DatePicker value={to} onChange={(v) => onChange(from, v)} className="w-40" />
-          </Label>
-        </>
+      {single ? (
+        <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          {singleLabel}
+          <DatePicker value={from} onChange={(v) => onChange(v, v)} className="w-40" />
+        </Label>
+      ) : (
+        <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          统计期间
+          <DateRangePicker value={{ from, to }} onChange={onChange} className="w-64" />
+        </Label>
       )}
-      <div className="flex flex-wrap gap-1 pb-1">
-        {presets.map((p) => (
-          <Button key={p.label} size="xs" variant={from === p.range[0] && to === p.range[1] ? "secondary" : "ghost"} onClick={() => onChange(...p.range)}>
-            {p.label}
-          </Button>
-        ))}
-      </div>
+      {single && (
+        <div className="flex flex-wrap gap-1 pb-1">
+          {presets.map((p) => (
+            <Button key={p.label} size="xs" variant={from === p.range[0] && to === p.range[1] ? "secondary" : "ghost"} onClick={() => onChange(...p.range)}>
+              {p.label}
+            </Button>
+          ))}
+        </div>
+      )}
       {extra}
     </div>
   );

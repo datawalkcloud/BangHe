@@ -302,9 +302,17 @@ textarea::placeholder {
 }
 
 /* 打印：只保留 #print-root（纸张本体），其余全部隐藏。
-   纸张自带 mm 宽与 mm 内边距，@page 尺寸由 ReceiptDocument 按纸型动态注入；
-   这里只把它从屏幕上的"适应宽度缩放 + 投影"还原成真实毫米，保证 1:1 出纸。 */
+   纸张自带 mm 宽与 mm 内边距，这里把它从屏幕上的"适应宽度缩放 + 投影"还原成真实毫米，保证 1:1 出纸。
+
+   注意：正常出纸走 `printPage.ts` 的离屏 iframe 通道，那份打印文档里除了纸没有别的东西，
+   @page 尺寸由它实测后注入。下面这套规则只服务**兜底**（iframe 不可用时退回 window.print()），
+   所以必须与那条通道的结论保持一致：定长纸的页边距由 @page margin 出，纸面自身不留白。 */
 @media print {
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
   body * {
     visibility: hidden;
   }
@@ -318,6 +326,18 @@ textarea::placeholder {
     left: 0;
     margin: 0;
     box-shadow: none !important;
+  }
+  /* 定长纸：页边距已在 @page 上，纸面再留白就是双倍边距 */
+  #print-root[data-page-fixed="1"] {
+    padding: 0 !important;
+    width: auto !important;
+    min-height: 0 !important;
+  }
+  /* 虚线分隔、二维码这些是真要印出来的，别被"省墨"策略抹掉 */
+  #print-root,
+  #print-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   /* 纸张托架只服务屏幕：纸上不能带 transform / 裁剪高度 / 居中留白 */
   .receipt-fit-host,

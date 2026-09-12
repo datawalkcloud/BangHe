@@ -1,0 +1,98 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 42
++ ... thub\BangHe\src-tauri; cargo test --test window_contract 2>&1 | Out-F ...
++                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.80s
+     Running tests\window_contract.rs (target\debug\deps\window_contract-fc7248
+e298eae77b.exe)
+
+running 4 tests
+test display_window_never_shares_the_main_label ... ok
+test only_hide_is_recognized_everything_else_exits ... ok
+test close_behavior_key_is_the_same_on_both_sides ... ok
+test out_of_the_box_the_window_hides_to_the_tray ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+ct_exit=0
+cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 225
++ ... Append G:\Github\BangHe\win-ct2.txt; cargo test --no-run 2>&1 | Out-F ...
++                                          ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\payments_contract.rs:127:9
+    |
+127 |         SettleInput {
+    |         ^^^^^^^^^^^ missing `grade`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `banghe` (test "payments_contract") due to 1 previous 
+error
+warning: build failed, waiting for other jobs to finish...
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\orders_contract.rs:209:9
+    |
+209 |         SettleInput {
+    |         ^^^^^^^^^^^ missing `grade`
+
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\orders_contract.rs:526:9
+    |
+526 |         SettleInput {
+    |         ^^^^^^^^^^^ missing `grade`
+
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\orders_contract.rs:560:9
+    |
+560 |         SettleInput {
+    |         ^^^^^^^^^^^ missing `grade`
+
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\orders_contract.rs:576:9
+    |
+576 |         SettleInput {
+    |         ^^^^^^^^^^^ missing `grade`
+
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\orders_contract.rs:589:9
+    |
+589 |         SettleInput {
+    |         ^^^^^^^^^^^ missing `grade`
+
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\orders_contract.rs:852:21
+    |
+852 |     let mut input = SettleInput {
+    |                     ^^^^^^^^^^^ missing `grade`
+
+error: could not compile `banghe` (test "orders_contract") due to 6 previous er
+rors
+warning: failed to garbage collect finalized incremental compilation session di
+rectory `\\?\G:\Github\BangHe\src-tauri\target\debug\incremental\command_wiring
+_contract-1ib0ghvzzduya\s-hm8842hej1-1ujaknw-eq244fz7qs6swiryjjt9bl5rj`: 鎷掔粷璁块棶
+銆?(os error 5)
+
+warning: failed to garbage collect finalized incremental compilation session di
+rectory `\\?\G:\Github\BangHe\src-tauri\target\debug\incremental\devices_contra
+ct-2914gx66bsedf\s-hm88512xw1-1oxql0v-e298tnwe8uyw8nguwo1faoaol`: 鎷掔粷璁块棶銆?(os e
+rror 5)
+
+error[E0063]: missing field `grade` in initializer of `SettleInput`
+   --> tests\search_contract.rs:135:9
+    |
+135 |         SettleInput {
+    |         ^^^^^^^^^^^ missing `grade`
+
+error: could not compile `banghe` (test "search_contract") due to 1 previous er
+ror
+warning: `banghe` (test "devices_contract") generated 1 warning
+warning: `banghe` (test "command_wiring_contract") generated 1 warning
+all_exit=101

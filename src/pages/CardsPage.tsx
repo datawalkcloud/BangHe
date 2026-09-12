@@ -20,7 +20,6 @@ import type { CardPoolRow } from "@/mock/types";
 import { CARD_STATUS, type CardStatus } from "@/lib/constants";
 import { dateTimeShort, orDash } from "@/lib/format";
 import { useSetting } from "@/hooks/useLookups";
-import { useDeviceStore } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { IcScanDialog } from "@/components/business/IcScanDialog";
@@ -34,7 +33,6 @@ import { Label } from "@/components/ui/label";
 export function CardsPage() {
   const qc = useQueryClient();
   const can = useSession((s) => s.can);
-  const mockOff = useDeviceStore((s) => s.mockOff);
   const warnFree = useSetting("card_pool_warn_free").num || 5;
 
   const [status, setStatus] = useState<CardStatus | "all">("all");
@@ -114,9 +112,6 @@ export function CardsPage() {
         description="卡只认单不认人：先登记在册，工作台上才能发；结算/作废自动回收，丢损在此注销。"
         actions={
           <>
-            {mockOff && (
-              <span className="text-xs text-muted-foreground">外设总开关已关，弹窗仍可手输卡号登记。</span>
-            )}
             <Button size="sm" onClick={() => setScanOpen(true)} disabled={!can("order.create")}>
               <ScanLineIcon />
               读卡登记

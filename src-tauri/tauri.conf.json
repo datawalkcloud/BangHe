@@ -62,6 +62,7 @@
         "headerImage": null,
         "sidebarImage": null,
         "installerIcon": "icons/icon.ico",
+        "installerHooks": "nsis-hooks.nsh",
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false
       }

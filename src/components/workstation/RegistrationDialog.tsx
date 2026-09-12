@@ -8,6 +8,9 @@
  *
  * 设备互斥（06 §1.2）：弹窗开着就自己把 `regHolding` 置真，让工作台的 IC 常听让出读卡器——
  * 顶部工具条的「新建过磅单」也复用本弹窗，互斥不能再依赖父页面各自记得 pause。
+ *
+ * 另一个入口不是按钮而是刷卡：后台常听听到的空闲卡若没有在途单可发，会带卡号打开本框
+ * （06 §4.1），卡号经 `presetCardNo` 进 `IdentityPanel`，取号那一刻与单一起绑上。
  */
 import { useEffect, useState } from "react";
 import type { GrainVariety, Party, StorageSlot, Warehouse } from "@/mock/types";
@@ -23,6 +26,7 @@ export function RegistrationDialog({
   warehouses,
   slots,
   lastVarietyId,
+  cardNo = null,
   onCreated,
 }: {
   open: boolean;
@@ -33,6 +37,11 @@ export function RegistrationDialog({
   slots: StorageSlot[];
   /** 沿用上张单的品种做默认值（磅房最省手，05 §4 ①） */
   lastVarietyId: number | null;
+  /**
+   * 已经贴在感应区上的那张卡：后台刷卡编排器发现"没有等发卡的在途单"时把它交下来，
+   * 随本单一起绑上——人不用把卡收走再刷一次。没刷卡开窗时为 null，框内照常按需刷。
+   */
+  cardNo?: string | null;
   onCreated: (orderNo: string) => void;
 }) {
   const [draft, setDraft] = useState<OrderDraft>(() => emptyDraft(lastVarietyId));
@@ -74,6 +83,7 @@ export function RegistrationDialog({
             order={null}
             draft={draft}
             onDraft={patch}
+            presetCardNo={cardNo}
             parties={parties}
             varieties={varieties}
             warehouses={warehouses}

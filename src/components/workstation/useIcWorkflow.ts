@@ -3,13 +3,14 @@
  *
  * 整条"读卡器 → 定位磅单 → 按单据落库状态推进一步"的判断**只收在这一个 hook 里**：
  *  ① 工作台默认起 `reader.ic.watch` 后台常听；
- *  ② 每读到一张卡先 `api.cardLocate(sn)`：空闲卡→发卡绑到最近无卡单；在途卡→按这张单缺什么推进；
+ *  ② 每读到一张卡先 `api.cardLocate(sn)`：空闲卡→发卡绑到最近无卡单，**一张等卡的单都没有时
+ *     直接把制单框弹出来并把这张卡带进去**（制成就绑它，不让人把同一张卡再刷一遍）；在途卡→按这张单缺什么推进；
  *  ③ 推进只认"此刻地磅稳定读数"，读数未稳 / 皮重超容差一律不写库、交回面板手点（06 §2.2 三条硬规矩）；
  *  ④ "一刷"的判据是**边沿**：`reader.ic.watch` 只在换卡、或天线空过一次之后再放上时才命中，
  *    卡压在感应区不动不会一轮轮重复推进（06 §4.2）；本 hook 再叠一层 `card_swipe_debounce_ms`
  *    时间窗当第二道保险（同一张卡同一待办步窗口内只算一刷）。
  *  ⑤ `card_flow_mode=off` 的站点根本不起监听，全程面板手点（06 §4.4 C1"无外设也要能完成闭环"）；
- *    这台机压根没有 IC 通道（浏览器预览 / 台账未登记启用 / 台账切成 Mock / 底栏「Mock 关」）同样不起循环。
+ *    这台机压根没有 IC 通道（浏览器预览 / 台账未登记启用 / 台账切成 Mock）同样不起循环。
  *    真设备只是**暂时**故障时才按 2→15 s 退避重起，插回来不必刷新页面（06 §4.2）。
  *
  * 设备互斥（06 §1.2）：一台读卡器一次只解一种介质。弹窗要读身份证 / 弹结算框时 `paused=true`，
@@ -46,6 +47,13 @@ function nextStep(o: WeighOrder): "gross" | "tare" | "settle" | "done" {
  */
 const sticky = (id: string) => ({ id });
 
+/**
+ * 服务端"没有可发的在途单"这句原文（Rust `cards.rs::issue` 与 mock 同名实现是同一句）。
+ * 发卡前已经预检过一轮，这里是兜底：预检看的是那一瞬间，真发卡这一刻可能已被别台机抢走。
+ */
+const NO_PENDING_ORDER = "没有等待发卡的在途单";
+const isNoPendingOrder = (e: unknown) => e instanceof Error && e.message.includes(NO_PENDING_ORDER);
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** 读卡器故障后重起监听的退避：2 s 起、翻倍、封顶 15 s（06 §4.4 C1：故障期间工作台退回手点，不必死盯循环） */
 const WATCH_RETRY_MIN_MS = 2_000;
@@ -55,6 +63,7 @@ export function useIcWorkflow({
   paused,
   onRequestSettle,
   onWeighed,
+  onRequestRegister,
 }: {
   /** 弹窗开着 / 结算框开着时为真，本 hook 让出设备锁不监听（`card_flow_mode=off` 在内部同样按不监听处理） */
   paused: boolean;
@@ -62,6 +71,8 @@ export function useIcWorkflow({
   onRequestSettle: (orderNo: string) => void;
   /** 皮重捕获成功（算完净重）后回调，页面据此自动出码单 */
   onWeighed: (order: WeighOrder) => void;
+  /** 刷到一张空闲卡、但库里没有等发卡的在途单：把这张卡交给页面弹制单框，制成就绑这张卡 */
+  onRequestRegister: (cardNo: string) => void;
 }) {
   const qc = useQueryClient();
   const watch = useDeviceStore((s) => s.reader.ic.watch);
@@ -70,12 +81,12 @@ export function useIcWorkflow({
   /** 该站用不用流转卡：off＝不起监听、全程面板手点（06 §4.4 C1 的退路，读卡器故障时同样靠它） */
   const flowMode = useSetting("card_flow_mode").raw ?? "auto";
   /**
-   * 这台机此刻有没有 IC 通道：浏览器预览 / 台账没登记启用 / 台账切成 Mock / 底栏「Mock 关」都算**没有**。
+   * 这台机此刻有没有 IC 通道：浏览器预览 / 台账没登记启用 / 台账切成 Mock 都算**没有**。
    * 没有就别起循环，更别跟着退避重起——那是配置态不是故障，反复轮只会白刷 store。
-   * 四个量都进依赖：站长登记/启用这台机、切回真机、或把外设开关打开，本 effect 自己会重挂起来听。
+   * 三个量都进依赖：站长登记/启用这台机、切回真机，本 effect 自己会重挂起来听。
    */
   const icAvailable = useDeviceStore(
-    (s) => runningInTauri() && !s.mockOff && s.reader.registered && !s.reader.mocked,
+    (s) => runningInTauri() && s.reader.registered && !s.reader.mocked,
   );
 
   const running = useRef(false);
@@ -86,9 +97,9 @@ export function useIcWorkflow({
    * `handle` 就跟着每帧换身份，底下那条监听 effect 每帧 stopWatch + 重起——
    * 真机上正压着卡的那一轮 read 会被 epoch 判废、这一刷凭空丢掉。收成 ref，effect 只依赖稳定量。
    */
-  const cbs = useRef({ onRequestSettle, onWeighed });
+  const cbs = useRef({ onRequestSettle, onWeighed, onRequestRegister });
   useEffect(() => {
-    cbs.current = { onRequestSettle, onWeighed };
+    cbs.current = { onRequestSettle, onWeighed, onRequestRegister };
   });
 
   const refresh = useCallback((orderNo: string, partyId: number) => {
@@ -183,9 +194,33 @@ export function useIcWorkflow({
     [debounceMs, refresh],
   );
 
-  /** 读到一张空闲卡：按 06 §4.1 把它发给最近一张无卡在途单 */
+  /**
+   * 没有可发的单：把制单框弹出来，并把这张卡一并带进去。
+   * 卡已经贴在感应区上、人已经站在窗口前，此时回一句"请先点制单"等于让人把同一张卡再刷一遍。
+   */
+  const openRegister = useCallback((cardNo: string) => {
+    cbs.current.onRequestRegister(cardNo);
+    toast.warning("当前没有等待发卡的在途单：已打开制单窗口，制好即绑这张卡", sticky(`ic-need-order:${cardNo}`));
+    announce("当前卡未使用，请制单", `ic-need-order:${cardNo}`);
+  }, []);
+
+  /** 读到一张空闲卡：按 06 §4.1 把它发给最近一张无卡在途单；一张都没有就直接请人制单 */
   const issueFree = useCallback(
     async (cardNo: string) => {
+      /**
+       * 先问清"有没有等卡的单"，有才发。
+       * 不问就发会撞上服务端那句"请先点制单"的报错——那句话该由机器变成动作（弹窗），不该由人去读。
+       */
+      let open: WeighOrder[] | null = null;
+      try {
+        open = await api.openOrders();
+      } catch {
+        open = null; // 读不出来不猜，交给下面 cardIssue，由服务端给准话
+      }
+      if (open && !open.some((o) => !o.card_no)) {
+        openRegister(cardNo);
+        return;
+      }
       try {
         const res = await api.cardIssue({ card_no: cardNo });
         toast.success(`已把卡 ${cardNo} 发给 ${res.order_no}，请交给农户`);
@@ -193,12 +228,17 @@ export function useIcWorkflow({
         qc.invalidateQueries({ queryKey: ["order", res.order_no] });
         qc.invalidateQueries({ queryKey: ["open-orders"] });
       } catch (e) {
+        // 预检过了仍撞上"没有在途单"：多半是这一瞬间被别台机抢走，同样直接把制单框给人
+        if (isNoPendingOrder(e)) {
+          openRegister(cardNo);
+          return;
+        }
         toast.error(e instanceof Error ? e.message : "发卡失败", sticky(`ic-issue:${cardNo}`));
         // 服务端回的原因带单号、带条款，念出来没人听得懂，只念结论：这一步没成
         announce("这张卡发不出去，请到工作台上手点制单", `ic-issue:${cardNo}`);
       }
     },
-    [qc],
+    [qc, openRegister],
   );
 
   const handle = useCallback(

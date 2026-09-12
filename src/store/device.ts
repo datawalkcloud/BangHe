@@ -4,12 +4,10 @@
  * 只放"高频、非服务端状态"——设备读数、判稳、抓拍中、桥接进程存活。
  * 业务数据一律走 react-query，不进这里（05 §8）。
  *
- * 读数流有两条路（04 §2、§4），由 `useScaleTick` 按运行环境与台账自动选：
- *  - 桌面端且台账里生效的那台磅是真机：订阅 Rust 的 tauri event `device://scale`，切帧/取数/判稳
- *    全在 `scale.rs` 做完，这里只把可用的结论落成界面状态。**台账里既没登记真磅、也没登记 Mock 磅
- *    就是"离线 + 一句原因"**，绝不拿模拟抖动顶上——过磅是要结算的，假读数比没读数危险得多。
- *  - 浏览器预览，或台账里生效的磅被标成 Mock（模拟器）：没有/不该碰串口，`tick()` 用随机抖动演示
- *    "不稳定 → 稳定 → 可捕获"，并把 `source` 标成 `"demo"`，界面据此说明这条读数是哪来的。
+ * 读数流只有一条路（04 §2、§4）：桌面端订阅 Rust 的 tauri event `device://scale`，切帧/取数/判稳
+ * 全在 `scale.rs` 做完，这里只把可用的结论落成界面状态。**台账里没有启用的真磅就是"离线 + 一句
+ * 原因"**，绝不拿模拟抖动顶上——过磅是要结算的，假读数比没读数危险得多。浏览器预览没有原生通道，
+ * 界面就停在未连接并说明原因。
  *
  * 读卡器已经走真机：Rust `idcard.rs` 加载 64 位 Sdtapi.dll 直调精伦 iDR，一台机承担身份证
  * 与 IC（Mifare）两条介质通道（能读哪几条由 `lib/card-reader` 的登记表决定）。本 store 只把
@@ -23,24 +21,14 @@
  * 要能测得到），它直接调 `nativeIdcard.status`。
  */
 import { create } from "zustand";
-import { useEffect, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { api } from "@/lib/api";
 import { nativeIdcard, runningInTauri } from "@/lib/native";
 import { nativeScale, subscribeScale, type ScaleReading } from "@/lib/scale-native";
 import type { DeviceStatus } from "@/lib/constants";
 import { ACTIVE_PARTIES } from "@/mock/masters";
 
-/** 判稳窗口与分度取自站点参数；演示/Mock 心跳的"多久算稳"改由下面的 STABLE_DELAY_MS 决定（按时间停稳，不再按容差） */
-const WINDOW = 5;
-const DIVISION = 100; // 10 kg 分度
-
-/** 演示/ Mock 心跳：上磅（或下磅）后过这么久才判稳，模拟车辆停稳的过程 */
-const STABLE_DELAY_MS = 5000;
-/** 停稳前的初始抖动幅度（0.1kg 单位，300=30kg），在停稳窗口内线性收敛到 0，让读数"先跳后定" */
-const SETTLE_SPREAD = 300;
-
-/** 读数出处：`live` = Rust 串口线程解析出的真帧，`demo` = 浏览器预览或台账 Mock 磅的模拟心跳 */
+/** 读数出处：`live` = Rust 串口线程解析出的真帧，`demo` = 还没收到过任何真帧（浏览器预览 / 未连上仪表） */
 export type ScaleSource = "live" | "demo";
 
 export interface ScaleState {
@@ -48,38 +36,43 @@ export interface ScaleState {
   onScale: boolean;
   /** 当前读数，0.1kg 整数 */
   weight01kg: number;
-  /** 车上"真值"，用于生成抖动 */
-  setpoint01kg: number;
-  /**
-   * 演示/Mock 心跳的"判稳到点"时刻（epoch ms）：上磅/下磅时置为 now + STABLE_DELAY_MS，
-   * 心跳在此之前持续抖动并判为不稳定，到点后锁定为稳定读数。null = 已停稳 / 直接稳定。
-   */
-  settleAt: number | null;
   samples: number[];
   stable: boolean;
   source: ScaleSource;
-  /**
-   * 台账里"生效的那台磅"被标成了 Mock（模拟器）：桌面端据此改走演示心跳，而不是去开一个
-   * 根本不存在/不该碰的串口。由 `useScaleTick` 跟着设备清单算出并写回，界面用它把读数出处
-   * 说清楚（"台账 Mock 模拟" ≠ "浏览器演示"）。
-   */
-  mocked: boolean;
   /** 原帧的可读形式：`weigh_record.raw_frame` 落库用它（迎检要能对回原始报文）；模拟流没有，回 null */
   rawFrame: string | null;
   /** 最近一次失败原因的中文短句（台账没登记磅 / 串口打不开 / 帧解析失败），界面直接显示这一句 */
   error: string | null;
   /** 最近一帧的本地时刻，界面据此说明这条读数新不新 */
   at: string | null;
-  /** 手动把车开上磅 / 开下磅（演示用） */
-  driveOn: (kg: number) => void;
-  driveOff: () => void;
   /**
-   * Mock 模式手输重量：把读数**直接**写成输入值并对齐分度、标记为稳定，不依赖演示心跳的抖动收敛。
-   * 台账把这台磅标成模拟器时，工作台用它让操作员输入一个确切重量后照常捕获（空格/P）。
+   * 这一帧来自台账里的**哪台磅**（`device_config.code`）。读数流是全局单槽（一次只开一条串口），
+   * 而设备中心可以选中任意一行磅来开面板：没有这个归属，面板就会把别的磅的在线结论回写到
+   * 当前选中行的状态灯上——绿灯挂错设备比不绿更糟。演示/浏览器预览里是 null。
    */
-  setDemoWeight: (kg: number) => void;
+  code: string | null;
+  /** 这帧是从哪个串口来的（打不开/掉线时要说清是哪条链路） */
+  port: string | null;
+  /* ---- 判稳依据快照：界面说的数就是后端判的那几条，不再各写一份默认值 ---- */
+  /** 窗口内均值（0.1 kg） */
+  mean01kg: number;
+  /** 分度（0.1 kg） */
+  division01kg: number;
+  /** 窗口极差（0.1 kg） */
+  spread01kg: number;
+  /** 窗口首尾帧实际时长（ms） */
+  windowMs: number;
+  /** 判稳所需帧数下限（`stability.window_frames`） */
+  windowFrames: number;
+  /** 容差（0.1 kg）= `max_spread_divisions × division_01kg` */
+  tolerance01kg: number;
+  /** 窗口需持续多久（ms，`stability.stable_ms`） */
+  stableMs: number;
+  /** 累计解析成功的帧数 */
+  frameCount: number;
+  /** 累计校验/解析失败帧数 */
+  errCount: number;
   setConnected: (v: boolean) => void;
-  tick: () => void;
 }
 
 /**
@@ -213,9 +206,6 @@ export interface DeviceHubState {
   reader: CardReaderState;
   camera: { status: DeviceStatus; lastCaptureAt: string | null; busy: boolean };
   printer: { status: DeviceStatus; name: string; busy: boolean; lastError: string | null };
-  /** Mock 总开关：关掉后所有外设不可用，用来验收"无外设也能完成闭环"（05 §10-1） */
-  mockOff: boolean;
-  setMockOff: (v: boolean) => void;
   /**
    * 制单/登记弹窗正占用身份证通道（06 §1.2 设备互斥）：IC 常听循环据此让出读卡器。
    * 原先「弹窗让位」由各父页面各自 pause；顶部工具条也能开这张弹窗后，标记收进弹窗自己维护，
@@ -231,23 +221,28 @@ export interface DeviceHubState {
 }
 
 const initialScale: ScaleState = {
-  connected: true,
+  connected: false,
   onScale: false,
   weight01kg: 0,
-  setpoint01kg: 0,
-  settleAt: null,
   samples: [],
   stable: true,
   source: "demo",
-  mocked: false,
   rawFrame: null,
   error: null,
   at: null,
-  driveOn: () => {},
-  driveOff: () => {},
-  setDemoWeight: () => {},
+  code: null,
+  port: null,
+  /** 全 0 = 还没收到过真帧；这些数只由后端那一帧带来，界面不自己抄一份默认值 */
+  mean01kg: 0,
+  division01kg: 0,
+  spread01kg: 0,
+  windowMs: 0,
+  windowFrames: 0,
+  tolerance01kg: 0,
+  stableMs: 0,
+  frameCount: 0,
+  errCount: 0,
   setConnected: () => {},
-  tick: () => {},
 };
 
 /** 读卡用的模拟身份：直接取 mock 农户档案第一条，便于把“读卡 → 命中档案 → 带出默认值”串起来 */
@@ -316,90 +311,7 @@ async function matchParty(idCardNo: string): Promise<number | null> {
 export const useDeviceStore = create<DeviceHubState>((set, get) => ({
   scale: {
     ...initialScale,
-    driveOn: (kg: number) =>
-      set((s) => ({
-        scale: {
-          ...s.scale,
-          onScale: true,
-          setpoint01kg: Math.round(kg * 10),
-          stable: false,
-          samples: [],
-          settleAt: Date.now() + STABLE_DELAY_MS,
-        },
-      })),
-    driveOff: () =>
-      set((s) => ({
-        scale: {
-          ...s.scale,
-          onScale: false,
-          setpoint01kg: 0,
-          stable: false,
-          samples: [],
-          settleAt: Date.now() + STABLE_DELAY_MS,
-        },
-      })),
-    setDemoWeight: (kg: number) =>
-      set((s) => {
-        const sp = Math.max(0, Math.round(kg * 10));
-        const aligned = Math.round(sp / DIVISION) * DIVISION;
-        return {
-          scale: {
-            ...s.scale,
-            // 直接给定一个稳定读数：connected 拉回 true、判稳窗口填满对齐值，并把 settleAt 置空，
-            // 让心跳"就地锁定"而不是再抖起来——手输的重量能立刻显示并被捕获。
-            connected: true,
-            source: "demo",
-            onScale: sp > 0,
-            setpoint01kg: sp,
-            settleAt: null,
-            weight01kg: aligned,
-            samples: Array.from({ length: WINDOW }, () => aligned),
-            stable: true,
-            error: null,
-          },
-        };
-      }),
     setConnected: (v: boolean) => set((s) => ({ scale: { ...s.scale, connected: v, stable: v ? s.scale.stable : false } })),
-    tick: () => {
-      const s = get().scale;
-      if (!s.connected) {
-        set({ scale: { ...s, weight01kg: 0, stable: false, samples: [] } });
-        return;
-      }
-      const base = s.onScale ? s.setpoint01kg : 0;
-      const now = Date.now();
-      // 已停稳（settleAt 为空）或到点：读数锁定到分度对齐值并停住，判稳通过、可捕获
-      if (s.settleAt == null || now >= s.settleAt) {
-        const aligned = Math.round(base / DIVISION) * DIVISION;
-        set({
-          scale: {
-            ...s,
-            samples: Array.from({ length: WINDOW }, () => aligned),
-            source: "demo",
-            weight01kg: aligned,
-            stable: true,
-          },
-        });
-        return;
-      }
-      // 停稳窗口内：抖动幅度随剩余时间线性收敛到 0（先跳后定），期间一律判为不稳定
-      const remain = s.settleAt - now;
-      const decay = remain / STABLE_DELAY_MS; // 1 → 0
-      const spread = Math.round(SETTLE_SPREAD * decay);
-      const jitter = spread > 0 ? Math.round((Math.random() - 0.5) * 2 * spread) : 0;
-      const raw = Math.max(0, base + jitter);
-      const samples = [...s.samples.slice(-(WINDOW - 1)), raw];
-      set({
-        scale: {
-          ...s,
-          samples,
-          // 显式标回 demo：一旦从真帧流切回模拟心跳，界面不能还挂着"live"说这是仪表读数
-          source: "demo",
-          weight01kg: raw,
-          stable: false,
-        },
-      });
-    },
   },
   reader: {
     status: "unknown",
@@ -411,18 +323,6 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
     setRegistered: (v) => set((s) => ({ reader: { ...s.reader, registered: v } })),
     probe: async () => {
       const patch = (p: Partial<CardReaderState>) => set((s) => ({ reader: { ...s.reader, ...p } }));
-      if (get().mockOff) {
-        const r: ReaderProbe = {
-          status: "offline",
-          connected: false,
-          samId: null,
-          fingerprint: false,
-          error: "外设总开关已关闭，不做真机探测",
-          at: clock(),
-        };
-        patch({ probing: false, status: r.status, lastProbe: r });
-        return r;
-      }
       if (get().reader.mocked || !runningInTauri()) {
         const r: ReaderProbe = {
           status: "unknown",
@@ -489,10 +389,6 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
           if (get().reader.idcard.watching) patchCard({ reading: false, watchNote: reason });
           else patchCard({ reading: false, last: null, error: reason });
         };
-        if (st.mockOff) {
-          patchCard({ reading: false, last: null, error: "外设已关闭，无法读卡；请改用「搜档案」或手工录入证号" });
-          return null;
-        }
         if (st.reader.mocked || !runningInTauri()) {
           // 演示通道：浏览器预览或台账把这台机切了 Mock，明确不碰真设备
           patchCard({ reading: true, error: null });
@@ -612,10 +508,6 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
           if (get().reader.ic.watching) patchIc({ reading: false, watchNote: reason });
           else patchIc({ reading: false, last: null, error: reason });
         };
-        if (st.mockOff) {
-          patchIc({ reading: false, last: null, error: "外设总开关已关闭，IC 卡通道不可用" });
-          return null;
-        }
         // IC 通道没有可演示的假卡：宁可不给结果，也不凭空编一个卡号和块数据出来
         if (st.reader.mocked || !runningInTauri()) {
           patchIc({
@@ -717,23 +609,13 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
   },
   camera: { status: "online", lastCaptureAt: null, busy: false },
   printer: { status: "online", name: "HP LaserJet M403d", busy: false, lastError: null },
-  mockOff: false,
-  setMockOff: (v) =>
-    set((s) => ({
-      mockOff: v,
-      scale: { ...s.scale, connected: !v, onScale: v ? false : s.scale.onScale, weight01kg: v ? 0 : s.scale.weight01kg, stable: v ? false : s.scale.stable },
-      reader: { ...s.reader, status: v ? "offline" : "unknown", lastProbe: v ? s.reader.lastProbe : null },
-      camera: { ...s.camera, status: v ? "offline" : "online" },
-      printer: { ...s.printer, status: v ? "offline" : "online" },
-    })),
   regHolding: false,
   setRegHolding: (v) => set({ regHolding: v }),
   setScale: (patch) => set((s) => ({ scale: { ...s.scale, ...patch } })),
   applyScaleFrame: (r) => {
-    // 关掉外设总开关时丢弃在途帧：读线程可能还挂在串口上，但"无外设闭环"的验收不该看到读数
-    if (get().mockOff) return;
-    // 只挑界面要用的字段：ScaleReading 还有分度值/均值/帧计数等诊断项，将来界面要用再显式加，
-    // 不整体展开进 store——否则 Rust 加一个字段这边就静默多一个没人声明的状态。
+    // 仍然逐字段挑，不整体展开：界面要的是读数 + 判稳依据 + 这帧属于哪台磅；
+    // Rust 侧新增的诊断字段（`deviceId`、`errorKind`）没界面用就先不落 store，
+    // 否则加一个字段这边就静默多一个没人声明的状态。
     set((s) => ({
       scale: {
         ...s.scale,
@@ -746,6 +628,17 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
         rawFrame: r.rawFrame,
         error: r.error,
         at: r.at,
+        code: r.code,
+        port: r.port,
+        mean01kg: r.mean01kg,
+        division01kg: r.division01kg,
+        spread01kg: r.spread01kg,
+        windowMs: r.windowMs,
+        windowFrames: r.windowFrames,
+        tolerance01kg: r.tolerance01kg,
+        stableMs: r.stableMs,
+        frameCount: r.frameCount,
+        errCount: r.errCount,
       },
     }));
   },
@@ -754,51 +647,24 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
 }));
 
 /**
- * 地磅读数心跳：桌面端订 Rust 的 `device://scale` 真帧，浏览器预览跑前端模拟。
+ * 地磅读数流挂载：桌面端订 Rust 的 `device://scale` 真帧。
  *
- * 四条约定：
+ * 三条约定：
  *  - `AppShell`、副屏、设备中心三处共用本 hook，所以串口只开一次（反复 start/stop 会丢帧）；
  *    读线程的归宿是 `RunEvent::Exit`，组件卸载只掉订阅、不关端口。
- *  - 台账里生效的那台磅被标成 **Mock** → 与浏览器预览同路，走 `tick()` 演示心跳（能"上磅/下磅"、
- *    会走数），不再去开一个不该碰的串口。这与设备中心 `demoMode = is_mock===1 || ...` 的判据一致；
- *    之前只按 `runningInTauri()` 二选一，导致 `npm run tauri dev` 下登记的 Mock 磅永远"没有读数"。
- *  - 台账里既没有真磅也没有 Mock 磅（压根没登记）→ 状态灯灰着并说明原因，**不退化成模拟流**
+ *  - 台账里没有启用的真磅（含只登记成 Mock 的）→ 状态灯说明原因，**不退化成模拟流**
  *    （过磅要结算，凭空抖动比没读数危险）。
- *  - `mockOff` 走 selector 进依赖：一关开关就掉订阅，剩下的在途帧也被 `applyScaleFrame` 丢弃。
+ *  - 浏览器预览没有原生通道：不去开一个不存在的串口，界面停在未连接并说明原因。
  */
-export function useScaleTick(intervalMs = 220): void {
-  const mockOff = useDeviceStore((s) => s.mockOff);
-  const setScale = useDeviceStore((s) => s.setScale);
-
-  // 台账清单：跟着设备中心的改动走，改了 Mock/启用/默认立刻重算（副屏是独立 webview，也各自查一遍）
-  const { data: devices, isFetched } = useQuery({
-    queryKey: ["devices"],
-    queryFn: () => api.listDevices(),
-  });
-  // 生效磅是不是被标成 Mock：只在"没有可用真磅、却有一台启用的 Mock 磅"时成立——
-  // 有真磅就仍用真磅（openRealScale 只挑 is_mock===0），不因为并存一台 Mock 就退化成演示。
-  const scaleMocked = useMemo(() => {
-    const scales = (devices ?? []).filter((d) => d.kind === "scale" && d.is_enabled === 1);
-    return !scales.some((d) => d.is_mock === 0) && scales.some((d) => d.is_mock === 1);
-  }, [devices]);
-
-  // 把结论落进 store，界面据此把读数出处说清楚（"台账 Mock 模拟" ≠ "浏览器演示"）
+export function useScaleTick(): void {
   useEffect(() => {
-    setScale({ mocked: scaleMocked });
-  }, [scaleMocked, setScale]);
-
-  const demo = !runningInTauri() || mockOff || scaleMocked;
-  // 桌面端要等台账查清楚再决定：否则会在"其实该走演示"的情况下先闪一下真磅开口/离线
-  const ready = !runningInTauri() || mockOff || isFetched;
-
-  useEffect(() => {
-    if (!ready) return;
-    if (demo) {
-      // 从真磅失败态（connected=false）切回演示心跳时，先把在线拉回 true，否则 tick 会把读数清零、永远不走数。
-      // mockOff 例外：那是"无外设闭环"验收，保持离线、只留手录。
-      if (!mockOff) useDeviceStore.getState().setScale({ connected: true, source: "demo" });
-      const id = window.setInterval(() => useDeviceStore.getState().scale.tick(), intervalMs);
-      return () => window.clearInterval(id);
+    if (!runningInTauri()) {
+      useDeviceStore.getState().setScale({
+        connected: false,
+        stable: false,
+        error: "当前是浏览器预览，没有原生设备通道：请用「npm run tauri dev」启动桌面端后重试",
+      });
+      return;
     }
     const unsubscribe = subscribeScale(
       (r) => useDeviceStore.getState().applyScaleFrame(r),
@@ -808,7 +674,7 @@ export function useScaleTick(intervalMs = 220): void {
     );
     void openRealScale();
     return unsubscribe;
-  }, [ready, demo, mockOff, intervalMs]);
+  }, []);
 }
 
 /** 已发起过开口的标记：三处挂载共用一条流，失败时放开以便下一次挂载重试（配置改对不必重启） */

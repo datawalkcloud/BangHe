@@ -1,9 +1,10 @@
 //! 设备台账的行为守卫（03 §9.20 `device_config`、02 §M9；页面 `src/pages/DevicesPage.tsx`）
 //!
 //! 守的是"接上 SQLite 才会犯、纸面 review 看不出来"的六件事：
-//!  1. **自检不许假装成功**：`probe_plan` 只放行本机真有通道的两类驱动，
-//!     针式 / 窗口预览 / mock 驱动必须落到"未接入探测通道"，VID/PID 还得从
-//!     `"0x0483"` 这种手写十六进制里解析出来——解析错了就是拿另一台机器的应答糊弄。
+//!  1. **自检不许假装成功**：`probe_plan` 只放行本机真有通道的三类——ESC/POS 小票机、
+//!     精伦读卡器、地磅（读数流 / 一次性试读），针式与窗口预览打印机必须落到
+//!     "未接入探测通道"，台账里标成 Mock 或已停用的磅也绝不许去开 COM 口；
+//!     VID/PID 还得从 `"0x0483"` 这种手写十六进制里解析出来——解析错了就是拿另一台机器的应答糊弄。
 //!  2. **默认设备互斥**：`uk_dev_default` 是部分唯一索引，登记第二台默认机时
 //!     不在同事务里降级就撞 UNIQUE；降级只能同 `kind`，跨类不能误伤。
 //!  3. **编码重复要留痕**：拒绝文案是 mock 那一句，且审计必须活着进库（`CreateOutcome`
@@ -21,7 +22,8 @@ use rusqlite::{params, Connection};
 use banghe_lib::auth::AuthProfile;
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::devices::{
-    create_device, list_devices, probe_plan, report_device_probe, set_device_enabled, set_device_mock, update_device_config,
+    create_device, list_devices, probe_plan, report_device_probe, scale_verdict_from_probe, scale_verdict_from_stream,
+    set_device_enabled, set_device_mock, update_device_config,
     CreateDeviceInput, DeviceConfig, ProbePlan, ProbeResult, PrintVerify, UpdateDeviceConfigInput,
 };
 
@@ -124,12 +126,92 @@ fn probe_plan_routes_only_drivers_with_a_real_channel() {
 
     assert_eq!(probe_plan(&conn, "prn_ticket").unwrap(), ProbePlan::Printer { vid: Some(0x0483), pid: Some(0x5720) });
     assert_eq!(probe_plan(&conn, "idcard1").unwrap(), ProbePlan::IdCard);
-    for code in ["prn_main", "prn_dot", "scale1"] {
+    for code in ["prn_main", "prn_dot"] {
         let plan = probe_plan(&conn, code).unwrap();
         let ProbePlan::NotWired { message } = plan else { panic!("{code} 没有本机探测通道，不该被派发到真设备：{plan:?}") };
         assert!(message.starts_with("该驱动（") && message.contains("暂未接入本机探测通道"), "{message}");
     }
     assert_eq!(probe_plan(&conn, "nope").unwrap(), ProbePlan::Missing);
+}
+
+/// 地磅的本机通道就是那条串口：启用的真机磅必须派发到 `Scale`（否则设备中心永远"未检测"，
+/// 现场明明在收数却看不到绿灯）。
+#[test]
+fn probe_plan_routes_a_real_scale_to_the_serial_stream() {
+    let conn = db();
+    // 驱动名不认识也要照探：磅探的是端口，不是某个型号的私有握手
+    insert_device(&conn, "scale_any", "scale", "tolodo_dl901", r#"{"port":"COM4","baud":1200}"#);
+    insert_device(&conn, "scale1", "scale", "yaohua_xk3190", r#"{"port":"COM3","baud":9600}"#);
+    assert_eq!(probe_plan(&conn, "scale1").unwrap(), ProbePlan::Scale);
+    assert_eq!(probe_plan(&conn, "scale_any").unwrap(), ProbePlan::Scale);
+}
+
+/// 但 Mock 与停用这两台**绝不能去开口**：`resolve_template` 就是这么挡读线程的，自检绕过去
+/// 占一次 COM 口，等于让演示磅把真磅的端口吃掉。
+#[test]
+fn probe_plan_refuses_to_open_a_port_for_mock_or_disabled_scale() {
+    let conn = db();
+    insert_device(&conn, "scale_mock", "scale", "mock", r#"{"port":"COM3"}"#);
+    conn.execute("UPDATE device_config SET is_mock = 1 WHERE code = 'scale_mock'", []).unwrap();
+    insert_device(&conn, "scale_off", "scale", "yaohua_xk3190", r#"{"port":"COM5"}"#);
+    conn.execute("UPDATE device_config SET is_enabled = 0 WHERE code = 'scale_off'", []).unwrap();
+
+    for (code, expect) in [("scale_mock", "Mock"), ("scale_off", "已停用")] {
+        let plan = probe_plan(&conn, code).unwrap();
+        let ProbePlan::NotWired { message } = plan else { panic!("{code} 不该被派发到串口：{plan:?}") };
+        assert!(message.contains(expect), "{code} 的拒绝原因要说清「{expect}」：{message}");
+    }
+}
+
+/// 地磅的"绿灯判据"：读数流正在收数（`LiveStatus::connected`）才算在线，
+/// 且回的那句话要带上端口、帧数与读数——现场据此判断"软件看到的是哪条链路"。
+#[test]
+fn scale_verdict_turns_green_only_while_the_stream_is_parsing_frames() {
+    let mut s = banghe_lib::scale::LiveStatus {
+        running: true,
+        connected: true,
+        code: "scale1".into(),
+        port: "COM3".into(),
+        frame_count: 128,
+        last_frame_at: Some("2026-09-12 23:16:43".into()),
+        last: Some(banghe_lib::scale::ScaleEvent { weight_01kg: 620, ..Default::default() }),
+        ..Default::default()
+    };
+    let (ok, msg) = scale_verdict_from_stream(&s);
+    assert!(ok, "正在收数就该报在线：{msg}");
+    for want in ["COM3", "128", "62.0"] {
+        assert!(msg.contains(want), "回话里要能看到 {want}：{msg}");
+    }
+
+    // 端口还开着但 5 秒没帧：不能继续挂绿标，且要把读数流那句原因原样递给人
+    s.connected = false;
+    s.error = Some("串口 COM3 已 5 秒没有收到读数帧：仪表未上电、波特率不符或 COM 口被别的程序占着".into());
+    let (ok, msg) = scale_verdict_from_stream(&s);
+    assert!(!ok, "收不到数就不是在线");
+    assert!(msg.contains("5 秒没有收到读数帧"), "要照抄读数流的原因：{msg}");
+}
+
+/// 没在流时的一次性试读：读到帧才算通，一帧没读到要把"打不开端口"和"读不到数"分开说。
+#[test]
+fn scale_verdict_from_probe_separates_open_port_from_reading_frames() {
+    let out = banghe_lib::scale::ProbeOutcome {
+        good_frames: 3,
+        weight_01kg: Some(640),
+        first_good_ms: Some(240),
+        bad_frames: 1,
+        error: None,
+    };
+    let (ok, msg) = scale_verdict_from_probe("COM3", &out);
+    assert!(ok, "试读到 3 帧就是通了");
+    assert!(msg.contains("64.0") && msg.contains("240 ms") && msg.contains("1 帧校验不过"), "{msg}");
+
+    let (ok, msg) = scale_verdict_from_probe("COM3", &banghe_lib::scale::ProbeOutcome::default());
+    assert!(!ok, "一帧都没读到不能报绿");
+    assert!(msg.contains("一帧可解析读数都没读到"), "要给出下一步可查的原因：{msg}");
+
+    let busy = banghe_lib::scale::ProbeOutcome { error: Some("端口不存在或已被占用（确认 COM 号与波特率）".into()), ..Default::default() };
+    let (ok, msg) = scale_verdict_from_probe("COM3", &busy);
+    assert!(!ok && msg.contains("已被占用"), "端口打不开要说打不开，不能混成「读不到数」：{msg}");
 }
 
 #[test]

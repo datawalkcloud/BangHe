@@ -12,6 +12,12 @@
 //!      校验和按内容算（哈希前 CRLF→LF 归一），换行符差异不算改动。
 //!   3. 库结构版本高于本程序能理解的版本 → 拒绝启动并提示从 `backup/` 恢复迁移前快照，
 //!      不做任何"忽略未知列"的乐观兜底。
+//!
+//! 还有一条与"覆盖安装"相关的口径：安装包（NSIS 钩子）每次装完会在 AppDataDir 落一个
+//! `install.stamp` 记号；启动时记号的修改时间与库内记账不一致、或 `app_meta.app_version`
+//! 与当前二进制版本不一致，就视为"覆盖安装后的首次启动"——在做任何写入（含迁移）之前
+//! 先 `VACUUM INTO` 一份 `pre_upgrade_` 快照。库文件本体在 AppDataDir，安装器覆盖的是
+//! Program Files，真正的风险从来是"新程序第一次开库"，快照钉在那一刻才有退路。
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -147,7 +153,7 @@ pub struct Report {
     pub applied: Vec<String>,
     pub from_version: u32,
     pub to_version: u32,
-    /// 迁移前自动备份（§6）生成的文件；空库首装时为 None
+    /// 启动前自动备份（§6 迁移前 / §7 覆盖安装后首启）生成的文件；空库首装时为 None
     pub backup_path: Option<PathBuf>,
     /// 本次启动做过「换行符兼容补记」的脚本名：内容一字未改，只是老库里记的是
     /// CRLF 检出 flavor 的哈希。正常应当永远为空，非空说明这台机器装过历史构建。
@@ -175,18 +181,22 @@ pub fn applied_names(conn: &Connection) -> Result<Vec<String>, rusqlite::Error> 
 }
 
 /// 打开库并补齐迁移。`backup_dir` 为 `None` 时跳过迁移前备份（仅测试用）。
+/// `install_marker` 是 `install.stamp` 的修改时间（[`crate::db::install_stamp`]），
+/// `None` = 装机记号不存在（开发调试或老安装包），只按版本号判定升级。
 pub fn apply(
     conn: &mut Connection,
     app_version: &str,
+    install_marker: Option<&str>,
     backup_dir: Option<&Path>,
 ) -> Result<Report, MigrateError> {
-    apply_with(conn, app_version, backup_dir, MIGRATIONS)
+    apply_with(conn, app_version, install_marker, backup_dir, MIGRATIONS)
 }
 
 /// 同 [`apply`]，但可指定脚本子集——测试用它模拟"现场停在旧版本、装上新版补跑中间脚本"。
 pub fn apply_with(
     conn: &mut Connection,
     app_version: &str,
+    install_marker: Option<&str>,
     backup_dir: Option<&Path>,
     migrations: &'static [Migration],
 ) -> Result<Report, MigrateError> {
@@ -244,20 +254,44 @@ pub fn apply_with(
     };
 
     let mut report = report;
-    if !pending.is_empty() {
-        // §6 迁移前自动备份。空库首装没有可回退的东西，跳过。
-        if backup_dir.is_some() && has_user_tables(conn)? {
-            report.backup_path =
-                Some(pre_migrate_backup(conn, backup_dir.unwrap(), from_version, target_max)?);
-        }
-        for m in pending {
-            apply_one(conn, m, app_version)?;
-        }
-        sync_app_meta(conn, app_version, report.to_version)?;
+    // 升级检测（覆盖安装的第一道闸）：
+    //  - 记号新：`install.stamp` 的修改时间与上次消费记账不一致——同版本重装也算；
+    //  - 版本变：`app_meta.app_version` 与当前二进制不一致——绿色拷贝、老安装包
+    //    （还没带钩子）走这一条。两者都是拿"上次成功启动记下的账"对比，比对发生在
+    //    任何写入之前，快照拍到的永远是**旧程序最后一次落库**的状态。
+    let stored_version = app_meta_value(conn, "app_version");
+    let stored_marker = app_meta_value(conn, "install_stamp_seen");
+    let version_changed = stored_version.as_deref().is_some_and(|prev| prev != app_version);
+    let fresh_install = install_marker.is_some() && stored_marker.as_deref() != install_marker;
+    let snapshot_due = fresh_install || version_changed || !pending.is_empty();
+    if backup_dir.is_some() && snapshot_due && has_user_tables(conn)? {
+        // §6/§7 启动前自动备份。空库首装没有可回退的东西，跳过。
+        // 有待跑脚本时名字保留 pre_migrate（起止结构号是排障要用的信息，
+        // 同一份快照已经覆盖"覆盖安装"这件事，不再叠第二份）；
+        // 纯换包不动结构的覆盖安装才是 pre_upgrade。
+        report.backup_path = Some(if pending.is_empty() {
+            pre_upgrade_backup(conn, backup_dir.unwrap(), stored_version.as_deref(), app_version)?
+        } else {
+            pre_migrate_backup(conn, backup_dir.unwrap(), from_version, target_max)?
+        });
     }
+    for m in pending {
+        apply_one(conn, m, app_version)?;
+    }
+    // 无论本次有没有跑脚本都要记账：记号消费掉了，下一次启动才不会被同一份
+    // install.stamp 再触发一次备份；版本没变的普通重启则只是原地重写同样的值。
+    sync_app_meta(conn, app_version, report.to_version, install_marker)?;
 
     post_checks(conn)?;
     Ok(report)
+}
+
+/// `app_meta` 读一个键。表还不存在（首装跑到 0001 之前）或键缺失一律 None。
+fn app_meta_value(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row("SELECT value FROM app_meta WHERE key = ?1", params![key], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
 }
 
 fn apply_one(
@@ -318,17 +352,38 @@ fn has_user_tables(conn: &Connection) -> Result<bool, rusqlite::Error> {
     Ok(n > 0)
 }
 
-/// §6：`backup/pre_migrate_<起>_<止>_<时间>.db`。VACUUM INTO 自带一致性且不需停写。
+/// §6：`backup/pre_migrate_<起>_<止>_<时间>.db`。
 fn pre_migrate_backup(
     conn: &Connection,
     backup_dir: &Path,
     from: u32,
     to: u32,
 ) -> Result<PathBuf, MigrateError> {
+    let stamp = Local::now().format("%Y%m%d-%H%M%S");
+    snapshot_to(conn, backup_dir, format!("pre_migrate_{from:04}_to_{to:04}_{stamp}.db"))
+}
+
+/// §7：`backup/pre_upgrade_<旧版>_to_<新版>_<时间>.db`——版本变了；
+/// 同版本覆盖安装（只有记号是新的）则记作 `pre_upgrade_<版本>_<时间>.db`。
+fn pre_upgrade_backup(
+    conn: &Connection,
+    backup_dir: &Path,
+    prev_version: Option<&str>,
+    app_version: &str,
+) -> Result<PathBuf, MigrateError> {
+    let stamp = Local::now().format("%Y%m%d-%H%M%S");
+    let mid = match prev_version {
+        Some(prev) if prev != app_version => format!("{prev}_to_{app_version}"),
+        _ => app_version.to_string(),
+    };
+    snapshot_to(conn, backup_dir, format!("pre_upgrade_{mid}_{stamp}.db"))
+}
+
+/// 快照落盘的唯一实现：`VACUUM INTO` 自带一致性且不需停写。
+fn snapshot_to(conn: &Connection, backup_dir: &Path, name: String) -> Result<PathBuf, MigrateError> {
     std::fs::create_dir_all(backup_dir)
         .map_err(|e| MigrateError::BackupDir(format!("{}：{e}", backup_dir.display())))?;
-    let stamp = Local::now().format("%Y%m%d-%H%M%S");
-    let path = backup_dir.join(format!("pre_migrate_{from:04}_to_{to:04}_{stamp}.db"));
+    let path = backup_dir.join(name);
     if path.exists() {
         return Err(MigrateError::BackupDir(format!(
             "备份文件已存在：{}",
@@ -348,8 +403,16 @@ fn pre_migrate_backup(
     Ok(path)
 }
 
-/// 把当前版本写进 §9.1 `app_meta`，供「系统信息」页与多台机器对版本。
-fn sync_app_meta(conn: &Connection, app_version: &str, to_version: u32) -> Result<(), rusqlite::Error> {
+/// 把当前版本写进 §9.1 `app_meta`，供「系统信息」页与多台机器对版本；
+/// 顺带消费掉本次启动见过的 `install.stamp` 记号（`install_stamp_seen`），
+/// 同一次覆盖安装只备份一次。现在**每次成功启动**都会跑（不再只跟着迁移），
+/// 版本没变时就是原地重写同样的值。`app_meta` 还不存在（0001 之前的空库）则跳过。
+fn sync_app_meta(
+    conn: &Connection,
+    app_version: &str,
+    to_version: u32,
+    install_marker: Option<&str>,
+) -> Result<(), rusqlite::Error> {
     let exists: i64 = conn.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='app_meta'",
         [],
@@ -377,6 +440,13 @@ fn sync_app_meta(conn: &Connection, app_version: &str, to_version: u32) -> Resul
             ON CONFLICT(key) DO NOTHING",
         params![now_iso()],
     )?;
+    if let Some(marker) = install_marker {
+        conn.execute(
+            "INSERT INTO app_meta(key, value) VALUES ('install_stamp_seen', ?1)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![marker],
+        )?;
+    }
     Ok(())
 }
 

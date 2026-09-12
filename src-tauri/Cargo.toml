@@ -18,7 +18,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon`：主窗口可以被设成"关闭时藏进系统托盘"（系统 → 窗口），托盘是那条唯一的回路。
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 # 备份页「从其它位置导入副本」要弹系统文件选择框去挑 U 盘/移动硬盘上的 .db。
 # 插件只提供选路，路径清洗与落盘全在 system.rs::import_backup（只认绝对路径）。

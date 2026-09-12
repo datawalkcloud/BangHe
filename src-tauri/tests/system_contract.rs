@@ -18,8 +18,9 @@
 //!     `errors` 是人话；无旁文件的迁移前快照只给 warning（它是"装错版本"唯一的退路）；
 //!  6. **恢复**：确认文案不对、岗位不对都要被拒；成功路径必须走到"当前库被改名保留 +
 //!     现库内容等于备份 + 退路副本里还能查到备份之后那张单"；
-//!  7. **自动备份**：只有超过 `backup_auto_interval_days` 或目录里只剩 `pre_migrate_` 快照时
-//!     才补副本；没到点一个文件都不许多；留痕的 `actor_id` 必须是 NULL（不挂真实账号）；
+//!  7. **自动备份**：只有超过 `backup_auto_interval_days` 或目录里只剩 `pre_migrate_` /
+//!     `pre_upgrade_` 结构快照时才补副本；没到点一个文件都不许多；留痕的 `actor_id`
+//!     必须是 NULL（不挂真实账号）；
 //!  8. **导入外部副本**：规范命名的副本沿用原名（导入时刻不能把旧库伪装成新备份），
 //!     旁文件对不上、同名不同内容都不许落进备份目录；导进来的副本要能直接走恢复。
 //!
@@ -441,15 +442,23 @@ fn backup_run_prunes_only_older_copies_and_deletes_pairs() {
         assert!(PathBuf::from(format!("{}.sha256", p.display())).is_file(), "{f} 的旁文件不该被牵连删掉");
     }
 
-    // pre_migrate 快照不参与淘汰：它是"库结构版本超前"时唯一的退路
+    // pre_migrate / pre_upgrade 快照不参与淘汰：前者是"库结构版本超前"时唯一的退路，
+    // 后者是覆盖安装了新版本翻车时的退路，都不该被手动备份的次数挤掉
     let snapshot = dir.join("pre_migrate_0000_to_0006_20260101-000000.db");
+    let upgrade = dir.join("pre_upgrade_0.1.0_to_0.2.0_20260101-000000.db");
     std::fs::write(&snapshot, b"not really a db").unwrap();
+    std::fs::write(&upgrade, b"not really a db").unwrap();
     let (victims, errs) = prune_backups(&dir, 1, &[]);
     assert!(errs.is_empty(), "{errs:?}");
-    assert!(!victims.iter().any(|v| v.starts_with("pre_migrate_")), "迁移前快照不能被淘汰：{victims:?}");
+    assert!(
+        !victims.iter().any(|v| v.starts_with("pre_migrate_") || v.starts_with("pre_upgrade_")),
+        "结构快照不能被淘汰：{victims:?}"
+    );
     assert!(snapshot.exists(), "迁移前快照必须还在盘上：{victims:?}");
+    assert!(upgrade.exists(), "覆盖安装快照必须还在盘上：{victims:?}");
     assert_eq!(victims, vec![second.name.clone()], "保留 1 份时只留最新那份");
     std::fs::remove_file(&snapshot).ok();
+    std::fs::remove_file(&upgrade).ok();
 }
 
 #[test]
@@ -860,7 +869,17 @@ fn prune_keeps_a_copy_that_a_restore_is_about_to_use() {
 fn filename_grammar_helpers_stay_inside_their_grammar() {
     assert_eq!(system::kind_of("banghe_20260101-000001_pre-restore.db"), "pre-restore");
     assert_eq!(system::kind_of("banghe_20260101-000001_manual.db"), "manual");
-    assert_eq!(system::kind_of("pre_migrate_0000_to_0006_20260101-000001.db"), "pre");
+    assert_eq!(system::kind_of("pre_migrate_0000_to_0006_20260101-000001.db"), "pre_migrate");
+    // 覆盖安装快照的头两段才是 kind；版本号里的点不能干扰时间戳识别
+    assert_eq!(system::kind_of("pre_upgrade_0.1.0_20260101-000001.db"), "pre_upgrade");
+    assert_eq!(
+        system::kind_of("pre_upgrade_0.1.0_to_0.2.0_20260101-000001.db"),
+        "pre_upgrade"
+    );
+    assert_eq!(
+        system::name_stamp("pre_upgrade_0.1.0_to_0.2.0_20260101-000001.db").as_deref(),
+        Some("20260101-000001")
+    );
     assert_eq!(system::kind_of("odd.db"), "odd");
     assert_eq!(system::name_stamp("banghe_20260101-000001_manual.db").as_deref(), Some("20260101-000001"));
     assert_eq!(system::name_stamp("banghe_manual.db"), None);
@@ -931,6 +950,19 @@ fn auto_backup_makes_a_copy_only_when_the_gap_is_due() {
         assert!(
             system::auto_backup_if_due(conn, &loc).unwrap().is_some(),
             "只剩 pre_migrate 快照时不算数：它撑不起\"数据留存\"这件事"
+        );
+        // pre_upgrade（覆盖安装首启拍的快照）同理：那是退路，不是日常副本。
+        // 先把上一步真生成的 banghe_ 清掉，否则"最新普通副本"又新鲜了、判不到期。
+        for f in std::fs::read_dir(&dir).unwrap().flatten() {
+            if f.file_name().to_string_lossy().starts_with("banghe_") {
+                std::fs::remove_file(f.path()).unwrap();
+            }
+        }
+        std::fs::remove_file(dir.join("pre_migrate_0005_to_0006_20200101-000000.db")).unwrap();
+        std::fs::write(dir.join("pre_upgrade_0.1.0_20200101-000000.db"), "快照占位".as_bytes()).unwrap();
+        assert!(
+            system::auto_backup_if_due(conn, &loc).unwrap().is_some(),
+            "只剩 pre_upgrade 快照时同样不算数"
         );
     });
 }

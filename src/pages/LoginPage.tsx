@@ -213,7 +213,7 @@ export function LoginPage() {
                   autoComplete="username"
                   spellCheck={false}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="如 admin"
+                  placeholder=""
                 />
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">

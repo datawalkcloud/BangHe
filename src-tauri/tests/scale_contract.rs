@@ -13,9 +13,9 @@ use rusqlite::{params, Connection};
 
 use banghe_lib::db;
 use banghe_lib::scale::{
-    frame_display, load_config, load_device, parse_hex, parse_template, parse_weight, resolve_template, split_frames,
-    split_frames_ex, Align, Framing, Judgement, Payload, ScaleEvent, Stability, StabilityJudge, StreamCore, FrameTemplate,
-    Transport,
+    driver_preset, frame_display, load_config, load_device, parse_hex, parse_template, parse_weight, resolve_template,
+    split_frames, split_frames_ex, yaohua_xk3190_cont, Align, Framing, Judgement, Payload, ScaleEvent, Stability,
+    StabilityJudge, StreamCore, FrameTemplate, Transport,
 };
 
 // ------------------------------------------------------------------ 测试用模板
@@ -29,7 +29,7 @@ const DOC_TEMPLATE: &str = r#"{
   "payload":   { "sign_index": 1, "digits": "0123456", "decimal_places": 1,
                  "skip_chars": " ", "unit": "kg", "status_bytes": [] },
   "stability": { "window_frames": 5, "max_spread_divisions": 2,
-                 "min_weight_01kg": 2000, "stable_ms": 400 },
+                 "min_weight_01kg": 0, "stable_ms": 400 },
   "align":     { "division_01kg": 100, "mode": "nearest_div" },
   "query":     { "enabled": false, "command_hex": "02 3F 57 45 03", "interval_ms": 200 }
 }"#;
@@ -57,7 +57,7 @@ fn empty_config_lands_on_every_document_default() {
     let t = parse_template("{}").expect("空对象也是合法配置");
     assert_eq!(t.stability.window_frames, 5);
     assert_eq!(t.stability.max_spread_divisions, 2);
-    assert_eq!(t.stability.min_weight_01kg, 2000);
+    assert_eq!(t.stability.min_weight_01kg, 0);
     assert_eq!(t.stability.stable_ms, 400);
     assert_eq!(t.align.division_01kg, 100);
     assert_eq!(t.align.mode, "nearest_div");
@@ -445,20 +445,31 @@ fn one_division_tolerance_config_is_the_front_end_line() {
 }
 
 #[test]
-fn below_min_weight_is_never_a_valid_reading() {
-    // §2.3：起称阈值防的是"空磅噪声被当有效读数"——即使纹丝不动也不算稳
+fn no_min_weight_gate_by_default_but_an_opt_in_threshold_still_works() {
+    // 默认不设任何起称限制：30 kg 只要纹丝不动、攒满窗口就该判稳（62 kg 砝码台架实测要能稳）
     let mut j = judge(doc_stability(), doc_align());
-    let mut out = Vec::new();
-    for i in 0..6 {
-        out.push(j.push(300, i * 200, None).stable);
-    }
-    assert!(out.iter().all(|s| !s), "30 kg 反复不动也不能判稳");
-    assert!(!out.iter().any(|s| *s));
-    // 上磅：越过 200 kg 后同样的抖动就该判稳
-    let mut j2 = judge(doc_stability(), doc_align());
+    assert_eq!(doc_stability().min_weight_01kg, 0, "默认必须是没有阈值");
     let mut last = None;
     for i in 0..5 {
-        last = Some(j2.push(2000, i * 200, None));
+        last = Some(j.push(300, i * 200, None));
+    }
+    assert!(last.unwrap().stable, "默认阈值 0 时轻载稳态必须能判稳，绝不被起称限制拦下");
+
+    // 现场显式配了阈值才生效：低于阈值即使不动也不算稳，够到阈值才算
+    let gated = Stability {
+        window_frames: 5,
+        max_spread_divisions: 2,
+        min_weight_01kg: 2000,
+        stable_ms: 400,
+    };
+    let mut low = judge(gated.clone(), doc_align());
+    for i in 0..6 {
+        assert!(!low.push(300, i * 200, None).stable, "配了 200 kg 阈值时 30 kg 反复不动也不算稳");
+    }
+    let mut ok = judge(gated, doc_align());
+    let mut last = None;
+    for i in 0..5 {
+        last = Some(ok.push(2000, i * 200, None));
     }
     assert!(last.unwrap().stable, "刚好等于阈值算起称");
 }
@@ -487,6 +498,30 @@ fn stable_ms_is_a_real_duration_gate() {
         s = Some(short.push(5000, i * 99, None));
     }
     assert!(!s.unwrap().stable);
+}
+
+#[test]
+fn a_fast_meter_keeps_framing_until_the_window_is_long_enough() {
+    // 20 ms 一帧（50 Hz）压住车不动：旧写法把窗口封死在 5 帧 = 100 ms，`span >= 400 ms`
+    // 永远不成立，判稳就成了不可能事件。现在窗口按时长收口，攒到 400 ms 就该给稳。
+    let mut j = judge(doc_stability(), doc_align());
+    let mut last = None;
+    for i in 0..30 {
+        last = Some(j.push(5000, i * 20, None));
+    }
+    let r = last.unwrap();
+    assert!(r.stable, "50 Hz 仪表稳定压磅必须能判稳：窗口 {} ms / {} 帧", r.window_ms, r.samples.len());
+    assert!(r.window_ms >= 400, "窗口时长是判稳的前提：{r:?}");
+    assert!(r.samples.len() >= 5, "帧数下限仍然要满足：{r:?}");
+    assert!(r.samples.len() < 25, "够长之后要把老样本收掉，不能一路堆成无限窗口：{r:?}");
+
+    // 同一条快链路上真的在晃，依然不能给稳（时长收口不是放松判据）
+    let mut shaky = judge(doc_stability(), doc_align());
+    let mut last = None;
+    for i in 0..30 {
+        last = Some(shaky.push(if i % 2 == 0 { 5000 } else { 9000 }, i * 20, None));
+    }
+    assert!(!last.unwrap().stable, "极差 40 kg 远超 2 分度容差，多久都不该稳");
 }
 
 #[test]
@@ -946,4 +981,157 @@ fn judgement_helpers_are_pure_and_repeatable() {
         assert_eq!(got.len(), 1, "每段都恰好是一帧");
         assert!(buf.is_empty());
     }
+}
+
+// ================================================================== 耀华 XK3190-A9 真机帧（2026-09-12 现场）
+
+/// 现场 62 kg 实测一帧的原始字节：`02 2B 30 30 30 30 36 32 30 31 46 03`
+/// = STX `+` `000062` `0`(小数位) `1F`(异或校验) ETX。校验核对：`+`~小数位 8 字节异或 = 0x1F。
+fn a9_real_frame_62kg() -> Vec<u8> {
+    vec![0x02, b'+', b'0', b'0', b'0', b'0', b'6', b'2', b'0', b'1', b'F', 0x03]
+}
+
+/// 把预设模板接上端口，喂给整条流内核用。
+fn a9_core() -> StreamCore {
+    let mut tpl = yaohua_xk3190_cont();
+    tpl.transport.port = "COM3".into();
+    StreamCore::new(tpl, "scale1", 1)
+}
+
+#[test]
+fn real_xk3190_a9_frame_parses_to_62_kg() {
+    let tpl = yaohua_xk3190_cont();
+    assert_eq!(parse_weight(&a9_real_frame_62kg(), &tpl.payload).unwrap(), 620, "62 kg → 620 个 0.1kg");
+}
+
+#[test]
+fn a9_continuous_stream_reads_through_the_whole_pipeline() {
+    // 切帧（STX/ETX）+ 校验（xor_ascii_hex）+ 取数（小数位标志）三段一起过，才算真接上
+    let mut core = a9_core();
+    let evs = core.feed(&a9_real_frame_62kg(), 1000);
+    assert_eq!(evs.len(), 1, "校验与取数都过，恰好一条读数事件：{evs:?}");
+    assert!(evs[0].connected);
+    assert_eq!(evs[0].weight_01kg, 620);
+    assert_eq!(evs[0].error_kind, None, "不该有任何错误：{:?}", evs[0].error);
+}
+
+#[test]
+fn a9_xor_ascii_hex_mismatch_is_a_bad_frame_not_a_reading() {
+    let mut core = a9_core();
+    let mut bad = a9_real_frame_62kg();
+    bad[10] = b'E'; // 帧尾 "1F" 改成 "1E"，异或值仍是 0x1F → 校验必不过
+    let evs = core.feed(&bad, 1000);
+    assert!(evs.iter().any(|e| e.error_kind.as_deref() == Some("BadFrame")), "{evs:?}");
+    assert!(evs.iter().all(|e| e.weight_01kg == 0), "校验不过绝不能当成一次读数下发");
+}
+
+#[test]
+fn a9_checksum_is_case_insensitive() {
+    let mut core = a9_core();
+    let mut lower = a9_real_frame_62kg();
+    lower[10] = b'f'; // 小写 1f 一样合法
+    let evs = core.feed(&lower, 1000);
+    assert!(evs.iter().any(|e| e.connected && e.weight_01kg == 620), "小写十六进制也该认：{evs:?}");
+}
+
+#[test]
+fn a9_decimal_count_flag_divides_the_integer() {
+    let tpl = yaohua_xk3190_cont();
+    // +000625 1 1B → 数字 000625、小数位 1 → 62.5 kg（校验 2B^30^30^30^36^32^35^31 = 0x1B）
+    let frame: Vec<u8> = vec![0x02, b'+', b'0', b'0', b'0', b'6', b'2', b'5', b'1', b'1', b'B', 0x03];
+    assert_eq!(parse_weight(&frame, &tpl.payload).unwrap(), 625);
+}
+
+#[test]
+fn flat_ledger_form_gets_the_driver_preset() {
+    // 现场在设备中心只填了 port/baud/帧族（扁平），驱动是耀华 → 必须自动套上 A9 模板
+    let conn = db_conn();
+    insert_device(
+        &conn,
+        "scaleA9",
+        "1 号地磅",
+        "scale",
+        "yaohua_xk3190",
+        r#"{ "port": "COM3", "baud": "9600", "frameFamily": "A" }"#,
+        0,
+        1,
+    );
+    let (_row, tpl) = load_config(&conn, "scaleA9").unwrap().expect("扁平表单也要能跑出 A9 模板");
+    assert_eq!(tpl.transport.port, "COM3");
+    assert_eq!(tpl.transport.baud, 9600);
+    assert_eq!(tpl.framing.start, "\u{02}");
+    assert_eq!(tpl.framing.terminator, "\u{03}");
+    assert_eq!(tpl.framing.checksum, "xor_ascii_hex");
+    assert_eq!(tpl.payload.decimal_count_index, Some(8));
+    // 套完预设还能直接读出真帧
+    assert_eq!(parse_weight(&a9_real_frame_62kg(), &tpl.payload).unwrap(), 620);
+}
+
+#[test]
+fn full_nested_template_is_never_overwritten_by_the_preset() {
+    // 写了完整 framing 段的（帧监视器手调过的）必须原样生效，不能被 A9 预设悄悄换成 STX
+    let conn = db_conn();
+    insert_device(&conn, "scaleCustom", "手调模板的磅", "scale", "yaohua_xk3190", DOC_TEMPLATE, 0, 1);
+    let (_row, tpl) = load_config(&conn, "scaleCustom").unwrap().unwrap();
+    assert_eq!(tpl.framing.start, "=");
+    assert_eq!(tpl.payload.decimal_count_index, None);
+}
+
+#[test]
+fn unknown_driver_has_no_preset() {
+    assert!(driver_preset("toledo").is_none(), "没预设的驱动完全按 config_json 走");
+    assert!(driver_preset("yaohua_xk3190").is_some());
+}
+
+// ============================================================ 判稳依据快照（设备中心取证用）
+
+/// 造一帧 A9 连续帧：`STX` `符号` `6 位整数 kg` `小数位数=0` `两字符 ASCII 十六进制异或` `ETX`。
+/// 校验按真机同规则现算（符号位~小数位这 8 字节异或），kg=62 时正好等于现场抓到的 `1F`。
+fn a9_frame_kg(kg: i64) -> Vec<u8> {
+    let mut f: Vec<u8> = vec![0x02, b'+'];
+    f.extend(format!("{:06}", kg.abs()).as_bytes());
+    f.push(b'0');
+    let xored = f[1..].iter().fold(0u8, |acc, b| acc ^ *b);
+    f.extend(format!("{xored:02X}").as_bytes());
+    f.push(0x03);
+    f
+}
+
+#[test]
+fn a9_frames_alternating_two_kg_stabilize_and_say_why() {
+    // 现场那一幕：仪表在 62.0 / 64.0 之间跳（极差 2 kg，远小于 2 分度 = 20 kg 的容差）。
+    // 判稳结论连同**依据**一起下发，设备中心才能说清"为什么还不稳"，而不是留个"波动中"。
+    let mut core = a9_core();
+    let mut last = None;
+    for i in 0..5u64 {
+        let kg = if i % 2 == 0 { 62 } else { 64 };
+        for ev in core.feed(&a9_frame_kg(kg), i * 150) {
+            last = Some(ev);
+        }
+    }
+    let ev = last.expect("5 帧应有事件");
+    assert!(ev.stable, "极差 2 kg 在容差内、窗口 600 ms 超过 400 ms，该给稳：{ev:?}");
+    assert_eq!(ev.spread_01kg, 20, "极差按 0.1 kg 整数报：620..640 = 20");
+    assert_eq!(ev.tolerance_01kg, 200, "容差 = max_spread_divisions(2) × 分度(100)");
+    assert_eq!(ev.window_ms, 600, "窗口首尾帧实际时长");
+    assert_eq!(ev.window_frames, 5, "配置的帧数下限（现在是下限，不是上限）");
+    assert_eq!(ev.stable_ms, 400);
+    assert_eq!(ev.samples.len(), 5);
+}
+
+#[test]
+fn a9_snapshot_explains_a_window_that_is_too_short() {
+    // 帧太稀（一帧 50 ms、只喂 3 帧）：极差合格但时长不够，快照要能把"卡在哪一条"指出来
+    let mut core = a9_core();
+    let mut last = None;
+    for i in 0..3u64 {
+        for ev in core.feed(&a9_frame_kg(62), i * 50) {
+            last = Some(ev);
+        }
+    }
+    let ev = last.expect("应有事件");
+    assert!(!ev.stable);
+    assert_eq!(ev.spread_01kg, 0, "三帧同一个数，极差不是问题");
+    assert!(ev.window_ms < ev.stable_ms, "卡的就是时长：{} < {}", ev.window_ms, ev.stable_ms);
+    assert!((ev.samples.len() as u64) < ev.window_frames, "也还没攒满帧数下限");
 }

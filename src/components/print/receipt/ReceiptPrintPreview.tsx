@@ -6,7 +6,8 @@
  *
  * 出纸去向按通道分流，两条路物理上不是一台机器：
  *  - `raw`：ESC/POS 直连**小票机**。票面按当前模板现排（`escpos.ts`），只能吃热敏纸；
- *  - 其余（窗口预览 / PDF 静默）：走 `window.print()`，对应 A4 激光与针式套打。
+ *  - 其余（窗口预览 / PDF 静默）：走 `printPage.ts` 的离屏 iframe 通道，把预览里那张纸
+ *    原样送进打印文档——改纸型 / 改版式后预览怎么变，纸上就怎么变。
  */
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -14,8 +15,10 @@ import { PAPER } from "@/lib/constants";
 import type { PaperKind, PrintChannel } from "@/lib/constants";
 import { nativePrinter, toNativePaper } from "@/lib/native";
 import { PrintPreview } from "../PrintPreview";
+import { printJob } from "../printPage";
 import { receiptLines } from "./escpos";
 import { PaperFrame, ReceiptDocument, docMeta } from "./render";
+import { PAPER_SPEC } from "./paper";
 import { useReceiptStore, useReceiptTemplate } from "./store";
 import type { ReceiptContext, ReceiptScenario } from "./types";
 
@@ -53,7 +56,17 @@ export function ReceiptPrintPreview({
    */
   async function handlePrint(channel: PrintChannel, p: PaperKind): Promise<boolean> {
     if (channel !== "raw") {
-      window.print();
+      // 走的不是小票机：把预览里那块纸原样送进打印文档，纸上就是眼前这一版
+      const node = document.getElementById("print-root");
+      if (!node) return false;
+      const spec = PAPER_SPEC[p];
+      await printJob({
+        title: no,
+        widthMm: spec.widthMm,
+        heightMm: spec.heightMm,
+        marginMm: spec.marginMm,
+        node,
+      });
       return true;
     }
     if (p !== "thermal80" && p !== "thermal58") {

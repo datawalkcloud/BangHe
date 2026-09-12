@@ -1,0 +1,12 @@
+﻿src/components/settlement/SettleForm.tsx(19,10): error TS6133: 'GRADES' is declared but its value is never read.
+exit=2
+[33m[33m[PLUGIN_TIMINGS] [0mPlugin hooks ran for 3.8s of this 4.4s build (87
+%).
+The slowest hooks, timed inside each callback (the wait before a callback start
+s is excluded, the time it awaits is included):
+  - @tailwindcss/vite:generate:build transform (76%, 3.3s, 1 call)
+Additional hook time came from hooks under 1s.
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more de
+tails.
+[39m
+build_exit=0

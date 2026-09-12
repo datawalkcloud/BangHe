@@ -1,0 +1,3 @@
+﻿src/components/business/OperatorSwitch.tsx(14,22): error TS6133: 'PowerIcon' is declared but its value is never read.
+src/components/business/OperatorSwitch.tsx(19,1): error TS6133: 'runningInTauri' is declared but its value is never read.
+src/components/business/OperatorSwitch.tsx(76,10): error TS6133: 'exitApp' is declared but its value is never read.

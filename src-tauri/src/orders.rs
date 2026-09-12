@@ -82,6 +82,11 @@ const QC_ROLES: &[&str] = &["station_master", "inspector"];
 pub(crate) const SETTLE_ROLES: &[&str] = &["station_master", "cashier"];
 /// 补录入仓去向：值仓的活，站长兜底（02 §11 保管员 = 指定仓房货位）
 const KEEPER_ROLES: &[&str] = &["station_master", "keeper"];
+/// 调整等级：化验员定级、出纳结算时改判、站长兜底（02 §11；结算常按实际议价改判）
+const GRADE_ROLES: &[&str] = &["station_master", "inspector", "cashier"];
+
+/// 等级值域。与 `src/lib/constants.ts::GRADES` 逐字同源（`ledger.rs` 里那份是给报表图例排的）。
+const GRADES: &[&str] = &["一等", "二等", "三等", "四等", "等外"];
 
 // ------------------------------------------------------------------------- 审计
 // audit_log（§9.21）动作名与 mock 层逐字一致（order.create / order.destination /
@@ -1921,7 +1926,7 @@ pub fn list_qc(conn: &Connection, opts: &QcListOpts) -> Result<Vec<QcReport>, St
 
 // ------------------------------------------------------------------------ 结算
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct SettleInput {
     pub order_no: String,
     pub price_fen_per_ton: i64,
@@ -1940,6 +1945,10 @@ pub struct SettleInput {
     pub price_override_reason: Option<String>,
     #[serde(default)]
     pub party_signed: Option<bool>,
+    /// 结算时确认的业务等级。`None`（或空串）＝沿用磅单现值；有值即以结算为准改写，
+    /// 与化验定级不同时写进审计备注——"这一车按几等结的钱"必须事后能查。
+    #[serde(default)]
+    pub grade: Option<String>,
 }
 
 pub(crate) const METHODS: &[&str] = &["cash", "bank", "wechat", "alipay", "transfer", "credit_writeoff"];
@@ -1968,22 +1977,28 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
             return Err(format!("{name}不能为负数"));
         }
     }
+    let grade = input.grade.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(g) = grade {
+        if !GRADES.contains(&g) {
+            return Err(format!("等级「{g}」不在值域内（{}）", GRADES.join(" / ")));
+        }
+    }
     if input.price_list_id.is_none() && input.price_override_reason.clone().unwrap_or_default().trim().is_empty() {
         // 01 §F2.3：偏离价目表必须留事由；直接按价目表取价时 price_list_id 有值，放行
         return Err("手填单价必须填写改价事由（历史价是已结算单的唯一可追溯出处）".into());
     }
-    type SettleTarget = (i64, String, i64, String, String, Option<i64>, Option<i64>, Option<i64>, String, i64);
+    type SettleTarget = (i64, String, i64, String, String, Option<i64>, Option<i64>, Option<i64>, String, i64, Option<String>);
     let head: Option<SettleTarget> = conn
         .query_row(
             "SELECT o.id, o.order_no, o.party_id, p.name, o.business_date, o.net_weight_01kg, o.gross_weight_01kg, o.tare_weight_01kg, o.status,
-                    COALESCE((SELECT COUNT(*) FROM settlement_order WHERE order_id = o.id), 0)
+                    COALESCE((SELECT COUNT(*) FROM settlement_order WHERE order_id = o.id), 0), o.grade
              FROM weigh_order o JOIN party p ON p.id = o.party_id WHERE o.order_no = ?1",
             params![input.order_no],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)),
         )
         .optional()
         .map_err(|e| format!("读取磅单失败：{e}"))?;
-    let Some((order_id, order_no, party_id, party_name, business_date, net, gross, tare, status, settled_cnt)) = head else {
+    let Some((order_id, order_no, party_id, party_name, business_date, net, gross, tare, status, settled_cnt, old_grade)) = head else {
         return Ok(None);
     };
     if settled_cnt > 0 {
@@ -2030,6 +2045,7 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
             price_fen_per_ton = ?7, price_list_id = ?8, price_override_reason = ?9,
             goods_amount_fen = ?10, deduction_fee_fen = ?11, payable_amount_fen = ?12,
             paid_amount_fen = ?13, payment_status = ?14, payment_method = ?15,
+            grade = COALESCE(?20, grade),
             status = 'settled', settled_at = ?16, paid_at = ?17, updated_at = ?16, updated_by = ?18
          WHERE id = ?19",
         params![
@@ -2043,7 +2059,7 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
             if input.pay_now { Some(input.payment_method.as_str()) } else { None },
             now,
             if input.pay_now { Some(now.as_str()) } else { None },
-            actor.id, order_id,
+            actor.id, order_id, grade,
         ],
     )
     .map_err(|e| format!("结算写单失败：{e}"))?;
@@ -2075,7 +2091,15 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
         params![settlement_id, order_id, goods, input.price_fen_per_ton, settle_weight],
     )
     .map_err(|e| format!("写结算明细失败：{e}"))?;
-    audit(conn, actor, "settle.create", "settlement", &settle_no, Some(&format!("{order_no} 结算 {party_name}")), None);
+    let mut detail = format!("{order_no} 结算 {party_name}");
+    // 结算时改过等级要单独记一笔：化验单上写的几等和最后按几等结的钱不是一回事，
+    // 迎检与纠纷翻的就是这条备注（化验单 itself 永不改写，见 [`set_grade`]）。
+    if let Some(g) = grade {
+        if old_grade.as_deref() != Some(g) {
+            detail.push_str(&format!("；等级 {} → {}", old_grade.as_deref().unwrap_or("未定级"), g));
+        }
+    }
+    audit(conn, actor, "settle.create", "settlement", &settle_no, Some(&detail), None);
 
     if input.pay_now {
         let pay_no = next_no(conn, "FK")?;
@@ -2597,4 +2621,79 @@ pub fn assign_destination(conn: &Connection, actor: &AuthProfile, input: AssignD
 #[tauri::command]
 pub async fn order_assign_destination(app: AppHandle, input: AssignDestinationInput) -> Result<Option<WeighOrder>, String> {
     write_tx(&app, move |conn, actor| assign_destination(conn, actor, input), KEEPER_ROLES, "登记入仓去向").await
+}
+
+// ------------------------------------------------------------------- 调整等级
+// 化验报告上的 `qc_report.grade` 是化验员按国标的判定，**永不改写**（复检另立新单，
+// 见不变式 7）；磅单上的 `weigh_order.grade` 是**结算用的业务等级**，从过磅完成到
+// 结算这一段允许改判——现场最常见的是"化验定二等、结算按实际议价改三等"。
+//
+// 所以改判只动磅单（事由可选，留空时审计里显式记为「未填写」），状态闸门沿用 VOIDABLE：
+// 单据一旦进了结算/作废终态，等级就是钱的一部分，要改请站长走红冲，不许在这里悄悄改掉已结过的账。
+
+#[derive(Debug, Deserialize)]
+pub struct GradeAdjustInput {
+    pub order_no: String,
+    /// 目标等级。空串 / null ＝ 清除定级（回到"未定级"）
+    pub grade: Option<String>,
+    /// 改判事由，可选：现场改判频繁，不强制填写；留空时审计写「未填写」
+    #[serde(default)]
+    pub reason: String,
+    /// 操作人以会话为准，此字段只为与 mock 签名对齐而存在
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub operator_id: Option<i64>,
+}
+
+pub fn set_grade(conn: &Connection, actor: &AuthProfile, input: GradeAdjustInput) -> Result<Option<WeighOrder>, String> {
+    let target = input.grade.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(g) = target {
+        if !GRADES.contains(&g) {
+            return Err(format!("等级「{g}」不在值域内（{}）", GRADES.join(" / ")));
+        }
+    }
+    let reason = input.reason.trim();
+    let reason_label = if reason.is_empty() { "未填写" } else { reason };
+    let order: Option<WeighOrder> = conn
+        .query_row(&format!("{ORDER_SELECT} WHERE o.order_no = ?1"), params![input.order_no], map_order_row)
+        .optional()
+        .map_err(|e| format!("读取磅单失败：{e}"))?;
+    let Some(order) = order else { return Ok(None) };
+    if !VOIDABLE.contains(&order.status.as_str()) {
+        return Err(match order.status.as_str() {
+            "voided" => "本单已作废，不能再调整等级".into(),
+            "rejected" => "本单化验拒收，不能再调整等级".into(),
+            other => format!("本单当前为「{other}」，已结算的单改等级请先由站长红冲（02 §F6.3）"),
+        });
+    }
+    if order.grade.as_deref() == target {
+        // 没变就是没变：既不写库也不留痕，审计表里不该有"改了个寂寞"的噪音
+        return Ok(Some(order));
+    }
+    let now = now_iso();
+    conn.execute(
+        "UPDATE weigh_order SET grade = ?2, updated_at = ?3, updated_by = ?4 WHERE id = ?1",
+        params![order.id, target, now, actor.id],
+    )
+    .map_err(|e| format!("调整等级失败：{e}"))?;
+    audit(
+        conn,
+        actor,
+        "order.grade",
+        "weigh_order",
+        &order.order_no,
+        Some(&format!(
+            "等级 {} → {}：{}",
+            order.grade.as_deref().unwrap_or("未定级"),
+            target.unwrap_or("未定级"),
+            reason_label
+        )),
+        None,
+    );
+    load_order_full(conn, &order.order_no)
+}
+
+#[tauri::command]
+pub async fn order_set_grade(app: AppHandle, input: GradeAdjustInput) -> Result<Option<WeighOrder>, String> {
+    write_tx(&app, move |conn, actor| set_grade(conn, actor, input), GRADE_ROLES, "调整等级").await
 }

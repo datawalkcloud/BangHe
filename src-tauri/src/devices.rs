@@ -8,9 +8,11 @@
 //! 入参 `operator_id` 一律忽略（操作人以会话为准）、读不设岗（与 dashboard 同口径）。
 //!
 //! `test_device` 是这一轮唯一**不只看库**的命令：它按台账里的 `kind`/`driver`/`config_json`
-//! 决定能不能真探，只放行本机确实有通道的两类——ESC/POS 小票机走
+//! 决定能不能真探，只放行本机确实有通道的三类——ESC/POS 小票机走
 //! [`crate::printer::printer_status`]（只发 `DLE EOT`，不出纸）、精伦读卡器走
-//! [`crate::idcard::idcard_status`]（读 SAM 号）。其余一律 `ok:false` + 一句人话，
+//! [`crate::idcard::idcard_status`]（读 SAM 号）、地磅走 [`crate::scale`] 的那条串口：
+//! 读数流正在收数就算在线（判据是 `LiveStatus::connected`，不自己数时间），没在流时
+//! `scale::probe_once` 一次性开端口读三帧再归还。其余一律 `ok:false` + 一句人话，
 //! 耗时用 `Instant::now()` 实测：把"没探"演成"探过了"是 mock 时代的病，不带来真库。
 //!
 //! `secret_json`：**当前无口令类字段，本模块对它不写也不合并**。`DEVICE_SPEC` 七类设备
@@ -587,6 +589,8 @@ pub enum ProbePlan {
     Printer { vid: Option<u16>, pid: Option<u16> },
     /// 精伦 Routon 读卡器：读 SAM 号即算联机
     IdCard,
+    /// 地磅：本机通道就是那条串口读数流（正在收数即在线；没在流时一次性开端口试读几帧）
+    Scale,
     /// 本机没有这条驱动对应的探测通道
     NotWired { message: String },
     /// 台账里没有这个编码（与 mock 一致：回 ok=false，不抛错）
@@ -627,6 +631,22 @@ pub fn probe_plan(conn: &Connection, code: &str) -> Result<ProbePlan, String> {
     if d.kind == "idcard" && d.driver.starts_with("routon") {
         return Ok(ProbePlan::IdCard);
     }
+    // 地磅不看驱动名，看台账开关：磅的本机通道是**那条串口**，任何驱动名探的都是同一条路。
+    // 但标成 Mock / 已停用的两台绝不能去开口——`resolve_template` 就是这么挡读线程的，
+    // 自检绕过去开一次端口，等于让"演示磅"真的把 COM 口占了。
+    if d.kind == "scale" {
+        if d.is_mock == 1 || d.driver == "mock" {
+            return Ok(ProbePlan::NotWired {
+                message: format!("这台磅「{}」在台账里是 Mock，走的是演示读数流，不做真机探测", d.name),
+            });
+        }
+        if d.is_enabled == 0 {
+            return Ok(ProbePlan::NotWired {
+                message: format!("这台磅「{}」在台账里已停用，先在设备中心启用再做联机测试", d.name),
+            });
+        }
+        return Ok(ProbePlan::Scale);
+    }
     Ok(ProbePlan::NotWired { message: format!("该驱动（{}）暂未接入本机探测通道，请在设备面板按指引验证", d.driver) })
 }
 
@@ -637,6 +657,55 @@ pub struct DeviceTestOutcome {
     pub ok: bool,
     pub message: String,
     pub elapsed_ms: u64,
+}
+
+// ------------------------------------------------------------------ 地磅自检口径
+
+/// 没在流时一次性开端口试读的预算：9600 波特下耀华连续帧约 4–5 帧/秒，2 秒足够读到数，
+/// 又不至于让设备中心的"联机测试"按钮卡到像死机。
+const SCALE_PROBE_BUDGET: std::time::Duration = std::time::Duration::from_millis(2000);
+/// 试读凑够几帧就收工（3 帧：够看出"在持续发数"，不是一帧噪声凑巧过校验）
+const SCALE_PROBE_FRAMES: u64 = 3;
+
+/// 0.1 kg → 界面口径的 kg 文本
+fn kg_text(weight_01kg: i64) -> String {
+    format!("{:.1}", weight_01kg as f64 / 10.0)
+}
+
+/// **正在收数**时的结论。判据完全跟着 `scale::LiveStatus::connected`（串口开着且近
+/// `STARVE_MS`=5 秒内解析出过帧），设备中心不再自己数时间，避免两处真相。
+pub fn scale_verdict_from_stream(s: &crate::scale::LiveStatus) -> (bool, String) {
+    if s.connected {
+        let read = s.last.as_ref().map(|l| format!("，最新读数 {}", kg_text(l.weight_01kg))).unwrap_or_default();
+        let at = s.last_frame_at.clone().unwrap_or_else(|| "—".into());
+        (true, format!("读数流在线：串口 {} 已打开，累计 {} 帧{read}（最后收帧 {at}）", s.port, s.frame_count))
+    } else {
+        (
+            false,
+            s.error.clone().unwrap_or_else(|| {
+                format!("串口 {} 已打开但 5 秒内没有解析出读数帧：仪表未上电、波特率不符或帧模板对不上", s.port)
+            }),
+        )
+    }
+}
+
+/// **没在流**时一次性试读的结论。"打得开端口"与"读得到可解析帧"分开说：前者失败是 COM 号 /
+/// 占用问题，后者失败是仪表与波特率问题，现场要拧的螺丝不一样。
+pub fn scale_verdict_from_probe(port: &str, out: &crate::scale::ProbeOutcome) -> (bool, String) {
+    if out.good_frames == 0 {
+        return (
+            false,
+            out.error.clone().unwrap_or_else(|| {
+                format!(
+                    "串口 {port} 开了 2 秒，一帧可解析读数都没读到：仪表未上电、波特率不符，或 COM 口被别的程序占着"
+                )
+            }),
+        );
+    }
+    let read = out.weight_01kg.map(|w| format!("，读到 {} kg", kg_text(w))).unwrap_or_default();
+    let first = out.first_good_ms.map(|ms| format!("{ms} ms")).unwrap_or_else(|| "—".into());
+    let bad = if out.bad_frames > 0 { format!("；另有 {} 帧校验不过", out.bad_frames) } else { String::new() };
+    (true, format!("串口 {port} 已打开并解析出 {} 帧{read}（首帧 {first}{bad}）", out.good_frames))
 }
 
 // ----------------------------------------------------------------- Tauri 命令
@@ -650,6 +719,8 @@ pub async fn device_list(app: AppHandle) -> Result<Vec<DeviceConfig>, String> {
 #[tauri::command]
 pub async fn device_test(app: AppHandle, code: String) -> Result<DeviceTestOutcome, String> {
     let started = Instant::now();
+    // `code` 下面要移动进 probe_plan 的闭包，地磅分支还要再用一次，先克隆一份
+    let scale_code = code.clone();
     let plan = read_only(&app, move |conn| probe_plan(conn, &code), "设备自检读取").await?;
     let (ok, message) = match plan {
         ProbePlan::Missing => (false, "设备不存在".to_string()),
@@ -683,6 +754,36 @@ pub async fn device_test(app: AppHandle, code: String) -> Result<DeviceTestOutco
                 }
             }
         },
+        ProbePlan::Scale => {
+            // 正在收数就是这台磅在线的凭据，**绝不再去开一次端口**：工作台开着流的时候
+            // 第二次 open 同一个 COM 口必然失败，那会把一条好链路报成故障。
+            match crate::scale::live_snapshot(&app).filter(|s| s.running && s.code == scale_code) {
+                Some(stream) => scale_verdict_from_stream(&stream),
+                None => {
+                    // 没在流（多半是站长开设备中心验货、工作台还没起来）：读台账拿模板，
+                    // 一次性开端口读几帧再归还。台账那句中文（Mock / 停用 / 没写 COM 口）
+                    // 由 load_config 直接抛回，现场照着一改就能重测。
+                    let tpl = read_only(
+                        &app,
+                        move |conn| crate::scale::load_config(conn, &scale_code).map(|o| o.map(|(_, t)| t)),
+                        "设备自检读取",
+                    )
+                    .await?;
+                    match tpl {
+                        None => (false, "台账里没有这台磅，请核对编码".to_string()),
+                        Some(tpl) => {
+                            let port = tpl.transport.port.clone();
+                            let out = tauri::async_runtime::spawn_blocking(move || {
+                                crate::scale::probe_once(&tpl, SCALE_PROBE_BUDGET, SCALE_PROBE_FRAMES)
+                            })
+                            .await
+                            .map_err(|e| format!("地磅自检任务失败：{e}"))?;
+                            scale_verdict_from_probe(&port, &out)
+                        }
+                    }
+                }
+            }
+        }
     };
     Ok(DeviceTestOutcome { ok, message, elapsed_ms: started.elapsed().as_millis() as u64 })
 }

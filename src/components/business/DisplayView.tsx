@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { runningInTauri } from "@/lib/native";
 import { DEFAULT_MODE, THEME_MODE_KEY } from "@/lib/theme";
 import { money, ton, weight } from "@/lib/format";
+import { resolveRange } from "@/lib/date-range";
 import { useDeviceStore, useScaleTick } from "@/store/device";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -14,13 +15,15 @@ import { cn } from "cn";
 
 export function DisplayView({ onExit }: { onExit: () => void }) {
   const scale = useDeviceStore((s) => s.scale);
-  useScaleTick(220);
-  /** 只有独立展示窗能整屏；浏览器预览里这层是主窗口的覆盖层，没有窗口可全屏 */
+  useScaleTick();
+  /** 只有独立大屏窗能整屏；浏览器预览里这层是主窗口的覆盖层，没有窗口可全屏 */
   const inWindow = runningInTauri();
   const [fullscreen, setFullscreen] = useState(false);
+  // 大屏固定看"今天"：不暴露区间选择器，站长挂墙上的就是当天气势。
+  const { from, to } = resolveRange("today");
   const { data } = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: () => api.dashboard(),
+    queryKey: ["dashboard", from, to],
+    queryFn: () => api.dashboard(from, to),
     staleTime: 30_000,
   });
 
@@ -58,7 +61,7 @@ export function DisplayView({ onExit }: { onExit: () => void }) {
 
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center gap-6 bg-background px-8">
-      <p className="text-2xl font-medium text-muted-foreground">{data?.today ? "今日收购合计" : "加载中…"}</p>
+      <p className="text-2xl font-medium text-muted-foreground">{data?.summary ? "今日收购合计" : "加载中…"}</p>
       <p className="tnum text-center text-[clamp(72px,14vw,220px)] leading-none font-bold tabular-nums">
         {weight(scale.weight01kg)}
       </p>
@@ -68,13 +71,13 @@ export function DisplayView({ onExit }: { onExit: () => void }) {
       <Separator className="w-1/3" />
       <div className="flex flex-wrap items-baseline justify-center gap-x-10 gap-y-2 text-center">
         <p className="text-lg text-muted-foreground">
-          今日 <span className="tnum text-3xl font-semibold text-foreground">{data?.today.orders ?? 0}</span> 车次
+          今日 <span className="tnum text-3xl font-semibold text-foreground">{data?.summary.orders ?? 0}</span> 车次
         </p>
         <p className="text-lg text-muted-foreground">
-          <span className="tnum text-3xl font-semibold text-foreground">{ton(data?.today.net_01kg ?? 0)}</span>
+          <span className="tnum text-3xl font-semibold text-foreground">{ton(data?.summary.net_01kg ?? 0)}</span>
         </p>
         <p className="text-lg text-muted-foreground">
-          金额 <span className="tnum text-3xl font-semibold text-foreground">{money(data?.today.goods_fen ?? 0)}</span>
+          金额 <span className="tnum text-3xl font-semibold text-foreground">{money(data?.summary.goods_fen ?? 0)}</span>
         </p>
       </div>
       <p className="mt-6 flex items-center gap-6 text-sm text-muted-foreground">
@@ -84,7 +87,7 @@ export function DisplayView({ onExit }: { onExit: () => void }) {
           </span>
         )}
         <span className="flex items-center gap-1.5">
-          <Kbd>Esc</Kbd> 退出展示模式
+          <Kbd>Esc</Kbd> 退出对外大屏
         </span>
       </p>
       <div className="absolute top-4 right-4 flex items-center gap-2">

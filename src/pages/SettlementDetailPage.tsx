@@ -1,7 +1,7 @@
 /**
  * 结算单详情（05 §3 `/settlements/$settleNo`）。
  *
- * 出纳的收款动作在这里发生：一张结算单可以分几次付（农户先拿现金、
+ * 出纳的付款动作在这里发生：一张结算单可以分几次付（农户先拿现金、
  * 余下走卡是常态），所以付款表单默认金额 = 未付余额但允许改小，
  * 每次登记都追加一条 payment_record，绝不覆盖已付数（01 §F5.2）。
  */
@@ -21,7 +21,7 @@ import { OrderStatusBadge, PaymentStatusBadge, ToneBadge } from "@/components/bu
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
 import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
 import { MoneyLine } from "@/components/business/NumField";
-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { Button } from "@/components/ui/button";
 import { Choose } from "@/components/business/Choose";
 import { Input } from "@/components/ui/input";
@@ -40,7 +40,8 @@ export function SettlementDetailPage() {
   const [amountYuan, setAmountYuan] = useState("");
   const [method, setMethod] = useState<PaymentMethod>("cash");
   const [tradeNo, setTradeNo] = useState("");
-  const [printOpen, setPrintOpen] = useState(false);
+  /** 出票走与磅房工作台同一条路：无预览直打 → 失败才回退预览框，出纸口由设备中心台账决定 */
+  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
 
   const { data, isLoading } = useQuery({
     queryKey: ["settlement", settleNo],
@@ -66,7 +67,7 @@ export function SettlementDetailPage() {
         toast.error("登记失败：未找到该结算单");
         return;
       }
-      toast.success(`已登记收款 ${money(Math.round((Number(amountYuan) || 0) * 100))}（${PAYMENT_METHOD[method]}）`);
+      toast.success(`已登记付款 ${money(Math.round((Number(amountYuan) || 0) * 100))}（${PAYMENT_METHOD[method]}）`);
       setAmountYuan("");
       setTradeNo("");
       void queryClient.invalidateQueries({ queryKey: ["settlement", settleNo] });
@@ -186,7 +187,15 @@ export function SettlementDetailPage() {
               <ArrowLeftIcon />
               返回台账
             </Button>
-            <Button size="sm" variant="outline" disabled={!can("print") || !station} onClick={() => setPrintOpen(true)}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!can("print") || !station}
+              onClick={() => {
+                if (!station) return;
+                void printReceipt({ scenario: "settlement_voucher", docNo: s.settle_no, isReprint: true, context: { station, names, settlement: s } });
+              }}
+            >
               <PrinterIcon />
               打印凭证
             </Button>
@@ -198,7 +207,7 @@ export function SettlementDetailPage() {
         <div className="flex flex-col gap-4">
           {s.payment_status !== "paid" && (
             <CallOut tone={PAYMENT_STATUS[s.payment_status].tone} title={`${PAYMENT_STATUS[s.payment_status].label}：尚差 ${money(unpaidFen)}`}>
-              {rmbUpper(unpaidFen)}。{s.payment_status === "unpaid" ? "本单尚未收到任何款项。" : "已部分收款，余款按挂账处理。"}
+              {rmbUpper(unpaidFen)}。{s.payment_status === "unpaid" ? "本单尚未付过款。" : "已部分付款，余款按挂账处理。"}
             </CallOut>
           )}
 
@@ -240,7 +249,7 @@ export function SettlementDetailPage() {
               <section className="border bg-card">
                 <header className="border-b px-3 py-2 text-sm font-semibold">
                   付款流水
-                  <span className="ml-2 text-xs font-normal text-muted-foreground">允许一笔结算单分次收款，每次追加一条</span>
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">允许一笔结算单分次付款，每次追加一条</span>
                 </header>
                 <DataTable
                   columns={payCols}
@@ -250,7 +259,7 @@ export function SettlementDetailPage() {
                   empty={
                     <EmptyState
                       title="还没有付款记录"
-                      description={unpaidFen > 0 ? "本单全额未付，右侧登记第一笔收款。" : "无需付款。"}
+                      description={unpaidFen > 0 ? "本单全额未付，右侧登记第一笔付款。" : "无需付款。"}
                     />
                   }
                 />
@@ -275,7 +284,7 @@ export function SettlementDetailPage() {
               </section>
 
               <section className={cn("border bg-card", !can("pay.record") && "opacity-70")}>
-                <header className="border-b px-3 py-2 text-sm font-semibold">登记收款</header>
+                <header className="border-b px-3 py-2 text-sm font-semibold">登记付款</header>
                 <div className="flex flex-col gap-3 p-3">
                   <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                     本次金额（元）
@@ -328,12 +337,12 @@ export function SettlementDetailPage() {
                     onClick={() => pay.mutate()}
                   >
                     <BanknoteIcon />
-                    {pay.isPending ? "登记中…" : "确认收款"}
+                    {pay.isPending ? "登记中…" : "确认付款"}
                   </Button>
                   <p className="text-xs text-muted-foreground">
                     {unpaidFen === 0
                       ? "本单已结清，无需再登记。"
-                      : "收款后打印的凭证联交给售粮人作为收款依据，存根联财务留存。"}
+                      : "付款后打印的凭证联交给售粮人作为收款依据，存根联财务留存。"}
                   </p>
                 </div>
               </section>
@@ -342,15 +351,8 @@ export function SettlementDetailPage() {
         </div>
       </div>
 
-      {station && (
-        <ReceiptPrintPreview
-          open={printOpen}
-          onOpenChange={setPrintOpen}
-          scenario="settlement_voucher"
-          context={{ station, names, settlement: s }}
-          docNo={s.settle_no}
-        />
-      )}
+      {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
+      {printFallback}
     </div>
   );
 }

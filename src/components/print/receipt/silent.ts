@@ -2,7 +2,9 @@
  * 无预览的「静默出票」（06 §2.2 硬规矩 2 / §8 打印编排）。
  *
  * 磅房的现场规矩只有一条：点打印 = 出纸，中间不弹任何框。这里是那条规矩的唯一实现——
- * 工作台不论自动（第二刷）还是手动（F9），都先走这里，只有真打不出去才回退预览框。
+ * 所有"点一下就出票"的入口（工作台自动/手动出码单、磅单与质检单详情的补打、结算凭证、
+ * 付款小票）都先走这里，只有真打不出去才回退预览框。业务页统一经
+ * `useSilentReceiptPrint` 进来，不要自己直接调本函数。
  *
  * **出纸口由设备中心配置的打印机决定**（默认项优先，其次台账里唯一那台），两条路物理上
  * 不是一台机器：
@@ -29,6 +31,7 @@ import { parseHex, ESCPOS_DRIVERS } from "@/lib/print-guard";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
 import { receiptLines } from "./escpos";
+import { SCENARIOS } from "./scenarios";
 import { effectiveTemplate, useReceiptStore } from "./store";
 import type { ReceiptContext, ReceiptScenario } from "./types";
 
@@ -83,6 +86,9 @@ export async function printReceiptSilently({
 }): Promise<SilentOutcome> {
   if (!runningInTauri()) return "preview";
 
+  // 票种名只从场景目录取一份：这条路不只打码单（质检单/结算凭证/付款小票都走它），
+  // 失败提示写死"码单"会在别的页面变成谎话
+  const docLabel = SCENARIOS[scenario]?.label ?? "单据";
   const tpl = effectiveTemplate(scenario);
   const target = resolveDirectTarget(devices, tpl.paper as PaperKind);
   const lines = receiptLines(tpl, { ...context, reprint: isReprint });
@@ -121,9 +127,9 @@ export async function printReceiptSilently({
   const out = res.available ? res.data : undefined;
   if (!res.available || !out?.ok) {
     // 06 §2.2：自动打印失败要报因，但不回滚已捕获的皮重；交回预览框给磅员一次手动机会
-    toast.error(`码单没能自动出纸：${out?.error ?? res.error ?? "未知原因"}`, { description: "已转窗口预览；重量已记，不受影响" });
-    // 这一声必须出：不出，磅员会以为票已经在打了，直接让车下磅。成功不念——纸从出纸口出来比语音直接
-    announce("码单没能自动出纸，请在预览框里手动打一次", `print-fail:${docNo}`);
+    toast.error(`${docLabel}没能自动出纸：${out?.error ?? res.error ?? "未知原因"}`, { description: "已转窗口预览；已记的数据不受影响" });
+    // 这一声必须出：不出，操作员会以为票已经在打了，直接让车下磅。成功不念——纸从出纸口出来比语音直接
+    announce(`${docLabel}没能自动出纸，请在预览框里手动打一次`, `print-fail:${docNo}`);
     return "preview";
   }
 
@@ -139,11 +145,11 @@ export async function printReceiptSilently({
     });
     toast.success(
       channel === "raw"
-        ? `${docNo} 已出码单（${printerName} · 热敏直连）`
+        ? `${docNo} 已出${docLabel}（${printerName} · 热敏直连）`
         : `${docNo} 已提交「${printerName}」，纸张等按打印机配置`,
     );
   } catch (e) {
-    toast.error("码单已出纸，但打印留痕失败：补打角标可能不准", {
+    toast.error(`${docLabel}已出纸，但打印留痕失败：补打角标可能不准`, {
       description: e instanceof Error ? e.message : String(e),
     });
   }

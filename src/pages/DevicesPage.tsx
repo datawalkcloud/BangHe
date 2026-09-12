@@ -5,9 +5,6 @@
  * 右边是测试面板 + 帧监视器——地磅排障全靠原始帧，
  * 所以把 store 里正在跑的读数流原样打成一行行的帧文本，
  * 让站长不用接串口工具就能确认"是仪表没发帧，还是发了帧但解析不出重量"。
- *
- * Mock 总开关在标题右侧常驻：关掉之后所有外设不可用，用来验收
- * "无外设也能完成闭环（手录兜底）"这条硬性要求（05 §10-1）。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
@@ -173,8 +170,6 @@ export function DevicesPage() {
   const queryClient = useQueryClient();
   const can = useSession((s) => s.can);
   const actor = useActor();
-  const mockOff = useDeviceStore((s) => s.mockOff);
-  const setMockOff = useDeviceStore((s) => s.setMockOff);
 
   const { data: devices = [], isPending } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices() });
   const [selected, setSelected] = useState<string | null>(null);
@@ -649,7 +644,7 @@ export function DevicesPage() {
 
   function exportConfig() {
     const n = downloadCsv(
-      csvName(`设备配置_${mockOff ? "mock关" : "mock开"}`),
+      csvName("设备配置"),
       ["编码", "名称", "类型", "驱动", "启用", "Mock", "默认", "状态", "最后成功", "错误计数", "最后错误", "配置JSON"],
       devices.map((d) => [
         d.code,
@@ -708,36 +703,11 @@ export function DevicesPage() {
               <DownloadIcon />
               导出配置
             </Button>
-            <Label className="flex h-9 items-center gap-2 border px-2.5 text-xs">
-              <Switch
-                checked={!mockOff}
-                disabled={!can("device.manage")}
-                onCheckedChange={(v) => setMockOff(v !== true)}
-                aria-label="外设 Mock 总开关"
-              />
-              Mock {mockOff ? "已关闭（走手录兜底）" : "开启"}
-            </Label>
           </>
         }
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        {mockOff && (
-          <CallOut
-            tone="warning"
-            title="Mock 已关闭：所有外设不可用"
-            action={
-              can("device.manage") ? (
-                <Button size="xs" variant="outline" onClick={() => setMockOff(false)}>
-                  恢复 Mock
-                </Button>
-              ) : undefined
-            }
-          >
-            这正是"没有任何硬件也要能收粮"的验收场景：读卡改成手工检索农户档案，称重改成手录并强制填原因。工作台上的每个外设按钮此刻都应当是灰的，并且旁边写着为什么。
-          </CallOut>
-        )}
-
         {/* 灰按钮必须自己解释原因，否则现场只会得出"软件坏了"的结论（05 §6.5） */}
         {!can("device.manage") && (
           <CallOut
@@ -749,7 +719,7 @@ export function DevicesPage() {
               </Button>
             }
           >
-            {actor ? `「${actor.displayName} · ${ROLE[actor.role]}」` : "—"}没有 device.manage（仅站长可启用/停用设备、切换 Mock、动总开关）。点卡片标题仍能联机测试、看状态与原始帧——排障不需要权限，改配置才需要。要动手得用站长账号：换人走左侧栏底部「当前操作员」入口，切换需要密码。
+            {actor ? `「${actor.displayName} · ${ROLE[actor.role]}」` : "—"}没有 device.manage（仅站长可启用/停用设备、切换 Mock）。点卡片标题仍能联机测试、看状态与原始帧——排障不需要权限，改配置才需要。要动手得用站长账号：换人走左侧栏底部「当前操作员」入口，切换需要密码。
           </CallOut>
         )}
 
@@ -806,7 +776,7 @@ export function DevicesPage() {
 
             <div className="flex min-w-0 flex-col gap-3 border bg-card p-3 xl:sticky xl:top-4">
               {active ? (
-                <TestPanel d={active} mockOff={mockOff} />
+                <TestPanel d={active} />
               ) : (
                 <EmptyState
                   title="还没有登记任何设备"
@@ -1228,12 +1198,30 @@ interface TestResult {
   at: string;
 }
 
-function TestPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
+function TestPanel({ d }: { d: DeviceConfig }) {
+  const queryClient = useQueryClient();
   const [result, setResult] = useState<TestResult | null>(null);
+  const now = () => new Date().toLocaleTimeString("zh-CN", { hour12: false });
+
+  // 地磅的自检结论直接落台账：它不像打印机/读卡器还有 VID、SAM 号那样的凭据可看，
+  // "读数流在收数"本身就是结论，测一次不写回灯就还挂着"未检测"，等于白测。
+  const reportProbe = useMutation({
+    mutationFn: (r: { ok: boolean; message: string }) =>
+      api.reportDeviceProbe(d.code, { status: r.ok ? "online" : "offline", error: r.ok ? null : r.message, at: stamp() }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["devices"] }),
+    onError: (e: Error) => toast.error(`状态回写失败：${e.message}`),
+  });
   const testing = useMutation({
     mutationFn: () => api.testDevice(d.code),
-    onSuccess: (r) => setResult({ ...r, at: new Date().toLocaleTimeString("zh-CN", { hour12: false }) }),
-    onError: (e: Error) => setResult({ ok: false, message: e.message, elapsedMs: 0, at: new Date().toLocaleTimeString("zh-CN", { hour12: false }) }),
+    onSuccess: (r) => {
+      setResult({ ...r, at: now() });
+      if (d.kind === "scale") reportProbe.mutate(r);
+    },
+    onError: (e: Error) => {
+      setResult({ ok: false, message: e.message, elapsedMs: 0, at: now() });
+      // 命令回的是中文短句（台账没写 COM 口 / 波特率不对的那类），同样是一次真结论
+      if (d.kind === "scale") reportProbe.mutate({ ok: false, message: e.message });
+    },
   });
 
   return (
@@ -1257,13 +1245,22 @@ function TestPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
           <p className="text-xs text-muted-foreground">
             这台机的联机测试在下方读卡器面板里，走真机打开设备 + 问 SAM 号，不用这里的模拟探测。
           </p>
+        ) : d.kind === "scale" ? (
+          <>
+            <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending}>
+              {testing.isPending ? "正在读帧…" : "联机测试"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              地磅测的就是那条串口：工作台正在收数时直接按读数流判定在线；这里没开流时会临时开一次端口读三帧（最多约 2 秒）再归还，
+              结论当场回写上方状态灯。台账里标成 Mock 或已停用的磅不会去碰端口。
+            </p>
+          </>
         ) : (
-          <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending || mockOff}>
+          <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending}>
             {testing.isPending ? "正在握手…" : "联机测试"}
           </Button>
         )}
       </div>
-      {mockOff && <p className="text-xs text-muted-foreground">Mock 总开关关闭期间不做任何真实探测。</p>}
 
       {result && (
         <div className={cn("flex flex-col gap-0.5 border p-2 text-xs", TONE_BOX[result.ok ? "success" : "danger"])}>
@@ -1283,10 +1280,10 @@ function TestPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
         />
       </div>
 
-      {d.kind === "scale" && <ScalePanel mockOff={mockOff} />}
-      {d.kind === "idcard" && <CardReaderPanel key={d.code} d={d} mockOff={mockOff} />}
+      {d.kind === "scale" && <ScalePanel key={d.code} d={d} />}
+      {d.kind === "idcard" && <CardReaderPanel key={d.code} d={d} />}
       {d.kind === "camera" && <CameraPanel />}
-      {d.kind === "printer" && <PrinterPanel key={d.code} d={d} mockOff={mockOff} />}
+      {d.kind === "printer" && <PrinterPanel key={d.code} d={d} />}
       {(d.kind === "led" || d.kind === "cashbox" || d.kind === "signpad") && (
         <CallOut tone="neutral" title="该外设为后续期实现">
           LED 播报、钱箱联动、签名板在 02 §M9 里标为 P2，首版不接线；这里保留卡片是为了现场清点硬件时知道有没有插对。
@@ -1311,34 +1308,68 @@ function frameLine(weight01kg: number, stable: boolean): string {
   return `=+${kg}kg  ${stable ? "ST" : "US"}`;
 }
 
-function ScalePanel({ mockOff }: { mockOff: boolean }) {
-  useScaleTick(220);
+function ScalePanel({ d }: { d: DeviceConfig }) {
+  const queryClient = useQueryClient();
+  useScaleTick();
   const scale = useDeviceStore((s) => s.scale);
-  const driveOn = useDeviceStore((s) => s.scale.driveOn);
-  const driveOff = useDeviceStore((s) => s.scale.driveOff);
   const setConnected = useDeviceStore((s) => s.scale.setConnected);
   const [streaming, setStreaming] = useState(true);
-  const [setpoint, setSetpoint] = useState("48600");
   const [frames, setFrames] = useState<Frame[]>([]);
   const boxRef = useRef<HTMLDivElement>(null);
-  const paused = !streaming || mockOff;
+  const paused = !streaming;
 
+  /**
+   * 这条流是不是**眼前这台磅**的真机读数。三个条件缺一不可：
+   *  - `d.is_mock === 0`：台账里标 Mock 的磅不去开它的串口，拿它报绿就是骗现场；
+   *  - `source === "live"`：浏览器预览没有真帧；
+   *  - `code === d.code`：读数流是全局单槽，选中别的磅时不能把别人的在线结论挂过来。
+   */
+  const mine = d.is_mock === 0 && scale.source === "live" && scale.code === d.code;
+  const live: DeviceStatus | null = mine ? (scale.connected ? "online" : "offline") : null;
   useEffect(() => {
     if (paused) return;
     setFrames((prev) => {
       const next = prev.concat({
         at: new Date().toLocaleTimeString("zh-CN", { hour12: false }) + "." + String(new Date().getMilliseconds()).padStart(3, "0"),
-        line: frameLine(scale.weight01kg, scale.stable),
+        // 真机帧一律原样上屏（`raw_frame` 是后端 `frame_display` 转义过的实帧，与落库进
+        // `weigh_record.raw_frame` 的那串逐字一致）；只有演示心跳才合成 A 族样子。
+        line: scale.rawFrame || frameLine(scale.weight01kg, scale.stable),
         w: scale.weight01kg,
         stable: scale.stable,
       });
       return next.slice(-60);
     });
-  }, [scale.weight01kg, scale.stable, paused]);
+  }, [scale.weight01kg, scale.stable, scale.rawFrame, paused]);
 
   useEffect(() => {
     boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight });
   }, [frames]);
+
+  /* ---------------- 状态灯回写：正在收数就是这台磅在线的凭据，不靠站长手点一次联机测试 */
+
+  const reported = useRef<DeviceStatus | null>(null);
+  const report = useMutation({
+    mutationFn: (p: { status: DeviceStatus; error: string | null; at: string }) => api.reportDeviceProbe(d.code, p),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["devices"] }),
+    // 回写没落库就要放开闸门重试：否则 `reported` 记着"已报过"，灯会一直停在错的那一档
+    onError: (e: Error) => {
+      reported.current = null;
+      toast.error(`状态回写失败：${e.message}`);
+    },
+  });
+  // 防抖只有后端那一档（`STARVE_MS`：5 秒没有可解析帧才把 connected 压成 false）。
+  // 界面**不能再等一轮**：掉线之后就没有新帧了，effect 不会被第二次触发，红永远报不出去。
+  useEffect(() => {
+    if (!live) return;
+    if (reported.current === live) return; // 回写在途，别重复发（每发一次离线就加一次错误数）
+    if (live === d.last_status && (live === "online" || (d.last_error ?? null) === (scale.error ?? null))) return;
+    reported.current = live;
+    report.mutate({
+      status: live,
+      error: live === "online" ? null : scale.error ?? `串口 ${scale.port ?? d.code} 已停止收到可解析读数帧`,
+      at: stamp(),
+    });
+  }, [live, scale.error, scale.port, d.code, d.last_status, d.last_error, report.mutate]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -1358,40 +1389,27 @@ function ScalePanel({ mockOff }: { mockOff: boolean }) {
             {streaming ? <SquareIcon /> : <PlayIcon />}
             {streaming ? "暂停" : "继续"}
           </Button>
-          <Button size="xs" variant="outline" onClick={() => setConnected(!scale.connected)}>
-            {scale.connected ? "拔线模拟" : "重新连线"}
-          </Button>
+          {/* 只在演示流上给：真机流点它会直接改写 store 的 connected，
+              而那个值现在就是台账状态灯的凭据——一键造出一个假掉线 */}
+          {!mine && (
+            <Button size="xs" variant="outline" onClick={() => setConnected(!scale.connected)}>
+              {scale.connected ? "拔线模拟" : "重新连线"}
+            </Button>
+          )}
         </span>
       </div>
 
-      <div className="flex flex-wrap items-end gap-2">
-        <Label className="flex min-w-0 flex-1 flex-col gap-1 text-xs text-muted-foreground">
-          模拟上车重量（kg）
-          <Input value={setpoint} onChange={(e) => setSetpoint(e.target.value)} inputMode="decimal" className="h-8 tnum text-sm" disabled={mockOff} />
-        </Label>
-        <Button
-          size="sm"
-          disabled={mockOff}
-          onClick={() => {
-            const kg = Number(setpoint);
-            if (!kg || kg <= 0) {
-              toast.error("请输入大于 0 的公斤数");
-              return;
-            }
-            driveOn(kg);
-          }}
-        >
-          开上磅
-        </Button>
-        <Button size="sm" variant="outline" disabled={mockOff} onClick={() => driveOff()}>
-          开下磅
-        </Button>
-      </div>
+      {scale.error && mine && (
+        <div className={cn("border p-2 text-xs", TONE_BOX.danger)}>
+          <span className="font-medium text-destructive">读数流报错</span>
+          <span className="ml-1 text-muted-foreground">{scale.error}</span>
+        </div>
+      )}
 
       <div ref={boxRef} className="h-44 min-w-0 overflow-y-auto border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed">
         {frames.length === 0 ? (
           <p className="font-sans text-xs text-muted-foreground">
-            {mockOff ? "Mock 已关闭，没有读数流。" : paused ? "已暂停，点「继续」恢复。" : "等待仪表发帧…"}
+            {paused ? "已暂停，点「继续」恢复。" : "等待仪表发帧…"}
           </p>
         ) : (
           frames.map((f, i) => (
@@ -1403,10 +1421,30 @@ function ScalePanel({ mockOff }: { mockOff: boolean }) {
           ))
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
-        判稳窗口 5 帧、容差 50（= 5.0 kg）、分度 100（= 10 kg）：极差达标后读数才向分度对齐，
-        因此稳定帧永远是整十公斤。窗口与容差来自站点参数，改参数在「基础档案 → 站点参数」。
-      </p>
+
+      {/* 判稳依据一律用后端随帧下发的数：界面再抄一份窗口/容差，就成了"说的是 5 kg、判的是 20 kg" */}
+      {mine && scale.windowFrames > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          判稳此刻的依据：窗口 <span className="tnum">{scale.samples.length}/{scale.windowFrames}</span> 帧、极差{" "}
+          <span className="tnum">{weight(scale.spread01kg, false)}</span>（容差{" "}
+          <span className="tnum">{weight(scale.tolerance01kg, false)}</span>）、持续{" "}
+          <span className="tnum">{scale.windowMs}</span> ms（需 ≥ <span className="tnum">{scale.stableMs}</span> ms）、分度{" "}
+          <span className="tnum">{weight(scale.division01kg, false)}</span>；累计 <span className="tnum">{scale.frameCount}</span>{" "}
+          帧、坏帧 <span className="tnum">{scale.errCount}</span> 帧。
+          <span className="text-foreground">三项里没达标的那一项，就是"还在波动中"的原因。</span>
+          <br />
+          窗口、容差与分度写在<span className="font-medium">这台磅的帧模板</span>里（
+          <span className="font-mono">stability.window_frames / max_spread_divisions / stable_ms</span>、
+          <span className="font-mono">align.division_01kg</span>）——上方「编辑」表单只给波特率与帧族，
+          这几项要改得把嵌套模板写进台账的 <span className="font-mono">config_json</span>（配置导出 → 改 → 导入）。
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          这条流不是这台磅的真机帧（{d.is_mock === 1 ? "台账把它标成了 Mock，不会去开它的串口" : "没有收到真机帧"}），界面不会凭空造读数。
+          判稳窗口与容差写在这台磅的帧模板里（<span className="font-mono">stability.*</span> /{" "}
+          <span className="font-mono">align.division_01kg</span>），站点参数不参与判稳。
+        </p>
+      )}
     </div>
   );
 }
@@ -1424,7 +1462,7 @@ function chipDate(v: string | null | undefined): string {
  * 上半部分是设备级的（这台机此刻在不在、凭什么说它在），下半部分按 `lib/card-reader`
  * 登记表里这台驱动声明的 media 逐节渲染，所以面板不会替硬件编它没有的能力。
  */
-function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
+function CardReaderPanel({ d }: { d: DeviceConfig }) {
   const queryClient = useQueryClient();
   const reader = useDeviceStore((s) => s.reader);
   const probe = useDeviceStore((s) => s.reader.probe);
@@ -1435,7 +1473,7 @@ function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) 
   // 不能一直停在"台账里没有启用的证卡阅读器"那句刚入库时说的旧话上。
   useEffect(() => {
     void probe();
-  }, [probe, mockOff, d.is_mock, reader.registered]);
+  }, [probe, d.is_mock, reader.registered]);
 
   // 探测结论回写台账（只动状态四字段），面板与卡片因此不会出现两种说法
   const report = useMutation({
@@ -1451,18 +1489,16 @@ function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) 
   }, [lastProbe, d.last_status, d.last_error, report.mutate]);
 
   const st = DEVICE_STATUS[reader.status];
-  const demoMode = mockOff || d.is_mock === 1 || !runningInTauri();
-  const headline = mockOff
-    ? "外设总开关已关闭，不做真机探测"
-    : !runningInTauri()
-      ? "浏览器预览：没有原生设备通道"
-      : spec.onlineProof === "none"
-        ? "该驱动不做真机校验，状态只能停在未检测"
-        : d.is_mock === 1
-          ? "台账里这台机是 Mock：身份证通道回演示卡，IC 通道不造假"
-          : lastProbe?.connected
-            ? "设备已打开，SAM 应答正常"
-            : "设备未连通";
+  const demoMode = d.is_mock === 1 || !runningInTauri();
+  const headline = !runningInTauri()
+    ? "浏览器预览：没有原生设备通道"
+    : spec.onlineProof === "none"
+      ? "该驱动不做真机校验，状态只能停在未检测"
+      : d.is_mock === 1
+        ? "台账里这台机是 Mock：身份证通道回演示卡，IC 通道不造假"
+        : lastProbe?.connected
+          ? "设备已打开，SAM 应答正常"
+          : "设备未连通";
 
   return (
     <div className="flex flex-col gap-2">
@@ -1471,7 +1507,7 @@ function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) 
       <div className={cn("flex flex-col gap-1 border p-2 text-xs", TONE_BOX[st.tone])}>
         <div className="flex items-center justify-between gap-2">
           <span className={cn("font-medium", TONE_TEXT[st.tone])}>{headline}</span>
-          <Button size="xs" variant="ghost" disabled={mockOff || reader.probing} onClick={() => void probe()}>
+          <Button size="xs" variant="ghost" disabled={reader.probing} onClick={() => void probe()}>
             {reader.probing ? "正在探测…" : "重新探测"}
           </Button>
         </div>
@@ -1500,9 +1536,9 @@ function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) 
       {/* 一节一种介质：能读什么卡由登记表决定，换一台只读身份证的机型就不会多出 IC 这节 */}
       {spec.media.map((medium) =>
         medium === "idcard" ? (
-          <IdCardMedium key={medium} d={d} mockOff={mockOff} demoMode={demoMode} canPhoto={spec.photo} />
+          <IdCardMedium key={medium} d={d} demoMode={demoMode} canPhoto={spec.photo} />
         ) : (
-          <IcMedium key={medium} d={d} mockOff={mockOff} />
+          <IcMedium key={medium} d={d} />
         ),
       )}
     </div>
@@ -1512,12 +1548,10 @@ function CardReaderPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) 
 /** 介质通道一：身份证（SAM 解密芯片） */
 function IdCardMedium({
   d,
-  mockOff,
   demoMode,
   canPhoto,
 }: {
   d: DeviceConfig;
-  mockOff: boolean;
   demoMode: boolean;
   canPhoto: boolean;
 }) {
@@ -1530,14 +1564,14 @@ function IdCardMedium({
     <div className="flex flex-col gap-1.5">
       <SectionTitle extra={<span className="text-xs text-muted-foreground">{m.qualifier}</span>}>{m.label}</SectionTitle>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" disabled={mockOff || card.reading} onClick={() => void read({ photo })}>
+        <Button size="sm" variant="outline" disabled={card.reading} onClick={() => void read({ photo })}>
           {card.reading ? m.pending : m.action}
         </Button>
         {canPhoto && (
           <Label className="flex h-8 items-center gap-2 border px-2.5 text-xs">
             <Switch
               checked={photo}
-              disabled={mockOff || demoMode}
+              disabled={demoMode}
               onCheckedChange={setPhoto}
               aria-label="读卡同时取照片"
             />
@@ -1553,11 +1587,9 @@ function IdCardMedium({
       )}
       {demoMode && !card.reading && (
         <p className="text-xs text-muted-foreground">
-          {mockOff
-            ? "总开关关闭期间不做任何读卡，工作台请改用「搜档案」或手工录入证号。"
-            : !runningInTauri()
-              ? "此刻不碰真设备，读出来的是演示卡；用桌面版（npm run tauri dev）才会走 Sdtapi 真机读卡。"
-              : "此刻不碰真设备，读出来的是演示卡；要让现场证号进这里，把这台机切回真实设备。"}
+          {!runningInTauri()
+            ? "此刻不碰真设备，读出来的是演示卡；用桌面版（npm run tauri dev）才会走 Sdtapi 真机读卡。"
+            : "此刻不碰真设备，读出来的是演示卡；要让现场证号进这里，把这台机切回真实设备。"}
         </p>
       )}
 
@@ -1595,7 +1627,7 @@ function IdCardMedium({
 }
 
 /** 介质通道二：IC（Mifare）卡，只读探测；结果与原因都取自 store 的 reader.ic */
-function IcMedium({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
+function IcMedium({ d }: { d: DeviceConfig }) {
   const ic = useDeviceStore((s) => s.reader.ic);
   const readIc = useDeviceStore((s) => s.reader.ic.read);
   const m = MEDIUM.ic;
@@ -1607,7 +1639,7 @@ function IcMedium({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
       <Button
         size="sm"
         variant="outline"
-        disabled={mockOff || ic.reading}
+        disabled={ic.reading}
         onClick={() => void readIc(keyHex ? { keyHex } : undefined)}
       >
         {ic.reading ? m.pending : m.action}
@@ -1701,7 +1733,7 @@ function liveOf(p: {
   return { status: "online", error: null, name, at };
 }
 
-function PrinterPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
+function PrinterPanel({ d }: { d: DeviceConfig }) {
   const queryClient = useQueryClient();
   const setPrinter = useDeviceStore((s) => s.setPrinter);
   const escpos = d.driver === "escpos_usbprint" || d.driver === "raw_escpos";
@@ -1710,7 +1742,7 @@ function PrinterPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
 
   const devices = useQuery({
     queryKey: ["printer", "usbprint-devices"],
-    enabled: escpos && !mockOff,
+    enabled: escpos,
     retry: 0,
     queryFn: async () => {
       const r = await nativePrinter.list();
@@ -1739,7 +1771,7 @@ function PrinterPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
 
   const probe = useQuery({
     queryKey: ["printer", "status", picked?.vendorId ?? null, picked?.productId ?? null],
-    enabled: escpos && !mockOff && picked !== null,
+    enabled: escpos && picked !== null,
     retry: 0,
     queryFn: async () => {
       const r = await nativePrinter.status({
@@ -1872,7 +1904,6 @@ function PrinterPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
         <Button
           size="sm"
           variant="outline"
-          disabled={mockOff}
           onClick={() => {
             toast.info("已调用系统打印对话框，请在其中确认打印机与纸型");
             window.print();
@@ -1960,20 +1991,19 @@ function PrinterPanel({ d, mockOff }: { d: DeviceConfig; mockOff: boolean }) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" disabled={mockOff || picked === null || selfTest.isPending} onClick={() => selfTest.mutate()}>
+        <Button size="sm" variant="outline" disabled={picked === null || selfTest.isPending} onClick={() => selfTest.mutate()}>
           <PrinterIcon />
           {selfTest.isPending ? "正在送出…" : "打印自检票"}
         </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={mockOff || !can("device.manage")}
+          disabled={!can("device.manage")}
           onClick={() => setCfgOpen(true)}
         >
           配置…
         </Button>
       </div>
-      {mockOff && <p className="text-xs text-muted-foreground">Mock 总开关关闭期间不允许写设备配置，也不做真实探测。</p>}
       {!can("device.manage") && <p className="text-xs text-muted-foreground">改设备配置需要站长岗位（device.manage）；这里置灰是权限不足，不是设备问题。</p>}
       {selfTest.data && (
         <div className={cn("flex flex-col gap-0.5 border p-2 text-xs", TONE_BOX[selfTest.data.ok ? "success" : "danger"])}>

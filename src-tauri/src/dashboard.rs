@@ -5,6 +5,12 @@
 //! 页面零改动（05 §8）。`manualCount` / `rejectCount` 这类前端在用的驼峰键
 //! 就照驼峰序列化，不趁机统一命名风格。
 //!
+//! **时间区间**：`build_dashboard(conn, from, to)` 收一段 business_date 闭区间
+//! （`YYYY-MM-DD`，含端点），由页面时间选择器解析后传入（今天/昨天/近 7 天/近 30 天/
+//! 本月/上月，见 `src/lib/date-range.ts`）。区间只作用于"历史类"数字——汇总卡
+//! （`summary`）、逐日趋势、品种占比、售粮人构成、时段分布；在途作业、告警、设备状态
+//! 是"当下此刻"的事实，与所选区间无关，保持实时。
+//!
 //! 统计口径全部照搬 `src/mock/analytics.ts`（它本身是照 03 §10 写的）：
 //!  1. 参与汇总 = `settlement_weight_01kg` 非空且状态不是 voided / rejected；
 //!     **红冲单与原单都参与**（不变式 4，负值抵消），所以不能按状态白名单筛。
@@ -25,7 +31,7 @@
 //! 口径只留一份；`tests/dashboard_contract.rs` 里"新单停留 ≈ 0"的断言
 //! 就是这条回归的闸。
 
-use chrono::{Duration, Local};
+use chrono::{Duration, NaiveDate};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
@@ -35,8 +41,6 @@ use crate::db::{locked, Db};
 
 type Pool = Arc<Mutex<Connection>>;
 
-/// mock 的 HISTORY_DAYS = 14：趋势与分组窗口都取「今天往前 14 天，含今天」共 15 个点
-const TREND_DAYS: i64 = 15;
 /// 在途超时提醒的兜底阈值（分钟），与 mock `open_order_alert_minutes` 默认值一致
 const DEFAULT_ALERT_MINUTES: i64 = 30;
 /// 挂账时效兜底（小时），与 0002_seed 的 `payment_due_warn_hours` 一致
@@ -60,18 +64,28 @@ fn pool_of(app: &AppHandle) -> Result<Pool, String> {
         .ok_or_else(|| "数据库尚未就绪（启动迁移未完成）".to_string())
 }
 
-/// 业务日期口径（本地日历日）。跨零点作业的单归前一日，由录单时写死在
-/// `business_date` 上，这里只负责"今天"是哪一天。
-fn today() -> String {
-    Local::now().format("%Y-%m-%d").to_string()
+/// 把 `YYYY-MM-DD` 解析成日历日；解析失败（脏数据/异常区间）时返回 None，
+/// 逐日枚举遇到坏日期直接截断，绝不让看板整页打不开。
+fn parse_date(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
-fn days_before(base: &str, n: i64) -> String {
-    let d = chrono::NaiveDate::parse_from_str(base, "%Y-%m-%d")
-        .unwrap_or_else(|_| Local::now().date_naive())
-        .checked_sub_signed(Duration::days(n))
-        .unwrap_or_else(|| Local::now().date_naive());
-    d.format("%Y-%m-%d").to_string()
+/// business_date 闭区间 [from, to] 的逐日枚举（含端点），供趋势柱补零用。
+/// from>to 或日期非法时返回空——宁可少画一根柱，不虚构数据。上限 370 天防御死循环。
+fn dates_between(from: &str, to: &str) -> Vec<String> {
+    let (Some(start), Some(end)) = (parse_date(from), parse_date(to)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut cur = start;
+    for _ in 0..370 {
+        out.push(cur.format("%Y-%m-%d").to_string());
+        if cur >= end {
+            break;
+        }
+        cur += Duration::days(1);
+    }
+    out
 }
 
 /// 读一个 int 型系统参数；键不存在或值不是数字时用默认值（看板不能因为
@@ -94,7 +108,7 @@ fn setting_int(conn: &Connection, key: &str, default: i64) -> i64 {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dashboard {
-    pub today: TodayStat,
+    pub summary: PeriodStat,
     pub open_orders: Vec<OpenOrderRow>,
     pub alerts: Vec<Alert>,
     pub trend: Vec<TrendRow>,
@@ -106,8 +120,10 @@ pub struct Dashboard {
     pub devices: Vec<DeviceRow>,
 }
 
+/// 所选区间（business_date 闭区间）的汇总，不叫 `TodayStat`：看板已支持
+/// 今天/昨天/近 7 天/近 30 天/本月/上月，这里始终是当前区间的值。
 #[derive(Debug, Clone, Serialize)]
-pub struct TodayStat {
+pub struct PeriodStat {
     pub orders: i64,
     pub net_01kg: i64,
     pub settle_01kg: i64,
@@ -115,7 +131,7 @@ pub struct TodayStat {
     pub payable_fen: i64,
     pub paid_fen: i64,
     pub credit_fen: i64,
-    // 前端 Dashboard.today 用的是驼峰 manualCount/rejectCount（mock 时代就这样），
+    // 前端 Dashboard.summary 用的是驼峰 manualCount/rejectCount（mock 时代就这样），
     // 逐字对齐，不趁机改页面。
     #[serde(rename = "manualCount")]
     pub manual_count: i64,
@@ -242,36 +258,34 @@ fn party_type_label(t: &str) -> String {
 // --------------------------------------------------------------------- 纯库操作
 // 全部收 &Connection、不碰 Tauri 状态，tests/dashboard_contract.rs 直接跑这段。
 
-pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
-    let tk = today();
-    let window_from = days_before(&tk, TREND_DAYS - 1);
+pub fn build_dashboard(conn: &Connection, from: &str, to: &str) -> Result<Dashboard, String> {
     let alert_minutes = setting_int(conn, "open_order_alert_minutes", DEFAULT_ALERT_MINUTES);
     let due_hours = setting_int(conn, "payment_due_warn_hours", DEFAULT_DUE_HOURS);
 
-    // ------------------------------------------------------------- 今日汇总
+    // ------------------------------------------------------------- 区间汇总
     let (orders, net, settle, goods, payable, paid): (i64, i64, i64, i64, i64, i64) = conn
         .query_row(
             &format!(
                 "SELECT COUNT(*), COALESCE(SUM(net_weight_01kg),0), COALESCE(SUM(settlement_weight_01kg),0),
                         COALESCE(SUM(goods_amount_fen),0), COALESCE(SUM(payable_amount_fen),0),
                         COALESCE(SUM(paid_amount_fen),0)
-                 FROM weigh_order WHERE business_date = ?1 AND {STAT_WHERE}"
+                 FROM weigh_order WHERE business_date BETWEEN ?1 AND ?2 AND {STAT_WHERE}"
             ),
-            params![tk],
+            params![from, to],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
-        .map_err(|e| format!("读取今日汇总失败：{e}"))?;
+        .map_err(|e| format!("读取区间汇总失败：{e}"))?;
     let manual_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM weigh_order WHERE business_date = ?1 AND weight_source = 'manual'",
-            params![tk],
+            "SELECT COUNT(*) FROM weigh_order WHERE business_date BETWEEN ?1 AND ?2 AND weight_source = 'manual'",
+            params![from, to],
             |r| r.get(0),
         )
         .map_err(|e| format!("读取手录车次失败：{e}"))?;
     let reject_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM weigh_order WHERE business_date = ?1 AND status = 'rejected'",
-            params![tk],
+            "SELECT COUNT(*) FROM weigh_order WHERE business_date BETWEEN ?1 AND ?2 AND status = 'rejected'",
+            params![from, to],
             |r| r.get(0),
         )
         .map_err(|e| format!("读取拒收车次失败：{e}"))?;
@@ -326,6 +340,8 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
         .map_err(|e| format!("读取设备状态失败：{e}"))?;
 
     // ------------------------------------------------------------------- 趋势
+    // 逐日柱子覆盖所选区间：今天/昨天只有 1 根，近 30 天/本月最多 31 根。
+    // 空档日补零（不是跳过），保证横轴连续、趋势可读。
     let mut stmt = conn
         .prepare(&format!(
             "SELECT business_date, COUNT(*), COALESCE(SUM(net_weight_01kg),0), COALESCE(SUM(goods_amount_fen),0)
@@ -335,30 +351,29 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
         ))
         .map_err(|e| format!("读取趋势失败：{e}"))?;
     let agg: Vec<(String, i64, i64, i64)> = stmt
-        .query_map(params![window_from, tk], |r| {
+        .query_map(params![from, to], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })
         .map_err(|e| format!("读取趋势失败：{e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("读取趋势失败：{e}"))?;
-    let trend: Vec<TrendRow> = (0..TREND_DAYS)
-        .map(|i| {
-            let date = days_before(&tk, TREND_DAYS - 1 - i);
-            agg.iter()
-                .find(|(d, ..)| *d == date)
-                .map(|(_, orders, net, goods)| TrendRow {
-                    date: date.clone(),
-                    orders: *orders,
-                    net_01kg: *net,
-                    goods_fen: *goods,
-                })
-                .unwrap_or(TrendRow { date, net_01kg: 0, goods_fen: 0, orders: 0 })
+    let trend: Vec<TrendRow> = dates_between(from, to)
+        .into_iter()
+        .map(|date| match agg.iter().find(|(d, ..)| *d == date) {
+            Some((_, orders, net, goods)) => TrendRow {
+                date,
+                orders: *orders,
+                net_01kg: *net,
+                goods_fen: *goods,
+            },
+            None => TrendRow { date, net_01kg: 0, goods_fen: 0, orders: 0 },
         })
         .collect();
 
     // --------------------------------------------------------------- 品种分组
-    // 品种全集来自档案（LEFT JOIN 聚合），没收粮的品种也占一行 0。与 mock 的差别：
-    // mock 写死四个品种，这里跟着 grain_variety 走——档案页加了品种，看板就有柱子。
+    // 品种全集来自档案（LEFT JOIN 聚合），没收粮的品种也占一行 0。区间内无收量的品种
+    // 仍留在图例里（柱子不缺），与 mock 的差别：mock 写死四个品种，这里跟着
+    // grain_variety 走——档案页加了品种，看板就有柱子。
     let mut stmt = conn
         .prepare(&format!(
             "SELECT v.code, v.name, COALESCE(s.net, 0), COALESCE(s.goods, 0)
@@ -366,7 +381,7 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
              LEFT JOIN (
                  SELECT variety_id, SUM(net_weight_01kg) AS net, SUM(goods_amount_fen) AS goods
                  FROM weigh_order
-                 WHERE business_date >= ?1 AND {STAT_WHERE}
+                 WHERE business_date BETWEEN ?1 AND ?2 AND {STAT_WHERE}
                  GROUP BY variety_id
              ) s ON s.variety_id = v.id
              WHERE v.deleted_at IS NULL
@@ -374,7 +389,7 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
         ))
         .map_err(|e| format!("读取品种分组失败：{e}"))?;
     let by_variety: Vec<VarietyRow> = stmt
-        .query_map(params![window_from], |r| {
+        .query_map(params![from, to], |r| {
             Ok(VarietyRow {
                 variety_code: r.get(0)?,
                 variety_name: r.get(1)?,
@@ -391,14 +406,14 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
         .prepare(
             "SELECT p.party_type, COUNT(*), COALESCE(SUM(o.net_weight_01kg),0)
              FROM weigh_order o JOIN party p ON p.id = o.party_id
-             WHERE o.business_date >= ?1
+             WHERE o.business_date BETWEEN ?1 AND ?2
                AND o.settlement_weight_01kg IS NOT NULL
                AND o.status NOT IN ('voided','rejected')
              GROUP BY p.party_type ORDER BY p.party_type",
         )
         .map_err(|e| format!("读取售粮人构成失败：{e}"))?;
     let by_party_type: Vec<PartyTypeRow> = stmt
-        .query_map(params![window_from], |r| {
+        .query_map(params![from, to], |r| {
             let t: String = r.get(0)?;
             Ok(PartyTypeRow {
                 r#type: t.clone(),
@@ -413,16 +428,17 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
 
     // ----------------------------------------------------------------- 时段分布
     // registered_at 落库即本地挂钟文本（+08:00），substr 取时与 mock 的
-    // getHours 等价，且不受 julianday 时区陷阱影响。统计**今日全部单**
-    // （含在途/作废），口径同 mock：它画的是"什么时候来过车"。
+    // getHours 等价，且不受 julianday 时区陷阱影响。统计**区间内全部单**
+    // （含在途/作废），把各天叠到 06:00–20:00 的时段桶上：单日区间=当天流水，
+    // 多日区间=哪个时段最忙的热力，口径同 mock。
     let mut stmt = conn
         .prepare(
             "SELECT CAST(substr(registered_at, 12, 2) AS INTEGER), COUNT(*)
-             FROM weigh_order WHERE business_date = ?1 GROUP BY 1",
+             FROM weigh_order WHERE business_date BETWEEN ?1 AND ?2 GROUP BY 1",
         )
         .map_err(|e| format!("读取时段分布失败：{e}"))?;
     let hours: Vec<(i64, i64)> = stmt
-        .query_map(params![tk], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))
         .map_err(|e| format!("读取时段分布失败：{e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("读取时段分布失败：{e}"))?;
@@ -497,7 +513,7 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
     if manual_count > 0 {
         alerts.push(Alert {
             level: "warning".into(),
-            title: format!("今日 {manual_count} 单为手录称重"),
+            title: format!("本期 {manual_count} 单为手录称重"),
             detail: "手录单据迎检必查，请核对仪表日志".into(),
             action: "查看手录清单".into(),
             href: "/orders?weightSource=manual".into(),
@@ -505,7 +521,7 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
     }
 
     Ok(Dashboard {
-        today: TodayStat {
+        summary: PeriodStat {
             orders,
             net_01kg: net,
             settle_01kg: settle,
@@ -529,10 +545,11 @@ pub fn build_dashboard(conn: &Connection) -> Result<Dashboard, String> {
 // ----------------------------------------------------------------- Tauri 命令
 
 /// 看板是只读聚合，所有岗位（含 viewer）都要能看，不设写入闸门。
+/// `from`/`to` 是 business_date 闭区间（`YYYY-MM-DD`），由前端时间选择器解析后传入。
 #[tauri::command]
-pub async fn dashboard_data(app: AppHandle) -> Result<Dashboard, String> {
+pub async fn dashboard_data(app: AppHandle, from: String, to: String) -> Result<Dashboard, String> {
     let pool = pool_of(&app)?;
-    tauri::async_runtime::spawn_blocking(move || locked(&pool, build_dashboard))
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, move |conn| build_dashboard(conn, &from, &to)))
         .await
         .map_err(|e| format!("看板聚合任务失败：{e}"))?
 }

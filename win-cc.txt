@@ -1,0 +1,19 @@
+﻿cargo :     Checking banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 42
++ ... ion G:\Github\BangHe\src-tauri; cargo check --bins --lib 2>&1 | Out-F ...
++                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking ba...ngHe\src-tauri) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: constant `GRADE_ROLES` is never used
+  --> src\orders.rs:86:7
+   |
+86 | const GRADE_ROLES: &[&str] = &["station_master", "inspector", "cashier"];
+   |       ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `banghe` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.84s
+exit=0

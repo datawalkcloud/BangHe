@@ -1,0 +1,48 @@
+﻿cargo :     Blocking waiting for file lock on build directory
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --test mock_coverage_contract --test command_w ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Blocking wa...build directory 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.04s
+     Running tests\command_wiring_contract.rs (target\debug\deps\command_wiring
+_contract-29ce820496030634.exe)
+
+running 6 tests
+test handler_module_prefixes_are_declared_modules ... ok
+test every_rust_command_is_registered_in_invoke_handler ... ok
+test every_frontend_command_has_a_registered_backend ... ok
+test every_registered_command_is_called_by_the_frontend ... ok
+test every_emit_targets_a_declared_channel ... ok
+test device_event_channels_are_declared_on_both_sides ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests\mock_coverage_contract.rs (target\debug\deps\mock_coverage_c
+ontract-5bec03845c2fa155.exe)
+
+running 5 tests
+test mock_api_is_spread_first ... ok
+test native_overrides_do_not_collide ... ok
+test mock_surface_is_not_empty ... ok
+test remaining_mock_surface_is_documented ... ok
+test every_native_module_is_merged_into_api_ts ... FAILED
+
+failures:
+
+---- every_native_module_is_merged_into_api_ts stdout ----
+
+thread 'every_native_module_is_merged_into_api_ts' (21448) panicked at tests\mock_coverage_contract.rs:175:5:
+杩欎簺鍘熺敓妯″潡鍐欎簡鍗存病琚?api.ts 灞曞紑锛岄〉闈笂杩欎竴鍧椾粛鏄亣鏁版嵁锛歔"windowApi"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    every_native_module_is_merged_into_api_ts
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `--test mock_coverage_contract`

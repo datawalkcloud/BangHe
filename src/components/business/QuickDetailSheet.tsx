@@ -58,7 +58,7 @@ import {
   WeightSourceBadge,
 } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid } from "@/components/business/layout";
-import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
+import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { cn } from "cn";
 
 export type QuickDetailType = "order" | "party" | "qc" | "settlement";
@@ -122,7 +122,11 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
 
-  const [printDoc, setPrintDoc] = useState<"weigh_order" | "quality_report" | null>(null);
+  /**
+   * 出票走与磅房工作台同一条路（无预览直打 → 失败才回退预览框），出纸口由设备中心台账决定。
+   * 抽屉里同样不该直接开预览框——那会让配好的打印机被 `window.print()` 的系统默认队列顶掉。
+   */
+  const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
 
@@ -179,6 +183,27 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
   const locked = order.status === "voided" || order.status === "rejected";
   const manual = order.weight_source === "manual";
   const statusDesc = ORDER_STATUS[order.status].desc;
+  /** 补打角标只看 print_log 里真正出过纸的那几条，与工作台同一口径 */
+  const weighPrinted = (order.prints ?? []).filter((p) => p.doc_type === "weigh_order" && p.result === "success").length;
+  /** 补打：无预览直打，出纸口/纸型交给设备中心台账；直打失败时 hook 自己弹预览框兜底 */
+  const reprintWeighOrder = () => {
+    if (!station) return;
+    void printReceipt({
+      scenario: "weigh_order",
+      docNo: order.order_no,
+      isReprint: weighPrinted > 0,
+      context: { station, names, order, qc },
+    });
+  };
+  const reprintQcReport = () => {
+    if (!station || !qc) return;
+    void printReceipt({
+      scenario: "quality_report",
+      docNo: qc.report_no,
+      isReprint: true,
+      context: { station, names, qc },
+    });
+  };
 
   const recordCols: Column<WeighRecord>[] = [
     { key: "seq", header: "序号", cell: (r) => <span className="tnum">{r.seq}</span> },
@@ -205,10 +230,10 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button size="xs" variant="outline" onClick={() => setPrintDoc("quality_report")} disabled={!qc || !can("print")}>
+          <Button size="xs" variant="outline" onClick={reprintQcReport} disabled={!qc || !can("print")}>
             <FlaskConicalIcon /> 质检单
           </Button>
-          <Button size="xs" variant="outline" onClick={() => setPrintDoc("weigh_order")} disabled={!can("print")}>
+          <Button size="xs" variant="outline" onClick={reprintWeighOrder} disabled={!can("print")}>
             <PrinterIcon /> 补打码单
           </Button>
           {!locked && can("order.void") && (
@@ -303,20 +328,8 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
         </div>
       )}
 
-      {station && printDoc && (
-        <ReceiptPrintPreview
-          open={!!printDoc}
-          onOpenChange={(open) => !open && setPrintDoc(null)}
-          scenario={printDoc === "quality_report" ? "quality_report" : "weigh_order"}
-          context={
-            printDoc === "quality_report" && qc
-              ? { station, names, qc, reprint: true }
-              : { station, names, order, qc, reprint: true }
-          }
-          isReprint
-          docNo={printDoc === "quality_report" && qc ? qc.report_no : order.order_no}
-        />
-      )}
+      {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
+      {printFallback}
 
       <AlertDialog open={voidOpen} onOpenChange={setVoidOpen}>
         <AlertDialogContent>

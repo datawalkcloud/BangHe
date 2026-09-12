@@ -1,9 +1,10 @@
 /** 外观设置：保留业务系统的分区布局，并提供主题生成器支持的配置。 */
 import type { CSSProperties } from "react";
-import { CheckIcon, RotateCcwIcon } from "lucide-react";
+import { RotateCcwIcon } from "lucide-react";
 import { ACCENT_COLOR_THEMES, BASE_COLOR_THEMES, MENU_STYLES, RADIUS_STYLES, THEME_STYLES, resolveAppearanceVars, resolveTokens, type ThemePalette } from "@/lib/theme";
 import { useThemeConfig } from "@/hooks/useThemeConfig";
 import { SectionTitle } from "@/components/business/layout";
+import { ChoiceCard } from "@/components/business/ChoiceCard";
 import { ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,19 +12,6 @@ import { cn } from "cn";
 
 function tokenVars(tokens: Record<string, string>): CSSProperties {
   return Object.fromEntries(Object.entries(tokens).map(([key, value]) => [`--${key}`, value])) as CSSProperties;
-}
-
-function ChoiceCard({ name, value, label, hint, active, onSelect }: { name: string; value: string; label: string; hint: string; active: boolean; onSelect: () => void }) {
-  return (
-    <label className={cn("flex min-w-0 cursor-pointer flex-col gap-1 border p-2.5 text-sm transition-colors", active ? "border-primary bg-primary/5" : "border-input hover:bg-accent")}>
-      <input type="radio" name={name} value={value} checked={active} onChange={onSelect} className="sr-only" />
-      <span className="flex items-center gap-1.5 font-medium">
-        {label}
-        {active && <CheckIcon className="size-3.5 text-primary" />}
-      </span>
-      <span className="text-xs text-muted-foreground">{hint}</span>
-    </label>
-  );
 }
 
 function SwatchCard({ name, preset, tokens, active, onSelect }: { name: string; preset: { key: string; zh: string; title: string }; tokens: Record<string, string>; active: boolean; onSelect: () => void }) {

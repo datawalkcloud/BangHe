@@ -178,6 +178,10 @@ export const systemApi = {
       : Promise.reject(new Error(NO_CHANNEL)),
   restart: (): Promise<void> =>
     runningInTauri() ? call<void>("app_restart") : Promise.reject(new Error(NO_CHANNEL)),
+  /** 真正退出程序。主窗口的 ✕ 可以被设成"隐藏到系统托盘"（`lib/window-native.ts`），
+   *  那样界面上就再没有能关掉程序的入口了，这个动作就是那条退路。 */
+  exit: (): Promise<void> =>
+    runningInTauri() ? call<void>("app_exit") : Promise.reject(new Error(NO_CHANNEL)),
 };
 
 export type SystemApi = typeof systemApi;

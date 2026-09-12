@@ -220,6 +220,7 @@ fn settle_now(conn: &Connection, no: &str, price: i64, pay_now: bool) -> banghe_
             price_list_id: Some(latest_price(conn)),
             price_override_reason: None,
             party_signed: Some(true),
+            grade: None,
         },
     )
     .unwrap()
@@ -537,6 +538,7 @@ fn settle_math_and_money_trail() {
             price_list_id: Some(latest_price(&conn)),
             price_override_reason: None,
             party_signed: Some(false),
+            grade: None,
         },
     )
     .unwrap()
@@ -561,6 +563,7 @@ fn settle_math_and_money_trail() {
             order_no: no.clone(), price_fen_per_ton: 240000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
             other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), settler_id: None,
             price_list_id: Some(latest_price(&conn)), price_override_reason: None, party_signed: None,
+            grade: None,
         },
     )
     .unwrap_err();
@@ -577,6 +580,7 @@ fn settle_math_and_money_trail() {
             order_no: no2.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
             other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), settler_id: None,
             price_list_id: None, price_override_reason: None, party_signed: None,
+            grade: None,
         },
     )
     .unwrap_err();
@@ -590,6 +594,7 @@ fn settle_math_and_money_trail() {
             order_no: no2.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
             other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "wechat".into(), settler_id: None,
             price_list_id: None, price_override_reason: Some("当日市场价上浮，站长口头确认".into()), party_signed: Some(true),
+            grade: None,
         },
     )
     .unwrap()
@@ -863,6 +868,7 @@ fn settle_full(
         price_list_id: Some(latest_price(conn)),
         price_override_reason: None,
         party_signed: Some(true),
+        grade: None,
     };
     f(&mut input);
     settle(conn, &actor(4, "cashier"), input)

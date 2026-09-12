@@ -7,8 +7,9 @@
  * - audit：迎检第一张表。谁、什么时候、对哪张单、做了什么、谁授权的，五件事缺一不可；
  * - backup：把"留存年限 / 备份份数"这类硬指标做成页面可见的自查，而不是写在文档里没人看；
  * - shift：日结前得先知道还有什么没闭环，否则封账等于把窟窿埋进历史；
- * - appearance / templates：显示模式、配色与票据版式都是**本机**偏好（磅房里每台屏的光照不一样，
- *   每台打印机走纸也不一样），所以它们不需要站长权限，也不写审计、不进站点参数——与上面五个分区正好相反。
+ * - window / appearance / templates：关窗口是退出还是藏进托盘、显示模式、配色与票据版式
+ *   都是**本机**偏好（磅房里每台屏的光照不一样，每台打印机走纸也不一样），所以它们
+ *   不需要站长权限，也不写审计、不进站点参数——与上面五个分区正好相反。
  *
  * 与仓房分区同样的处理：没有接口的动作一律标只读并写明原因，绝不做只弹 toast 的假按钮。
  */
@@ -36,11 +37,12 @@ import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionBar, SectionTitle } from "@/components/business/layout";
 import { ThemeSettingsPanel } from "@/components/business/ThemeSettingsPanel";
+import { WindowBehaviorPanel } from "@/components/business/WindowBehaviorPanel";
 import { ReceiptTemplateEditor } from "@/components/print/receipt/TemplateEditor";
 import { OperatorPanel } from "@/components/business/OperatorSwitch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DatePicker } from "@/components/ui/date-picker";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -49,7 +51,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "cn";
 
-export type SystemSection = "users" | "staff" | "audit" | "backup" | "shift" | "appearance" | "templates";
+export type SystemSection = "users" | "staff" | "audit" | "backup" | "shift" | "window" | "appearance" | "templates";
 
 const SECTIONS: { key: SystemSection; label: string; desc: string }[] = [
   { key: "users", label: "登录与权限", desc: "当前操作员与岗位可见范围" },
@@ -57,6 +59,7 @@ const SECTIONS: { key: SystemSection; label: string; desc: string }[] = [
   { key: "audit", label: "操作审计", desc: "关键动作留痕，迎检必查" },
   { key: "backup", label: "备份与恢复", desc: "留存参数自查与体检" },
   { key: "shift", label: "日结交班", desc: "封账前的挂起清单" },
+  { key: "window", label: "窗口", desc: "关闭主窗口是退出还是藏进托盘，只影响本机" },
   { key: "appearance", label: "外观与主题", desc: "显示模式与色板，只影响本机" },
   { key: "templates", label: "小票模板", desc: "各场景票据版式与可打印字段" },
 ];
@@ -95,6 +98,7 @@ export function SystemPage({ section }: { section: SystemSection }) {
         {section === "audit" && <AuditSection />}
         {section === "backup" && <BackupSection />}
         {section === "shift" && <ShiftSection />}
+        {section === "window" && <WindowBehaviorPanel />}
         {section === "appearance" && <ThemeSettingsPanel />}
         {section === "templates" && <ReceiptTemplateEditor />}
       </div>
@@ -588,12 +592,16 @@ function AuditSection() {
           />
         </Label>
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          起始日
-          <DatePicker value={from} onChange={(v) => setFrom(v)} className="w-auto" aria-label="留痕起始日" />
-        </Label>
-        <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          截止日
-          <DatePicker value={to} onChange={(v) => setTo(v)} className="w-auto" aria-label="留痕截止日" />
+          时间范围
+          <DateRangePicker
+            value={{ from, to }}
+            onChange={(f, t) => { setFrom(f); setTo(t); }}
+            presets={false}
+            allowClear
+            placeholder="全部时间"
+            className="w-auto"
+            aria-label="留痕时间范围"
+          />
         </Label>
         <div className="flex gap-2 pb-0.5">
           <Button size="sm" variant="outline" onClick={() => window.print()}>
@@ -884,7 +892,7 @@ function BackupSection() {
           {status.backups.map((b) => (
             <li key={b.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-sm">
               <span className="font-mono text-xs">{b.name}</span>
-              <ToneBadge tone={b.kind === "imported" || b.kind === "pre_migrate" ? "info" : b.kind === "pre-restore" ? "warning" : "neutral"}>{b.kind}</ToneBadge>
+              <ToneBadge tone={b.kind === "imported" || b.kind === "pre_migrate" || b.kind === "pre_upgrade" ? "info" : b.kind === "pre-restore" ? "warning" : "neutral"}>{b.kind}</ToneBadge>
               <span className="text-xs text-muted-foreground">{dateTime(b.created_at)}</span>
               <span className="tnum text-xs">{fileSize(b.size_bytes)}</span>
               <ToneBadge tone={b.sha256_ok === true ? "success" : b.sha256_ok === false ? "danger" : "neutral"}>

@@ -5,6 +5,7 @@
  * 打印时以用户模板为准；点「恢复默认」即回到这里。
  */
 import type { ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
+import { defaultLayout } from "./paper";
 
 const BASELINE = "2026-09-12T00:00:00+08:00";
 
@@ -13,7 +14,17 @@ export function uid(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
+/**
+ * 出厂版式：纸型说了算（热敏 → 小票风格，A4 / 针式 → 单据风格）。
+ *
+ * 落进模板里而不是每次渲染时再推，是为了让"版式"在编辑器里是个看得见、能改的字段：
+ * 用户把纸型从 A4 改成 80 热敏时，编辑器顺手把版式切成小票风格，之后他还能改回去。
+ */
+function withLayout(t: ReceiptTemplate): ReceiptTemplate {
+  return { ...t, layout: t.layout ?? defaultLayout(t.paper) };
+}
+
+function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
   switch (scenario) {
     case "weigh_order":
       return {
@@ -129,6 +140,11 @@ export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
         ],
       };
   }
+}
+
+/** 某场景的出厂默认模板 */
+export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
+  return withLayout(buildTemplate(scenario));
 }
 
 /**

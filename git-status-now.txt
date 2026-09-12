@@ -1,0 +1,48 @@
+﻿ M .workbuddy/memory/2026-09-12.md
+ D dist-verify/assets/dist-js-DGYXQbVt.js
+ D dist-verify/assets/index-Bqd1ZV2x.css
+ D dist-verify/assets/index-mRUyRiD0.js
+ M dist-verify/index.html
+ M "docs/design/03-\346\212\200\346\234\257\346\236\266\346\236\204\344\270\216\346\225\260\346\215\256\346\250\241\345\236\213.md"
+ M "docs/design/04-\347\241\254\344\273\266\345\257\271\346\216\245\346\226\271\346\241\210.md"
+ M src-tauri/src/db/migrate.rs
+ M src-tauri/src/db/mod.rs
+ M src-tauri/src/devices.rs
+ M src-tauri/src/lib.rs
+ M src-tauri/src/scale.rs
+ M src-tauri/src/system.rs
+ M src-tauri/tauri.conf.json
+ M src-tauri/tests/devices_contract.rs
+ M src-tauri/tests/scale_contract.rs
+ M src-tauri/tests/schema_contract.rs
+ M src-tauri/tests/system_contract.rs
+ M src/components/business/OperatorSwitch.tsx
+ M src/components/business/ThemeSettingsPanel.tsx
+ M src/components/layout/AppBreadcrumb.tsx
+ M src/components/workstation/IdentityPanel.tsx
+ M src/components/workstation/RegistrationDialog.tsx
+ M src/components/workstation/useIcWorkflow.ts
+ M src/lib/system-native.ts
+ M src/pages/SystemPage.tsx
+ M src/pages/WorkstationPage.tsx
+?? _lucide-check.txt
+?? _lucide-files.txt
+?? _tsc.txt
+?? build-ic.txt
+?? build-verify3.txt
+?? cargo-test-all.txt
+?? cargo-window-test.txt
+?? dist-verify/assets/dist-js-DYpQGcz4.js
+?? dist-verify/assets/index-2-O3WJiS.css
+?? dist-verify/assets/index-C6baJjs1.js
+?? git-status-now.txt
+?? src-tauri/nsis-hooks.nsh
+?? src-tauri/src/window.rs
+?? src-tauri/tests/window_contract.rs
+?? src/components/business/ChoiceCard.tsx
+?? src/components/business/WindowBehaviorPanel.tsx
+?? src/hooks/useCloseBehavior.ts
+?? src/lib/window-native.ts
+?? tsc-ic.txt
+?? tsc-ic2.txt
+fe79fa9 1

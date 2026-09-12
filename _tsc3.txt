@@ -1,0 +1,6 @@
+﻿src/pages/SettlementDetailPage.tsx(44,9): error TS6198: All destructured elements are unused.
+src/pages/SettlementDetailPage.tsx(190,101): error TS2304: Cannot find name 'setPrintOpen'.
+src/pages/SettlementDetailPage.tsx(347,10): error TS2304: Cannot find name 'ReceiptPrintPreview'.
+src/pages/SettlementDetailPage.tsx(348,17): error TS2304: Cannot find name 'printOpen'.
+src/pages/SettlementDetailPage.tsx(349,25): error TS2304: Cannot find name 'setPrintOpen'.
+exit=2

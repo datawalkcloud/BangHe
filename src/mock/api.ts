@@ -34,6 +34,7 @@ import type {
   WeighOrder,
 } from "./types";
 import type { CardStatus, DeviceStatus, OrderStatus, PaperKind, PaymentMethod, PrintChannel } from "@/lib/constants";
+import { GRADES } from "@/lib/constants";
 import { stamp, type PrintVerify } from "@/lib/print-guard";
 import {
   ALL_SLOTS,
@@ -179,9 +180,9 @@ export const api = {
     return users;
   },
 
-  async dashboard(): Promise<Dashboard> {
+  async dashboard(from: string, to: string): Promise<Dashboard> {
     await sleep();
-    return buildDashboard();
+    return buildDashboard(from, to);
   },
 
   /* ----------------------------------------------------------- 磅单 */
@@ -1087,11 +1088,17 @@ export const api = {
     price_override_reason?: string | null;
     /** 售粮人是否已在纸质码单上签字 */
     party_signed?: boolean;
+    /** 结算时确认的业务等级；不传/空串＝沿用磅单现值（与 Rust `settle` 同口径，COALESCE） */
+    grade?: string | null;
   }): Promise<{ order: WeighOrder; settlement: Settlement } | null> {
     await sleep(160);
     // 01 §F2.3：偏离价目或没有生效价目时都是手填价，必须留改价事由（与 Rust 端 settle 同口径）
     if (input.price_list_id == null && !(input.price_override_reason ?? "").trim()) {
       throw new Error("手填单价必须填写改价事由（历史价是已结算单的唯一可追溯出处）");
+    }
+    const targetGrade = (input.grade ?? "").trim();
+    if (targetGrade && !GRADES.some((g) => g === targetGrade)) {
+      throw new Error(`等级「${targetGrade}」不在值域内（${GRADES.join(" / ")}）`);
     }
     const o = orderOf(input.order_no);
     if (!o || o.net_weight_01kg == null) return null;
@@ -1108,6 +1115,8 @@ export const api = {
     if (settleWeight <= 0) return null;
     const goods = amountFen(settleWeight, input.price_fen_per_ton);
     const payable = goods - input.deduction_fee_fen;
+    // 结算时改判的等级随单落下；化验报告上的判定本身永不改写（复检另立新单，不变式 7）
+    if (targetGrade) o.grade = targetGrade as WeighOrder["grade"];
     Object.assign(o, {
       package_deduct_01kg: input.package_deduct_01kg,
       moisture_deduct_01kg: input.moisture_deduct_01kg,
@@ -1196,6 +1205,53 @@ export const api = {
       });
     }
     return { order: o, settlement };
+  },
+
+  /**
+   * 调整等级：只改磅单上的**业务定级**，化验报告上的判定永不改写（复检另立新单）。
+   *
+   * 现场最常见的是"化验按国标定二等、结算按实际议价改三等"，所以从过磅完成到结算
+   * 这一段允许改判；事由可选（留空时审计记「未填写」）。已结算/作废/拒收是终态，
+   * 要改请站长走红冲。与 Rust `orders.rs::set_grade` 同口径（含"等级没变就不写库也不留痕"）。
+   */
+  async setOrderGrade(input: {
+    order_no: string;
+    /** 目标等级，空串 / null ＝ 清除定级（回到未定级） */
+    grade: string | null;
+    /** 改判事由，可选 */
+    reason: string;
+    operator_id: number;
+  }): Promise<WeighOrder | null> {
+    await sleep(120);
+    const o = orderOf(input.order_no);
+    if (!o) return null;
+    const target = (input.grade ?? "").trim();
+    if (target && !GRADES.some((g) => g === target)) {
+      throw new Error(`等级「${target}」不在值域内（${GRADES.join(" / ")}）`);
+    }
+    const reason = input.reason.trim() || "未填写";
+    if (["voided", "rejected", "settled", "paid", "archived", "reversed"].includes(o.status)) {
+      throw new Error(`本单当前为「${o.status}」，已结算的单改等级请先由站长红冲`);
+    }
+    const next = (target || null) as WeighOrder["grade"];
+    if (o.grade === next) return o;
+    const now = localIso(new Date());
+    const before = o.grade ?? "未定级";
+    o.grade = next;
+    o.updated_at = now;
+    auditLogs.unshift({
+      id: o.id,
+      at: now,
+      actor_id: input.operator_id,
+      actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
+      action: "order.grade",
+      entity: "weigh_order",
+      entity_no: o.order_no,
+      reason: `等级 ${before} → ${next ?? "未定级"}：${reason}`,
+      authorized_by: null,
+      result: "ok",
+    });
+    return o;
   },
 
   /** 作废：单据永不物理删除，只置状态并留事由与经办人（不要求站长授权） */

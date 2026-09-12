@@ -258,7 +258,7 @@ fn queue_excludes_terminal_orders() {
     void_order(
         &conn,
         &actor(1, "station_master"),
-        VoidOrderInput { order_no: draft.clone(), reason: "登记错人了，重新制单".into(), operator_id: None, authorized_by: 1 },
+        VoidOrderInput { order_no: draft.clone(), reason: "登记错人了，重新制单".into(), operator_id: None, authorized_by: Some(1) },
     )
     .unwrap()
     .expect("作废应成功");

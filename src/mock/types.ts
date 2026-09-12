@@ -438,7 +438,12 @@ export interface OrderFilters {
 }
 
 export interface Dashboard {
-  today: {
+  /**
+   * 选定区间（business_date 闭区间 from~to）的汇总。字段名不叫 `today`：
+   * 看板已支持今天/昨天/近 7 天/近 30 天/本月/上月，这里始终是"当前所选区间"的值，
+   * 区间文案由页面的时间选择器承载，不写死在字段名里（05 §3）。
+   */
+  summary: {
     orders: number;
     net_01kg: number;
     settle_01kg: number;

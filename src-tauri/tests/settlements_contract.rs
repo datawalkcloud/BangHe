@@ -1,4 +1,4 @@
-//! 结算台账的行为守卫（05 §3 /settlements；01 §F5.2 分次收款）
+//! 结算台账的行为守卫（05 §3 /settlements；01 §F5.2 分次付款）
 //!
 //! 台账列表走 `settlement_list`（归 tests/reports_contract.rs），这里守的是
 //! `settlements.rs` 的四件事：
@@ -6,12 +6,12 @@
 //!     当天不清的"粮进仓、钱没算"必须一眼可见。
 //!  2. **详情三件套**：结算单 + 覆盖磅单（按 seq）+ 付款流水必须同源同形，
 //!     mock 与真库共用一个页面契约。
-//!  3. **补录收款**：partial→paid 只能由累计已付推出来；磅单侧按结算明细
+//!  3. **补录付款**：partial→paid 只能由累计已付推出来；磅单侧按结算明细
 //!     逐单填满应付再轮下一单；每笔都落 payment_record + `pay.record` 审计，
 //!     绝不覆盖已付数（01 §F5.2）。
 //!  4. **拒绝口径**（真库比 mock 严的四处）：超额、已撤销单、非法金额 /
 //!     付款方式、非现金缺流水号全部用中文短句拒绝；签字位 `signed_by_party`
-//!     收款不得顺手置 1。
+//!     补付不得顺手置 1。
 //!  另挂 **挂账账龄**：时效读 `payment_due_warn_hours`（72h = 3 天），
 //!  due_date / overdue_days 与业务日对得上，已付与撤销的单不进清单。
 
@@ -138,6 +138,7 @@ fn settle_credit(conn: &Connection, party: i64, variety: i64) -> String {
             price_list_id: Some(price),
             price_override_reason: None,
             party_signed: Some(true),
+            grade: None,
         },
     )
     .unwrap()
@@ -277,7 +278,7 @@ fn record_payment_drives_partial_then_paid_and_leaves_trail() {
     assert!(o_paid_at.is_some());
 
     let rows: i64 = conn.query_row("SELECT COUNT(*) FROM payment_record WHERE settlement_id = (SELECT id FROM settlement WHERE settle_no=?1)", params![no], |r| r.get(0)).unwrap();
-    assert_eq!(rows, 2, "分次收款每次追加一条");
+    assert_eq!(rows, 2, "分次付款每次追加一条");
     let audits: i64 = conn
         .query_row("SELECT COUNT(*) FROM audit_log WHERE action='pay.record' AND entity='settlement' AND entity_no=?1", params![no], |r| r.get(0))
         .unwrap();
@@ -303,7 +304,7 @@ fn payment_does_not_flip_signature_and_rejects_bad_inputs() {
     assert!(pay(&conn, "JS01999999000002", 100, "cash", None).unwrap().is_none(), "查无此单回 None");
 
     let s = pay(&conn, &no, 100, "cash", None).unwrap().unwrap();
-    assert_eq!(s.signed_by_party, 0, "收款不代签");
+    assert_eq!(s.signed_by_party, 0, "补付不代签");
     assert_eq!(s.payment_status, "partial", "前面所有失败都不得留下半笔状态");
 
     conn.execute("UPDATE settlement SET status='revoked' WHERE settle_no=?1", params![&no]).unwrap();

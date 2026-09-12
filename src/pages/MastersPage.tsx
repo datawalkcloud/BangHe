@@ -38,7 +38,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { DatePicker } from "@/components/ui/date-picker";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 
@@ -970,16 +970,15 @@ function PricesSection() {
                 </span>
               )}
             </Label>
-            <div className="grid grid-cols-2 gap-2 sm:col-span-2">
-              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                生效起始
-                <DatePicker value={form.from} onChange={(v) => patch({ from: v })} className="w-full tnum" />
-              </Label>
-              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                生效截止
-                <DatePicker value={form.to} onChange={(v) => patch({ to: v })} className="w-full tnum" />
-              </Label>
-            </div>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
+              有效期
+              <DateRangePicker
+                value={{ from: form.from, to: form.to }}
+                onChange={(f, t) => patch({ from: f, to: t })}
+                presets={false}
+                className="w-full tnum"
+              />
+            </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               备注
               <Input value={form.remark} onChange={(e) => patch({ remark: e.target.value })} className="text-sm" />

@@ -11,10 +11,13 @@
 import { useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { LogOutIcon, UserCogIcon } from "lucide-react";
+import { LogOutIcon, PowerIcon, UserCogIcon } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { ROLE } from "@/lib/constants";
 import type { AuthProfile } from "@/lib/auth";
+import { runningInTauri } from "@/lib/native";
+import { systemApi } from "@/lib/system-native";
 import { useSession } from "@/store/session";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -62,6 +65,16 @@ function useSignOut() {
     // 未登录进不去任何业务页（router.tsx 的守卫），这里显式跳一次，省得停在原地
     void navigate({ to: "/login" });
   };
+}
+
+/**
+ * 真机上的"退出程序"：走 `app_exit`，串口归还与 WAL 收尾照常跑（不是直接杀进程）。
+ *
+ * 这个入口不能省：主窗口的 ✕ 可以被设成"隐藏到系统托盘"（系统 → 窗口），设了之后点 ✕
+ * 就退不掉，而侧栏是唯一一处不用先去托盘找菜单的地方。
+ */
+function exitApp() {
+  systemApi.exit().catch((e: unknown) => toast.error(`退出失败：${e instanceof Error ? e.message : String(e)}`));
 }
 
 /** 演示模式的换人：认 mock 在职名单，不校验密码。下拉与下拉框两种排布共用这一份 */
@@ -118,6 +131,8 @@ export function OperatorFooter() {
   const demo = useSession((s) => s.demo);
   const { state } = useSidebar();
   const signOut = useSignOut();
+  // 浏览器预览没有窗口，"退出程序"这个动作无从谈起（和备份页同一条口径：不给点不动的假按钮）
+  const desktop = runningInTauri();
   // 折叠态的下拉里也要能换人，所以名单在早退之前取（demo 为假时不发请求）
   const { active, pick } = useDemoStaff(demo);
   const collapsed = state === "collapsed";
@@ -165,6 +180,12 @@ export function OperatorFooter() {
               <LogOutIcon />
               退出登录
             </DropdownMenuItem>
+            {desktop && (
+              <DropdownMenuItem onClick={exitApp}>
+                <PowerIcon />
+                退出程序
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarFooter>
@@ -180,10 +201,18 @@ export function OperatorFooter() {
       {demo ? (
         <DemoPicker value={String(actor.id)} />
       ) : (
-        <Button size="xs" variant="outline" className="flex-1" onClick={() => void signOut()}>
-          <LogOutIcon data-slot="icon" />
-          退出登录
-        </Button>
+        <div className="flex gap-1.5">
+          <Button size="xs" variant="outline" className="flex-1" onClick={() => void signOut()}>
+            <LogOutIcon data-slot="icon" />
+            退出登录
+          </Button>
+          {desktop && (
+            <Button size="xs" variant="outline" className="flex-1" onClick={exitApp}>
+              <PowerIcon data-slot="icon" />
+              退出程序
+            </Button>
+          )}
+        </div>
       )}
     </SidebarFooter>
   );

@@ -206,7 +206,7 @@ export function PartyDetailPage() {
           {detail.credit_fen > detail.credit_limit_fen && detail.credit_limit_fen > 0 && (
             <CallOut tone="danger" title="挂账已超额度">
               当前未付 {money(detail.credit_fen)}，超过设定额度 {money(detail.credit_limit_fen)}。
-              站点参数「允许挂账」开启时仍可结算，但建议先收款再继续收粮。
+              站点参数「允许挂账」开启时仍可结算，但建议先把挂账付清再继续收粮。
             </CallOut>
           )}
 

@@ -1,0 +1,41 @@
+﻿cargo :     Blocking waiting for file lock on build directory
+所在位置 行:445 字符: 44
++ ... src-tauri"; cargo test --test window_contract --test command_wiring_c ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Blocking wa...build directory:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: use of deprecated method `tauri::tray::TrayIconBuilder::<R>::menu_on_left_click`: Use `TrayIconBuilder::show_m
+enu_on_left_click` instead.
+   --> src\window.rs:140:10
+    |
+140 |         .menu_on_left_click(false)
+    |          ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `banghe` (lib) generated 1 warning
+   Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.18s
+     Running tests\command_wiring_contract.rs (target\debug\deps\command_wiring_contract-29ce820496030634.exe)
+
+running 6 tests
+test handler_module_prefixes_are_declared_modules ... ok
+test every_rust_command_is_registered_in_invoke_handler ... ok
+test every_registered_command_is_called_by_the_frontend ... ok
+test every_frontend_command_has_a_registered_backend ... ok
+test every_emit_targets_a_declared_channel ... ok
+test device_event_channels_are_declared_on_both_sides ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests\window_contract.rs (target\debug\deps\window_contract-fc7248e298eae77b.exe)
+
+running 3 tests
+test close_behavior_key_is_the_same_on_both_sides ... ok
+test only_hide_is_recognized_everything_else_exits ... ok
+test display_window_never_shares_the_main_label ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+exit=0

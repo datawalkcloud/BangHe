@@ -1,0 +1,1 @@
+﻿PowerIcon=true PowerOffIcon=true CirclePowerIcon=true XIcon=true Minimize2Icon=true MinusIcon=true LogOutIcon=true MonitorXIcon=true SquareMinusIcon=true

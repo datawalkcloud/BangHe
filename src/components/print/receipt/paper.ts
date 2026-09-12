@@ -21,7 +21,7 @@ export interface PaperSpec {
   heightMm: number | null;
   /** 票内容与纸边的留白（mm） */
   marginMm: MarginMm;
-  /** @page size 取值 */
+  /** @page size 取值（卷纸的 auto 高度不可靠，真正出纸的尺寸由打印通道实测后注入） */
   cssSize: string;
   /** 给人看的一行说明 */
   note: string;
@@ -72,3 +72,22 @@ export const paperPxHeight = (kind: PaperKind) => {
   const h = PAPER_SPEC[kind].heightMm;
   return h == null ? null : mmToPx(h);
 };
+
+/**
+ * 票面版式。与纸型分开，是因为"长什么样"和"打在什么纸上"不是一回事：
+ * 241 针式连续纸走的也是行式排版（`escpos.ts` → GDI），把它排成小票风格反而更接近出纸效果；
+ * 反过来 A4 台账确实需要网格表格，换成小票风格就没人看得懂了。
+ * 所以版式是模板的一个字段，纸型只决定它的初始值。
+ */
+export type ReceiptLayout = "receipt" | "sheet";
+
+export const LAYOUT: Record<ReceiptLayout, string> = {
+  receipt: "小票风格（窄条 · 居中抬头 · 虚线分隔）",
+  sheet: "单据风格（分栏 · 表格 · 方框署名）",
+};
+
+/** 卷纸：高度随内容走，打印时按实测内容高度给 @page 一个精确高度 */
+export const isRollPaper = (kind: PaperKind) => PAPER_SPEC[kind].heightMm == null;
+
+/** 纸型决定的默认版式：热敏 → 小票；A4 / 针式 → 单据 */
+export const defaultLayout = (kind: PaperKind): ReceiptLayout => (isRollPaper(kind) ? "receipt" : "sheet");

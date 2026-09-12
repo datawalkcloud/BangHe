@@ -1,17 +1,24 @@
 /**
  * 首页看板（05 §3，站长每天早上第一眼看的页面）。
  *
- * 排序按"今天要处理什么"而不是"数据好不好看"：
- * 告警 → 待办数字 → 在途作业 → 趋势，快捷入口放右上角给磅员用。
+ * 排序按"要处理什么 / 这段时间干得怎么样"而不是"数据好不好看"：
+ * 告警 → 区间汇总数字 → 在途作业 → 趋势与分组，快捷入口放右上角给磅员用。
+ *
+ * 顶部的时间选择器只重算"历史类"数字（汇总卡、趋势、品种/人群占比、时段分布），
+ * 口径是一整段 business_date 闭区间；在途作业、告警、设备状态永远是"此刻"的事实，
+ * 不随区间变化（今天的在途车不会因为切到"本月"就变成 30 天的存量）。
  */
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangleIcon, ArrowRightIcon, CircleCheckIcon } from "lucide-react";
 import { api } from "@/lib/api";
-import { durationText, money, ton, weight, dateTimeShort, nowLocalISO, ratioText, todayISO } from "@/lib/format";
+import { durationText, money, ton, weight, dateTimeShort, nowLocalISO, ratioText } from "@/lib/format";
+import { resolveRange, rangeLabel } from "@/lib/date-range";
 import { VARIETY_COLOR } from "@/lib/constants";
 import { ORDER_STATUS, PARTY_TYPE } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { BarList, MiniBars, SplitBar, StatCard } from "@/components/business/StatCard";
@@ -19,18 +26,24 @@ import { EmptyState, PageBody, PageHeader, SectionTitle } from "@/components/bus
 import { cn } from "cn";
 
 export function DashboardPage() {
-  const { data, isPending } = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard() });
+  const [range, setRange] = useState(() => resolveRange("today"));
+  const { data, isPending } = useQuery({
+    queryKey: ["dashboard", range.from, range.to],
+    queryFn: () => api.dashboard(range.from, range.to),
+  });
   // 设备面板随看板一起取（桌面端 = 真库 device_config，与下方离线告警同源），
   // 不再单独 query mock 的 listDevices。
   const devices = data?.devices ?? [];
 
   const offline = devices.filter((d) => d.is_enabled === 1 && d.last_status !== "online");
+  // 汇总卡标签前缀用所选区间文案（近 30 天 / 本月 / 昨天…），避免切了区间还写死"今日"。
+  const p = range.label;
 
   return (
     <>
       <PageHeader
         title="首页看板"
-        description={isPending ? "加载中…" : `今日为 ${todayISO()}（业务日期口径，跨零点单归前一日）`}
+        description={isPending ? "加载中…" : `统计区间 ${range.from} ~ ${range.to}（${p}；业务日期口径，跨零点单归前一日）`}
         actions={
           <>
             <Button size="sm" render={<Link to="/workstation" />}>
@@ -43,7 +56,17 @@ export function DashboardPage() {
         }
       />
       <PageBody className="overflow-y-auto">
-        {/* 告警优先：进站第一眼要看到"今天有什么不对" */}
+        {/* 时间区间选择器：单个 range 日期控件，快捷预设内置在下拉里（与报表同一份口径 date-range.ts） */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">统计范围</span>
+          <DateRangePicker
+            value={{ from: range.from, to: range.to }}
+            onChange={(f, t) => setRange({ from: f, to: t, label: rangeLabel(f, t) })}
+            className="w-64"
+          />
+        </div>
+
+        {/* 告警优先：进站第一眼要看到"有什么不对"（实时，不受区间影响） */}
         {(data?.alerts.length ?? 0) > 0 && (
           <section className="grid gap-2 lg:grid-cols-2">
             {data!.alerts.map((a) => (
@@ -76,28 +99,28 @@ export function DashboardPage() {
           </section>
         )}
 
-        {/* 今日待办数字 */}
+        {/* 区间待办数字 */}
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
-          <StatCard label="今日车次" value={data?.today.orders ?? "—"} unit="车" hint={isPending ? "" : "含在途与已归档"} />
-          <StatCard label="今日净重" value={ton(data?.today.net_01kg ?? 0)} hint={`结算重 ${ton(data?.today.settle_01kg ?? 0)}`} />
-          <StatCard label="今日货款" value={money(data?.today.goods_fen ?? 0)} tone="info" />
+          <StatCard label={`${p}车次`} value={data?.summary.orders ?? "—"} unit="车" hint={isPending ? "" : "含在途与已归档"} />
+          <StatCard label={`${p}净重`} value={ton(data?.summary.net_01kg ?? 0)} hint={`结算重 ${ton(data?.summary.settle_01kg ?? 0)}`} />
+          <StatCard label={`${p}货款`} value={money(data?.summary.goods_fen ?? 0)} tone="info" />
           <StatCard
-            label="今日应付"
-            value={money(data?.today.payable_fen ?? 0)}
-            hint={`已付 ${money(data?.today.paid_fen ?? 0)}`}
+            label={`${p}应付`}
+            value={money(data?.summary.payable_fen ?? 0)}
+            hint={`已付 ${money(data?.summary.paid_fen ?? 0)}`}
           />
           <StatCard
             label="挂账未付"
-            value={money(data?.today.credit_fen ?? 0)}
-            tone={(data?.today.credit_fen ?? 0) > 0 ? "warning" : "neutral"}
+            value={money(data?.summary.credit_fen ?? 0)}
+            tone={(data?.summary.credit_fen ?? 0) > 0 ? "warning" : "neutral"}
             hint="超时效天数的进下方告警"
           />
           <StatCard
             label="手录车次"
-            value={data?.today.manualCount ?? 0}
+            value={data?.summary.manualCount ?? 0}
             unit="车"
-            tone={(data?.today.manualCount ?? 0) > 0 ? "warning" : "neutral"}
-            hint={`拒收 ${data?.today.rejectCount ?? 0} 车`}
+            tone={(data?.summary.manualCount ?? 0) > 0 ? "warning" : "neutral"}
+            hint={`拒收 ${data?.summary.rejectCount ?? 0} 车`}
           />
         </section>
 
@@ -195,11 +218,12 @@ export function DashboardPage() {
         <div className="grid min-w-0 gap-4 lg:grid-cols-3">
           <Card>
             <CardHeader className="py-2.5">
-              <CardTitle className="text-sm">近 7 日车次</CardTitle>
+              <CardTitle className="text-sm">{p}车次趋势</CardTitle>
             </CardHeader>
             <CardContent className="p-0 pr-2">
               <MiniBars
-                items={(data?.trend ?? []).slice(-7).map((t) => ({ label: t.date.slice(5), value: t.orders }))}
+                items={(data?.trend ?? []).map((t) => ({ label: t.date.slice(5), value: t.orders }))}
+                labelEvery={(data?.trend.length ?? 0) > 15 ? 5 : (data?.trend.length ?? 0) > 7 ? 3 : 1}
                 formatter={(v) => String(v)}
               />
             </CardContent>
@@ -207,7 +231,7 @@ export function DashboardPage() {
 
           <Card>
             <CardHeader className="py-2.5">
-              <CardTitle className="text-sm">品种净重占比（今日）</CardTitle>
+              <CardTitle className="text-sm">品种净重占比（{p}）</CardTitle>
             </CardHeader>
             <CardContent>
               <BarList
@@ -243,11 +267,11 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader className="py-2.5">
-            <CardTitle className="text-sm">今日状态分布与时间线</CardTitle>
+            <CardTitle className="text-sm">在途状态与作业节奏</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
-            <SectionTitle extra={<span className="text-xs text-muted-foreground">按磅单状态</span>}>
-              在途与完成
+            <SectionTitle extra={<span className="text-xs text-muted-foreground">实时在途，按磅单状态</span>}>
+              当前在途
             </SectionTitle>
             <div className="flex flex-wrap gap-2">
               {Object.entries(ORDER_STATUS).map(([k, v]) => {
@@ -260,10 +284,12 @@ export function DashboardPage() {
                 );
               })}
               {(data?.openOrders.length ?? 0) === 0 && (
-                <span className="text-sm text-muted-foreground">当前无在途车，今日已完成 {data?.today.orders ?? 0} 车</span>
+                <span className="text-sm text-muted-foreground">当前无在途车，{p}共 {data?.summary.orders ?? 0} 车</span>
               )}
             </div>
-            <SectionTitle>时段分布</SectionTitle>
+            <SectionTitle extra={<span className="text-xs text-muted-foreground">{p}</span>}>
+              时段分布
+            </SectionTitle>
             <MiniBars
               height={72}
               items={(data?.hourCurve ?? []).map((h) => ({ label: `${h.hour}`, value: h.orders }))}

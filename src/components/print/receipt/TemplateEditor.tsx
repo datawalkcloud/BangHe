@@ -24,9 +24,11 @@ import { Choose } from "@/components/business/Choose";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { defaultTemplate } from "./defaults";
 import { receiptLines } from "./escpos";
+import { printJob } from "../printPage";
 import { SCENARIOS } from "./scenarios";
 import { PaperFrame, ReceiptDocument } from "./render";
-import { PAPER_SPEC } from "./paper";
+import { defaultLayout, LAYOUT, PAPER_SPEC } from "./paper";
+import type { ReceiptLayout } from "./paper";
 import { effectiveTemplate, useReceiptStore } from "./store";
 import { uid } from "./defaults";
 import type { BlockKind, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
@@ -149,7 +151,17 @@ export function ReceiptTemplateEditor() {
       toast.message("该纸型不走小票机", {
         description: `${PAPER[draft.paper]}由系统打印队列输出，已改为窗口打印预览；小票机只吃 58 / 80 热敏。`,
       });
-      window.print();
+      // 与业务打印同一条通道：预览里这块纸原样进打印文档，打出来就是右侧这一版
+      const node = document.getElementById("print-root");
+      if (!node) return;
+      const spec = PAPER_SPEC[draft.paper];
+      await printJob({
+        title: `${draft.name} 测试票`,
+        widthMm: spec.widthMm,
+        heightMm: spec.heightMm,
+        marginMm: spec.marginMm,
+        node,
+      });
       return;
     }
     setPrinting("test");
@@ -267,14 +279,28 @@ export function ReceiptTemplateEditor() {
                 <Input value={draft.copyNote} onChange={(e) => patch({ copyNote: e.target.value })} className="h-8 text-sm" />
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                纸型
+                纸型（换纸型会同步换成该纸型的默认版式）
                 <Choose
                   value={draft.paper}
-                  onChange={(v) => patch({ paper: v as PaperKind })}
+                  onChange={(v) => {
+                    const p = v as PaperKind;
+                    patch({ paper: p, layout: defaultLayout(p) });
+                  }}
                   options={(Object.keys(PAPER) as PaperKind[]).map((k) => ({ value: k, label: PAPER[k] }))}
                   size="sm"
                   aria-label="纸型"
                 />
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                版式
+                <Choose
+                  value={draft.layout ?? defaultLayout(draft.paper)}
+                  onChange={(v) => patch({ layout: v as ReceiptLayout })}
+                  options={(Object.keys(LAYOUT) as ReceiptLayout[]).map((k) => ({ value: k, label: LAYOUT[k] }))}
+                  size="sm"
+                  aria-label="版式"
+                />
+                <span className="text-[10px] text-muted-foreground">小票风格的行序与小票机出纸一致</span>
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 补打角标

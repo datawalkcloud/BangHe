@@ -72,6 +72,7 @@ export type CreateOrderInput = Parameters<typeof mock.createOrder>[0];
 export type CaptureInput = Parameters<typeof mock.capture>[0];
 export type SaveQcInput = Parameters<typeof mock.saveQc>[0];
 export type SettleInput = Parameters<typeof mock.settle>[0];
+export type GradeAdjustInput = Parameters<typeof mock.setOrderGrade>[0];
 export type PrintLogInput = Parameters<typeof mock.logPrint>[0];
 
 export const ordersApi = {
@@ -97,6 +98,8 @@ export const ordersApi = {
 
   /* -------------------------------------------------------------- 结算 */
   settle: routeSave<{ order: WeighOrder; settlement: Settlement } | null, SettleInput>("order_settle", (i) => mock.settle(i)),
+  /** 调整等级：只改磅单的业务定级，化验单判定不动（Rust 侧与 settle 同在 orders.rs） */
+  setOrderGrade: routeSave<WeighOrder | null, GradeAdjustInput>("order_set_grade", (i) => mock.setOrderGrade(i)),
 
   /* ------------------------------------------------------------ 打印留痕 */
   logPrint: (input: PrintLogInput): Promise<void> =>

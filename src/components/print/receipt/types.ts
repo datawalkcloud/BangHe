@@ -11,6 +11,7 @@
  */
 import type { ReactNode } from "react";
 import type { PaperKind } from "@/lib/constants";
+import type { ReceiptLayout } from "./paper";
 import type {
   DailyReport,
   LedgerRow,
@@ -101,6 +102,12 @@ export interface ReceiptTemplate {
   scenario: ReceiptScenario;
   name: string;
   paper: PaperKind;
+  /**
+   * 票面版式。缺省按纸型推（热敏 → 小票风格，A4 / 针式 → 单据风格），
+   * 一旦用户在编辑器里动过就以模板存的为准——否则"把 241 联单排成小票风格"这种
+   * 合理需求没法表达。见 paper.ts 的说明。
+   */
+  layout?: ReceiptLayout;
   /** 票据大标题，如「收购码单（过磅单）」 */
   title: string;
   /** 联次说明，如「第一联 存根（粮站留存）」 */

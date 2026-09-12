@@ -36,7 +36,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { DatePicker } from "@/components/ui/date-picker";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { EmptyState, PageHeader } from "@/components/business/layout";
 import { cn } from "cn";
@@ -271,12 +271,12 @@ export function OrdersPage() {
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-end gap-2 border bg-muted/20 p-2.5">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              起始日
-              <DatePicker value={filters.dateFrom ?? ""} onChange={(v) => patch({ dateFrom: v })} className="w-36" />
-            </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              截止日
-              <DatePicker value={filters.dateTo ?? ""} onChange={(v) => patch({ dateTo: v })} className="w-36" />
+              业务日期
+              <DateRangePicker
+                value={{ from: filters.dateFrom ?? "", to: filters.dateTo ?? "" }}
+                onChange={(f, t) => patch({ dateFrom: f, dateTo: t })}
+                className="w-60"
+              />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               状态

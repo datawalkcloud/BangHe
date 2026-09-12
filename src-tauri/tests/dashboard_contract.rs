@@ -11,7 +11,8 @@
 //!     立刻改变告警名单；`open_order_alert_minutes` 库里没种时走默认 30；
 //!  4. **JSON 键名**：前端 Dashboard 是驼峰/下划线混写（`openOrders`、`net_01kg`、
 //!     `manualCount`），序列化名字逐字钉死，改一个页面就瞎一块；
-//!  5. **窗口边界**：趋势窗口 [今天-14, 今天]，窗口外的单不得混进分组。
+//!  5. **区间边界**：`build_dashboard` 收 [from, to] 闭区间，趋势逐日补零覆盖整段，
+//!     分组与汇总同一条 BETWEEN；区间外的单（本测试放 days_ago(20)）不得混进来。
 //!
 //! 与 `masters_contract.rs` 同样走内存库 + 真实迁移（含种子：station id=1、
 //! admin id=1、四个默认品种、22 个参数键），前提变了这里先红。
@@ -130,9 +131,10 @@ fn set_setting(conn: &Connection, key: &str, value_json: &str) {
 #[test]
 fn empty_db_dashboard_is_zeroed_but_well_shaped() {
     let conn = db();
-    let d = build_dashboard(&conn).expect("空库（只有种子）不应该报错");
-    assert_eq!(d.today.orders, 0);
-    assert_eq!(d.today.credit_fen, 0);
+    // 传一段 15 天区间，保留"趋势逐日补零、品种全集各占一行"的旧断言语义。
+    let d = build_dashboard(&conn, &days_ago(14), &today()).expect("空库（只有种子）不应该报错");
+    assert_eq!(d.summary.orders, 0);
+    assert_eq!(d.summary.credit_fen, 0);
     assert!(d.open_orders.is_empty());
     assert!(d.alerts.is_empty(), "没有单据没有设备，不该凭空告警");
     assert_eq!(d.trend.len(), 15);
@@ -160,17 +162,17 @@ fn today_totals_redflush_pairs_counted_void_rejected_excluded() {
     // 手录完成单：进汇总 + manualCount + 手录告警
     insert_order(&conn, Order { no: "BD06", net: Some(5000), settle: Some(5000), goods: Some(5000), payable: Some(5000), paid: 5000, weight_source: "manual", ..Default::default() });
 
-    let d = build_dashboard(&conn).unwrap();
-    assert_eq!(d.today.orders, 4, "BD01/02/03/06 参与汇总；红冲对不能漏");
-    assert_eq!(d.today.net_01kg, 12345 + 5000 - 5000 + 5000);
-    assert_eq!(d.today.settle_01kg, 12000 + 5000 - 5000 + 5000);
-    assert_eq!(d.today.goods_fen, 100000 + 40000 - 40000 + 5000);
-    assert_eq!(d.today.payable_fen, 99000 + 40000 - 40000 + 5000);
-    assert_eq!(d.today.paid_fen, 15000);
-    assert_eq!(d.today.credit_fen, d.today.payable_fen - d.today.paid_fen, "挂账 = 应付 − 已付，必须同源闭合");
-    assert_eq!(d.today.manual_count, 1);
-    assert_eq!(d.today.reject_count, 1);
-    assert!(d.alerts.iter().any(|a| a.title == "今日 1 单为手录称重" && a.href == "/orders?weightSource=manual"));
+    let d = build_dashboard(&conn, &today(), &today()).unwrap();
+    assert_eq!(d.summary.orders, 4, "BD01/02/03/06 参与汇总；红冲对不能漏");
+    assert_eq!(d.summary.net_01kg, 12345 + 5000 - 5000 + 5000);
+    assert_eq!(d.summary.settle_01kg, 12000 + 5000 - 5000 + 5000);
+    assert_eq!(d.summary.goods_fen, 100000 + 40000 - 40000 + 5000);
+    assert_eq!(d.summary.payable_fen, 99000 + 40000 - 40000 + 5000);
+    assert_eq!(d.summary.paid_fen, 15000);
+    assert_eq!(d.summary.credit_fen, d.summary.payable_fen - d.summary.paid_fen, "挂账 = 应付 − 已付，必须同源闭合");
+    assert_eq!(d.summary.manual_count, 1);
+    assert_eq!(d.summary.reject_count, 1);
+    assert!(d.alerts.iter().any(|a| a.title == "本期 1 单为手录称重" && a.href == "/orders?weightSource=manual"));
 }
 
 #[test]
@@ -183,7 +185,7 @@ fn open_order_overdue_follows_setting_and_fresh_order_not_inflated() {
     // settled / paid 不属于在途（看板语义是"还没结完钱的车"）
     insert_order(&conn, Order { no: "BD12", status: "settled", registered_at: hours_ago(9.0), ..Default::default() });
 
-    let d = build_dashboard(&conn).unwrap();
+    let d = build_dashboard(&conn, &today(), &today()).unwrap();
     let nos: Vec<&str> = d.open_orders.iter().map(|o| o.order_no.as_str()).collect();
     assert_eq!(nos, vec!["BD10", "BD11"], "按停留降序，且不得混入 settled");
     assert!(d.open_orders[0].since_minutes >= 100 && d.open_orders[0].since_minutes <= 130);
@@ -194,7 +196,7 @@ fn open_order_overdue_follows_setting_and_fresh_order_not_inflated() {
 
     // 阈值挪到 300 分钟：同一份数据不再报警（读的是 app_setting，不是写死）
     set_setting(&conn, "open_order_alert_minutes", "300");
-    let d2 = build_dashboard(&conn).unwrap();
+    let d2 = build_dashboard(&conn, &today(), &today()).unwrap();
     assert!(d2.alerts.iter().all(|a| !a.title.contains("在途超时")));
     assert!(d2.open_orders.iter().all(|o| !o.overdue));
 }
@@ -218,7 +220,7 @@ fn credit_alert_reads_warn_hours_setting() {
     settle("JS101", 50000, 0, hours_ago(40.0)); // 未超 ⇒ 不进
     settle("JS102", 30000, 30000, hours_ago(500.0)); // 已付清 ⇒ 不进（v_payable 排除 paid）
 
-    let d = build_dashboard(&conn).unwrap();
+    let d = build_dashboard(&conn, &today(), &today()).unwrap();
     let a = d.alerts.iter().find(|x| x.title.contains("挂账")).expect("应有一条挂账告警");
     assert_eq!(a.title, "1 笔挂账超过付款时效");
     assert_eq!(a.detail, "合计 ¥1,000.00 未付，已超 3 天时效", "72 小时要说成 3 天，单位与前端 format 对齐");
@@ -226,10 +228,10 @@ fn credit_alert_reads_warn_hours_setting() {
 
     // 收紧到 12 小时 ⇒ 两条都进；放宽到 108 小时 ⇒ 全出。参数必须真在链路上。
     set_setting(&conn, "payment_due_warn_hours", "12");
-    let d = build_dashboard(&conn).unwrap();
+    let d = build_dashboard(&conn, &today(), &today()).unwrap();
     assert_eq!(d.alerts.iter().find(|x| x.title.contains("挂账")).unwrap().title, "2 笔挂账超过付款时效");
     set_setting(&conn, "payment_due_warn_hours", "108");
-    let d = build_dashboard(&conn).unwrap();
+    let d = build_dashboard(&conn, &today(), &today()).unwrap();
     assert!(d.alerts.iter().all(|x| !x.title.contains("挂账")));
 }
 
@@ -249,7 +251,7 @@ fn device_panel_and_offline_alert_share_source() {
     dev("cam1", "camera", 0, "offline", Some("不该出现")); // 停用 ⇒ 面板与告警都不计
     dev("idcard1", "idcard", 1, "online", None);
 
-    let d = build_dashboard(&conn).unwrap();
+    let d = build_dashboard(&conn, &today(), &today()).unwrap();
     assert_eq!(d.devices.len(), 3, "只列启用设备");
     assert!(d.devices.iter().all(|x| x.code != "cam1"));
     let a = d.alerts.iter().find(|x| x.title.contains("设备")).expect("离线+故障应告警");
@@ -267,7 +269,7 @@ fn trend_and_grouping_window_is_14_days_back() {
     insert_order(&conn, Order { no: "BD21", party: broker, variety: xm, business_date: days_ago(3), net: Some(500), settle: Some(500), goods: Some(900), payable: Some(900), ..Default::default() });
     insert_order(&conn, Order { no: "BD22", variety: xm, business_date: days_ago(20), net: Some(7000), settle: Some(7000), goods: Some(8000), payable: Some(8000), ..Default::default() });
 
-    let d = build_dashboard(&conn).unwrap();
+    let d = build_dashboard(&conn, &days_ago(14), &today()).unwrap();
     assert_eq!(d.trend.iter().map(|t| t.orders).sum::<i64>(), 2, "20 天前的单不得进窗口");
     let t3 = d.trend.iter().find(|t| t.date == days_ago(3)).unwrap();
     assert_eq!((t3.orders, t3.net_01kg, t3.goods_fen), (1, 500, 900));
@@ -286,7 +288,7 @@ fn hour_curve_counts_all_today_arrivals() {
     insert_order(&conn, Order { no: "BD32", status: "registered", registered_at: iso_at(&today(), 14), ..Default::default() });
     insert_order(&conn, Order { no: "BD33", business_date: days_ago(1), registered_at: iso_at(&days_ago(1), 9), ..Default::default() });
 
-    let d = build_dashboard(&conn).unwrap();
+    let d = build_dashboard(&conn, &today(), &today()).unwrap();
     let h = |x: i64| d.hour_curve.iter().find(|c| c.hour == x).unwrap().orders;
     assert_eq!((h(9), h(14)), (2, 1), "画的是'什么时候来过车'，作废/在途也计入");
     assert_eq!(h(8), 0);
@@ -298,14 +300,14 @@ fn hour_curve_counts_all_today_arrivals() {
 fn serde_keys_match_frontend_dashboard_contract() {
     let conn = db();
     insert_order(&conn, Order { no: "BD40", status: "registered", net: Some(10), settle: Some(10), goods: Some(10), payable: Some(10), weight_source: "manual", ..Default::default() });
-    let json = serde_json::to_value(build_dashboard(&conn).unwrap()).unwrap();
+    let json = serde_json::to_value(build_dashboard(&conn, &today(), &today()).unwrap()).unwrap();
     for key in [
-        "today", "openOrders", "alerts", "trend", "byVariety", "byPartyType", "hourCurve", "devices",
+        "summary", "openOrders", "alerts", "trend", "byVariety", "byPartyType", "hourCurve", "devices",
     ] {
         assert!(json.get(key).is_some(), "顶层缺 {key}");
     }
     for key in ["orders", "net_01kg", "settle_01kg", "goods_fen", "payable_fen", "paid_fen", "credit_fen", "manualCount", "rejectCount"] {
-        assert!(json["today"].get(key).is_some(), "today 缺 {key}");
+        assert!(json["summary"].get(key).is_some(), "summary 缺 {key}");
     }
     for key in ["order_no", "party_name", "status", "variety_name", "since_minutes", "overdue"] {
         assert!(json["openOrders"][0].get(key).is_some(), "openOrders 行缺 {key}");

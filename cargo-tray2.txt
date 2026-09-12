@@ -1,0 +1,26 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 44
++ ... hub\BangHe\src-tauri"; cargo test --test window_contract 2>&1 | Out-F ...
++                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.62s
+     Running tests\window_contract.rs (target\debug\deps\window_contract-fc7248e298eae77b.exe)
+
+running 3 tests
+test only_hide_is_recognized_everything_else_exits ... ok
+test close_behavior_key_is_the_same_on_both_sides ... ok
+test display_window_never_shares_the_main_label ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 145
++ ... Github\BangHe\cargo-tray2.txt"; cargo check --bins --lib 2>&1 | Out-F ...
++                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.16s
+exit=0
