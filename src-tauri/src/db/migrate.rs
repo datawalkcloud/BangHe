@@ -108,6 +108,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0011_retire_print_channel.sql",
         sql: include_str!("migrations/0011_retire_print_channel.sql"),
     },
+    Migration {
+        name: "0012_reader_prompt_voice.sql",
+        sql: include_str!("migrations/0012_reader_prompt_voice.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

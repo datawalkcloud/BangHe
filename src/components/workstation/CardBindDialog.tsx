@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useDeviceStore } from "@/store/device";
+import { useReaderPromptVoice } from "@/hooks/useReaderPromptVoice";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -33,6 +34,12 @@ interface CardBindDialogProps {
 
 const RING_R = 62;
 const RING_C = 2 * Math.PI * RING_R;
+
+/**
+ * 提示语音的原文。刻意不等于标题：标题里的"（IC 小白卡）"是给操作员看的辨识说明，
+ * 念出来只会把句子拖长、把重点（贴卡）淹掉。改标题时记得回来看这行。
+ */
+const VOICE_ALOUD = "请将流转卡贴在读卡器感应区";
 
 /** 感应弧 + 一张探出面板右缘的 IC 卡：读作"贴上来别动"，不是扫码 */
 function PlaceIcArt() {
@@ -76,6 +83,8 @@ function PlaceIcArt() {
 export function CardBindDialog({ open, onOpenChange, required, onPicked, onSkip, timeoutSeconds = 60 }: CardBindDialogProps) {
   const watchNote = useDeviceStore((s) => s.reader.ic.watchNote);
   const icError = useDeviceStore((s) => s.reader.ic.error);
+  // 弹出即念一句"请将流转卡贴在读卡器感应区"：这一框挡在取号制单前面，农户不贴卡整张单都开不了
+  useReaderPromptVoice(open, VOICE_ALOUD);
   const [left, setLeft] = useState(timeoutSeconds);
   /** 监听被设备故障/没有 IC 通道打断：弹窗留着说清原因，不静默关掉让磅员以为是自己手快 */
   const [halted, setHalted] = useState(false);

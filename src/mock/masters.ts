@@ -258,6 +258,9 @@ export const parties: Party[] = [];
         remark: credit > 0 ? "允许挂账，月底结清" : chance(0.14) ? pick(["常年送粮", "要求当场结清", "自留种", "雨天需加扣水"]) : null,
         status: chance(0.94) ? "active" : "disabled",
         created_at: dateKey(addDays(TODAY, -int(200, 900))),
+        // 人像选填：自然人多走"刷证建档"，卡面照片当时就带进来了；单位是手工建的，本来就没照片
+        photo_attachment_id:
+          plan.type === "farmer" || plan.type === "large_grower" ? (chance(0.62) ? 9000 + seq : null) : null,
       });
     }
   }

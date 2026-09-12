@@ -20,7 +20,7 @@
  */
 import { runningInTauri } from "@/lib/native";
 import { api as mock } from "@/mock/api";
-import type { PartyDetail } from "@/mock/api";
+import type { PartyDetail, PartyPhotoImage } from "@/mock/api";
 import type { OrderFilters, PageResult, Party, QcReport, Settlement, WeighOrder } from "@/mock/types";
 import type { OrderRow } from "@/mock/api";
 
@@ -54,6 +54,7 @@ const ARGS_MAP: Record<string, string[]> = {
   order_list: ["filters"],
   party_list: ["keyword", "partyType"],
   party_get: ["id"],
+  party_photo: ["partyId"],
   qc_list: ["opts"],
 };
 function a2args(cmd: string, a: unknown[]): Record<string, unknown> {
@@ -66,6 +67,7 @@ function a2args(cmd: string, a: unknown[]): Record<string, unknown> {
 }
 
 export type PartySaveInput = Parameters<typeof mock.saveParty>[0];
+export type PartyPhotoInput = Parameters<typeof mock.setPartyPhoto>[0];
 export type CreateOrderInput = Parameters<typeof mock.createOrder>[0];
 export type CaptureInput = Parameters<typeof mock.capture>[0];
 export type SaveQcInput = Parameters<typeof mock.saveQc>[0];
@@ -77,6 +79,10 @@ export const ordersApi = {
   listParties: route1<[keyword: string, type?: Party["party_type"] | "all"], Party[]>("party_list", (kw, type) => mock.listParties(kw, type)),
   getParty: route1<[id: number], PartyDetail | null>("party_get", (id) => mock.getParty(id)),
   saveParty: routeSave<Party, PartySaveInput>("party_save", (i) => mock.saveParty(i)),
+  /** 档案人像的读通道：真库回附件字节的 data URL，浏览器预览回演示头像 */
+  partyPhoto: route1<[partyId: number], PartyPhotoImage | null>("party_photo", (id) => mock.partyPhoto(id)),
+  /** 换/清档案人像（`source_path` 空串＝清除）。与 saveParty 分开一条：照片写不进去不该回滚已成立的建档 */
+  setPartyPhoto: routeSave<Party, PartyPhotoInput>("party_photo_set", (i) => mock.setPartyPhoto(i)),
 
   /* -------------------------------------------------------------- 磅单 */
   listOrders: route1<[f: OrderFilters], PageResult<OrderRow>>("order_list", (f) => mock.listOrders(f)),

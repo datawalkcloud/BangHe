@@ -11,15 +11,18 @@
  */
 import { useMemo, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftIcon, ScanLineIcon } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { OrderRow } from "@/mock/api";
 import { PARTY_TYPE, WEIGHT_SOURCE } from "@/lib/constants";
 import { maskIdCard, money, orDash, shiftDay, todayISO, weight } from "@/lib/format";
 import { useSetting } from "@/hooks/useLookups";
 import { useDeviceStore } from "@/store/device";
+import { actorId } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
+import { PartyPortrait } from "@/components/business/PartyPortrait";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { StatCard } from "@/components/business/StatCard";
@@ -40,6 +43,7 @@ const DETAIL_TABLE =
 export function PartyDetailPage() {
   const { id } = useParams({ from: "/parties/$id" });
   const partyId = Number(id);
+  const qc = useQueryClient();
   const readCard = useDeviceStore((s) => s.reader.idcard.read);
   const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
 
@@ -94,6 +98,48 @@ export function PartyDetailPage() {
     );
   }
 
+  /** 守卫之后取一份非空快照：函数声明会被提升，TS 不认下面这段里的 `detail` 已经收窄了 */
+  const p = detail;
+
+  /**
+   * 读卡核对（02 §F3.1、§F3.2）。这一枪顺手做完只有读卡才能给的三件事：
+   *  ① 证号对得上＝"这个档案背后确实有这张证件"，与本页「已核验/未核验」同一判据；
+   *  ② 档案还没有人像照片时，把证件里那张补进去（**只补缺**：已有照片的档案一律不动，
+   *     换脸得由人在档案页点「上传照片」自己确认）；
+   *  ③ 对不上要说清读到的是谁——把别人的证件按在本页上，比不核对更危险。
+   */
+  async function verifyByCard() {
+    const card = await readCard({ photo: true });
+    if (!card) return; // 读不出来/设备不可用：原因已由设备状态栏与档案页那条告警说清，这里不叠一条
+    if (card.id_card_no !== p.id_card_no.trim().toUpperCase()) {
+      toast.error("卡面证号与这张档案不一致", {
+        description: `读到 ${maskIdCard(card.id_card_no)}，本档案是 ${maskIdCard(p.id_card_no)}。请确认拿的是谁的证件。`,
+      });
+      return;
+    }
+    if (p.photo_attachment_id != null) {
+      toast.success("读卡核对通过", { description: "证号一致；这张档案已有照片与核验标记，无需改动。" });
+      return;
+    }
+    if (!card.photo_path) {
+      toast.success("读卡核对通过", {
+        description: "证号一致，但这次没从证件里取到照片（解码组件不支持），可在档案页「上传照片」补。",
+      });
+      return;
+    }
+    try {
+      await api.setPartyPhoto({ party_id: partyId, source_path: card.photo_path, operator_id: actorId(), source_label: "读卡带入" });
+      void qc.invalidateQueries({ queryKey: ["party-photo", partyId] });
+      void qc.invalidateQueries({ queryKey: ["party", partyId] });
+      void qc.invalidateQueries({ queryKey: ["audits"] });
+      toast.success("读卡核对通过，已把身份证照片补进档案");
+    } catch (e) {
+      toast.warning("读卡核对通过，但照片没存上", {
+        description: e instanceof Error ? e.message : "档案本身没有变化，可到档案页重新上传。",
+      });
+    }
+  }
+
   const recentCols: Column<OrderRow>[] = [
     {
       key: "order_no",
@@ -132,7 +178,7 @@ export function PartyDetailPage() {
               <ArrowLeftIcon />
               返回列表
             </Button>
-            <Button size="sm" variant="outline" onClick={() => void readCard()}>
+            <Button size="sm" variant="outline" onClick={() => void verifyByCard()}>
               <ScanLineIcon />
               读卡核对
             </Button>
@@ -174,27 +220,37 @@ export function PartyDetailPage() {
 
           <div className="grid items-start gap-4 xl:grid-cols-2">
             <Card2 title="档案信息">
-              <InfoGrid
-                cols={2}
-                items={[
-                  { label: "档案编码", value: <span className="tnum">{detail.code}</span> },
-                  { label: "身份类型", value: PARTY_TYPE[detail.party_type] },
-                  { label: "证件号", value: <span className="tnum">{maskIdCard(detail.id_card_no)}</span> },
-                  {
-                    label: "证件核验",
-                    // 用词与 /parties 列表一致：同一状态不在两处叫两个名字（读卡带入即已核验）
-                    value: detail.id_card_verified === 1 ? <ToneBadge tone="success">已核验</ToneBadge> : <ToneBadge tone="warning">未核验</ToneBadge>,
-                  },
-                  { label: "联系电话", value: <span className="tnum">{orDash(detail.phone)}</span> },
-                  { label: "默认车牌", value: <span className="tnum">{orDash(detail.default_vehicle_no)}</span> },
-                  { label: "住址", value: orDash(detail.address), span: 2 },
-                  { label: "开户行", value: orDash(detail.bank_name) },
-                  { label: "银行账号", value: <span className="tnum">{orDash(detail.bank_account)}</span> },
-                  { label: "默认仓房", value: detail.default_warehouse_id == null ? "未预设" : `#${detail.default_warehouse_id}` },
-                  { label: "默认货位", value: detail.default_slot_id == null ? "未预设" : `#${detail.default_slot_id}` },
-                  { label: "备注", value: orDash(detail.remark), span: 2 },
-                ]}
-              />
+              <div className="flex flex-col gap-3">
+                <div className="flex items-start gap-3">
+                  <PartyPortrait partyId={partyId} hasPhoto={detail.photo_attachment_id != null} />
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {detail.photo_attachment_id != null
+                      ? "人像照片来自建档时刷的那张身份证；要换一张，到「农户与单位」编辑框里点「换一张」。"
+                      : "还没有人像照片：刷一次身份证核对会自动补上，也可在编辑框里本地上传。这是选填项，不影响制单与结算。"}
+                  </p>
+                </div>
+                <InfoGrid
+                  cols={2}
+                  items={[
+                    { label: "档案编码", value: <span className="tnum">{detail.code}</span> },
+                    { label: "身份类型", value: PARTY_TYPE[detail.party_type] },
+                    { label: "证件号", value: <span className="tnum">{maskIdCard(detail.id_card_no)}</span> },
+                    {
+                      label: "证件核验",
+                      // 用词与 /parties 列表一致：同一状态不在两处叫两个名字（读卡带入即已核验）
+                      value: detail.id_card_verified === 1 ? <ToneBadge tone="success">已核验</ToneBadge> : <ToneBadge tone="warning">未核验</ToneBadge>,
+                    },
+                    { label: "联系电话", value: <span className="tnum">{orDash(detail.phone)}</span> },
+                    { label: "默认车牌", value: <span className="tnum">{orDash(detail.default_vehicle_no)}</span> },
+                    { label: "住址", value: orDash(detail.address), span: 2 },
+                    { label: "开户行", value: orDash(detail.bank_name) },
+                    { label: "银行账号", value: <span className="tnum">{orDash(detail.bank_account)}</span> },
+                    { label: "默认仓房", value: detail.default_warehouse_id == null ? "未预设" : `#${detail.default_warehouse_id}` },
+                    { label: "默认货位", value: detail.default_slot_id == null ? "未预设" : `#${detail.default_slot_id}` },
+                    { label: "备注", value: orDash(detail.remark), span: 2 },
+                  ]}
+                />
+              </div>
             </Card2>
 
             <Card2

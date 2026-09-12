@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { KeyboardIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useDeviceStore } from "@/store/device";
+import { useReaderPromptVoice } from "@/hooks/useReaderPromptVoice";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -62,6 +63,12 @@ const SCENE_COPY: Record<
 
 const RING_R = 62;
 const RING_C = 2 * Math.PI * RING_R;
+
+/**
+ * 弹窗标题与提示语音共用这一句原文：改文案只改一处，不会出现"屏上写平放、喇叭里念贴一下"
+ * 这种两边各说各话的错位——农户听一句看一句，最后谁都不动手。
+ */
+const VOICE_ALOUD = "请将身份证平放在读卡器感应区";
 
 /**
  * 按真机外形画的示意：竖版圆角面板 + 右上角指示灯槽 + 中左侧非接触感应弧 + 平放的身份证。
@@ -115,6 +122,8 @@ export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManu
   const copy = SCENE_COPY[scene];
   const watchNote = useDeviceStore((s) => s.reader.idcard.watchNote);
   const cardError = useDeviceStore((s) => s.reader.idcard.error);
+  // 弹窗一开先念一句"请将身份证平放在读卡器感应区"：人站在窗外时，这一声比屏幕上的字先到
+  useReaderPromptVoice(open, VOICE_ALOUD);
   const [left, setLeft] = useState(timeoutSeconds);
   /** 监听被设备故障打断（不是读到卡、也不是倒计时走完）：弹窗留着说清原因 */
   const [halted, setHalted] = useState(false);
@@ -130,7 +139,9 @@ export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManu
     let mounted = true;
     void useDeviceStore
       .getState()
-      .reader.idcard.watch()
+      // 顺手把卡面照片一起取回来：档案人像只有"读卡这一次"能拿到（02 §F3.1）。
+      // 取不到照片时 Rust 会退回不带照片的读法，读卡本身照常成功，所以这里不必按场景省掉它。
+      .reader.idcard.watch({ photo: true })
       .then((card) => {
         if (!mounted) return;
         // 读到卡就收工：档案页原有的 lastCard 副作用负责带出或预填表单
@@ -170,7 +181,7 @@ export function CardScanDialog({ open, onOpenChange, timeoutSeconds = 60, onManu
     <Dialog open={open} onOpenChange={(next) => closeRef.current(next)}>
       <DialogContent className="max-w-[460px]">
         <DialogHeader>
-          <DialogTitle className="text-sm">请将身份证平放在读卡器感应区</DialogTitle>
+          <DialogTitle className="text-sm">{VOICE_ALOUD}</DialogTitle>
           <DialogDescription className="text-xs">
             {copy.description}
           </DialogDescription>

@@ -158,6 +158,14 @@ export interface PartyDetail extends Party {
   total_net_01kg: number;
 }
 
+/** 档案人像的读回形状，与 Rust `attachment::ImageForDisplay` 逐字一致（那边 camelCase）。 */
+export interface PartyPhotoImage {
+  /** `data:<mime>;base64,...` —— 界面直接进 img src，永远拿不到本机文件路径 */
+  dataUrl: string;
+  size: number;
+  capturedAt: string;
+}
+
 export const api = {
   /* ------------------------------------------------------------ 元信息 */
   async station(): Promise<Station> {
@@ -252,6 +260,45 @@ export const api = {
       credit_fen: settlements.filter((s) => s.party_id === id && s.status === "normal").reduce((s, x) => s + (x.payable_fen - x.paid_fen), 0),
       total_net_01kg: mine.filter(statableForSummary).reduce((s, o) => s + (o.net_weight_01kg ?? 0), 0),
     };
+  },
+
+  /**
+   * 档案人像（02 §F3.1 选填项）。真库读的是 AppData 里那个附件文件；mock 没有文件系统，
+   * 就按姓名首字生成一张同样比例的演示头像——为的是浏览器预览里"这张档案有没有照片"
+   * 看得出来差别，而不是统一一片空白。
+   */
+  async partyPhoto(partyId: number): Promise<PartyPhotoImage | null> {
+    await sleep();
+    const p = parties.find((x) => x.id === partyId);
+    if (!p || p.photo_attachment_id == null) return null;
+    return { dataUrl: demoAvatar(p.name), size: 4096, capturedAt: p.created_at };
+  },
+
+  /**
+   * 换/清档案人像，对应真库 `party_photo_set`。
+   * `source_path` 是操作员本机选中的图片路径（读卡带入时是读卡器本次落出的暂存文件），
+   * 空串＝清除。mock 不真的读文件，只把这行档案的附件引用挪个位置并留审计。
+   */
+  async setPartyPhoto(input: {
+    party_id: number;
+    source_path: string;
+    operator_id: number;
+    source_label?: string | null;
+  }): Promise<Party> {
+    await sleep(80);
+    const idx = parties.findIndex((x) => x.id === input.party_id);
+    if (idx < 0) throw new Error("该售粮人档案不存在或已删除，无法保存照片");
+    const clear = input.source_path.trim() === "";
+    const next: Party = { ...parties[idx], photo_attachment_id: clear ? null : 9000 + input.party_id };
+    parties[idx] = next;
+    auditMaster(
+      clear ? "party.photo.clear" : "party.photo.update",
+      "party",
+      next.code,
+      input.operator_id,
+      clear ? null : (input.source_label ?? null),
+    );
+    return next;
   },
 
   /* ---------------------------------------------------------- 化验 */
@@ -393,6 +440,8 @@ export const api = {
       remark: input.remark ?? null,
       status: "active",
       created_at: localIso(new Date()),
+      // 建档那一刻还没有照片：读卡带入的照片由随后的 setPartyPhoto 挂上（与真库同一分工）
+      photo_attachment_id: null,
     };
     parties.unshift(created);
     auditMaster("party.create", "party", created.code, input.operator_id);
@@ -1429,6 +1478,24 @@ function tzSuffix(d: Date): string {
 
 function localIso(d: Date): string {
   return `${dateKey(d)}T${d.toTimeString().slice(0, 8)}${tzSuffix(d)}`;
+}
+
+/**
+ * 演示头像：102×126，与身份证芯片照同比例，中间一个姓。
+ *
+ * 只服务浏览器预览（mock 没有文件系统可读）。真库那条 `party_photo` 回的是附件里的真实
+ * 字节，界面这一侧完全不区分两者——所以这里的形状必须和 `PartyPhotoImage` 一致。
+ */
+function demoAvatar(name: string): string {
+  const ch = (name.trim().charAt(0) || "农").replace(/[&<>"']/g, "");
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="102" height="126" viewBox="0 0 102 126">` +
+    `<rect width="102" height="126" fill="#eef2f7"/>` +
+    `<circle cx="51" cy="45" r="20" fill="#c3cfdd"/>` +
+    `<path d="M13 126c0-23 17-37 38-37s38 14 38 37z" fill="#c3cfdd"/>` +
+    `<text x="51" y="119" font-size="30" text-anchor="middle" fill="#5b6b80" font-family="sans-serif">${ch}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 /** 档案写入的审计留痕，与工作台关键动作共用一张表 */

@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import { CreditCardIcon, KeyboardIcon, ScanLineIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useDeviceStore } from "@/store/device";
+import { useReaderPromptVoice } from "@/hooks/useReaderPromptVoice";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -51,6 +52,13 @@ interface IcScanDialogProps {
 
 const RING_R = 62;
 const RING_C = 2 * Math.PI * RING_R;
+
+/**
+ * 扫描态标题与提示语音共用这一句：屏幕上写什么，喇叭里就念什么。
+ * 只挂在弹窗开合上——读到卡进「登记入库」阶段、或点「再刷一张」回到寻卡，都不重播也不打断
+ * 正在念的半句（那一瞬操作员正看着卡号出来，再念一遍纯属抢话）。
+ */
+const VOICE_ALOUD = "请将流转卡平放在读卡器感应区";
 
 /**
  * 扫描态的画面：感应区圆环 + 倒计时 progress；中央 IC 卡示意，三层感应弧由内向外依次亮，
@@ -105,6 +113,8 @@ export function IcScanDialog({
   const icError = useDeviceStore((s) => s.reader.ic.error);
   /** store 的 ic.last 给扫描态做"上一次"占位（页面级监听留下的卡号）：命中后立刻被自己覆盖 */
   const lastFromStore = useDeviceStore((s) => s.reader.ic.last);
+  // 弹出即念一句"请将流转卡平放在读卡器感应区"：批量登记新卡时手里握着一叠，这句就是动作指令
+  useReaderPromptVoice(open, VOICE_ALOUD);
 
   type Phase = "scanning" | "ready" | "submitting";
   const [phase, setPhase] = useState<Phase>("scanning");
@@ -249,7 +259,7 @@ export function IcScanDialog({
       <DialogContent className="max-w-[460px]">
         <DialogHeader>
           <DialogTitle className="text-sm">
-            {scanning ? "请将流转卡平放在读卡器感应区" : "登记入库"}
+            {scanning ? VOICE_ALOUD : "登记入库"}
           </DialogTitle>
           <DialogDescription className="text-xs">
             {scanning

@@ -24,7 +24,7 @@ use banghe_lib::cards::{pool_register, pool_retire, RegisterInput, RetireInput};
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::orders::{
     capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, void_order, assign_destination,
-    CaptureInput, CreateOrderInput, OrderFilters, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VoidOrderInput, AssignDestinationInput,
+    party_photo_view, set_party_photo, CaptureInput, CreateOrderInput, OrderFilters, PartyPhotoInput, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VoidOrderInput, AssignDestinationInput,
 };
 
 fn db() -> Connection {
@@ -1128,4 +1128,284 @@ fn destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones() {
     let o = assign(&conn, keep, &no2, Some(wh), Some(slot)).unwrap().unwrap();
     assert_eq!(o.status, status_before, "补去向不得改动单据状态");
     assert_eq!(o.warehouse_name.as_deref(), Some("CW-A"));
+}
+
+// --------------------------------------------------------------- 档案人像照片
+//
+// 02 §F3.1 的"照片选填 + 刷证自动带出"落到真库就是这一组。业务上最贵的两种错是
+// **把 A 的脸挂到 B 的档案**与**库里有引用、盘上没图**，所以两头都用例钉着：
+// 导入按文件头判格式（不信扩展名）、替换必须清干净旧的、清除不留死引用、读回不外泄本机路径。
+
+/// 一个用例一个临时根目录，Drop 里整体删掉，不给 `%TEMP%` 攒农户人像
+struct PhotoDir {
+    path: std::path::PathBuf,
+}
+
+impl PhotoDir {
+    fn new(tag: &str) -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("banghe-photo-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("临时目录应可创建");
+        Self { path }
+    }
+
+    /// 数据目录下现存的文件（递归），用来验"旧的删干净了没有"
+    fn files(&self) -> Vec<std::path::PathBuf> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else {
+                    out.push(p);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.path, &mut out);
+        out
+    }
+}
+
+impl Drop for PhotoDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// 一张 BMP：`BM` 头 + 102×126 的 DIB 头 + 内容指纹。身份证芯片照就是这个格式
+/// （04 §3.5-1），尾部塞 `tag` 让不同用例的图内容不同、sha 也就不同。
+fn fake_bmp(tag: &str) -> Vec<u8> {
+    let mut v = b"BM".to_vec();
+    v.extend_from_slice(&[0u8; 14]);
+    v.extend_from_slice(&[0x28, 0, 0, 0, 102, 0, 0, 0, 126, 0, 0, 0]);
+    v.extend_from_slice(tag.as_bytes());
+    while v.len() < 600 {
+        v.push(0x40);
+    }
+    v
+}
+
+/// 把一张图放到"读卡器本次落出来的暂存位置"，回绝对路径（前端的 `photo_path` 就是它）
+fn staged_photo(root: &std::path::Path, name: &str, bytes: &[u8]) -> String {
+    let dir = root.join("idcard");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, bytes).unwrap();
+    p.display().to_string()
+}
+
+fn photo_input(party_id: i64, source_path: &str) -> PartyPhotoInput {
+    PartyPhotoInput {
+        party_id,
+        source_path: source_path.to_string(),
+        operator_id: None,
+        source_label: Some("读卡带入".into()),
+    }
+}
+
+/// `attachment` 全表快照：行没漏、没多，一眼可见
+fn attachments(conn: &Connection) -> Vec<(i64, String, Option<i64>, String, String, i64)> {
+    let mut stmt = conn
+        .prepare("SELECT id, file_path, biz_id, biz_type, mime, encrypted FROM attachment ORDER BY id")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+        .unwrap();
+    rows.collect::<Result<Vec<_>, _>>().unwrap()
+}
+
+fn audits(conn: &Connection, action: &str) -> i64 {
+    conn.query_row("SELECT count(*) FROM audit_log WHERE action = ?1", params![action], |r| r.get(0))
+        .unwrap()
+}
+
+/// `party.updated_at` 直接查库：DTO 里不带这一列，而"这次到底动没动这行"正是这里要验的。
+fn party_updated_at(conn: &Connection, id: i64) -> Option<String> {
+    conn.query_row("SELECT updated_at FROM party WHERE id = ?1", params![id], |r| r.get(0))
+        .unwrap()
+}
+
+fn is_chinese(err: &str) -> bool {
+    err.chars().any(|c| c as u32 >= 0x4e00)
+}
+
+#[test]
+fn card_photo_lands_on_the_party_and_reads_back_as_a_data_url() {
+    let conn = db();
+    let dir = PhotoDir::new("import");
+    let party = new_party(&conn, "人像甲", "341204199301272051");
+    let src = staged_photo(&dir.path, "photo.bmp", &fake_bmp("face-a"));
+
+    let p = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &src)).unwrap();
+    let att = p.photo_attachment_id.expect("导入后档案应挂上附件");
+
+    let rows = attachments(&conn);
+    assert_eq!(rows.len(), 1, "一次导入只该有一行附件");
+    let (id, rel, biz_id, biz_type, mime, encrypted) = &rows[0];
+    assert_eq!(*id, att);
+    assert_eq!(biz_id, &Some(party), "附件的 biz_id 要反指回这张档案");
+    assert_eq!(biz_type, "id_card_photo");
+    assert_eq!(mime, "image/bmp", "MIME 按文件头判，不是按扩展名猜");
+    assert_eq!(*encrypted, 0, "字段加密基建还没落地，如实写 0（与证号明文过渡态同一条）");
+    assert!(rel.starts_with("attachments/"), "库里只存相对路径：{rel}");
+    assert!(dir.path.join(rel).exists(), "盘上应真有这张图");
+    assert!(!rel.contains("idcard"), "库里不该出现读卡器的暂存路径：{rel}");
+
+    let img = party_photo_view(&conn, &dir.path, &actor(1, "station_master"), party)
+        .unwrap()
+        .expect("有照片就该读得回来");
+    assert!(img.data_url.starts_with("data:image/bmp;base64,"), "回的是 data URL：{}", &img.data_url[..24]);
+    assert!(!img.data_url.contains(&src), "像素里也不该带上本机路径");
+    assert_eq!(audits(&conn, "party.photo.update"), 1, "换照片要留一条修改痕迹");
+    assert_eq!(audits(&conn, "pii.read"), 1, "看人像是一次 PII 访问，必须留痕");
+    let accessed_by: Option<i64> = conn
+        .query_row("SELECT accessed_by FROM attachment WHERE id = ?1", params![att], |r| r.get(0))
+        .unwrap();
+    assert_eq!(accessed_by, Some(1), "attachment.accessed_* 这两列现在真的有人写了");
+}
+
+#[test]
+fn replacing_a_portrait_leaves_no_stale_row_or_file() {
+    let conn = db();
+    let dir = PhotoDir::new("replace");
+    let party = new_party(&conn, "人像乙", "341204199301272052");
+    let a = staged_photo(&dir.path, "a.bmp", &fake_bmp("face-b-first"));
+    let b = staged_photo(&dir.path, "b.bmp", &fake_bmp("face-b-second"));
+
+    let first = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &a)).unwrap();
+    let old_rel: String = conn
+        .query_row("SELECT file_path FROM attachment WHERE id = ?1", params![first.photo_attachment_id.unwrap()], |r| r.get(0))
+        .unwrap();
+    assert!(dir.path.join(&old_rel).exists());
+
+    let second = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &b)).unwrap();
+    assert_ne!(
+        first.photo_attachment_id, second.photo_attachment_id,
+        "换了图就是换了附件，不能把新图盖在旧行上"
+    );
+    let rows = attachments(&conn);
+    assert_eq!(rows.len(), 1, "旧附件行必须跟着删掉：{rows:?}");
+    assert!(!dir.path.join(&old_rel).exists(), "旧文件也得删干净——PII 不该因为'换了一张'继续留在盘上");
+    assert_eq!(dir.files().len(), 3, "只剩两张暂存源图 + 一张新附件，旧的那张不该还在");
+}
+
+#[test]
+fn saving_the_same_picture_twice_does_not_churn_the_attachment() {
+    let conn = db();
+    let dir = PhotoDir::new("same");
+    let party = new_party(&conn, "人像丙", "341204199301272053");
+    let src = staged_photo(&dir.path, "same.bmp", &fake_bmp("face-c"));
+
+    let once = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &src)).unwrap();
+    let twice = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &src)).unwrap();
+    assert_eq!(once.photo_attachment_id, twice.photo_attachment_id, "同一张图重复保存不该换附件 id");
+    assert_eq!(attachments(&conn).len(), 1, "更不该在盘上留第二份");
+    assert_eq!(audits(&conn, "party.photo.update"), 1, "没发生的事不配留一条修改痕迹");
+}
+
+#[test]
+fn clearing_a_portrait_removes_row_and_file() {
+    let conn = db();
+    let dir = PhotoDir::new("clear");
+    let party = new_party(&conn, "人像丁", "341204199301272054");
+    let src = staged_photo(&dir.path, "d.bmp", &fake_bmp("face-d"));
+    let with = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &src)).unwrap();
+    let rel: String = conn
+        .query_row("SELECT file_path FROM attachment WHERE id = ?1", params![with.photo_attachment_id.unwrap()], |r| r.get(0))
+        .unwrap();
+
+    let cleared = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, "")).unwrap();
+    assert_eq!(cleared.photo_attachment_id, None, "空串就是清除");
+    assert!(attachments(&conn).is_empty(), "清除后不该留附件行");
+    assert!(!dir.path.join(&rel).exists(), "清除后盘上不该留人像");
+    assert_eq!(audits(&conn, "party.photo.clear"), 1);
+    assert!(party_photo_view(&conn, &dir.path, &actor(1, "station_master"), party).unwrap().is_none());
+}
+
+#[test]
+fn clearing_when_there_was_no_photo_is_a_no_op() {
+    let conn = db();
+    let dir = PhotoDir::new("noop");
+    let party = new_party(&conn, "没照片戊", "341204199301272055");
+    let before = get_party(&conn, party).unwrap().unwrap().party;
+
+    let after = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, "")).unwrap();
+    assert_eq!(after.photo_attachment_id, before.photo_attachment_id);
+    assert_eq!(party_updated_at(&conn, party), None, "什么都没改就不该把档案标成'已修改'");
+    assert_eq!(audits(&conn, "party.photo.clear"), 0);
+    assert!(dir.files().is_empty(), "空操作连一个文件都不该新建");
+}
+
+#[test]
+fn junk_or_missing_source_is_refused_without_touching_the_party() {
+    let conn = db();
+    let dir = PhotoDir::new("junk");
+    let party = new_party(&conn, "坏图己", "341204199301272056");
+
+    // 改个 .bmp 后缀的文本文件：文件头判不过
+    let not_image = dir.path.join("not-image.bmp");
+    std::fs::write(&not_image, b"this is plain text pretending to be a bitmap, way longer than 16 bytes").unwrap();
+    // 扩展名不在白名单
+    let exe = dir.path.join("photo.exe");
+    std::fs::write(&exe, fake_bmp("ok-content")).unwrap();
+
+    for (label, path) in [
+        ("内容不是图片", not_image.display().to_string()),
+        ("后缀不允许", exe.display().to_string()),
+        ("文件不存在", dir.path.join("gone.bmp").display().to_string()),
+    ] {
+        let e = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &path))
+            .expect_err(&format!("{label}应当被拒"));
+        assert!(is_chinese(&e), "{label}：业务失败要中文短句：{e}");
+        assert!(!e.contains(&path), "{label}：错误里不得回显操作员的本机路径：{e}");
+    }
+    let p = get_party(&conn, party).unwrap().unwrap().party;
+    assert_eq!(p.photo_attachment_id, None, "被拒的导入不能留下半个引用");
+    assert!(attachments(&conn).is_empty());
+    assert_eq!(party_updated_at(&conn, party), None, "照片没成，档案的'已修改'也不该跟着翻");
+
+    let e = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(999_999, &staged_photo(&dir.path, "ok.bmp", &fake_bmp("face-e"))))
+        .expect_err("查无此档案应当直接拒绝");
+    assert!(e.contains("不存在"), "要说清是找不到档案：{e}");
+    assert!(dir.files().iter().all(|f| !f.to_string_lossy().contains("attachments")), "档案都不存在时更不该往数据目录写图");
+}
+
+#[test]
+fn a_lost_file_reads_back_as_an_actionable_error() {
+    let conn = db();
+    let dir = PhotoDir::new("lost");
+    let party = new_party(&conn, "图丢了庚", "341204199301272057");
+    let src = staged_photo(&dir.path, "g.bmp", &fake_bmp("face-g"));
+    let p = set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(party, &src)).unwrap();
+
+    // 只还原了 .db、没带 attachments/ 目录，或缓存被清理，都会落到这一支
+    for f in dir.files() {
+        if f.to_string_lossy().contains("attachments") {
+            std::fs::remove_file(f).unwrap();
+        }
+    }
+    let e = party_photo_view(&conn, &dir.path, &actor(1, "station_master"), party).unwrap_err();
+    assert!(e.contains("丢失"), "要说'文件已丢失'而不是笼统的读图失败：{e}");
+    assert!(e.contains("重新上传") || e.contains("读卡"), "还得给出路：{e}");
+    assert_eq!(audits(&conn, "pii.read"), 0, "没看到图就不该记一次'看过'");
+    assert!(p.photo_attachment_id.is_some(), "库里的引用保持原样，由人来补图");
+}
+
+#[test]
+fn party_rows_carry_the_photo_reference_through_list_and_detail() {
+    let conn = db();
+    let dir = PhotoDir::new("dto");
+    let a = new_party(&conn, "带照辛", "341204199301272058");
+    let b = new_party(&conn, "无照壬", "341204199301272059");
+    set_party_photo(&conn, &dir.path, &actor(1, "station_master"), photo_input(a, &staged_photo(&dir.path, "h.bmp", &fake_bmp("face-h"))))
+        .unwrap();
+
+    // 列表也要带这个字段：档案页据此决定"要不要去读图"，缺了它列表就会逐个空查
+    let rows = list_parties(&conn, "", None).unwrap();
+    let by_id = |id: i64| rows.iter().find(|x| x.id == id).unwrap().photo_attachment_id;
+    assert!(by_id(a).is_some());
+    assert_eq!(by_id(b), None);
+    assert!(get_party(&conn, b).unwrap().unwrap().party.photo_attachment_id.is_none());
 }

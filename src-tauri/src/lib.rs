@@ -4,6 +4,7 @@ mod printer;
 mod queue_print;
 
 pub mod auth;
+pub mod attachment;
 pub mod camera;
 pub mod cards;
 pub mod dashboard;
@@ -114,6 +115,8 @@ pub fn run() {
             orders::party_list,
             orders::party_get,
             orders::party_save,
+            orders::party_photo_set,
+            orders::party_photo,
             orders::order_get,
             orders::order_open,
             orders::order_list,

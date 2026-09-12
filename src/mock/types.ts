@@ -64,6 +64,8 @@ export interface Party {
   remark: string | null;
   status: "active" | "disabled";
   created_at: string;
+  /** 人像照片所挂的附件 id（03 §9.6）。**选填**：null 就是"这张档案没有照片"，不是缺数据 */
+  photo_attachment_id: number | null;
 }
 
 export interface GrainVariety {

@@ -22,7 +22,6 @@ import { date, weight } from "@/lib/format";
 import { TarePanel } from "@/components/workstation/IdentityPanel";
 import { WeighPanel } from "@/components/workstation/WeighPanel";
 import { QcPanel } from "@/components/workstation/QcPanel";
-import { PrintPanel } from "@/components/workstation/PrintPanel";
 import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
 import { CameraPanel } from "@/components/workstation/CameraPanel";
 import { PanelTile, WorkstationGrid } from "@/components/workstation/WorkstationGrid";
@@ -31,6 +30,7 @@ import type { PanelId } from "@/components/workstation/layout";
 import { RegistrationDialog } from "@/components/workstation/RegistrationDialog";
 import { useIcWorkflow } from "@/components/workstation/useIcWorkflow";
 import { SettleForm } from "@/components/settlement/SettleForm";
+import { TicketPrintSection } from "@/components/settlement/TicketPrintSection";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPreview";
@@ -39,6 +39,7 @@ import { useQuickDetail } from "@/components/business/QuickDetailSheet";
 import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export function WorkstationPage() {
   const { orderNo } = useSearch({ from: "/workstation" });
@@ -60,11 +61,6 @@ export function WorkstationPage() {
     queryFn: () => (orderNo ? api.getOrder(orderNo) : Promise.resolve(null)),
     enabled: !!orderNo,
   });
-  const { data: qcRows = [] } = useQuery({
-    queryKey: ["qc-of-order", orderNo],
-    queryFn: () => (orderNo ? api.listQc({ keyword: orderNo }) : Promise.resolve([])),
-    enabled: !!orderNo,
-  });
 
   const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
   const division01kg = useSetting("scale_division_01kg").num || 100;
@@ -78,7 +74,7 @@ export function WorkstationPage() {
   const [printTarget, setPrintTarget] = useState<string | null>(null);
   const [printOpen, setPrintOpen] = useState(false);
   /**
-   * 「直打」触发器：第二刷皮重后自动出码单、F9、凭票面板与顶部按钮共用这一条路——
+   * 「直打」触发器：第二刷皮重后自动出码单、F9、结算弹窗的「凭票打印」与顶部按钮共用这一条路——
    * 无预览直接打（silent.ts 按模板纸型分流热敏直连 / 打印队列直打，纸张随打印机配置），
    * 只有真打不出去（浏览器演示、设备离线、队列报错）才回退弹预览框。
    */
@@ -114,18 +110,23 @@ export function WorkstationPage() {
   // F7（制单）已收进顶部工具条作全局键：任何页面都弹同一张 RegistrationDialog，
   // 这里不再重复绑定，避免一次按键叠出两层弹窗
   /**
-   * 打当前单的码单：不弹预览，直接打到默认打印机（热敏纸直连小票机，A4/针式进打印队列、
-   * 纸张随打印机自身配置）。重复 F9 对同一张单也算一次新的直打（补打场景），所以先清
+   * 打某一张单的码单：不弹预览，直接打到默认打印机（热敏纸直连小票机，A4/针式进打印队列、
+   * 纸张随打印机自身配置）。不传单号时打当前 URL 那张单（F9 / 顶部按钮），结算弹窗里的
+   * 「凭票打印」则显式传入本单号。重复打同一张也算一次新的直打（补打场景），所以先清
    * printedFor 闸门；只有直打真失败时 effect 才回退弹预览框。
    */
-  const triggerPrint = useCallback(() => {
-    if (!order) return;
-    printedFor.current = null;
-    setPrintTarget(order.order_no);
-    setDirectPrint(true);
-  }, [order]);
+  const triggerPrint = useCallback(
+    (no?: string | null) => {
+      const target = no ?? order?.order_no;
+      if (!target) return;
+      printedFor.current = null;
+      setPrintTarget(target);
+      setDirectPrint(true);
+    },
+    [order],
+  );
 
-  useHotkey("f9", triggerPrint);
+  useHotkey("f9", () => triggerPrint());
   /**
    * 专注态以「是不是真的全屏」为准回写。全屏里 ESC 被 WebView 自己拿去退出全屏，
    * 键盘事件根本到不了页面，不回写就会出现「全屏已退、界面还钉在 fixed inset-0」，
@@ -174,7 +175,6 @@ export function WorkstationPage() {
     Math.abs(currentTare01kg - tareMean01kg) > Math.round((tareMean01kg * tolerancePct) / 100);
 
   const variety = useMemo(() => varieties.find((v) => v.id === order?.variety_id) ?? null, [varieties, order?.variety_id]);
-  const qc = useMemo(() => (order?.qc_report_id != null ? qcRows.find((r) => r.id === order.qc_report_id) ?? null : null), [qcRows, order?.qc_report_id]);
   const scaleDevice = devices.find((d) => d.kind === "scale");
   const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
   const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
@@ -229,13 +229,12 @@ export function WorkstationPage() {
     })();
   }, [directPrint, printTarget, station, printOrder, printQc, names, devices, printTimes, qcClient]);
 
-  /** 面板本体按 id 收在这儿；身份与制单已移到弹窗，不在格子里 */
+  /** 面板本体按 id 收在这儿；身份与制单、凭票与打印都已移出格子（前者进制单弹窗，后者进结算弹窗） */
   const bodies: Record<PanelId, ReactNode> = {
     tare: <TarePanel recent={tareRecent.slice(0, 5)} last01kg={partyDetail?.last_tare_01kg ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} currentTare01kg={currentTare01kg} alert={tareAlert} partyId={partyId} />,
     camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} mockOff={mockOff} />,
     weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} cameraOnline={cameraOnline} />,
     qc: <QcPanel order={order ?? null} variety={variety} />,
-    settle: <PrintPanel order={order ?? null} variety={variety} qc={qc} prices={prices} onPrint={triggerPrint} />,
   };
 
   const openOrdersHint = order ? `${order.variety_name}${order.grade ? ` · ${order.grade}` : ""}` : "未制单";
@@ -269,7 +268,7 @@ export function WorkstationPage() {
                 <CctvIcon />
                 {showCam ? "隐藏画面" : "过磅画面"}
               </Button>
-              <Button size="sm" variant="outline" onClick={triggerPrint} disabled={!order}>
+              <Button size="sm" variant="outline" onClick={() => triggerPrint()} disabled={!order}>
                 <PrinterIcon />
                 打印（F9）
               </Button>
@@ -375,31 +374,35 @@ export function WorkstationPage() {
             <DialogTitle className="text-sm font-semibold">结算 {settleNo ?? ""}</DialogTitle>
           </DialogHeader>
           {settleOrder ? (
-            <SettleForm
-              order={settleOrder}
-              variety={settleVariety}
-              qc={settleQc}
-              prices={prices}
-              allowCredit={allowCredit}
-              submitLabel="确认结算并收款"
-              submitHotkey={null}
-              onSettled={(r) => {
-                toast.success(`已结算 ${r.order.order_no}，本单卡自动回池`);
-                qcClient.invalidateQueries({ queryKey: ["order", r.order.order_no] });
-                qcClient.invalidateQueries({ queryKey: ["orders"] });
-                qcClient.invalidateQueries({ queryKey: ["open-orders"] });
-                qcClient.invalidateQueries({ queryKey: ["settlements"] });
-                qcClient.invalidateQueries({ queryKey: ["dashboard"] });
-                setSettleNo(null);
-              }}
-            />
+            <>
+              <SettleForm
+                order={settleOrder}
+                variety={settleVariety}
+                qc={settleQc}
+                prices={prices}
+                allowCredit={allowCredit}
+                submitLabel="确认结算并收款"
+                submitHotkey={null}
+                onSettled={(r) => {
+                  toast.success(`已结算 ${r.order.order_no}，本单卡自动回池`);
+                  qcClient.invalidateQueries({ queryKey: ["order", r.order.order_no] });
+                  qcClient.invalidateQueries({ queryKey: ["orders"] });
+                  qcClient.invalidateQueries({ queryKey: ["open-orders"] });
+                  qcClient.invalidateQueries({ queryKey: ["settlements"] });
+                  qcClient.invalidateQueries({ queryKey: ["dashboard"] });
+                  setSettleNo(null);
+                }}
+              />
+              {/* 原右栏「凭票与打印」面板撤除，出票/补打入口收进本弹窗 */}
+              <TicketPrintSection order={settleOrder} onPrint={() => triggerPrint(settleNo)} />
+            </>
           ) : (
             <p className="py-4 text-center text-xs text-muted-foreground">读取磅单中…</p>
           )}
         </DialogContent>
       </Dialog>
 
-      {/* 出码单：自动（第②刷）或手动（F9 / 凭票面板），打的是 printOrder */}
+      {/* 出码单：自动（第②刷）或手动（F9 / 顶部按钮 / 结算弹窗「凭票打印」），打的是 printOrder */}
       {printOrder && station ? (
         <ReceiptPrintPreview
           open={printOpen}
@@ -418,11 +421,25 @@ export function WorkstationPage() {
       )}
 
       {focusMode && (
-        <div className="absolute right-4 top-4 z-50">
-          <Button size="sm" variant="outline" onClick={toggleFocusMode}>
-            <Minimize2Icon />
-            退出专注（Esc / F11）
-          </Button>
+        <div className="absolute right-3 top-3 z-50">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  className="bg-background/80 shadow-xs backdrop-blur-xs hover:bg-background"
+                  onClick={toggleFocusMode}
+                  aria-label="退出专注（Esc / F11）"
+                />
+              }
+            >
+              <Minimize2Icon />
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="end">
+              退出专注（Esc / F11）
+            </TooltipContent>
+          </Tooltip>
         </div>
       )}
 

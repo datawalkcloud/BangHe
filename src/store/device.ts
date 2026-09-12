@@ -263,7 +263,9 @@ const DEMO_CARD: IdCardResult = {
   agency: "",
   valid_from: "",
   valid_to: "",
-  photo_path: null,
+  // 演示通道也给一张"卡面照片"：浏览器预览要能跑通「读卡 → 自动带出人像 → 保存进档案」
+  // 这条链（mock 侧只判路径空不空，不会真去读文件），否则演示里这条新功能永远看不见。
+  photo_path: "演示：身份证照片.bmp",
   real: false,
 };
 

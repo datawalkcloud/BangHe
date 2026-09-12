@@ -397,6 +397,10 @@ const AUDIT_ACTION: Record<string, string> = {
   "pay.record": "登记付款",
   "party.create": "新建售粮人档案",
   "party.update": "修改售粮人档案",
+  "party.photo.update": "更新档案人像照片",
+  "party.photo.clear": "移除档案人像照片",
+  // 查看农户人像属于 PII 访问：迎检时这一行要一眼读得懂，不能留成机器码
+  "pii.read": "查看个人信息",
   "variety.create": "新建品种",
   "variety.update": "修改品种",
   "price.create": "新增价目",

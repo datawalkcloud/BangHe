@@ -104,8 +104,8 @@ export function QuickPartyDialog({
   }, [form.name, code, idOk, taken]);
 
   const save = useMutation({
-    mutationFn: () =>
-      api.saveParty({
+    mutationFn: async () => {
+      const p = await api.saveParty({
         name: form.name.trim(),
         party_type: form.party_type,
         id_card_no: code,
@@ -114,10 +114,32 @@ export function QuickPartyDialog({
         status: "active",
         operator_id: actorId(),
         id_card_verified: verified ? 1 : 0,
-      }),
-    onSuccess: (p) => {
+      });
+      /**
+       * 卡面照片紧跟档案落库（02 §F3.1：刷证建档即自动使用身份证上那张，不用手传）。
+       * 这一步失败**不回头否定建档**——磅员此刻要的是这张单能继续过磅，
+       * 照片晚一分钟到档案页补都来得及；读卡器没解码照片的机型本来也会走到这一支。
+       */
+      const cardPhoto = card?.photo_path ?? null;
+      if (!cardPhoto) return { p, photoError: null as string | null };
+      try {
+        await api.setPartyPhoto({
+          party_id: p.id,
+          source_path: cardPhoto,
+          operator_id: actorId(),
+          source_label: "读卡带入",
+        });
+        void qc.invalidateQueries({ queryKey: ["party-photo", p.id] });
+        return { p, photoError: null as string | null };
+      } catch (e) {
+        return { p, photoError: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    onSuccess: ({ p, photoError }) => {
       toast.success(`已建档：${p.name}（${p.code}）· ${p.id_card_verified === 1 ? "已核验" : "未核验"}`, {
-        description: "已选为本单售粮人；开户行、挂账额度、参考皮重请到「农户与单位」补全。",
+        description: photoError
+          ? `档案已建好并选为本单售粮人；人像照片没存上（${photoError}），可到「农户与单位」补。`
+          : "已选为本单售粮人；开户行、挂账额度、参考皮重请到「农户与单位」补全。",
       });
       qc.invalidateQueries({ queryKey: ["parties"] });
       qc.invalidateQueries({ queryKey: ["party", p.id] });

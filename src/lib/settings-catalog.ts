@@ -106,6 +106,10 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
     key: "card_required_on_create", demo: "false", label: "制单必须绑卡", group: "weigh", kind: "bool",
     hint: "点「取号并制单」先弹框刷 IC 卡，读不到卡这张单制不成；关掉才允许无卡制单、事后靠监听发卡",
   },
+  {
+    key: "reader_prompt_voice", demo: "true", label: "读卡弹窗提示语音", group: "weigh", kind: "bool",
+    hint: "「请将身份证平放在读卡器感应区」「请将流转卡贴在读卡器感应区」这类监听弹窗弹出时，本机扬声器念一句提醒窗外的农户放卡（读卡建档 / 制单读卡 / 制单绑卡 / 流转卡登记四处）。关掉只是不出声，读卡与制单本身不受影响；这台机没装中文语音包时自动改播提示音",
+  },
 
   { key: "settlement_allow_part_pay", demo: "true", label: "允许挂账（部分付款）", group: "settle", kind: "bool" },
   {

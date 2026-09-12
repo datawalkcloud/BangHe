@@ -14,18 +14,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ContactIcon, PlusIcon, ScanLineIcon, SearchIcon } from "lucide-react";
+import { ContactIcon, PlusIcon, ScanLineIcon, SearchIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { Party } from "@/mock/types";
 import type { PartyType } from "@/lib/constants";
 import { PARTY_TYPE } from "@/lib/constants";
 import { maskIdCard, money, orDash, validateIdCard, weight } from "@/lib/format";
+import { runningInTauri } from "@/lib/native";
 import { useWarehouses } from "@/hooks/useLookups";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
 import { ALL, Choose } from "@/components/business/Choose";
 import { CardScanDialog } from "@/components/business/CardScanDialog";
+import { PartyPortrait } from "@/components/business/PartyPortrait";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge } from "@/components/business/badges";
 import { WeightField } from "@/components/business/NumField";
@@ -61,6 +63,15 @@ interface PartyForm {
    * 只活在表单里、不落库，保存时拿它和表单证号比一次，决定 `id_card_verified`。
    */
   read_card_no: string;
+  /** 档案里**已经存着**的人像附件 id（渲染与"要不要清除"的判断都看它） */
+  photo_attachment_id: number | null;
+  /**
+   * 等着挂到档案上的那张图：本机绝对路径 + 来源说明（进审计）。
+   * 来自文件框，或来自读卡器本次落出的暂存文件。保存时才导成附件，所以表单里不预览。
+   */
+  pending_photo: { path: string; label: string } | null;
+  /** 操作员点了「移除」：保存时把已有照片清掉（`pending_photo` 优先，两者不同时生效） */
+  photo_cleared: boolean;
 }
 
 /**
@@ -71,6 +82,21 @@ interface PartyForm {
 function cardVerified(form: PartyForm): 0 | 1 {
   const read = form.read_card_no.trim().toUpperCase();
   return read !== "" && read === form.id_card_no.trim().toUpperCase() ? 1 : 0;
+}
+
+/**
+ * 卡面照片 → 表单里"等着挂上去的那张图"。
+ *
+ * 读卡器把照片落在本机缓存里**本次读卡专属**的目录（04 §3.5），这里只带路径不带内容：
+ * 真正留下来要等保存时由 `party_photo_set` 导成附件，否则一次读卡就在盘上留一张没人认领的人像。
+ */
+function photoFromCard(card: { photo_path: string | null }): PartyForm["pending_photo"] {
+  return card.photo_path ? { path: card.photo_path, label: "读卡带入" } : null;
+}
+
+/** 只为把一长串路径缩成看得懂的文件名；判定格式/大小/能不能读都在后端，这里不参与任何决策。 */
+function baseName(path: string): string {
+  return path.split(/[/\\]/).filter(Boolean).pop() ?? path;
 }
 
 function emptyForm(): PartyForm {
@@ -90,6 +116,9 @@ function emptyForm(): PartyForm {
     remark: "",
     active: true,
     read_card_no: "",
+    photo_attachment_id: null,
+    pending_photo: null,
+    photo_cleared: false,
   };
 }
 
@@ -112,6 +141,9 @@ function formOf(p: Party): PartyForm {
     // 已核验的档案把证号本身当作凭证带进来：改电话、改额度这类无关编辑不该把核验状态弄丢，
     // 但一改证号就对不上了，自动回落成未核验。未核验的留空，避免凭空升级。
     read_card_no: p.id_card_verified === 1 ? p.id_card_no : "",
+    photo_attachment_id: p.photo_attachment_id ?? null,
+    pending_photo: null,
+    photo_cleared: false,
   };
 }
 
@@ -137,9 +169,15 @@ export function PartiesPage() {
 
   const patch = (p: Partial<PartyForm>) => setForm((f) => ({ ...f, ...p }));
 
-  /** 读卡命中已有档案就给"去改"的入口，命中新证号就直接铺进新建表单 */
+  /**
+   * 读卡命中已有档案就给"去改"的入口，命中新证号就直接铺进新建表单。
+   *
+   * 人像照片**只补缺、不覆盖**（与本页"卡面信息只带出不覆盖"同一条口径）：档案里已经存着
+   * 一张照片时，再刷一次卡不该悄悄把农户换脸——要换得由人自己点「上传照片」并保存。
+   */
   useEffect(() => {
     if (!lastCard) return;
+    const pending = photoFromCard(lastCard);
     const hit = all.find((p) => p.id_card_no === lastCard.id_card_no);
     if (hit) {
       // 卡面证号与档案证号对上了，这一轮读卡就是替他做的实名核验：原先手录的档案顺手升级
@@ -149,26 +187,50 @@ export function PartiesPage() {
           ? "卡面证号与档案一致，保存后档案将标记为「已核验」。"
           : "已在编辑框里带出该档案，可直接修改。",
       });
-      setForm({ ...formOf(hit), read_card_no: lastCard.id_card_no });
+      setForm({ ...formOf(hit), read_card_no: lastCard.id_card_no, pending_photo: hit.photo_attachment_id == null ? pending : null });
       setOpen(true);
     } else {
-      toast.success("读到新证号，已按卡片信息预填建档表单");
+      toast.success("读到新证号，已按卡片信息预填建档表单", {
+        description: pending ? "身份证上的人像照片一并带出，保存后即为档案照片。" : undefined,
+      });
       setForm({
         ...emptyForm(),
         name: lastCard.name,
         id_card_no: lastCard.id_card_no,
         address: lastCard.address,
         read_card_no: lastCard.id_card_no,
+        pending_photo: pending,
       });
       setOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastCard]);
 
+  /** 选一张本地图当人像：插件只给路径，格式与大小由后端导入时判（与备份导入同一口径）。 */
+  async function pickPhoto() {
+    if (!runningInTauri()) {
+      // 浏览器预览没有文件系统，给个假路径让表单流照样跑得通（mock 的写图只看路径空不空）
+      patch({ pending_photo: { path: "演示：农户人像.jpg", label: "手工上传" }, photo_cleared: false });
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({
+        title: "选择人像照片",
+        multiple: false,
+        filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "bmp"] }],
+      });
+      if (typeof picked !== "string") return; // 站长按了取消
+      setForm((f) => ({ ...f, pending_photo: { path: picked, label: "手工上传" }, photo_cleared: false }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "打开文件选择框失败");
+    }
+  }
+
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const yuan = Number(form.creditYuan) || 0;
-      return api.saveParty({
+      const p = await api.saveParty({
         id: form.id ?? undefined,
         operator_id: actorId(),
         name: form.name.trim(),
@@ -187,13 +249,44 @@ export function PartiesPage() {
         // 读卡带入且没改过证号才算核验过；真库与 mock 都认这个值（03 §9.6 id_card_verified）
         id_card_verified: cardVerified(form),
       });
+      /**
+       * 照片是档案落成之后的**独立一步**（`party_photo_set`，空串＝清除）：一张读不到、
+       * 超标或格式不对的图，绝不能回头把已经成立的建档/修改抹掉——与过磅抓拍同一条判断。
+       */
+      const photo = form.pending_photo
+        ? { path: form.pending_photo.path, label: form.pending_photo.label }
+        : form.photo_cleared
+          ? { path: "", label: null as string | null }
+          : null;
+      if (!photo) return { p, photoError: null as string | null };
+      try {
+        await api.setPartyPhoto({
+          party_id: p.id,
+          source_path: photo.path,
+          operator_id: actorId(),
+          source_label: photo.label,
+        });
+        void queryClient.invalidateQueries({ queryKey: ["party-photo", p.id] });
+        return { p, photoError: null as string | null };
+      } catch (e) {
+        return { p, photoError: e instanceof Error ? e.message : String(e) };
+      }
     },
-    onSuccess: (p) => {
+    onSuccess: ({ p, photoError }) => {
       toast.success(
         form.id == null
           ? `已建档：${p.name}（${p.code}）· ${p.id_card_verified === 1 ? "已核验" : "未核验"}`
           : `档案已更新：${p.name}`,
       );
+      if (photoError) {
+        toast.error(`照片没存上：${photoError}`, {
+          description: "档案本身已保存。重新打开这张档案，再点一次「上传照片」即可。",
+        });
+      } else if (form.pending_photo) {
+        toast.success(form.pending_photo.label === "读卡带入" ? "已把身份证上的人像照片存入档案" : "人像照片已存入档案");
+      } else if (form.photo_cleared) {
+        toast.info("已移除档案人像照片");
+      }
       setOpen(false);
       useDeviceStore.getState().reader.idcard.clear();
       void queryClient.invalidateQueries({ queryKey: ["parties"] });
@@ -378,6 +471,51 @@ export function PartiesPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
+            {/* 人像照片（选填）。放在最上面是因为它是这张表单里唯一"看一眼就知道对不对"的字段：
+                磅员建完档顺手确认一下"这就是刚才那张脸"，比核对 18 位证号快得多。 */}
+            <div className="sm:col-span-2 flex items-start gap-3 border bg-muted/20 p-2.5">
+              {form.pending_photo ? (
+                <div className="grid h-[118px] w-[96px] shrink-0 place-items-center border border-dashed border-primary/60 bg-primary/5 px-1 text-center">
+                  <span className="text-[10px] leading-tight text-primary">待保存<br />（保存后可预览）</span>
+                </div>
+              ) : (
+                <PartyPortrait
+                  partyId={form.id}
+                  hasPhoto={!form.photo_cleared && form.photo_attachment_id != null}
+                  size="md"
+                />
+              )}
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-xs font-medium">人像照片（选填）</span>
+                <p className="text-xs text-muted-foreground">
+                  {form.pending_photo
+                    ? `${form.pending_photo.label}：${baseName(form.pending_photo.path)}`
+                    : form.photo_cleared
+                      ? "已标记移除，保存后这张档案不再保留照片。"
+                      : "读卡建档会自动带出身份证上那张，也可本地上传 JPG / PNG / BMP。不传不影响建档与制单。"}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => void pickPhoto()}>
+                    <UploadIcon />
+                    {form.photo_attachment_id != null || form.pending_photo ? "换一张" : "上传照片"}
+                  </Button>
+                  {form.pending_photo ? (
+                    <Button size="sm" variant="ghost" onClick={() => patch({ pending_photo: null })}>
+                      <Trash2Icon />
+                      取消这张
+                    </Button>
+                  ) : (
+                    form.photo_attachment_id != null &&
+                    !form.photo_cleared && (
+                      <Button size="sm" variant="ghost" onClick={() => patch({ photo_cleared: true })}>
+                        <Trash2Icon />
+                        移除照片
+                      </Button>
+                    )
+                  )}
+                </div>
+              </div>
+            </div>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               姓名 / 单位名称 *
               <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} className="text-sm" />

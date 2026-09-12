@@ -20,9 +20,10 @@
 //!  - **`width`/`height` 留 NULL**：解析 JPEG 的 SOF0/SOF2 段拿宽高属于过度设计——
 //!    这两个字段在本系统里没有任何消费方（磅单只印缩略图，台账不按像素统计），
 //!    写一段二进制解析换来的是无人读的数。等真接上图像解码那轮再一并填。
-//!  - **`accessed_at`/`accessed_by` 访问审计不做**：还没有"看图"的读通道
-//!    （前端缩略图/原图与 `pii.read` 审计是同一条线，归附件展示那轮）。没有读动作
-//!    就没有可记的审计点，先建表列位再空写只会让下一个人以为审计已经生效。
+//!  - **`accessed_at`/`accessed_by` 这条抓拍自己不写**：读图的通道与 `pii.read` 审计
+//!    已经收在 [`crate::attachment::read_for_display`]（档案人像那轮建的），但抓拍缩略图
+//!    走的是"过磅当场本机可见"的路径，还没接上那条读通道——等 04 §4.3 的前端附件展示
+//!    那一轮统一换过去，不在这里半接半留。
 //!
 //! **PII**：抓拍画面含农户人像与车牌（04 §4.3）。因此本模块**不把文件路径写进任何
 //! 日志或返回值**——`attachment.file_path` 是库里唯一一处，取用时按岗位判权限；
@@ -41,6 +42,8 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local};
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
+
+use crate::attachment::ImageKind;
 
 /// 04 §1 的超时约定：抓图 3 秒。宁可拿不到图，也不让磅队停下来等一台摄像头。
 pub const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -715,20 +718,32 @@ pub fn safe_stem(raw: &str) -> String {
 /// 每段都由本机生成（时间、哈希、清洗过的 code），**没有任何一段来自摄像机侧**；
 /// 存进 `attachment.file_path` 的就是这一串相对 `AppDataDir` 的路径（§9.15 列注释）。
 pub fn attachment_rel_path(at: &DateTime<Local>, device_code: &str, sha256_hex: &str) -> String {
+    attachment_rel_path_ext(at, device_code, sha256_hex, "jpg")
+}
+
+/// 同上，但扩展名由调用方给（身份证照片是 `.bmp`、上传的 PNG 是 `.png`）。
+/// 扩展名与 `attachment.mime` 必须同批判定，见 [`crate::attachment::image_kind`]。
+pub(crate) fn attachment_rel_path_ext(
+    at: &DateTime<Local>,
+    device_code: &str,
+    sha256_hex: &str,
+    ext: &str,
+) -> String {
     let sha = sha256_hex.get(..8).unwrap_or(sha256_hex);
     format!(
-        "attachments/{}/{}-{:03}-{}-{}.jpg",
+        "attachments/{}/{}-{:03}-{}-{}.{}",
         at.format("%Y-%m"),
         at.format("%Y%m%d-%H%M%S"),
         at.timestamp_subsec_millis(),
         safe_stem(device_code),
-        sha
+        sha,
+        ext
     )
 }
 
 /// 把相对路径拼到数据目录下。任一段不安全（空、`.`、`..`、反斜杠、非白名单字符）
 /// 就回 `None`——这是最后一道闸，正常输入永远不会撞上它。
-fn join_under(root: &Path, rel: &str) -> Option<PathBuf> {
+pub(crate) fn join_under(root: &Path, rel: &str) -> Option<PathBuf> {
     let mut out = root.to_path_buf();
     for part in rel.split('/') {
         let ok = !part.is_empty()
@@ -748,26 +763,49 @@ fn join_under(root: &Path, rel: &str) -> Option<PathBuf> {
 
 // ------------------------------------------------------------------------ 落库
 
-/// 写文件 + 插 `attachment` 行。**不碰 `weigh_record`**：附件 id 回给调用方去挂。
+/// 一次「写文件 + 插一行 `attachment`」所需的全部归属。
 ///
-/// 目录不存在就建；同名（同毫秒同内容）就加序号重试，绝不覆盖已有抓拍。
+/// 本模块原先只服务过磅抓拍，于是这些归属散在 SQL 字面量里（`'scale_capture'`、
+/// `'image/jpeg'`）。档案人像、留样照片、签字都要落同一张表、走同一套"盘上有图、
+/// 库里有行、失败不能留孤本"的规矩——两处各写一遍的话，将来补漏的那一处永远不是全部。
+#[derive(Debug, Clone)]
+pub struct ImageMeta<'a> {
+    /// `attachment.biz_type`（值域见 §9.15 的 CHECK）
+    pub biz_type: &'a str,
+    /// `attachment.biz_id`：多态归属——抓拍是称重记录 id，档案人像是 `party.id`
+    pub biz_id: Option<i64>,
+    /// 便于按单归集与清理；不属于任何单据的附件为 `None`
+    pub order_id: Option<i64>,
+    /// `attachment.mime` 与文件扩展名，成对给出，不让调用方各写一半
+    pub kind: ImageKind,
+    /// 只用于生成文件名片段（先过 [`safe_stem`]），原始值既不落库也不打日志。
+    /// 抓拍传设备 `code`，档案人像传 `party{id}` 这类系统自己拼的标签。
+    pub tag: &'a str,
+    pub source_device_id: Option<i64>,
+    /// `attachment.created_by` 非空且是外键
+    pub operator_id: i64,
+}
+
+/// 写文件 + 插 `attachment` 行。**不碰任何业务表**：附件 id 回给调用方去挂。
+///
+/// 目录不存在就建；同名（同毫秒同内容）就加序号重试，绝不覆盖已有图片。
 /// 写完 `sync_all` 再插库：磅房机是直接拔电的，库里有一行而盘上没这张图是 worst case。
 /// 反过来若插库失败，就把刚写的文件删掉——留下"野图"比丢掉一张图更糟（04 §4.3 的
 /// 附件只能有单据归属，不然留存与清理都对不上账）。
-pub fn store_snapshot(
+pub fn store_image(
     conn: &Connection,
     app_dir: &Path,
-    jpeg: &[u8],
-    meta: &AttachmentMeta,
+    bytes: &[u8],
+    meta: &ImageMeta<'_>,
 ) -> Result<i64, String> {
-    if jpeg.is_empty() {
+    if bytes.is_empty() {
         return Err("没有图像数据可落库".into());
     }
     let now = Local::now();
-    let sha = sha256_hex(jpeg);
-    let rel = attachment_rel_path(&now, &meta.device_code, &sha);
-    let path = join_under(app_dir, &rel).ok_or_else(|| "抓拍文件路径不合法，已放弃落盘".to_string())?;
-    let parent = path.parent().ok_or_else(|| "抓拍文件路径不合法，已放弃落盘".to_string())?;
+    let sha = sha256_hex(bytes);
+    let rel = attachment_rel_path_ext(&now, meta.tag, &sha, meta.kind.ext);
+    let path = join_under(app_dir, &rel).ok_or_else(|| "附件文件路径不合法，已放弃落盘".to_string())?;
+    let parent = path.parent().ok_or_else(|| "附件文件路径不合法，已放弃落盘".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| file_reason(&e, "创建附件目录"))?;
 
     let candidate = path.clone();
@@ -794,7 +832,7 @@ pub fn store_snapshot(
     let (written_path, mut file) =
         written.ok_or_else(|| "同一毫秒内抓拍文件重名过多，已放弃落盘".to_string())?;
     let io = file
-        .write_all(jpeg)
+        .write_all(bytes)
         .and_then(|_| file.flush())
         .and_then(|_| file.sync_all());
     drop(file);
@@ -808,15 +846,17 @@ pub fn store_snapshot(
         "INSERT INTO attachment (biz_type, biz_id, order_id, file_path, file_size, mime,
                                  width, height, sha256, encrypted, captured_at,
                                  source_device_id, created_at, created_by)
-         VALUES ('scale_capture', ?1, ?2, ?3, ?4, 'image/jpeg', NULL, NULL, ?5, 0, ?6, ?7, ?6, ?8)",
+         VALUES (?9, ?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, 0, ?7, ?8, ?7, ?10)",
         params![
-            meta.weigh_record_id,
+            meta.biz_id,
             meta.order_id,
             rel,
-            jpeg.len() as i64,
+            bytes.len() as i64,
+            meta.kind.mime,
             sha,
             captured_at,
-            meta.device_id,
+            meta.source_device_id,
+            meta.biz_type,
             meta.operator_id,
         ],
     );
@@ -828,13 +868,37 @@ pub fn store_snapshot(
     Ok(conn.last_insert_rowid())
 }
 
-fn with_suffix(path: &Path, n: u32) -> PathBuf {
+/// 过磅抓拍落库：把抓拍侧的归属形状换算成通用的 [`ImageMeta`]。
+/// 行为（`biz_type`、mime、文件名形状、失败补删）与泛化前逐字一致，camera 契约测试钉着它。
+pub fn store_snapshot(
+    conn: &Connection,
+    app_dir: &Path,
+    jpeg: &[u8],
+    meta: &AttachmentMeta,
+) -> Result<i64, String> {
+    store_image(
+        conn,
+        app_dir,
+        jpeg,
+        &ImageMeta {
+            biz_type: "scale_capture",
+            biz_id: Some(meta.weigh_record_id),
+            order_id: Some(meta.order_id),
+            kind: ImageKind::Jpeg,
+            tag: &meta.device_code,
+            source_device_id: meta.device_id,
+            operator_id: meta.operator_id,
+        },
+    )
+}
+
+pub(crate) fn with_suffix(path: &Path, n: u32) -> PathBuf {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("shot");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("jpg");
     path.with_file_name(format!("{stem}-{n}.{ext}"))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     h.finalize()

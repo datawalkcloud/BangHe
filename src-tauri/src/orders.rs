@@ -28,6 +28,7 @@
 //! `has_photo` 只是"当时摄像头在线"的自我声明）。DTO 的 has_photo/抓拍墙一律按
 //! `photo_attachment_id IS NOT NULL` 现算——没存图就诚实显示"无抓拍"。
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Local};
@@ -340,6 +341,9 @@ pub struct Party {
     pub remark: Option<String>,
     pub status: String,
     pub created_at: String,
+    /// 人像照片（§9.6 `photo_attachment_id`）。**选填**：手工上传与读卡自动带入都落这一列，
+    /// `NULL` 就是"这张档案没有照片"，界面按"无照片"显示，不当成缺数据。
+    pub photo_attachment_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -916,7 +920,8 @@ pub(crate) const PARTY_SELECT: &str = "SELECT id, COALESCE(code, ''), name, part
          COALESCE(CAST(id_card_no_enc AS TEXT), ''), id_card_verified,
          COALESCE(CAST(phone_enc AS TEXT), ''), COALESCE(address, ''),
          bank_name, CAST(bank_account_enc AS TEXT), credit_limit_fen,
-         default_warehouse_id, NULL, default_vehicle_no, last_tare_01kg, remark, status, created_at
+         default_warehouse_id, NULL, default_vehicle_no, last_tare_01kg, remark, status, created_at,
+         photo_attachment_id
   FROM party";
 
 pub(crate) fn map_party_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Party> {
@@ -939,6 +944,7 @@ pub(crate) fn map_party_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Party> {
         remark: r.get(15)?,
         status: r.get(16)?,
         created_at: r.get(17)?,
+        photo_attachment_id: r.get(18)?,
     })
 }
 
@@ -1219,6 +1225,139 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
             Ok(row)
         }
     }
+}
+
+// ------------------------------------------------------------------ 档案人像照片
+//
+// 一条命令吃两种来源（读卡带入 / 手工选文件）：到落库这一步它们是同一样东西——本机上的
+// 一个图片文件。归属只有一处：`party.photo_attachment_id`（§9.6）指附件，附件那行的
+// `biz_id` 反指 party，两边一起写才不会留下没人认领的农户人像。
+//
+// **为什么不塞进 `party_save`**：照片写不进去（文件被占用、超大、格式不认识）绝不该把一次
+// 已经成立的建档/修改回滚掉——与过磅抓拍「一张照片不把称重拖回滚」是同一条判断（04 §4）。
+// 所以档案是档案、照片是照片，界面上保存成功后紧接着调这一条，失败了原表单还在、重存即可。
+
+#[derive(Debug, Deserialize)]
+pub struct PartyPhotoInput {
+    pub party_id: i64,
+    /// 本机图片文件的绝对路径：系统文件框选中的，或身份证读卡器**本次**落出来的暂存文件。
+    /// **空串＝清除照片**。不给这个字段（`None`）与给空串是两件事：前者不碰，后者删。
+    pub source_path: String,
+    /// 前端仍会带 operator_id，一律忽略，以会话为准
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub operator_id: Option<i64>,
+    /// 来源说明（"读卡带入" / "手工上传"），只进审计，不参与任何判定
+    #[serde(default)]
+    pub source_label: Option<String>,
+}
+
+/// 写入/替换/清除档案人像，回保存后的档案行。
+///
+/// 顺序钉死为「**先落新、再改引用、最后删旧**」：中途任何一步失败，最坏是盘上多一个
+/// 没人引用的新文件（事务回滚把库恢复干净）；反过来先删旧再写新，一旦写失败就是
+/// 「档案显示有照片、点开却说文件丢失」那种最难归因的脏状态。
+pub fn set_party_photo(
+    conn: &Connection,
+    app_dir: &Path,
+    actor: &AuthProfile,
+    input: PartyPhotoInput,
+) -> Result<Party, String> {
+    let party = conn
+        .query_row(
+            &format!("{PARTY_SELECT} WHERE id = ?1 AND deleted_at IS NULL"),
+            params![input.party_id],
+            map_party_row,
+        )
+        .optional()
+        .map_err(|e| format!("检查档案失败：{e}"))?
+        .ok_or_else(|| "该售粮人档案不存在或已删除，无法保存照片".to_string())?;
+
+    let source = input.source_path.trim().to_string();
+    if source.is_empty() {
+        let Some(old) = party.photo_attachment_id else {
+            // 本来就没照片，"清除"就是个空操作：不动 updated_at，免得审计里多出一条没发生的修改
+            return Ok(party);
+        };
+        // 先解引用、再删附件：档案这一行还指着它的时候删，SQLite 的外键约束直接就拦了
+        conn.execute(
+            "UPDATE party SET photo_attachment_id = NULL, updated_at = ?1 WHERE id = ?2",
+            params![now_iso(), party.id],
+        )
+        .map_err(|e| format!("清除照片失败：{e}"))?;
+        crate::attachment::delete_image(conn, app_dir, old)?;
+        audit(conn, actor, "party.photo.clear", "party", &party.code, None, None);
+        return get_party(conn, party.id)?.map(|d| d.party).ok_or_else(|| "档案不存在".to_string());
+    }
+
+    let (bytes, kind) = crate::attachment::load_image_file(&source)?;
+    let sha = crate::camera::sha256_hex(&bytes);
+    // 同一张图重复保存不该换附件：id 变了会让界面缓存与留痕都对不上，还白留一份文件
+    if let Some(old) = party.photo_attachment_id {
+        let same: Option<String> = conn
+            .query_row("SELECT sha256 FROM attachment WHERE id = ?1", params![old], |r| r.get(0))
+            .optional()
+            .map_err(|e| format!("读取原附件失败：{e}"))?;
+        if same.as_deref() == Some(sha.as_str()) {
+            return Ok(party);
+        }
+    }
+    let biz_type = crate::domain::enums::AttachmentBizType::IdCardPhoto.to_string();
+    let tag = format!("party{}", party.id);
+    let att = crate::camera::store_image(
+        conn,
+        app_dir,
+        &bytes,
+        &crate::camera::ImageMeta {
+            biz_type: &biz_type,
+            biz_id: Some(party.id),
+            order_id: None,
+            kind,
+            tag: &tag,
+            source_device_id: None,
+            operator_id: actor.id,
+        },
+    )?;
+    conn.execute(
+        "UPDATE party SET photo_attachment_id = ?1, updated_at = ?2 WHERE id = ?3",
+        params![att, now_iso(), party.id],
+    )
+    .map_err(|e| format!("照片挂到档案失败：{e}"))?;
+    if let Some(old) = party.photo_attachment_id {
+        crate::attachment::delete_image(conn, app_dir, old)?;
+    }
+    let reason = input
+        .source_label
+        .as_deref()
+        .map(|s| s.chars().take(60).collect::<String>());
+    audit(conn, actor, "party.photo.update", "party", &party.code, reason.as_deref(), None);
+    get_party(conn, party.id)?.map(|d| d.party).ok_or_else(|| "档案不存在".to_string())
+}
+
+/// 把档案人像读回给界面，并留一次访问痕迹（04 §4.3）。
+///
+/// 读不设岗位（与本文件「权限闸门」那条一致：viewer 也要能看档案），管住它的不是岗位而是
+/// **每一次查看都在 `audit_log` 与 `attachment.accessed_*` 里留痕**。没有照片回 `Ok(None)`，
+/// 那是正常状态不是错误——照片本来就是选填项。
+pub fn party_photo_view(
+    conn: &Connection,
+    app_dir: &Path,
+    actor: &AuthProfile,
+    party_id: i64,
+) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
+    let row = conn
+        .query_row(
+            "SELECT photo_attachment_id, COALESCE(code, '') FROM party WHERE id = ?1 AND deleted_at IS NULL",
+            params![party_id],
+            |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|e| format!("读取档案照片失败：{e}"))?;
+    let Some((att, code)) = row else { return Ok(None) };
+    let Some(att) = att else { return Ok(None) };
+    let img = crate::attachment::read_for_display(conn, app_dir, att, actor.id)?;
+    audit(conn, actor, "pii.read", "party", &code, Some("查看档案人像照片"), None);
+    Ok(Some(img))
 }
 
 // --------------------------------------------------------------------- 入仓去向
@@ -2182,6 +2321,37 @@ pub async fn party_get(app: AppHandle, id: i64) -> Result<Option<PartyDetail>, S
 #[tauri::command]
 pub async fn party_save(app: AppHandle, input: PartySaveInput) -> Result<Party, String> {
     write_tx(&app, move |conn, actor| save_party(conn, actor, input), FLOOR_ROLES, "维护售粮人档案").await
+}
+
+/// 数据目录：附件落盘与读回都以它为根（03 §9.15 的 `file_path` 就是相对它的路径）。
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位本机数据目录：{e}"))
+}
+
+#[tauri::command]
+pub async fn party_photo_set(app: AppHandle, input: PartyPhotoInput) -> Result<Party, String> {
+    let dir = app_data_dir(&app)?;
+    write_tx(
+        &app,
+        move |conn, actor| set_party_photo(conn, &dir, actor, input),
+        FLOOR_ROLES,
+        "维护售粮人照片",
+    )
+    .await
+}
+
+/// 档案人像的读通道。写命令用 `write_tx` 顺手拿到会话身份，读这条按同一口径先取 actor
+/// （访问痕迹要记到人），再进锁里读文件。
+#[tauri::command]
+pub async fn party_photo(app: AppHandle, party_id: i64) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
+    let actor = auth::current_actor(&app).ok_or_else(|| "登录已失效，请重新登录后再继续作业".to_string())?;
+    let pool = pool_of(&app)?;
+    let dir = app_data_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, move |conn| party_photo_view(conn, &dir, &actor, party_id)))
+        .await
+        .map_err(|e| format!("档案照片读取任务失败：{e}"))?
 }
 
 #[tauri::command]
