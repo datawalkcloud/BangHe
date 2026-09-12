@@ -69,13 +69,16 @@ export function LoginPage() {
   const mustSetup = !!session.session?.actor.mustChangePwd;
   const mode: "signin" | "setup" = mustSetup || result?.needsPasswordSetup === true ? "setup" : "signin";
 
+  // 进入页面 / 切换模式时聚焦第一个字段（05 §10-2）。绝不能把 password、username 放进依赖：
+  // 那样每敲一个字都会重新 focus 回 firstField（登录名框），把光标从密码框抢走。
   useEffect(() => {
     if (import.meta.env.DEV && !username && !password) {
       setUsername(DEV_LOGIN_USERNAME);
       setPassword(DEV_LOGIN_PASSWORD);
     }
     firstField.current?.focus();
-  }, [mode, password, username]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   const error = result?.error ?? session.notice;
 
