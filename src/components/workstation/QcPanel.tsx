@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, QcReport, WeighOrder } from "@/mock/types";
 import type { Grade, IndicatorMeta, QcDecision, TestMethod } from "@/lib/constants";
 import { GRADES, INDICATORS, QC_DECISION, TEST_METHOD } from "@/lib/constants";
@@ -140,9 +141,15 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
     onSuccess: (r) => {
       if (!r) {
         toast.error("保存失败：磅单不存在");
+        announce("化验保存失败，这张单不存在", `qc:${order?.order_no ?? "-"}`);
         return;
       }
       toast.success(`化验单 ${r.report_no} 已保存（留样 ${r.retention_no ?? "—"}）`);
+      // 结论念出来是这一屏最有用的一声：拒收与否决定司机要不要卸货，化验员常常背对着屏幕在扦样
+      announce(
+        decision === "reject" ? "化验已保存，判定拒收" : "化验已保存",
+        `qc-done:${order?.order_no ?? "-"}`,
+      );
       qc.invalidateQueries({ queryKey: ["order", order?.order_no] });
       qc.invalidateQueries({ queryKey: ["qc-of-order", order?.order_no] });
       qc.invalidateQueries({ queryKey: ["orders"] });
@@ -151,7 +158,10 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
     // 拒收理由、重复录入等闸门原因要原样送到化验员眼前
-    onError: (e: Error) => toast.error(`保存化验失败：${e.message || "可重试；已录入内容不会丢"}`),
+    onError: (e: Error) => {
+      toast.error(`保存化验失败：${e.message || "可重试；已录入内容不会丢"}`);
+      announce("化验保存失败，填的内容没有丢，可以再存一次", "qc-fail");
+    },
   });
 
   const blocked = !order
@@ -166,7 +176,11 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
 
   useHotkey("f5", () => {
     if (!blocked) save.mutate();
-    else toast.error(blocked);
+    else {
+      toast.error(blocked);
+      // 这些原因本身就是一句人话（不带单号与数字），照整句话去重：原因换了就该重念一句
+      announce(blocked);
+    }
   });
 
   /** 品种的国标基准可以是"尚未核定"（真库种子留空），此时不能渲染成一串破折号 */

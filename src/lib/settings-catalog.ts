@@ -107,8 +107,8 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
     hint: "点「取号并制单」先弹框刷 IC 卡，读不到卡这张单制不成；关掉才允许无卡制单、事后靠监听发卡",
   },
   {
-    key: "reader_prompt_voice", demo: "true", label: "读卡弹窗提示语音", group: "weigh", kind: "bool",
-    hint: "「请将身份证平放在读卡器感应区」「请将流转卡贴在读卡器感应区」这类监听弹窗弹出时，本机扬声器念一句提醒窗外的农户放卡（读卡建档 / 制单读卡 / 制单绑卡 / 流转卡登记四处）。关掉只是不出声，读卡与制单本身不受影响；这台机没装中文语音包时自动改播提示音",
+    key: "reader_prompt_voice", demo: "true", label: "磅房语音提示", group: "weigh", kind: "bool",
+    hint: "两类出声：① 读卡类弹窗（读卡建档 / 制单读卡 / 制单绑卡 / 流转卡登记）弹出时念一句「请将卡放到感应区」；② 工作台每道闸门拦下与每步落成都回话——读数没稳、这张卡用不了、档案已停用、毛重皮重已捕获、结算完成、码单没出纸，让不盯屏幕的操作员也听得见。关掉只是这台机不出声，读卡、称重、结算、绑卡闸门一律照旧；这台机没装中文语音包时自动改播提示音",
   },
 
   { key: "settlement_allow_part_pay", demo: "true", label: "允许挂账（部分付款）", group: "settle", kind: "bool" },

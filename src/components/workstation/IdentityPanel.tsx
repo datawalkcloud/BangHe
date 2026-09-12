@@ -16,9 +16,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDownIcon, ChevronRightIcon, CreditCardIcon, SearchIcon, UserRoundPlusIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/mock/types";
 import { PARTY_TYPE, ROLE } from "@/lib/constants";
 import { maskIdCard, ton, validateIdCard, weight } from "@/lib/format";
+import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
 import { useDeviceStore } from "@/store/device";
 import { useSetting } from "@/hooks/useLookups";
 import { actorId, useActor, useSession } from "@/store/session";
@@ -117,15 +119,22 @@ export function IdentityPanel({
       // 只报一条 toast 等于把人赶回档案页：农户还站在读卡器前，姓名/证号/住址其实已经读到了。
       // 弹窗里补个电话就能建档，建好直接选为本单售粮人（02 §F1.1「无档案时不出现两次以上的手工输入」）
       setEnrollOpen(true);
+      announce("没有这个人的档案，请补个电话先建个档");
       return;
     }
     // 读卡不能成为绕过停用的后门：停用档案只挡新单，历史磅单照旧可查
     if (hit.status !== "active") {
       toast.error(`档案「${hit.name}」已停用，不能制单；要续收粮请到农户档案重新启用`);
+      // 姓名不进喇叭（07 H12 同一条合规线），但这一声必须出：不念出来人会以为卡没读到，反复重刷
+      announce("这个人的档案已经停用，不能制单");
       return;
     }
     onDraft({ party: hit, vehicleNo: draft.vehicleNo || hit.default_vehicle_no || "" });
     toast.success(`读卡命中档案：${hit.name}`);
+    announce("读卡成功");
+    // 该带出的已经带出、该报的已经报完，这里才去补照片：档案还没有人像就把证件里这张写进去
+    // （只补缺，已有照片不动）。异步 fire-and-forget——补得上补不上都不该拦住磅员取号（02 §F3.1）。
+    void backfillPartyPhotoFromCard(lastCard, hit, qc);
     // draft.vehicleNo 不入依赖，否则每次输入都会重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastCard]);
@@ -147,6 +156,7 @@ export function IdentityPanel({
       }),
     onSuccess: (o) => {
       toast.success(o.card_no ? `已取号 ${o.order_no} · 已绑卡 ${o.card_no}` : `已取号 ${o.order_no}`);
+      announce("制单成功，请开车上磅");
       setCardNo(null);
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["open-orders"] });
@@ -158,6 +168,8 @@ export function IdentityPanel({
     onError: (e: Error) => {
       setCardNo(null); // 被服务端拦下的卡不许原地重试，重新刷一张（并发下它可能刚被别人发走）
       toast.error(`取号失败：${e.message || "请检查档案与品种是否齐全"}`);
+      // 服务端原因带条款，念出来没人听得懂；只念"没取到号"+ 卡要重新刷这一条现场动作
+      announce("这张单没能取到号，卡要重新刷一张");
     },
   });
 
@@ -173,7 +185,11 @@ export function IdentityPanel({
 
   /** 「取号并制单」：本站要求绑卡而卡还没就位时先弹刷卡框，读到可用的卡由弹窗直接落这一单（06 §4.0） */
   const submit = () => {
-    if (blocked) return;
+    if (blocked) {
+      // 走到这儿多半是按了 F7：按钮是灰的、点了没反应，不念一句就是彻底的静默失败
+      announce(blocked);
+      return;
+    }
     if (requireCard && !cardNo) {
       setBindOpen(true);
       return;

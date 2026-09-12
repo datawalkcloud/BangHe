@@ -64,6 +64,28 @@ export const STAT_STATUSES: OrderStatus[] = [
   "reversed",
 ];
 
+/* -------------------------------------------------------------- 磅单作废事由 */
+
+/** 事由最短字数，与真库闸门同源（`orders.rs::void_order` 的 6 个字） */
+export const VOID_REASON_MIN = 6;
+
+/**
+ * 常用作废事由的快捷选项：磅房现场一只手扶卡一只手敲字，废单来去就那么几句，
+ * 先点按钮填一句完整的话，仍可手改补细节。落库的是自由文本，不是枚举码。
+ * label 只给按钮上看，reason 才是进审计日志的那句话——每条都必须够
+ * [`VOID_REASON_MIN`] 字，点一下就能直接提交。
+ */
+export const VOID_REASONS: { label: string; reason: string }[] = [
+  { label: "农户取消售粮", reason: "农户临时取消售粮，车辆已卸离磅面" },
+  { label: "登记信息有误", reason: "售粮人或车牌登记错误，需重新制单" },
+  { label: "品种选错", reason: "粮食品种选错，需重新制单" },
+  { label: "同一车重复制单", reason: "同一车辆重复制单，本单作废" },
+  { label: "误触发称重", reason: "车辆未实际过磅，误触发称重" },
+  { label: "读数异常", reason: "磅面读数异常，需重新过磅" },
+  { label: "流转卡绑错", reason: "流转卡绑定错误，需重新发单" },
+  { label: "取样与本单不符", reason: "化验取样与本单不符，需重采重检" },
+];
+
 /* --------------------------------------------------------------- 售粮人类型 */
 
 export type PartyType = "farmer" | "large_grower" | "broker" | "cooperative" | "company";

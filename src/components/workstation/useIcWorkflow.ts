@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { announce } from "@/lib/voice-prompt";
 import type { WeighOrder } from "@/mock/types";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
@@ -36,7 +37,13 @@ function nextStep(o: WeighOrder): "gross" | "tare" | "settle" | "done" {
   return "settle";
 }
 
-/** 同一件事在屏幕上只占一个位置：同一张卡/同一张单连着闸门不过时更新原来那个框，不叠出一摞红框 */
+/**
+ * 同一件事在屏幕上只占一个位置：同一张卡/同一张单连着闸门不过时更新原来那个框，不叠出一摞红框。
+ *
+ * 下面每条 `toast.error/warning` 旁边都跟一句 `announce(...)`，且**去重键照抄同一个 `sticky(id)`**，
+ * 不另立一套编号（05 §6.5 规矩③）：操作员与农户都在窗外，屏上那行红字没人回头看，闸门拦下的事
+ * 必须同时从喇叭里出去。话术只说动作与结论，不念单号、卡号、姓名与重量（那些归屏幕和码单）。
+ */
 const sticky = (id: string) => ({ id });
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -104,11 +111,13 @@ export function useIcWorkflow({
       }
       if (!o) {
         toast.error(`卡挂的单 ${orderNo} 已不存在`, sticky(`ic-order-gone:${orderNo}`));
+        announce(`这张卡的单已经没有了，请重新制单`, `ic-order-gone:${orderNo}`);
         return;
       }
       const step = nextStep(o);
       if (step === "done") {
         toast.info(`${o.party_name} 的单已结算，卡可收回；要继续请到卡池页退卡`, sticky(`ic-order-done:${o.order_no}`));
+        announce("这张单已经结算完了，把卡收回来", `ic-order-done:${o.order_no}`);
         return;
       }
       const key = `${o.order_no}:${step}`;
@@ -118,17 +127,23 @@ export function useIcWorkflow({
       lastFire.current.set(key, now);
 
       if (step === "settle") {
+        // 不在这儿插话：第三刷就是把这张单交给结算框，接下来由结算框自己念它自己的话
         cbs.current.onRequestSettle(o.order_no);
         return;
       }
       // 毛重 / 皮重都要"此刻稳定读数"，未稳这一刷作废、不缓存不凑数
       if (!scale.connected || !scale.stable) {
         toast.warning(scale.error ? `仪表离线：${scale.error}` : "读数未稳，请等车停稳再刷", sticky(`ic-scale:${o.order_no}`));
+        announce(
+          scale.error ? "仪表离线，这一刷没有记上" : "读数还没稳定，等车停稳再刷一次",
+          `ic-scale:${o.order_no}`,
+        );
         return;
       }
       const weight01kg = scale.weight01kg;
       if (weight01kg <= 0) {
         toast.error("读数不大于 0，这一刷不记账", sticky(`ic-zero:${o.order_no}`));
+        announce("读数是零，这一刷不记账", `ic-zero:${o.order_no}`);
         return;
       }
       // 皮重超容差不在这里拦：一刷照样捕获，服务端复算后把警示记在磅单上（成功提示后补一条警告）
@@ -144,20 +159,25 @@ export function useIcWorkflow({
         });
         if (!updated) {
           toast.error("捕获失败：磅单不存在或已被他人修改", sticky(`ic-capture:${o.order_no}`));
+          announce("捕获失败，这张单可能已经被改过", `ic-capture:${o.order_no}`);
           return;
         }
         toast.success(`${step === "gross" ? "毛重" : "皮重"} ${updated.order_no} 已捕获`);
+        // 落库这一下是最该听到的一声：车马上要下磅，操作员不需要回头确认屏幕上那行绿字
+        announce(step === "gross" ? "毛重已捕获，请卸货后再来一次" : "皮重已捕获，可以下磅了", `ic-weight:${key}`);
         if (step === "tare" && updated.tare_override_reason) {
           toast.warning("皮重偏差超容差，本刷仍有效", {
             description: `${updated.tare_override_reason}；已在磅单醒目提醒，请核对车辆与读数`,
             id: `ic-tare-tol:${o.order_no}`,
           });
+          announce("皮重偏差超出容差，请核对车上有没有留人", `ic-tare-tol:${o.order_no}`);
         }
         refresh(o.order_no, o.party_id);
         if (step === "tare") cbs.current.onWeighed(updated); // 皮重即净重已定 → 自动出码单
         else if (updated.settled_at == null && updated.net_weight_01kg != null) cbs.current.onRequestSettle(updated.order_no);
       } catch (e) {
         toast.error(`捕获失败：${e instanceof Error ? e.message : "请重试；读数未丢，仪表仍在推送"}`, sticky(`ic-capture:${o.order_no}`));
+        announce("捕获失败，读数没有丢，再刷一次", `ic-catch:${o.order_no}`);
       }
     },
     [debounceMs, refresh],
@@ -169,10 +189,13 @@ export function useIcWorkflow({
       try {
         const res = await api.cardIssue({ card_no: cardNo });
         toast.success(`已把卡 ${cardNo} 发给 ${res.order_no}，请交给农户`);
+        announce("卡已经发出，请把卡交给农户", `ic-issued:${cardNo}`);
         qc.invalidateQueries({ queryKey: ["order", res.order_no] });
         qc.invalidateQueries({ queryKey: ["open-orders"] });
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "发卡失败", sticky(`ic-issue:${cardNo}`));
+        // 服务端回的原因带单号、带条款，念出来没人听得懂，只念结论：这一步没成
+        announce("这张卡发不出去，请到工作台上手点制单", `ic-issue:${cardNo}`);
       }
     },
     [qc],
@@ -190,10 +213,12 @@ export function useIcWorkflow({
       }
       if (!loc.found) {
         toast.error(`卡 ${sn} 未在卡池登记，请先到「流转卡」页登记`, sticky(`ic-unregistered:${sn}`));
+        announce("这张卡没有登记过，换一张卡", `ic-unregistered:${sn}`);
         return;
       }
       if (loc.status === "retired") {
         toast.error(`卡 ${sn} 已注销，不能再用`, sticky(`ic-retired:${sn}`));
+        announce("这张卡已经注销了，换一张卡", `ic-retired:${sn}`);
         return;
       }
       if (loc.status === "in_pool") {
@@ -203,7 +228,10 @@ export function useIcWorkflow({
       }
       // in_use：命中它挂的那张单，按缺项推进
       if (loc.order_no) await advance(loc.order_no);
-      else toast.info("这张卡挂着的单已经不在途了", sticky(`ic-loose:${sn}`));
+      else {
+        toast.info("这张卡挂着的单已经不在途了", sticky(`ic-loose:${sn}`));
+        announce("这张卡挂的单已经做完了，把卡收回来", `ic-loose:${sn}`);
+      }
     },
     [advance, issueFree],
   );

@@ -15,6 +15,7 @@ import {
   PAYMENT_METHOD,
   TEST_METHOD,
   TONE_DOT,
+  VOID_REASON_MIN,
 } from "@/lib/constants";
 import {
   dateTime,
@@ -36,8 +37,6 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,8 +48,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { DataTable, type Column } from "@/components/business/DataTable";
-import { Choose } from "@/components/business/Choose";
 import { DocTimeline } from "@/components/business/DocTimeline";
+import { VoidReasonField } from "@/components/business/VoidReasonField";
 import {
   OrderStatusBadge,
   PaymentStatusBadge,
@@ -122,12 +121,10 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
   const names = useStaffNames();
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
-  const { data: staff = [] } = useQuery({ queryKey: ["staff"], queryFn: () => api.staff() });
 
   const [printDoc, setPrintDoc] = useState<"weigh_order" | "quality_report" | null>(null);
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
-  const [voidAuth, setVoidAuth] = useState("");
 
   const { data: order, isLoading } = useQuery({
     queryKey: ["order", orderNo],
@@ -149,9 +146,6 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
     [qcRows, order?.qc_report_id],
   );
 
-  const masters = useMemo(() => staff.filter((u) => u.role === "station_master" && u.is_active === 1), [staff]);
-  const authId = Number(voidAuth) || null;
-
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["order", orderNo] });
     void queryClient.invalidateQueries({ queryKey: ["orders"] });
@@ -161,8 +155,7 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
   };
 
   const voidMut = useMutation({
-    mutationFn: () =>
-      api.voidOrder({ order_no: orderNo, reason: voidReason.trim(), operator_id: actorId(), authorized_by: authId ?? 0 }),
+    mutationFn: () => api.voidOrder({ order_no: orderNo, reason: voidReason.trim(), operator_id: actorId() }),
     onSuccess: (o) => {
       if (!o) {
         toast.error("作废失败：未找到该磅单");
@@ -171,9 +164,9 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
       toast.success(`磅单 ${o.order_no} 已作废`);
       setVoidOpen(false);
       setVoidReason("");
-      setVoidAuth("");
       invalidate();
     },
+    // 真库把"为什么不能废"说得很具体（已结算/已挂结算单），固定文案会把原因吞掉
     onError: (e: Error) => toast.error(e.message || "作废失败，请重试"),
   });
 
@@ -330,36 +323,17 @@ function OrderQuickDetailContent({ orderNo }: { orderNo: string }) {
           <AlertDialogHeader>
             <AlertDialogTitle>确认作废磅单 {orderNo}？</AlertDialogTitle>
             <AlertDialogDescription>
-              作废不可撤销。废单原因与授权人将留存迎检审计日志。
+              作废不可撤销，无需站长授权。作废原因与经办人会留存迎检审计日志。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-3 py-2 text-xs">
-            <div>
-              <Label className="text-xs">站长二次授权</Label>
-              <Choose
-                value={voidAuth}
-                onChange={setVoidAuth}
-                options={[
-                  { value: "", label: "选择授权站长…" },
-                  ...masters.map((m) => ({ label: m.display_name, value: String(m.id) })),
-                ]}
-              />
-            </div>
-            <div>
-              <Label className="text-xs">作废原因</Label>
-              <Textarea
-                value={voidReason}
-                onChange={(e) => setVoidReason(e.target.value)}
-                placeholder="请如实输入作废事由…"
-                rows={3}
-              />
-            </div>
+            <VoidReasonField value={voidReason} onChange={setVoidReason} />
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => void voidMut.mutate()}
-              disabled={!voidAuth || !voidReason.trim() || voidMut.isPending}
+              disabled={voidReason.trim().length < VOID_REASON_MIN || voidMut.isPending}
             >
               确定作废
             </AlertDialogAction>
@@ -393,7 +367,7 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
           {detail.status === "disabled" && <ToneBadge tone="danger">已停用</ToneBadge>}
         </div>
         <p className="text-xs text-muted-foreground mt-1">
-          {detail.code} · 建档 {detail.created_at.slice(0, 10)} · 证号 {maskIdCard(detail.id_card_no)}
+          {detail.code} · 建档 {detail.created_at?.slice(0, 10) ?? ""} · 证号 {maskIdCard(detail.id_card_no)}
         </p>
       </div>
 
@@ -411,7 +385,7 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
         <div className="border p-3 bg-card">
           <div className="text-xs text-muted-foreground">累计交售</div>
           <div className="tnum text-lg font-bold">{weight(detail.total_net_01kg)}</div>
-          <div className="text-[11px] text-muted-foreground">共 {detail.recent.length} 车次</div>
+          <div className="text-[11px] text-muted-foreground">共 {(detail.recent ?? []).length} 车次</div>
         </div>
         <div className="border p-3 bg-card">
           <div className="text-xs text-muted-foreground">未结清挂账</div>
@@ -439,11 +413,11 @@ function PartyQuickDetailContent({ partyId }: { partyId: number }) {
         </div>
       )}
 
-      {detail.recent.length > 0 && (
+      {(detail.recent ?? []).length > 0 && (
         <div className="space-y-2 border-t pt-3">
           <h4 className="text-xs font-semibold">近期交售记录</h4>
           <div className="max-h-60 overflow-y-auto space-y-1">
-            {detail.recent.slice(0, 10).map((r) => (
+            {(detail.recent ?? []).slice(0, 10).map((r) => (
               <div key={r.order_no} className="flex items-center justify-between border-b py-1.5 text-xs last:border-b-0">
                 <div>
                   <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-xs">

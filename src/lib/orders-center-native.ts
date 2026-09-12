@@ -4,8 +4,8 @@
  * 只有三个函数，因为磅单中心的读路径已经被 `orders-native.ts` 整体接上了真库
  * （`listOrders` / `getOrder` / `logPrint`，以及详情要的 `getParty` / `listQc`）。
  * 这里补的是那一份里没有、后端也刚新增的三条命令：
- *  - `voidOrder` → `order_void`：mock 的作废谁点都放行，真库补上「未到 settled 才能作废 /
- *    原因不少于 6 字 / 授权人必须是在职站长 / 已挂结算单的先拦住」，并写 `order.void` 审计。
+ *  - `voidOrder` → `order_void`：真库的三道闸门是「未到 settled 才能作废 / 原因不少于 6 字 /
+ *    已挂结算单的先拦住」，并写 `order.void` 审计；作废不要求站长授权（authorized_by 已废弃）。
  *  - `settlementOfOrderNo` → `settlement_of_order`：mock 每次都能按单号查到结算单，真库此前
  *    只在结算命令的返回值里给过一次，详情页刷新一下就再也拿不到「所属结算单」的跳转。
  *  - `assignOrderDestination` → `order_assign_destination`：去向在制单时选填（03 §9.9），

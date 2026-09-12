@@ -20,7 +20,7 @@ import { PARTY_TYPE, WEIGHT_SOURCE } from "@/lib/constants";
 import { maskIdCard, money, orDash, shiftDay, todayISO, weight } from "@/lib/format";
 import { useSetting } from "@/hooks/useLookups";
 import { useDeviceStore } from "@/store/device";
-import { actorId } from "@/store/session";
+import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { PartyPortrait } from "@/components/business/PartyPortrait";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
@@ -59,14 +59,15 @@ export function PartyDetailPage() {
     [credits, partyId],
   );
 
+  const tareList = detail?.tareHistory ?? detail?.tare_history ?? [];
   const tareMean01kg = useMemo(() => {
-    const r = detail?.tareHistory.slice(0, 5) ?? [];
+    const r = tareList.slice(0, 5);
     // 手录皮重不进均值：来源不可信，拿它当基准会把后面几车都带偏
     const trusted = r.filter((x) => x.source === WEIGHT_SOURCE.scale.label);
     const list = trusted.length > 0 ? trusted : r;
     if (list.length === 0) return null;
     return Math.round(list.reduce((s, x) => s + x.tare_01kg, 0) / list.length);
-  }, [detail]);
+  }, [tareList]);
 
   if (isLoading) {
     return (
@@ -117,27 +118,18 @@ export function PartyDetailPage() {
       });
       return;
     }
-    if (p.photo_attachment_id != null) {
-      toast.success("读卡核对通过", { description: "证号一致；这张档案已有照片与核验标记，无需改动。" });
+    if (p.photo_attachment_id == null && card.photo_path) {
+      // 判据、写入、留痕、怎么说都收在 lib/party-photo（工作台/档案页/这一页共用一份）。
+      // 它自己会报"已补上"或"没补上"，这里不再叠一条同义的 toast。
+      await backfillPartyPhotoFromCard(card, p, qc);
       return;
     }
-    if (!card.photo_path) {
-      toast.success("读卡核对通过", {
-        description: "证号一致，但这次没从证件里取到照片（解码组件不支持），可在档案页「上传照片」补。",
-      });
-      return;
-    }
-    try {
-      await api.setPartyPhoto({ party_id: partyId, source_path: card.photo_path, operator_id: actorId(), source_label: "读卡带入" });
-      void qc.invalidateQueries({ queryKey: ["party-photo", partyId] });
-      void qc.invalidateQueries({ queryKey: ["party", partyId] });
-      void qc.invalidateQueries({ queryKey: ["audits"] });
-      toast.success("读卡核对通过，已把身份证照片补进档案");
-    } catch (e) {
-      toast.warning("读卡核对通过，但照片没存上", {
-        description: e instanceof Error ? e.message : "档案本身没有变化，可到档案页重新上传。",
-      });
-    }
+    toast.success("读卡核对通过", {
+      description:
+        p.photo_attachment_id != null
+          ? "证号一致；这张档案已有照片与核验标记，无需改动。"
+          : "证号一致，但这次没从证件里取到照片（解码组件不支持），可在档案页「上传照片」补。",
+    });
   }
 
   const recentCols: Column<OrderRow>[] = [
@@ -171,7 +163,7 @@ export function PartyDetailPage() {
             {detail.status === "disabled" && <ToneBadge tone="danger">已停用</ToneBadge>}
           </span>
         }
-        description={`${detail.code} · 建档 ${detail.created_at.slice(0, 10)} · 证号 ${maskIdCard(detail.id_card_no)}`}
+        description={`${detail.code} · 建档 ${detail.created_at?.slice(0, 10) ?? ""} · 证号 ${maskIdCard(detail.id_card_no)}`}
         actions={
           <>
             <Button size="sm" variant="outline" render={<Link to="/parties" />}>
@@ -257,7 +249,7 @@ export function PartyDetailPage() {
               title="皮重档案"
               extra={<span className="text-xs text-muted-foreground">皮重偏差是超收/少付的高发点，均值只取地磅读数</span>}
             >
-              {detail.tareHistory.length === 0 ? (
+              {tareList.length === 0 ? (
                 <p className="text-sm text-muted-foreground">还没有皮重记录，第一次过磅后自动生成。</p>
               ) : (
                 <div className="flex flex-col gap-2">
@@ -271,7 +263,7 @@ export function PartyDetailPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {detail.tareHistory.map((t, i) => {
+                      {tareList.map((t, i) => {
                         const dev =
                           tareMean01kg != null && tolerancePct > 0
                             ? Math.abs(t.tare_01kg - tareMean01kg) > Math.round((tareMean01kg * tolerancePct) / 100)

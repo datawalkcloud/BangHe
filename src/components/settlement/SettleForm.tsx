@@ -13,6 +13,7 @@ import { useMutation } from "@tanstack/react-query";
 import { CircleCheckIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, PriceList, QcReport, Settlement, WeighOrder } from "@/mock/types";
 import type { PaymentMethod } from "@/lib/constants";
 import { PAYMENT_METHOD } from "@/lib/constants";
@@ -140,12 +141,19 @@ export function SettleForm({
     onSuccess: (r) => {
       if (!r) {
         toast.error("结算失败：净重缺失或扣重后重量不大于 0");
+        announce("结算没有成功，这张单的净重或扣重不对", `settle-bad:${order.order_no}`);
         return;
       }
+      // 收尾这一声最值钱：钱在手里、票在打，屏幕上那行绿字没人回头确认
+      announce(payNow ? "结算完成，钱已收清" : "结算完成，这一单挂账", `settle:${order.order_no}`);
       onSettled(r);
     },
     // 改价事由缺失、重复结算等闸门原因要原样送到操作员眼前，不许翻译成"操作失败"
-    onError: (e: Error) => toast.error(`结算失败：${e.message || "请重试；已录入内容不会丢"}`),
+    onError: (e: Error) => {
+      toast.error(`结算失败：${e.message || "请重试；已录入内容不会丢"}`);
+      // 服务端原因带单号与条款（"本单已于…结算"），念出来没人听得懂，只念结论与"内容没丢"
+      announce("结算没有成功，填的内容没有丢，可以再结一次", `settle-fail:${order.order_no}`);
+    },
   });
 
   /** 不放行的原因，null = 可以提交。顺序即"卡在哪儿"的优先级，同一份文案也写在按钮旁边 */
@@ -173,10 +181,13 @@ export function SettleForm({
   function pickFromList() {
     if (!listed) {
       toast.error("该品种该等级当前没有生效价，请到「收购价目表」维护");
+      announce("这个品种这个等级没有生效价，要手填单价", "settle-noprice");
       return;
     }
     setPrice(listed.price_fen_per_ton);
     toast.success(`已带出 ${listed.grade} ${money(listed.price_fen_per_ton)}/吨（生效至 ${listed.effective_to}）`);
+    // 只报"带出来了"，价格数字归屏幕与码单（05 §6.5 规矩①）
+    announce("已带出价目表的现价", `settle-priced:${order.order_no}`);
   }
 
   const change =
@@ -190,6 +201,8 @@ export function SettleForm({
     () => {
       if (blocked) {
         toast.error(blocked);
+        // 这些原因本身就是一句人话（不带单号与金额），照整句话去重：原因换了就该重念一句
+        announce(blocked);
         return;
       }
       if (!settle.isPending) settle.mutate();

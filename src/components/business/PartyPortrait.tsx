@@ -75,7 +75,7 @@ export function PartyPortrait({
     <img
       src={data.dataUrl}
       alt={`${partyId} 号档案人像`}
-      title={`建档/更新照片于 ${data.capturedAt.slice(0, 10)}`}
+      title={`建档/更新照片于 ${data.capturedAt?.slice(0, 10) ?? ""}`}
       className={cn(frame, "object-cover")}
     />
   );

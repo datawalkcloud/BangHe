@@ -164,7 +164,7 @@ export function WorkstationPage() {
     queryFn: () => (partyId != null ? api.getParty(partyId) : Promise.resolve(null)),
     enabled: partyId != null,
   });
-  const tareRecent = partyDetail?.tareHistory ?? [];
+  const tareRecent = partyDetail?.tareHistory ?? partyDetail?.tare_history ?? [];
   const tareMean01kg = useMemo(() => {
     const r = tareRecent.slice(0, 5);
     return r.length === 0 ? null : Math.round(r.reduce((s, x) => s + x.tare_01kg, 0) / r.length);

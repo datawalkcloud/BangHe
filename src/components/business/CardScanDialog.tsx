@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { KeyboardIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useDeviceStore } from "@/store/device";
-import { useReaderPromptVoice } from "@/hooks/useReaderPromptVoice";
+import { useReaderPromptVoice } from "@/hooks/useVoicePrompt";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,

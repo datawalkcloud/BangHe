@@ -21,6 +21,7 @@
  */
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { announce } from "@/lib/voice-prompt";
 import { runningInTauri, nativePrinter, toNativePaper, type NativePrintOutcome, type NativeResult } from "@/lib/native";
 import type { DeviceConfig } from "@/mock/types";
 import type { PaperKind, PrintChannel } from "@/lib/constants";
@@ -121,6 +122,8 @@ export async function printReceiptSilently({
   if (!res.available || !out?.ok) {
     // 06 §2.2：自动打印失败要报因，但不回滚已捕获的皮重；交回预览框给磅员一次手动机会
     toast.error(`码单没能自动出纸：${out?.error ?? res.error ?? "未知原因"}`, { description: "已转窗口预览；重量已记，不受影响" });
+    // 这一声必须出：不出，磅员会以为票已经在打了，直接让车下磅。成功不念——纸从出纸口出来比语音直接
+    announce("码单没能自动出纸，请在预览框里手动打一次", `print-fail:${docNo}`);
     return "preview";
   }
 

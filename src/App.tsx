@@ -4,6 +4,7 @@ import { ThemeProvider } from "next-themes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { router } from "@/router";
+import { useVoicePromptSwitch } from "@/hooks/useVoicePrompt";
 import { DEFAULT_MODE, THEME_MODE_KEY } from "@/lib/theme";
 import "./App.css";
 
@@ -33,9 +34,17 @@ export default function App() {
       >
         <TooltipProvider delay={400}>
           <RouterProvider router={router} />
+          {/* 语音总闸：挂在根上、全应用一份，参数读回来之前本机一律不出声（见 lib/voice-prompt 规矩④） */}
+          <VoicePromptSwitch />
           <Toaster position="bottom-right" richColors closeButton />
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );
+}
+
+/** 把站点参数 `reader_prompt_voice` 同步进语音模块；本身不渲染任何东西 */
+function VoicePromptSwitch() {
+  useVoicePromptSwitch();
+  return null;
 }

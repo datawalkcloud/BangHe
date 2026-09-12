@@ -15,6 +15,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CarFrontIcon, CarIcon, KeyboardIcon, PenLineIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { announce } from "@/lib/voice-prompt";
 import type { WeighOrder } from "@/mock/types";
 import { dateTime, fromKg, nowLocalISO, toKg, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
@@ -90,6 +91,7 @@ export function WeighPanel({
     onSuccess: (o, args) => {
       if (!o) {
         toast.error("捕获失败：磅单不存在或已被他人修改");
+        announce("捕获失败，这张单可能已经被改过", `ic-capture:${order?.order_no ?? "-"}`);
         return;
       }
       // 抓拍时间给下游用 dateTime 按字面切分展示，存 UTC 串会让时标少 8 小时
@@ -103,8 +105,14 @@ export function WeighPanel({
         toast.warning(`皮重 ${weight(args.weight_01kg)} 已捕获${manualTag}：偏差超出容差，已在磅单醒目提醒`, {
           description: o.tare_override_reason,
         });
+        announce("皮重偏差超出容差，请核对车上有没有留人", `ic-tare-tol:${o.order_no}`);
       } else {
         toast.success(`${args.weigh_type === "gross" ? "毛重" : "皮重"} ${weight(args.weight_01kg)} 已捕获${manualTag}`);
+        // 去重键与后台刷卡那条路共用一套（useIcWorkflow 里同名单号），同一笔重量只念一次
+        announce(
+          args.weigh_type === "gross" ? "毛重已捕获，请卸货后再来一次" : "皮重已捕获，可以下磅了",
+          `ic-weight:${o.order_no}:${args.weigh_type}`,
+        );
       }
       qc.invalidateQueries({ queryKey: ["order", o.order_no] });
       qc.invalidateQueries({ queryKey: ["orders"] });
@@ -113,24 +121,32 @@ export function WeighPanel({
       qc.invalidateQueries({ queryKey: ["party", o.party_id] });
     },
     // Rust 闸门回的是人话（"本单当前为 settled，不能再称重"），吞掉就没法排障了
-    onError: (e: Error) => toast.error(`捕获失败：${e.message || "请重试；读数未丢，仪表仍在推送"}`),
+    onError: (e: Error) => {
+      toast.error(`捕获失败：${e.message || "请重试；读数未丢，仪表仍在推送"}`);
+      // 服务端原因带状态码与单号，念出来没人听得懂，只念结论与下一步
+      announce("捕获失败，读数没有丢，再捕一次", `ic-catch:${order?.order_no ?? "-"}`);
+    },
   });
 
   function submit(type: "gross" | "tare", value01kg: number, source: "scale" | "manual") {
     if (!order) {
       toast.error("尚未制单，无法捕获读数");
+      announce("还没有制单，先点制单再称重", "w-noorder");
       return;
     }
     if (!can("weigh.capture")) {
       toast.error("当前岗位无权捕获读数，需磅员或站长");
+      announce("当前岗位不能称重，请换磅员或站长登录", "w-noperm");
       return;
     }
     if (source === "manual" && !can("weigh.manual")) {
       toast.error("手录重量需磅员或站长岗位");
+      announce("手录重量需要磅员或站长岗位", "w-nomanual");
       return;
     }
     if (value01kg <= 0) {
       toast.error("读数必须大于 0");
+      announce("读数是零，这一笔不记账", `ic-zero:${order.order_no}`);
       return;
     }
     // 皮重容差（05 §4 ②）：超差只附上警示文案照常捕获，不再拦下要授权；判定以服务端复算为准
@@ -153,10 +169,12 @@ export function WeighPanel({
   function captureLive(type: "gross" | "tare") {
     if (!scale.connected) {
       toast.error(scale.error ? `仪表离线：${scale.error}` : "仪表离线，请改用手工录入");
+      announce("仪表离线，这一笔没记上，请改手录", `ic-scale:${order?.order_no ?? "-"}`);
       return;
     }
     if (!scale.stable) {
       toast.warning("读数未稳定，请等车辆停稳后再捕获");
+      announce("读数还没稳定，等车停稳再捕", `ic-scale:${order?.order_no ?? "-"}`);
       return;
     }
     submit(type, scale.weight01kg, "scale");

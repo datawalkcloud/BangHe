@@ -21,6 +21,7 @@ import type { Party } from "@/mock/types";
 import type { PartyType } from "@/lib/constants";
 import { PARTY_TYPE } from "@/lib/constants";
 import { maskIdCard, money, orDash, validateIdCard, weight } from "@/lib/format";
+import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
 import { runningInTauri } from "@/lib/native";
 import { useWarehouses } from "@/hooks/useLookups";
 import { useDeviceStore } from "@/store/device";
@@ -173,7 +174,8 @@ export function PartiesPage() {
    * 读卡命中已有档案就给"去改"的入口，命中新证号就直接铺进新建表单。
    *
    * 人像照片**只补缺、不覆盖**（与本页"卡面信息只带出不覆盖"同一条口径）：档案里已经存着
-   * 一张照片时，再刷一次卡不该悄悄把农户换脸——要换得由人自己点「上传照片」并保存。
+   * 一张照片时，再刷一次卡不该悄悄把农户换脸——要换得由人自己点「换一张」并保存。
+   * 档案没有照片时就**当场补上**（判据与写入都收在 `lib/party-photo`，三处读卡入口同一份）。
    */
   useEffect(() => {
     if (!lastCard) return;
@@ -187,8 +189,23 @@ export function PartiesPage() {
           ? "卡面证号与档案一致，保存后档案将标记为「已核验」。"
           : "已在编辑框里带出该档案，可直接修改。",
       });
-      setForm({ ...formOf(hit), read_card_no: lastCard.id_card_no, pending_photo: hit.photo_attachment_id == null ? pending : null });
+      setForm({ ...formOf(hit), read_card_no: lastCard.id_card_no });
       setOpen(true);
+      /**
+       * 缺照片就这一刷直接补掉，不挂成"待保存"等磅员点保存——他刷完卡通常以为已经好了，
+       * 而读卡命中的档案多半只是顺手核一下，很可能根本不点保存，照片就一直空着。
+       * 补写成功后再把表单那一格刷成已存照片，并清掉待存态，免得点保存又写第二遍。
+       */
+      if (hit.photo_attachment_id == null && lastCard.photo_path) {
+        void backfillPartyPhotoFromCard(lastCard, hit, queryClient).then((saved) => {
+          if (!saved) return;
+          setForm((f) =>
+            f.id === saved.id
+              ? { ...f, photo_attachment_id: saved.photo_attachment_id, pending_photo: null, photo_cleared: false }
+              : f,
+          );
+        });
+      }
     } else {
       toast.success("读到新证号，已按卡片信息预填建档表单", {
         description: pending ? "身份证上的人像照片一并带出，保存后即为档案照片。" : undefined,

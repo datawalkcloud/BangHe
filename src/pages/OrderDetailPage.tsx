@@ -6,7 +6,7 @@
  *   基本信息 → 重量轨迹（含被弃用的读数）→ 化验指标 → 结算明细
  *   → 附件墙 → 打印记录 → 全链路时间轴
  *
- * 页面上只有两处写操作：「作废」必须站长授权 + 事由留痕；「入仓去向」由值仓事后补录
+ * 页面上只有两处写操作：「作废」不需要授权、只需填明事由留痕；「入仓去向」由值仓事后补录
  *  （制单时选填，见 03 §9.9），改派写 order.destination 审计、署名进 keeper_id。
  * 红冲（ reversals ）在 mock 层没有对应接口，因此这里只给出跳转与说明，
  * 绝不伪装成已完成的操作（02 §F6.3 要求红冲另立新单，接口未实现）。
@@ -18,7 +18,7 @@ import { AlertTriangleIcon, ArrowLeftIcon, FlaskConicalIcon, MapPinIcon, Printer
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
-import { INDICATORS, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT } from "@/lib/constants";
+import { INDICATORS, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
 import { useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
@@ -26,7 +26,6 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -37,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { Choose } from "@/components/business/Choose";
+import { VoidReasonField } from "@/components/business/VoidReasonField";
 import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
@@ -62,12 +62,10 @@ export function OrderDetailPage() {
   const names = useStaffNames();
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
-  const { data: staff = [] } = useQuery({ queryKey: ["staff"], queryFn: () => api.staff() });
 
   const [printDoc, setPrintDoc] = useState<"weigh_order" | "quality_report" | null>(null);
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
-  const [voidAuth, setVoidAuth] = useState("");
   /** 去向弹窗：Choose 的 value 一律是字符串，"" 表示"未定"（清空也是合法写入） */
   const [destOpen, setDestOpen] = useState(false);
   const [destWh, setDestWh] = useState("");
@@ -102,9 +100,6 @@ export function OrderDetailPage() {
     [qcRows, order?.qc_report_id],
   );
 
-  const masters = useMemo(() => staff.filter((u) => u.role === "station_master" && u.is_active === 1), [staff]);
-  const authId = Number(voidAuth) || null;
-
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["order", orderNo] });
     void queryClient.invalidateQueries({ queryKey: ["orders"] });
@@ -114,21 +109,18 @@ export function OrderDetailPage() {
   };
 
   const voidMut = useMutation({
-    mutationFn: () =>
-      // authorized_by 是真库在职站长的 id，Rust 侧验岗；站长的密码复核还没接（02 §11 要求二次确认）
-      api.voidOrder({ order_no: orderNo, reason: voidReason.trim(), operator_id: actorId(), authorized_by: authId ?? 0 }),
+    mutationFn: () => api.voidOrder({ order_no: orderNo, reason: voidReason.trim(), operator_id: actorId() }),
     onSuccess: (o) => {
       if (!o) {
         toast.error("作废失败：未找到该磅单");
         return;
       }
-      toast.success(`磅单 ${o.order_no} 已作废，原因与授权人已记入审计日志`);
+      toast.success(`磅单 ${o.order_no} 已作废，原因与经办人已记入审计日志`);
       setVoidOpen(false);
       setVoidReason("");
-      setVoidAuth("");
       invalidate();
     },
-    // 真库把"为什么不能废"说得很具体（已结算/已挂结算单/授权人不是在职站长），
+    // 真库把"为什么不能废"说得很具体（已结算 / 已挂结算单 / 状态已是终态），
     // 固定文案会把原因吞掉——磅员站在磅房门口只看到"请重试"是最坏的结果
     onError: (e: Error) => toast.error(e.message || "作废失败，请重试"),
   });
@@ -766,39 +758,20 @@ export function OrderDetailPage() {
           <AlertDialogHeader>
             <AlertDialogTitle className="text-sm">作废磅单 {order.order_no}</AlertDialogTitle>
             <AlertDialogDescription className="text-xs">
-              作废后本单不再参与任何汇总统计，但记录永久保留、可查询。
+              作废后本单不再参与任何汇总统计，但记录永久保留、可查询。作废不需要站长授权，
+              磅员填明事由即可废单，事由与经办人会写进审计日志。
               若已完成结算或付款，正确做法是<strong>另立红冲单</strong>而不是作废（02 §F6.3）——
               本版本尚未提供红冲接口，红冲需由站长在结算台账处理。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-3">
-            <Label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
-              作废原因（必填，不少于 6 字）
-              <Textarea
-                value={voidReason}
-                onChange={(e) => setVoidReason(e.target.value)}
-                placeholder="例：农户临时取消售粮，车辆已卸离磅面，读数作废重开"
-                rows={3}
-              />
-            </Label>
-            <Label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
-              授权站长
-              <Choose
-                aria-label="授权站长"
-                value={voidAuth}
-                onChange={setVoidAuth}
-                options={[
-                  { value: "", label: "请选择…（作废必须站长授权）" },
-                  ...masters.map((u) => ({ value: String(u.id), label: `${u.display_name}（站长）` })),
-                ]}
-              />
-            </Label>
+            <VoidReasonField value={voidReason} onChange={setVoidReason} />
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel className="text-sm">取消</AlertDialogCancel>
             <AlertDialogAction
             className="text-sm"
-            disabled={voidReason.trim().length < 6 || authId == null || voidMut.isPending}
+            disabled={voidReason.trim().length < VOID_REASON_MIN || voidMut.isPending}
               onClick={(e) => {
                 e.preventDefault();
                 voidMut.mutate();

@@ -15,7 +15,8 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useDeviceStore } from "@/store/device";
-import { useReaderPromptVoice } from "@/hooks/useReaderPromptVoice";
+import { announce } from "@/lib/voice-prompt";
+import { useReaderPromptVoice } from "@/hooks/useVoicePrompt";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -111,6 +112,7 @@ export function CardBindDialog({ open, onOpenChange, required, onPicked, onSkip,
         if (!alive) break;
         if (!hit) {
           setHalted(true); // 设备故障 / 这台机压根没有 IC 通道 / 被 stopWatch 打断
+          announce("这台机器读不到卡，请检查一下读卡器", "bind-halted");
           return;
         }
         const sn = hit.sn.trim().toUpperCase();
@@ -119,23 +121,29 @@ export function CardBindDialog({ open, onOpenChange, required, onPicked, onSkip,
           const loc = await api.cardLocate(sn);
           if (!loc.found) {
             setRejected(`卡 ${sn} 未在卡池登记：请到「流转卡」页登记后再制单，或换一张已登记的卡`);
+            // 拒绝原因写在屏上，农户看不见——这一句得从喇叭里出去才知道下一步干什么
+            announce("这张卡没有登记过，换一张卡");
             continue;
           }
           if (loc.status === "retired") {
             setRejected(`卡 ${sn} 已注销，不能再用：请换一张空闲卡`);
+            announce("这张卡已经注销了，换一张卡");
             continue;
           }
           if (loc.status === "in_use") {
             setRejected(
               `卡 ${sn} 还挂着没做完的单 ${loc.order_no ?? ""}${loc.party_name ? `（${loc.party_name}）` : ""}：一张卡不能同时开两张单，请先给那张单退卡或换一张空闲卡`,
             );
+            announce("这张卡还挂着没做完的单，先换一张");
             continue;
           }
+          announce("卡读到了，正在取号制单");
           useDeviceStore.getState().reader.ic.stopWatch();
           pickedRef.current(sn);
           return;
         } catch (e) {
           setRejected(`定位卡 ${sn} 失败：${e instanceof Error ? e.message : "请重试，或换一张卡"}`);
+          announce("这张卡读不出来，再贴一次试试");
         }
       }
     })();
@@ -160,6 +168,11 @@ export function CardBindDialog({ open, onOpenChange, required, onPicked, onSkip,
           ? "本站要求「制单必须绑卡」，没读到卡这张单制不成。重新点一次「取号并制单」可再来一轮。"
           : "这一轮没人放卡；重新点一次「取号并制单」可再来一轮，也可以不绑卡先制单。",
       });
+      // 弹窗是自己关的，谁都没盯着屏幕——这一声不说，农户会一直站在窗口前等着
+      announce(
+        required ? "等了一会儿没人放卡，这张单先不制了" : "没人放卡，监听已经停了",
+        "bind-timeout",
+      );
       closeRef.current(false);
     }, 200);
     return () => clearInterval(ticker);

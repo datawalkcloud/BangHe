@@ -154,6 +154,7 @@ function toRow(o: WeighOrder): OrderRow {
 export interface PartyDetail extends Party {
   recent: OrderRow[];
   tareHistory: { date: string; tare_01kg: number; source: string }[];
+  tare_history?: { date: string; tare_01kg: number; source: string }[];
   credit_fen: number;
   total_net_01kg: number;
 }
@@ -1197,8 +1198,14 @@ export const api = {
     return { order: o, settlement };
   },
 
-  /** 作废：单据永不物理删除，只置状态并留授权与原因 */
-  async voidOrder(input: { order_no: string; reason: string; operator_id: number; authorized_by: number }): Promise<WeighOrder | null> {
+  /** 作废：单据永不物理删除，只置状态并留事由与经办人（不要求站长授权） */
+  async voidOrder(input: {
+    order_no: string;
+    reason: string;
+    operator_id: number;
+    /** 已废弃：作废不再走授权，真库与此处都忽略，只为兼容旧调用方留在签名里 */
+    authorized_by?: number;
+  }): Promise<WeighOrder | null> {
     await sleep(120);
     const o = orderOf(input.order_no);
     if (!o) return null;
@@ -1211,7 +1218,7 @@ export const api = {
       id: o.id, at: now, actor_id: input.operator_id,
       actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
       action: "order.void", entity: "weigh_order", entity_no: o.order_no,
-      reason: input.reason, authorized_by: users.find((u) => u.id === input.authorized_by)?.display_name ?? "—", result: "ok",
+      reason: input.reason, authorized_by: null, result: "ok",
     });
     // 作废同为终态：自动回收该单绑的流转卡回池
     const voidCardNo = o.card_no;

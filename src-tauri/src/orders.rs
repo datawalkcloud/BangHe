@@ -351,6 +351,7 @@ pub struct PartyDetail {
     #[serde(flatten)]
     pub party: Party,
     pub recent: Vec<WeighOrder>,
+    #[serde(rename = "tareHistory")]
     pub tare_history: Vec<TareRow>,
     pub credit_fen: i64,
     pub total_net_01kg: i64,
@@ -2464,26 +2465,11 @@ pub struct VoidOrderInput {
     #[allow(dead_code)]
     #[serde(default)]
     pub operator_id: Option<i64>,
-    /// 授权站长。mock 让用户从下拉里挑一个就算授权，真库要验明他确实是在职站长
-    pub authorized_by: i64,
-}
-
-/// 验明"授权人是当前在职站长"（作废 / 红冲一类破坏性操作）。
-/// 皮重偏差超容差已不走授权——捕获有效、只记警示（见 [`capture`]）。
-fn ensure_active_station_master(conn: &Connection, id: i64) -> Result<(), String> {
-    let role: Option<String> = conn
-        .query_row(
-            "SELECT role FROM user_account WHERE id = ?1 AND is_active = 1 AND deleted_at IS NULL",
-            params![id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| format!("检查授权人失败：{e}"))?;
-    match role.as_deref() {
-        Some("station_master") => Ok(()),
-        Some(other) => Err(format!("授权人岗位是「{other}」，作废磅单必须由站长授权")),
-        None => Err("授权人不存在或已停用，无法作为作废授权人".into()),
-    }
+    /// 作废**不再要求站长授权**（磅员自己填事由即可废单），此字段只为兼容仍在
+    /// 传它的旧调用方而保留并忽略——与皮重超容差那次同口径（见 [`capture`]）。
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub authorized_by: Option<i64>,
 }
 
 pub fn void_order(conn: &Connection, actor: &AuthProfile, input: VoidOrderInput) -> Result<Option<WeighOrder>, String> {
@@ -2508,7 +2494,6 @@ pub fn void_order(conn: &Connection, actor: &AuthProfile, input: VoidOrderInput)
     if load_settlement_of(conn, order.id)?.is_some() {
         return Err("本单已挂在结算单下，作废前请先撤销结算".into());
     }
-    ensure_active_station_master(conn, input.authorized_by)?;
 
     let now = now_iso();
     conn.execute(
@@ -2516,7 +2501,8 @@ pub fn void_order(conn: &Connection, actor: &AuthProfile, input: VoidOrderInput)
         params![order.id, now, reason, actor.id],
     )
     .map_err(|e| format!("作废失败：{e}"))?;
-    audit(conn, actor, "order.void", "weigh_order", &order.order_no, Some(&reason), Some(input.authorized_by));
+    // authorized_by 恒为空：作废不走授权，留痕靠经办人（actor）+ 事由 + 时间
+    audit(conn, actor, "order.void", "weigh_order", &order.order_no, Some(&reason), None);
     // 作废同样是终态：同事务释放该单绑的流转卡（06 §6.3）
     crate::cards::release_for_order(conn, order.id);
     load_order_full(conn, &order.order_no)

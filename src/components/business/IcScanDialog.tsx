@@ -23,7 +23,8 @@ import { useEffect, useRef, useState } from "react";
 import { CreditCardIcon, KeyboardIcon, ScanLineIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useDeviceStore } from "@/store/device";
-import { useReaderPromptVoice } from "@/hooks/useReaderPromptVoice";
+import { announce } from "@/lib/voice-prompt";
+import { useReaderPromptVoice } from "@/hooks/useVoicePrompt";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -233,6 +234,7 @@ export function IcScanDialog({
       const errs = validateRef.current({ card_no, label });
       if (errs.length > 0) {
         setErrors(errs);
+        announce("这张卡的登记信息还没填完整");
         return;
       }
     }
@@ -241,10 +243,14 @@ export function IcScanDialog({
     try {
       await onRegisterRef.current({ card_no, label: label.trim() });
       toast.success(`卡 ${card_no} 已入池`);
+      // 批量登记时手里握着一叠卡，这一声就是"这张可以放下了、拿下一张"的信号；卡号不念（念了也对不上）
+      announce("这张卡已登记入库，可以登记下一张", `reg:${card_no}`);
       onRegisteredRef.current?.(card_no);
       closeRef.current(false);
     } catch (e) {
       toast.error(`登记失败：${e instanceof Error ? e.message : String(e)}`);
+      // 服务端原因带卡号与约束名，只念结论：这张没进去，还得再点一次登记
+      announce("这张卡没有登记进去，请看屏幕上的原因再登记一次", `reg-fail:${card_no}`);
       setPhase("ready");
     }
   }

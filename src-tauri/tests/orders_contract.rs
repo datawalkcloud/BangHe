@@ -740,33 +740,28 @@ fn print_log_records_reprint_and_operator() {
 
 // -------------------------------------------------------------- 作废与结算归属
 
-fn void_input(no: &str, reason: &str, authorized_by: i64) -> VoidOrderInput {
-    VoidOrderInput { order_no: no.into(), reason: reason.into(), operator_id: None, authorized_by }
+fn void_input(no: &str, reason: &str) -> VoidOrderInput {
+    // authorized_by 已废弃（作废不走授权），DTO 里只为兼容旧调用方而存在
+    VoidOrderInput { order_no: no.into(), reason: reason.into(), operator_id: None, authorized_by: None }
 }
 
-/// 作废在 mock 里谁点都放行，真库的三道闸门（岗位、事由、状态）逐条钉死。
+/// 真库的三道闸门（岗位、事由、状态）逐条钉死；作废**不需要站长授权**。
 #[test]
-fn void_gates_on_reason_authorizer_and_state_machine() {
+fn void_gates_on_reason_and_state_machine_without_authorization() {
     let conn = db();
     ensure_users(&conn);
     let xm: i64 = conn.query_row("SELECT id FROM grain_variety WHERE code='XM'", [], |r| r.get(0)).unwrap();
     let p = new_party(&conn, "丁", "341204199301272024");
     let no = create(&conn, p, xm);
-    let w2: i64 = conn.query_row("SELECT id FROM user_account WHERE username='w2'", [], |r| r.get(0)).unwrap();
     let weigher = actor(2, "weigher");
 
     // 事由：迎检要看懂"为什么废"，两个字不算理由
-    let e = void_order(&conn, &weigher, void_input(&no, "手滑", 1)).unwrap_err();
+    let e = void_order(&conn, &weigher, void_input(&no, "手滑")).unwrap_err();
     assert!(e.contains("6 个字"), "事由长度要回人话：{e}");
-    // 授权人：磅员自己放行 = 没有授权
-    let e = void_order(&conn, &weigher, void_input(&no, "农户临时取消售粮", w2)).unwrap_err();
-    assert!(e.contains("站长"), "授权人岗位要挑明：{e}");
-    let e = void_order(&conn, &weigher, void_input(&no, "农户临时取消售粮", 9999)).unwrap_err();
-    assert!(e.contains("不存在"), "{e}");
 
-    // 站长授权 → 置状态、记经办人、留审计与时间轴
+    // 磅员自己就能废：不查站长、不要求谁批——留痕的是经办人与事由
     let reason = "农户临时取消售粮，车辆已卸离磅面";
-    let o = void_order(&conn, &weigher, void_input(&no, reason, 1)).unwrap().unwrap();
+    let o = void_order(&conn, &weigher, void_input(&no, reason)).unwrap().unwrap();
     assert_eq!(o.status, "voided");
     assert_eq!(o.void_reason.as_deref(), Some(reason));
     assert!(o.voided_at.is_some());
@@ -778,12 +773,12 @@ fn void_gates_on_reason_authorizer_and_state_machine() {
         )
         .unwrap();
     assert_eq!(voided_by, 2, "经办人是点作废的磅员");
-    assert_eq!(audit_auth, Some(1), "授权人另记一笔，迎检查得到是谁批的");
+    assert_eq!(audit_auth, None, "作废不走授权，审计里不得凭空冒出一个授权人");
     let tl = o.timeline.unwrap();
     assert!(tl.iter().any(|e| e.action == "order.void"), "时间轴要出现作废这一步");
 
     // 重复作废 → 拒（不是静默成功）
-    let e = void_order(&conn, &weigher, void_input(&no, "再废一次试试看", 1)).unwrap_err();
+    let e = void_order(&conn, &weigher, void_input(&no, "再废一次试试看")).unwrap_err();
     assert!(e.contains("已作废"), "{e}");
 
     // 台账仍查得到，汇总不再有它的数
@@ -816,7 +811,7 @@ fn settlement_of_links_order_and_settled_order_cannot_be_voided() {
     assert!(s.orders.iter().any(|o| o.order_no == no), "明细里能看见本单");
 
     // 已结算的单禁止作废（02 §F2.3：只能走红冲更正）
-    let e = void_order(&conn, &actor(4, "cashier"), void_input(&no, "价格算错了想废了重开", 1)).unwrap_err();
+    let e = void_order(&conn, &actor(4, "cashier"), void_input(&no, "价格算错了想废了重开")).unwrap_err();
     assert!(e.contains("红冲"), "已结算要指路红冲：{e}");
     assert_eq!(load_order_full(&conn, &no).unwrap().unwrap().status, "settled", "拒绝作废不得改坏状态");
 }
@@ -1114,7 +1109,7 @@ fn destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones() {
 
     // 作废单不参与汇总，再登记去向没有意义还会污染审计
     let no = create(&conn, new_party(&conn, "作废甲", "341204199301272043"), xm_id(&conn));
-    void_order(&conn, &actor(2, "weigher"), void_input(&no, "农户临时取消售粮", 1)).unwrap();
+    void_order(&conn, &actor(2, "weigher"), void_input(&no, "农户临时取消售粮")).unwrap();
     let e = assign(&conn, keep, &no, Some(wh), Some(slot)).unwrap_err();
     assert!(e.contains("已作废"), "作废单要当场拒：{e}");
 
