@@ -138,8 +138,9 @@ export function LoginPage() {
       // 免得下面万一改密失败（新密码不合规等），那栏看起来像是被清空了
       setOldPassword(current);
     } else if (!(await session.beat())) {
-      // 表单在磅房机上挂过一夜：本地这份投影还在，后端那条会话早按空闲失效清了。
-      // beat() 已清掉投影并写好提示，界面自然退回登录表单，不必再去撞那句假错误。
+      // 表单在磅房机上挂过一夜：后端那条会话已转入锁屏。登录页在 AppShell 之外，
+      // 锁屏浮层盖不到这里，就地登出退回登录表单，让人重新输账号密码进来。
+      await session.signOut();
       setBusy(false);
       return;
     }
@@ -300,7 +301,7 @@ export function LoginPage() {
 
         {!session.demo && (
           <CardFooter className="justify-center text-xs text-muted-foreground">
-            {!import.meta.env.DEV && <>连错 5 次锁定 15 分钟；</>}无操作 1 小时后需重新登录
+            {!import.meta.env.DEV && <>连错 5 次锁定 15 分钟；</>}登录后长期有效，无操作 1 小时自动锁屏
           </CardFooter>
         )}
       </Card>

@@ -37,6 +37,7 @@ import { DeviceStatusBar } from "@/components/business/DeviceStatusBar";
 import { GlobalSearch } from "@/components/business/GlobalSearch";
 import { QuickDetailSheet } from "@/components/business/QuickDetailSheet";
 import { AppTopbar } from "@/components/layout/AppTopbar";
+import { LockScreen } from "@/components/layout/LockScreen";
 import { NAV_FLAT, NAV_GROUPS, isNavActive } from "@/components/layout/app-nav";
 import { cn } from "cn";
 import { DisplayView } from "@/components/business/DisplayView";
@@ -123,13 +124,20 @@ export function AppShell() {
   useScaleTick();
 
   /**
-   * 空闲失效（02 §11 M10，具体时长由后端下发）。两条线各管一段：
-   *  - 本地时钟：机器睡了一觉回来，第一眼就该是登录页，不等下一次问后端；
+   * 空闲锁屏（02 §11 M10，具体时长由后端下发）。两条线各管一段：
+   *  - 本地时钟：机器睡了一觉回来，第一眼就该是锁屏，不等下一次问后端；
    *  - `auth_touch`：真正说了算的是 Rust 里的 last_seen，只有动过键盘/鼠标才算"有人在用"，
    *    所以定时器本身不会把会话续下去。
+   * 锁屏只是要一次密码，会话不清、页面不跳，解锁后原地继续。
    */
   const touched = useRef(false);
   const lastBeatAt = useRef(Date.now());
+  // 解锁瞬间把本地空闲计时拨回现在：否则锁屏前留到最后一次心跳的时间差
+  // 会立刻又超 ttl，下一次 tick 就把刚解开的人再锁回去
+  const locked = useSession((s) => s.locked);
+  useEffect(() => {
+    if (!locked) lastBeatAt.current = Date.now();
+  }, [locked]);
   useEffect(() => {
     const mark = () => {
       touched.current = true;
@@ -138,18 +146,18 @@ export function AppShell() {
     window.addEventListener("keydown", mark, true);
     const timer = window.setInterval(() => {
       const s = useSession.getState();
-      if (s.phase !== "in" || s.demo) return;
+      if (s.phase !== "in" || s.demo || s.locked) return;
       const ttl = (s.session?.idleTtlSecs ?? 0) * 1000;
       if (ttl > 0 && Date.now() - lastBeatAt.current > ttl) {
-        s.expire("已超过约定时长无操作，请重新登录");
-        void navigate({ to: "/login" });
+        // 机器睡了一觉回来：第一眼就该是锁屏，不等下一次问后端
+        s.lock();
         return;
       }
       if (!touched.current) return;
       touched.current = false;
+      // beat() 判定空闲超限时只会就地锁屏，浮层由本组件的 locked 状态渲染
       void s.beat().then((alive) => {
         if (alive) lastBeatAt.current = Date.now();
-        else void navigate({ to: "/login" });
       });
     }, 60_000);
     return () => {
@@ -174,6 +182,8 @@ export function AppShell() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // 锁屏期间全局快捷键一律失效，浮层里自己的按键不拦
+      if (useSession.getState().locked && !(e.target instanceof HTMLElement && e.target.closest("[data-lock-screen]"))) return;
       // F 区与 Ctrl 组合键必须 preventDefault，否则 WebView 抢去做浏览器默认行为
       if (e.key === "F2") {
         e.preventDefault();
@@ -246,6 +256,7 @@ export function AppShell() {
       {display && <DisplayView onExit={() => setDisplay(false)} />}
       <GlobalSearch open={searchOpen} onOpenChange={setSearchOpen} />
       <QuickDetailSheet />
+      <LockScreen />
     </SidebarProvider>
   );
 }

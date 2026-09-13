@@ -224,14 +224,39 @@ fn supervisor_authorize_never_signs_in_or_touches_last_login() {
     assert!(not_master.error.unwrap().contains("不是站长"), "授权必须落在站长身上");
 }
 
-// ---------------------------------------------------------------- 会话与空闲失效
+// ---------------------------------------------------------------- 会话与空闲锁屏
 
 #[test]
 fn idle_boundary_uses_the_ttl_and_fails_closed_on_garbage() {
     let now = Local::now();
     assert!(!idle_expired(&iso_of(now - Duration::minutes(59)), now, IDLE_TTL_SECS), "59 分钟仍在会话内");
-    assert!(idle_expired(&iso_of(now - Duration::minutes(61)), now, IDLE_TTL_SECS), "超过 1 小时无操作即失效");
-    assert!(idle_expired("不是时间串", now, IDLE_TTL_SECS), "时间解析不了就当作失效，宁可重登");
+    assert!(idle_expired(&iso_of(now - Duration::minutes(61)), now, IDLE_TTL_SECS), "超过 1 小时无操作即锁屏");
+    assert!(idle_expired("不是时间串", now, IDLE_TTL_SECS), "时间解析不了就当作要锁屏，宁可多要一次密码");
+}
+
+#[test]
+fn unlock_verifies_only_the_person_and_keeps_the_session() {
+    let conn = db();
+    let before = text_of(&conn, "superadmin", "last_login_at");
+
+    let good = authenticate(&conn, "superadmin", auth::bootstrap_password(), Kind::Unlock, Some("sid-lock"));
+    assert!(good.ok, "本人密码应能解锁：{:?}", good.error);
+    assert!(good.session.is_none(), "解锁不重发会话，session_id 沿用锁屏前那条，审计链不断");
+    assert_eq!(text_of(&conn, "superadmin", "last_login_at"), before, "解锁不算重新上线");
+
+    let bad = authenticate(&conn, "superadmin", "nope", Kind::Unlock, Some("sid-lock"));
+    assert!(!bad.ok);
+    assert_eq!(bad.error.as_deref(), Some(NO_DETAIL), "解锁失败也不泄露细节");
+    assert_eq!(bad.attempts_left, Some(MAX_FAILED - 1), "连错锁定与登录同一套阈值");
+
+    let actions: Vec<String> = conn
+        .prepare("SELECT DISTINCT action FROM audit_log WHERE action = 'login.unlock'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(actions, vec!["login.unlock".to_string()], "解锁成功与失败都走 login.unlock 留痕");
 }
 
 #[test]

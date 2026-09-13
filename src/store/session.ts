@@ -46,7 +46,7 @@ export const PERMISSIONS: Record<string, Role[]> = {
 type Phase =
   /** 还没问过 Rust，界面什么都不该画（避免闪一下登录页） */
   | "checking"
-  /** 未登录 / 会话已过期 */
+  /** 未登录 / 主动登出（空闲不再登出，只锁屏，见 `locked`） */
   | "out"
   /** 有会话，但可能仍被要求先设密码 */
   | "in";
@@ -56,6 +56,8 @@ interface SessionState {
   /** 浏览器预览：密码不校验，界面必须显式挂横幅 */
   demo: boolean;
   session: AuthSession | null;
+  /** 锁屏中：登录态永久有效，空闲 1 小时只是要一次密码确认人还没走 */
+  locked: boolean;
   /** 上一次动作的回执文案（登录失败原因、锁定倒计时等），由登录页消费后清空 */
   notice: string | null;
   /** 组件内用法：`const canPrint = useSession((s) => s.can("print"))` */
@@ -63,10 +65,12 @@ interface SessionState {
   boot: () => Promise<void>;
   signIn: (username: string, password: string) => Promise<LoginOutcome>;
   signOut: () => Promise<void>;
-  /** 心跳：无操作超过后端给的 idleTtlSecs 即失效，返回 false 时调用方负责跳登录页 */
+  /** 心跳：无操作超过后端给的 idleTtlSecs 即锁屏（不登出），返回 false 时调用方交给浮层 */
   beat: () => Promise<boolean>;
-  /** 本地判定已过期（机器休眠、时钟跳变）时清掉投影：不走登出、不写审计，Rust 的 last_seen 才是真相 */
-  expire: (reason: string) => void;
+  /** 本地判定空闲超限（机器休眠、时钟跳变）：就地锁屏，Rust 的 last_seen 仍是真相 */
+  lock: (reason?: string) => void;
+  /** 锁屏解锁：只验本人密码，会话与审计链不变；失败回执带剩余次数 / 锁定时间 */
+  unlock: (password: string) => Promise<LoginOutcome>;
   setPassword: (old: string, fresh: string) => Promise<ActionOutcome>;
   setNotice: (text: string | null) => void;
 }
@@ -85,6 +89,7 @@ export const useSession = create<SessionState>((set, get) => ({
   phase: "checking",
   demo: false,
   session: null,
+  locked: false,
   notice: null,
   can: (permission) => roleAllows(get().session?.actor, permission),
 
@@ -94,12 +99,13 @@ export const useSession = create<SessionState>((set, get) => ({
         const r = await auth.restore();
         if (r.channel === "native" && r.error) {
           // 问不到会话就当没登录：宁可多要一次密码，也不猜一个身份出来
-          set({ phase: "out", session: null, demo: false, notice: r.error });
+          set({ phase: "out", session: null, locked: false, demo: false, notice: r.error });
           return;
         }
         set({
           phase: r.data ? "in" : "out",
           session: r.data ?? null,
+          locked: r.data?.locked ?? false,
           demo: r.channel === "demo",
         });
       })();
@@ -120,7 +126,7 @@ export const useSession = create<SessionState>((set, get) => ({
         lockedUntil: null,
       } satisfies LoginOutcome);
     if (outcome.ok && outcome.session) {
-      set({ phase: "in", session: outcome.session, demo: r.channel === "demo", notice: outcome.error });
+      set({ phase: "in", session: outcome.session, locked: outcome.session.locked, demo: r.channel === "demo", notice: outcome.error });
     } else {
       set({ notice: outcome.error });
     }
@@ -129,23 +135,48 @@ export const useSession = create<SessionState>((set, get) => ({
 
   signOut: async () => {
     await auth.signOut();
-    set({ phase: "out", session: null, notice: null });
+    set({ phase: "out", session: null, locked: false, notice: null });
   },
 
   beat: async () => {
     const s = get();
     if (s.phase !== "in" || s.demo) return true;
     const r = await auth.beat();
-    // 通道错误不等于过期：问不到就当还在，避免网络/进程抖动把磅员踢下线
+    // 通道错误不等于锁屏：问不到就当还在，避免网络/进程抖动把磅员踢进锁屏
     if (r.channel === "native" && r.error) return true;
     if (r.data === false) {
-      set({ phase: "out", session: null, notice: "已超过 1 小时无操作，请重新登录" });
+      get().lock("已超过 1 小时无操作，请输入密码解锁");
       return false;
     }
     return true;
   },
 
-  expire: (reason) => set({ phase: "out", session: null, notice: reason }),
+  lock: (reason) =>
+    set((s) => ({
+      locked: true,
+      session: s.session ? { ...s.session, locked: true } : null,
+      notice: reason ?? "已超过 1 小时无操作，请输入密码解锁",
+    })),
+
+  unlock: async (password) => {
+    const r = await auth.unlock(password);
+    const outcome: LoginOutcome =
+      r.data ??
+      ({
+        ok: false,
+        error: r.error ?? "解锁未完成",
+        session: null,
+        needsPasswordSetup: null,
+        attemptsLeft: null,
+        lockedUntil: null,
+      } satisfies LoginOutcome);
+    if (outcome.ok) {
+      set((s) => ({ locked: false, session: s.session ? { ...s.session, locked: false } : null, notice: null }));
+    } else {
+      set({ notice: outcome.error });
+    }
+    return outcome;
+  },
 
   setPassword: async (old, fresh) => {
     const r = await auth.setPassword(old, fresh);

@@ -51,7 +51,6 @@ index	idx_order_status	CREATE INDEX idx_order_status ON weigh_order(status) WHER
 index	idx_order_variety_date	CREATE INDEX idx_order_variety_date ON weigh_order(variety_id, business_date)
 index	idx_party_fp	CREATE UNIQUE INDEX idx_party_fp ON party(id_card_no_fp) WHERE id_card_no_fp IS NOT NULL
 index	idx_party_name	CREATE INDEX idx_party_name ON party(name)
-index	idx_party_phone	CREATE INDEX idx_party_phone ON party(phone_enc)
 index	idx_party_type	CREATE INDEX idx_party_type ON party(party_type, status)
 index	idx_pay_date	CREATE INDEX idx_pay_date ON payment_record(paid_at)
 index	idx_pay_method	CREATE INDEX idx_pay_method ON payment_record(method, paid_at)
@@ -71,6 +70,7 @@ index	uk_card_label	CREATE UNIQUE INDEX uk_card_label ON card(label) WHERE label
 index	uk_dev_default	CREATE UNIQUE INDEX uk_dev_default ON device_config(kind) WHERE is_default = 1
 index	uk_ind	CREATE UNIQUE INDEX uk_ind ON qc_indicator(report_id, code)
 index	uk_order_no	CREATE UNIQUE INDEX uk_order_no ON weigh_order(order_no)
+index	uk_party_phone	CREATE UNIQUE INDEX uk_party_phone ON party(phone_enc) WHERE phone_enc IS NOT NULL
 index	uk_pc_default	CREATE UNIQUE INDEX uk_pc_default ON party_contact(party_id, kind) WHERE is_default = 1
 index	uk_qc_effective	CREATE UNIQUE INDEX uk_qc_effective ON qc_report(order_id) WHERE is_effective = 1
 index	uk_record	CREATE UNIQUE INDEX uk_record ON weigh_record(order_id, seq)

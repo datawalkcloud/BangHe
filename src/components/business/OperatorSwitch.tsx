@@ -98,6 +98,7 @@ function useDemoStaff(enabled = true) {
           issuedAt: new Date().toISOString(),
           lastSeenAt: new Date().toISOString(),
           idleTtlSecs: 0,
+          locked: false,
         },
       });
     },
