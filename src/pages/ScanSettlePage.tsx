@@ -5,9 +5,9 @@
  * 拿着一沓票回到这个窗口，出纳一张一张扫票面上的二维码——扫进来就是那张磅单，
  * 现场议价、现场扣重、现场收钱，一次结一张。所以：
  *
- *  - **扫码是唯一的入口**。工作台那一屏已经不在这里结算（出票收进结算弹窗，
- *    现金客户也一样要扫一次：不扫就没有"哪张单、什么时候、被谁结算"的对应关系，
- *    事后对账只能靠人脑回忆，那是红冲和扯皮的源头。
+ *  - **扫码是唯一的入口**。结算窗口只认票面码——扫进来才知道"哪张单、什么时候、被谁结算"，
+ *    不扫就没有这个对应关系，事后对账只能靠人脑回忆，那是红冲和扯皮的源头。
+ *    工作台（刷卡第三刷或扫票）也会弹同一个 SettleForm 做结算，两条入口同一条 `api.settle`。
  *  - **一码一单**，不做多单合并。粮站的价按品种、按等级、按水分一单一议，
  *    把三张单攒成一篮再摊一个价，等于放弃逐单议价；真要并到一张付款凭证上，结算台账里查得到人。
  *  - **一切判定都摆在脸上**。扫错了票（质检单、别人的结算凭证、作废单、已经结过的单）
@@ -16,19 +16,20 @@
  *
  * 客户把票弄丢了也能结：左边「待结算池」按售粮人列出所有没结的磅单，点一下等同扫一下。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightIcon, BanknoteIcon, FileScanIcon, PrinterIcon, ScanLineIcon, WalletIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { ORDER_STATUS, PARTY_TYPE } from "@/lib/constants";
+import { PARTY_TYPE } from "@/lib/constants";
 import type { Settlement, WeighOrder } from "@/mock/types";
 import { dateTime, money, weight } from "@/lib/format";
 import { useSetting, usePrices, useStaffNames, useStation, useVarieties } from "@/hooks/useLookups";
 import { useScannerCapture } from "@/hooks/useScannerCapture";
 import { useSession } from "@/store/session";
-import { parseScannedCode } from "@/lib/ticket-code";
+import { parseScannedCode, settleable } from "@/lib/ticket-code";
+import { scanRejectNote, settleGateOf, type SettleGateRoute } from "@/lib/settle-gate";
 import { SettleForm, type SettleOutcome } from "@/components/settlement/SettleForm";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
@@ -114,39 +115,21 @@ export function ScanSettlePage() {
     [navigate],
   );
 
-  /** 一次扫码的判定：认得出种类 → 不是本窗口正在处理的这张 → 载入 */
+  /** 一次扫码的判定：认得出是一张可直接结算的码单 → 不是本窗口正在处理的这张 → 载入 */
   const handleCode = useCallback(
     (raw: string) => {
       const code = parseScannedCode(raw);
-      if (!code) {
-        setNote({
-          tone: "danger",
-          text: `这个码我们认不出来（${raw.trim().slice(0, 40) || "空"}）。可能是别家粮站的票，或码被压坏了——可以在上面框里手输码单上的单号。`,
-        });
+      if (!settleable(code)) {
+        const note = scanRejectNote(code);
+        if (note) setNote(note);
         return;
       }
-      if (code.kind === "order") {
-        if (code.docNo === orderNo) {
-          setNote({ tone: "info", text: `码单 ${code.docNo} 已经在当前窗口，不用重复扫。` });
-          return;
-        }
-        openOrder(code.docNo);
-        if (!code.prefixed) setNote({ tone: "info", text: `按单号 ${code.docNo} 取单（没扫到票面码，可能是手输或旧版票）。` });
+      if (code.docNo === orderNo) {
+        setNote({ tone: "info", text: `码单 ${code.docNo} 已经在当前窗口，不用重复扫。` });
         return;
       }
-      if (code.kind === "settlement") {
-        setNote({ tone: "warning", text: `递过来的是结算凭证（${code.docNo}），不是码单。结算凭证是已经算过钱的单子，挂账未付清请到「付款与挂账」核销。` });
-        return;
-      }
-      if (code.kind === "payment") {
-        setNote({ tone: "info", text: `递过来的是付款凭证（${code.docNo}）：这一笔已经付过钱了。要复核付款记录去「付款与挂账」。` });
-        return;
-      }
-      if (code.kind === "qc") {
-        setNote({ tone: "warning", text: `递过来的是质检单（${code.docNo}），质检单不能结算。请让客户翻出那张收购码单。` });
-        return;
-      }
-      setNote({ tone: "danger", text: `扫到的是本系统没有的单据种类（${code.docNo}），只有码单（BD）能在这里结算。` });
+      openOrder(code.docNo);
+      if (!code.prefixed) setNote({ tone: "info", text: `按单号 ${code.docNo} 取单（没扫到票面码，可能是手输或旧版票）。` });
     },
     [orderNo, openOrder],
   );
@@ -180,7 +163,7 @@ export function ScanSettlePage() {
     [qcClient],
   );
 
-  const gate = useMemo(() => gateOf(order ?? null, bill ?? null, maySettle, allowCredit), [order, bill, maySettle, allowCredit]);
+  const gate = useMemo(() => settleGateOf(order ?? null, bill ?? null, maySettle, allowCredit), [order, bill, maySettle, allowCredit]);
 
   const printSettlement = printDetail?.settlement ?? null;
   /** 付款小票打最后一笔：当场结清时只有一条；挂账后分次核销，打的正是刚发生的这一笔 */
@@ -349,7 +332,7 @@ export function ScanSettlePage() {
                 onPrint={(kind) => bill && setPrint({ settleNo: bill.settle_no, kind, reprint: true })}
               />
               {gate ? (
-                <CallOut tone={gate.tone} title={gate.title} action={gate.action}>
+                <CallOut tone={gate.tone} title={gate.title} action={gate.route ? <GateRouteLink route={gate.route} label={gate.routeLabel ?? "查看"} order={order} bill={bill ?? null} /> : undefined}>
                   {gate.body}
                 </CallOut>
               ) : (
@@ -497,80 +480,27 @@ function PoolCard({ pool, activeNo, onPick }: { pool: Awaited<ReturnType<typeof 
   );
 }
 
-/* ------------------------------------------------------------------ 闸门 */
-
-interface Gate {
-  tone: "info" | "warning" | "danger";
-  title: string;
-  body: string;
-  action?: ReactNode;
-}
+/* ------------------------------------------------------------------ 闸门出路链接 */
 
 /**
- * 能不能在这张单上算钱，返回 null 表示能。
+ * 把共享闸门给的 `route` 种类枚举渲染成类型安全的跳转链接。
  *
- * 判定顺序就是现场"为什么扫不下去"的顺序；每一条都得带出路，只写"不允许结算"的界面
- * 等于把出纳一个人扔在窗口——他既不能改数，也不能告诉客户为什么不行。
+ * 判定的**话术与去向**收在 `settle-gate.ts`（两个结算入口共用一份），但 TanStack Router 的
+ * `to` 是字面量类型、判定层承载不了，所以这里按种类映射回本页面能写的具体 `<Link>`。
  */
-function gateOf(order: WeighOrder | null, bill: Settlement | null, maySettle: boolean, allowCredit: boolean): Gate | null {
-  if (!order) return null;
-
-  if (!maySettle) {
-    return {
-      tone: "danger",
-      title: "当前岗位不能在这个窗口结算",
-      body: "结算需要出纳或站长权限（05 §5）。请换当班出纳的账号登录；磅员只负责出票，不负认定价。",
-    };
-  }
-  if (order.status === "voided" || order.status === "rejected" || order.status === "reversed" || order.status === "archived") {
-    return {
-      tone: "danger",
-      title: `这张单是「${ORDER_STATUS[order.status].label}」，不能结算`,
-      body: `${ORDER_STATUS[order.status].desc}${order.void_reason ? `。原因：${order.void_reason}` : ""}。要更正只能走红冲流程，不能在窗口直接改数收钱。`,
-      action: (
-        <Button size="xs" variant="outline" render={<Link to="/orders/$orderNo" params={{ orderNo: order.order_no }} />}>
-          看这张单
-          <ArrowRightIcon />
-        </Button>
-      ),
-    };
-  }
-  /**
-   * "已经结过了"的唯一可靠判据。
-   *
-   * 不能用 settlement_weight_01kg / price_fen_per_ton 不空来代理：`to_settle` 这个状态的定义
-   * 本身就是"净重与结算重量已确定、待结算"，建单时还会带出预估价与预估应付——按那个写法，
-   * 每一张等着被结算的单都会被判定成"已经结算过"，窗口直接把自己锁死。
-   */
-  const alreadySettled = !!bill || order.settled_at != null || order.status === "settled" || order.status === "paid";
-  if (alreadySettled) {
-    const paid = order.payment_status === "paid";
-    return {
-      tone: paid ? "info" : "warning",
-      title: paid ? "这张单已经结算并付清了" : "这张单已经结算过，还没付清",
-      body: `结算单 ${bill?.settle_no ?? "已生成"} 于 ${dateTime(bill?.settled_at ?? order.settled_at)}，重复结算在库里就被拦（不变式 6）。${
-        paid ? "客户要再拿一张纸，点上方「结算凭证」或「付款小票」即可。" : allowCredit ? "挂账的到「付款与挂账」按结算单核销。" : "本站已关闭挂账，请把尾款当场付清。"
-      }`,
-      action: bill ? (
-        <Button size="xs" variant="outline" render={<Link to="/settlements/$settleNo" params={{ settleNo: bill.settle_no }} />}>
-          看结算单
-          <ArrowRightIcon />
-        </Button>
-      ) : undefined,
-    };
-  }
-  if (order.net_weight_01kg == null) {
-    return {
-      tone: "warning",
-      title: "净重还没确定，算不了钱",
-      body: `当前状态「${ORDER_STATUS[order.status].label}」：${ORDER_STATUS[order.status].desc}。请让客户回磅房把剩下的那一次过磅做完。`,
-      action: (
-        <Button size="xs" variant="outline" render={<Link to="/workstation" search={{ orderNo: order.order_no }} />}>
-          带到工作台
-          <ArrowRightIcon />
-        </Button>
-      ),
-    };
-  }
-  return null;
+function GateRouteLink({ route, label, order, bill }: { route: SettleGateRoute; label: string; order: WeighOrder; bill: Settlement | null }) {
+  const link =
+    route === "settlement-detail" && bill ? (
+      <Link to="/settlements/$settleNo" params={{ settleNo: bill.settle_no }} />
+    ) : route === "workstation" ? (
+      <Link to="/workstation" search={{ orderNo: order.order_no }} />
+    ) : (
+      <Link to="/orders/$orderNo" params={{ orderNo: order.order_no }} />
+    );
+  return (
+    <Button size="xs" variant="outline" render={link}>
+      {label}
+      <ArrowRightIcon />
+    </Button>
+  );
 }

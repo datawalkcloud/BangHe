@@ -124,7 +124,35 @@ export type NativePrintLine =
   | { kind: "pair"; l1: string; v1: string; l2: string; v2: string }
   | { kind: "rule" }
   | { kind: "feed"; n: number }
-  | { kind: "qr"; text: string };
+  | {
+      kind: "qr";
+      text: string;
+      /**
+       * 一个模块占几个点（203dpi，1 点 = 0.125mm）。缺省 = 机器出厂的 4 点。
+       *
+       * 从前这条行不带尺寸，热敏纸上的码恒为固件默认的 4 点——站长在编辑器里把尺寸
+       * 从「中」调到「超大」，A4 与预览变了、小票机纹丝不动。
+       */
+      size?: number;
+    }
+  | {
+      /**
+       * 一维条码（CODE128）。
+       *
+       * 这里发的不是文本而是一条**已算好的条空几何**：ESC/POS 功能 A 只支持
+       * UPC / EAN / CODE39 / ITF / CODABAR，没有 CODE128（凭票载荷里的 `:` 连 CODE39
+       * 的字符表都进不去）；走功能 B 要赌固件版本，而固件自己压缩码制会让纸比预览窄。
+       * 所以条空宽度由前端一次算出（`src/components/print/receipt/code128.ts` 的
+       * `measureCode128`，与屏幕预览同一份），Rust 只照着排点。
+       */
+      kind: "barcode";
+      /** 条 / 空宽度交替序列（单位：模块），第一个元素是条 */
+      runs: number[];
+      /** 一个模块占几个点（203dpi，1 点 = 0.125mm）。纸宽放不下时前端已压过这个数 */
+      dots: number;
+      /** 条高（点） */
+      height: number;
+    };
 
 export type NativeResult<T> =
   | { available: true; data?: T; error?: string }

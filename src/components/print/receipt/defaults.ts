@@ -36,16 +36,17 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
         showReprintBadge: true,
         updatedAt: BASELINE,
         sections: [
-          { id: uid(), kind: "kv", title: "售粮人信息", fields: ["party_name", "id_card_masked", "party_type_label", "vehicle_no"] },
-          { id: uid(), kind: "kv", title: "品种与等级", fields: ["variety_name", "grade", "moisture_pct", "impurity_pct"] },
-          { id: uid(), kind: "kv", title: "仓储与状态", fields: ["warehouse", "status_label", "weight_source_label"] },
           {
-            id: uid(), kind: "kv", title: "重量明细",
-            fields: ["gross_weight", "tare_weight", "net_weight", "package_deduct", "moisture_deduct", "impurity_deduct", "other_deduct", "deduct_total", "settlement_weight", "settlement_weight_ton", "tare_warning"],
-          },
-          {
-            id: uid(), kind: "kv", title: "金额",
-            fields: ["price_per_kg", "goods_amount", "deduction_fee", "payable_amount", "paid_amount", "payable_upper", "payment_status_label", "payment_method_label"],
+            id: uid(),
+            kind: "kv",
+            // 不写区块标题：票面上每一段的小标题由字段自己的分组带出（见 render.tsx 的 kvClusters）
+            fields: [
+              "party_name", "id_card_masked", "party_type_label", "vehicle_no",
+              "variety_name", "grade", "moisture_pct", "impurity_pct",
+              "warehouse", "status_label", "weight_source_label",
+              "gross_weight", "tare_weight", "net_weight", "package_deduct", "moisture_deduct", "impurity_deduct", "other_deduct", "deduct_total", "settlement_weight", "settlement_weight_ton", "tare_warning",
+              "price_per_kg", "goods_amount", "deduction_fee", "payable_amount", "paid_amount", "payable_upper", "payment_status_label", "payment_method_label",
+            ],
           },
           { id: uid(), kind: "text", text: "备注：{{remark}}" },
           {
@@ -56,7 +57,7 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
             qrCaption: true,
             required: true,
           },
-          { id: uid(), kind: "text", text: "结算：凭本票右下角二维码到结算窗口扫码算价付款，无需重新过磅；票面丢失请到磅房补打。" },
+          { id: uid(), kind: "text", text: "结算：凭本票右下角的码到结算窗口扫码算价付款，无需重新过磅；票面丢失请到磅房补打。" },
           { id: uid(), kind: "sign", signers: ["磅员", "化验员", "结算员", "售粮人签字"] },
         ],
       };
@@ -70,10 +71,17 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
         showReprintBadge: true,
         updatedAt: BASELINE,
         sections: [
-          { id: uid(), kind: "kv", title: "基本信息", fields: ["order_no", "party_name", "sample_no", "test_method_label"] },
+          {
+            id: uid(),
+            kind: "kv",
+            // 一个字段区装下三段：小标题「基本信息 / 判定 / 留样」由字段所属分组带出
+            fields: [
+              "order_no", "party_name", "sample_no", "test_method_label",
+              "grade", "decision_label", "moisture_deduct", "impurity_deduct",
+              "retention_no", "retention_until", "is_recheck",
+            ],
+          },
           { id: uid(), kind: "table", title: "质检指标", dataset: "indicators", columns: ["name", "value", "std", "over", "note"] },
-          { id: uid(), kind: "kv", title: "判定", fields: ["grade", "decision_label", "moisture_deduct", "impurity_deduct"] },
-          { id: uid(), kind: "kv", title: "留样", fields: ["retention_no", "retention_until", "is_recheck"] },
           { id: uid(), kind: "text", text: "拒收原因：{{reject_reason}}" },
           { id: uid(), kind: "sign", signers: ["化验员签字", "司磅员确认"] },
         ],
@@ -88,9 +96,16 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
         showReprintBadge: true,
         updatedAt: BASELINE,
         sections: [
-          { id: uid(), kind: "kv", title: "基本信息", fields: ["payee_name", "period", "order_count", "status_label"] },
+          {
+            id: uid(),
+            kind: "kv",
+            // 一个字段区装下两段：小标题「基本信息 / 金额」由字段所属分组带出
+            fields: [
+              "payee_name", "period", "order_count", "status_label",
+              "total_goods", "total_deduction", "payable", "paid", "unpaid", "payable_upper", "main_method_label",
+            ],
+          },
           { id: uid(), kind: "table", title: "结算磅单明细", dataset: "orders", columns: ["order_no", "settlement_weight", "price", "goods_amount"] },
-          { id: uid(), kind: "kv", title: "金额", fields: ["total_goods", "total_deduction", "payable", "paid", "unpaid", "payable_upper", "main_method_label"] },
           { id: uid(), kind: "qr", title: "凭单码（挂账核销时扫）", text: "{{settle_code}}", qrCaption: true },
           { id: uid(), kind: "sign", signers: ["收款人签字", "出纳", "站长"] },
         ],
@@ -105,9 +120,16 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
         showReprintBadge: true,
         updatedAt: BASELINE,
         sections: [
-          { id: uid(), kind: "kv", title: "基本信息", fields: ["pay_no", "paid_at", "party_name", "method_label", "trade_no", "voucher_no"] },
-          { id: uid(), kind: "kv", title: "关联单据", fields: ["settle_no", "order_no"] },
-          { id: uid(), kind: "kv", title: "金额", fields: ["amount", "amount_upper"] },
+          {
+            id: uid(),
+            kind: "kv",
+            // 一个字段区装下三段：小标题「基本信息 / 关联 / 金额」由字段所属分组带出
+            fields: [
+              "pay_no", "paid_at", "party_name", "method_label",
+              "trade_no", "voucher_no", "settle_no", "order_no",
+              "amount", "amount_upper",
+            ],
+          },
           { id: uid(), kind: "sign", signers: ["收款人签字", "经手人"] },
         ],
       };

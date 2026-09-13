@@ -49,6 +49,9 @@ export function PaymentsPage() {
     queryFn: () => api.listPayments(from, to),
   });
   const { data: credits = [] } = useQuery({ queryKey: ["credits"], queryFn: () => api.credits() });
+  /** 待结算池张数只为把"没有挂账"这句说准：没结算的磅单不算挂账，但确实是压着的活 */
+  const { data: pendingPool = [] } = useQuery({ queryKey: ["pending-settlements"], queryFn: () => api.pendingSettlements() });
+  const pendingOrders = pendingPool.reduce((n, g) => n + g.rows.length, 0);
   const { data: dist = [] } = useQuery({
     queryKey: ["payment-method-dist", from, to],
     queryFn: () => api.paymentMethodDist(from, to),
@@ -208,11 +211,18 @@ export function PaymentsPage() {
             <section className="border bg-card">
               <header className="border-b px-3 py-2 text-sm font-semibold">
                 挂账台账
-                <span className="ml-2 text-xs font-normal text-muted-foreground">按逾期天数倒序，先看最久的</span>
+                <span className="ml-2 text-xs font-normal text-muted-foreground">只列已结算未付清的单，按逾期天数倒序，先看最久的</span>
               </header>
               <div className="max-h-72 overflow-y-auto p-3">
                 {credits.length === 0 ? (
-                  <EmptyState title="没有未付清的结算单" description="今天收的粮都当场结清了。" />
+                  <EmptyState
+                    title="没有未付清的结算单"
+                    description={
+                      pendingOrders > 0
+                        ? `已生成的结算单都已付清。另有 ${pendingOrders} 张磅单还没结算——那不算挂账，在「结算台账」的待结算池里压着。`
+                        : "已生成的结算单都已付清，待结算池也是空的。"
+                    }
+                  />
                 ) : (
                   <ul className="flex flex-col gap-2">
                     {credits.map((c) => (

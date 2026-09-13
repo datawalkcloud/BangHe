@@ -1992,6 +1992,12 @@ pub struct SettleInput {
     pub deduction_fee_fen: i64,
     pub pay_now: bool,
     pub payment_method: String,
+    /// 当场实付金额（分）。只在 `pay_now = true` 时生效：
+    /// `None`＝按应付**全额**付清（老 payload 一字不改，行为完全不变）；
+    /// `Some(v)` 且 `0 < v < 应付`＝部分付款，差额自动进挂账台账（`payment_status = 'partial'`）。
+    /// 站点关掉「允许挂账（部分付款）」时前端不给填小，命令层不重复设闸（与 `pay_now` 同口径）。
+    #[serde(default)]
+    pub paid_amount_fen: Option<i64>,
     #[allow(dead_code)]
     pub settler_id: Option<i64>,
     #[serde(default)]
@@ -2038,10 +2044,8 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
             return Err(format!("等级「{g}」不在值域内（{}）", GRADES.join(" / ")));
         }
     }
-    if input.price_list_id.is_none() && input.price_override_reason.clone().unwrap_or_default().trim().is_empty() {
-        // 01 §F2.3：偏离价目表必须留事由；直接按价目表取价时 price_list_id 有值，放行
-        return Err("手填单价必须填写改价事由（历史价是已结算单的唯一可追溯出处）".into());
-    }
+    // 改价事由已从「必填」降为「选填」：偏离价目表或手工定价时不填也能结算，
+    // 只在写入时留痕（有值即 trim 入库，无值落 NULL），追溯压力转到前端软提示与票面留痕。
     type SettleTarget = (i64, String, i64, String, String, Option<i64>, Option<i64>, Option<i64>, String, i64, Option<String>);
     let head: Option<SettleTarget> = conn
         .query_row(
@@ -2093,6 +2097,36 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
     }
     let now = now_iso();
 
+    // 当场实付：不带 `paid_amount_fen` 的老 payload ＝按应付全额付清，行为一字不变；
+    // 填小了即部分付款，差额留在结算单上进挂账台账。零元单（扣款把货款抵完）没钱可付，当场即清。
+    let paid = if !input.pay_now || payable == 0 {
+        0
+    } else {
+        match input.paid_amount_fen {
+            None => payable,
+            Some(v) if v <= 0 => {
+                return Err("当场实付金额必须大于 0；一分钱都不付就取消「当场已付」改走挂账".into());
+            }
+            Some(v) if v > payable => {
+                return Err(format!(
+                    "当场实付（{:.2}元）大于应付（{:.2}元），付款不得超过应付",
+                    v as f64 / 100.0,
+                    payable as f64 / 100.0
+                ));
+            }
+            Some(v) => v,
+        }
+    };
+    // 三档口径与 `settlements::record_payment` 完全一致：没勾当场＝unpaid，勾了没付够＝partial，付够＝paid。
+    // 部分付款时磅单 `paid_at` 仍留 NULL——那一列记的是"钱付清的时刻"，没付清就不许落时间。
+    let pay_status = if !input.pay_now {
+        "unpaid"
+    } else if paid >= payable {
+        "paid"
+    } else {
+        "partial"
+    };
+
     conn.execute(
         "UPDATE weigh_order SET
             package_deduct_01kg = ?1, moisture_deduct_01kg = ?2, impurity_deduct_01kg = ?3, other_deduct_01kg = ?4,
@@ -2109,11 +2143,11 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
             input.price_fen_per_ton, input.price_list_id,
             input.price_override_reason.as_deref().map(str::trim).filter(|s| !s.is_empty()),
             goods, input.deduction_fee_fen, payable,
-            if input.pay_now { payable } else { 0 },
-            if input.pay_now { "paid" } else { "unpaid" },
+            paid,
+            pay_status,
             if input.pay_now { Some(input.payment_method.as_str()) } else { None },
             now,
-            if input.pay_now { Some(now.as_str()) } else { None },
+            if pay_status == "paid" { Some(now.as_str()) } else { None },
             actor.id, order_id, grade,
         ],
     )
@@ -2130,8 +2164,8 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
         params![
             settle_no, party_id, business_date,
             net, deduct, settle_weight, goods, input.deduction_fee_fen,
-            payable, if input.pay_now { payable } else { 0 },
-            if input.pay_now { "paid" } else { "unpaid" },
+            payable, paid,
+            pay_status,
             if input.pay_now { Some(input.payment_method.as_str()) } else { None },
             party_name,
             if input.party_signed.unwrap_or(false) { 1 } else { 0 },
@@ -2154,17 +2188,39 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
             detail.push_str(&format!("；等级 {} → {}", old_grade.as_deref().unwrap_or("未定级"), g));
         }
     }
+    // 挂账的单不会产生付款流水，"为什么这张单子压在台账里"就只能靠这条审计说清
+    if pay_status != "paid" {
+        detail.push_str(&format!(
+            "；{} {:.2} 元挂账，凭结算凭证核销",
+            if pay_status == "unpaid" { "全额" } else { "尚欠" },
+            (payable - paid) as f64 / 100.0
+        ));
+    }
     audit(conn, actor, "settle.create", "settlement", &settle_no, Some(&detail), None);
 
-    if input.pay_now {
+    // 流水跟着"实际付了多少"走：挂账（paid=0）一笔流水都不该有，部分付款只登记实付那一段，
+    // 剩下的差额由挂账台账 + 之后的补录付款接手（settlements::record_payment）。
+    if paid > 0 {
         let pay_no = next_no(conn, "FK")?;
+        let pay_remark = if pay_status == "paid" { "当场结清" } else { "当场部分付款" };
         conn.execute(
             "INSERT INTO payment_record (pay_no, settlement_id, order_id, amount_fen, method, payee_name, paid_at, operator_id, reversed, remark, created_at, created_by)
-             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, 0, '当场结清', ?6, ?7)",
-            params![pay_no, settlement_id, payable, input.payment_method, party_name, now, actor.id],
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?6, ?7)",
+            params![pay_no, settlement_id, paid, input.payment_method, party_name, now, actor.id, pay_remark],
         )
         .map_err(|e| format!("付款流水写入失败：{e}"))?;
-        audit(conn, actor, "pay.record", "settlement", &settle_no, Some(&format!("当场结清 {pay_no}")), None);
+        audit(
+            conn,
+            actor,
+            "pay.record",
+            "settlement",
+            &settle_no,
+            Some(&match pay_status {
+                "paid" => format!("当场结清 {pay_no}"),
+                _ => format!("当场部分付款 {pay_no}，尚欠 {:.2} 元待核销", (payable - paid) as f64 / 100.0),
+            }),
+            None,
+        );
     }
     // 结算即终态：同事务释放该单绑的流转卡（受 card_release_on_terminal 控制，06 §6.3）
     crate::cards::release_for_order(conn, order_id);

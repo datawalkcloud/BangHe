@@ -3,21 +3,43 @@
  *
  * 热敏纸上的码不是这里画的——那是 Rust `ticket-core` 发 ESC/POS 的 `qrcode` 指令，
  * 由机器固件自己排点。这里只负责**不走小票机的那两条出纸路**（窗口打印、屏幕预览）。
- * 于是有两个数必须和机器对齐，对不齐就是"预览里扫不出来 / 纸上能扫"或反过来：
+ * 于是必须和机器对齐的是**尺寸档位表**本身：两边的模块边长都出自 `code-size.ts`
+ * 的同一张表（档位 → 点 → ×0.125mm），模板里选的档位既进这里的 SVG、也进 ESC/POS 的
+ * `size` 参数（见 `escpos.ts` 往 qr 行上挂的 `size`）。从前这里改档位在纸上毫无效果——
+ * 机器恒用 `QRCodeOption::default()` 的 4 点，站长调到「超大」也只在大纸上看得见。
  *
+ * 还有一个数必须一致，对不齐就是"预览里扫不出来 / 纸上能扫"或反过来：
  *  - **纠错等级 H**：`escpos` crate 的 `QRCodeOption::default()` 就是 H（30% 恢复），
  *    粮站的票要在口袋里揣一周、晒一个月，H 不是奢侈是必需。前端跟它同一个等级，
  *    两边生成的模块矩阵才相同，预览所见即纸上的点阵。
- *  - **模块物理尺寸 0.5mm**：机器侧默认 `size: 4`，203dpi 下 4 点 = 0.5mm/模块；
- *    这里默认档（qrScale=2）也取 0.5mm，预览框里的码和真票上的码一样大。
  */
 import { useMemo } from "react";
 import QRCode from "qrcode";
-
-const MODULE_MM: Record<1 | 2 | 3, number> = { 1: 0.35, 2: 0.5, 3: 0.7 };
+import { CODE_SCALE_DOTS, type CodeScale, DOT_MM } from "./code-size";
 
 /** 静区（二维码四周留白）：规范要求的 4 个模块，机器侧由固件自己留，画 SVG 必须自己补上 */
 const QUIET = 4;
+
+/** 按纠错 H 生成模块矩阵（与热敏固件同等级，两边矩阵才相同）。编不出来返回 null */
+function buildQr(m: string): { size: number; data: ArrayLike<number> } | null {
+  try {
+    const qr = QRCode.create(m, { errorCorrectionLevel: "H" });
+    return { size: qr.modules.size, data: qr.modules.data as ArrayLike<number> };
+  } catch {
+    // 载荷超出版本 40 的容量（现实中不可能：码里只有一个单号），或字符集不受支持
+    return null;
+  }
+}
+
+/**
+ * 载荷编成二维码后的物理边长（mm，含静区）。编辑器用它报"这一档实际多大"，
+ * 与这里画 SVG 用的是同一个式子——写进说明里的数字必须和票面上量得出来的一致。
+ */
+export function qrSideMm(text: string, scale: CodeScale): number | null {
+  const built = buildQr(text.trim());
+  if (!built) return null;
+  return (built.size + QUIET * 2) * CODE_SCALE_DOTS[scale] * DOT_MM;
+}
 
 export function QrGraphic({
   text,
@@ -26,26 +48,17 @@ export function QrGraphic({
 }: {
   /** 已解析完占位的最终载荷，空串不画 */
   text: string;
-  /** 模块倍率档，对应 ReceiptSection.qrScale */
-  scale?: 1 | 2 | 3;
+  /** 尺寸档位，对应 ReceiptSection.qrScale */
+  scale?: CodeScale;
   className?: string;
 }) {
   const m = text.trim();
-  const built = useMemo(() => {
-    if (!m) return null;
-    try {
-      const qr = QRCode.create(m, { errorCorrectionLevel: "H" });
-      return { size: qr.modules.size, data: qr.modules.data as ArrayLike<number> };
-    } catch {
-      // 载荷超出版本 40 的容量（现实中不可能：码里只有一个单号），或字符集不受支持
-      return null;
-    }
-  }, [m]);
+  const built = useMemo(() => (m ? buildQr(m) : null), [m]);
 
   if (!m) return null;
 
   const side = (built ? built.size : 0) + QUIET * 2;
-  const mm = MODULE_MM[scale] * side;
+  const mm = CODE_SCALE_DOTS[scale] * DOT_MM * side;
 
   if (!built) {
     return (

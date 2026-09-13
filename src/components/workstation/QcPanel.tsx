@@ -15,19 +15,18 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, QcReport, WeighOrder } from "@/mock/types";
 import type { Grade, IndicatorMeta, QcDecision, TestMethod } from "@/lib/constants";
-import { GRADES, INDICATORS, ODOR_PRESETS, QC_DECISION, REASON_MIN, REJECT_REASONS, TEST_METHOD } from "@/lib/constants";
+import { GRADES, INDICATORS, QC_DECISION, REASON_MIN, TEST_METHOD } from "@/lib/constants";
 import { density, fromPercent, percent, weight } from "@/lib/format";
 import { actorId, useSession } from "@/store/session";
+import { useQuickOptions } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
 import { Choose } from "@/components/business/Choose";
+import { ComboBox } from "@/components/business/ComboBox";
 import { QcDecisionBadge } from "@/components/business/badges";
 import { NumField, WeightField } from "@/components/business/NumField";
-import { ReasonChips } from "@/components/business/ReasonChips";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "cn";
 
 /** 指标输入缓冲：key = 指标 code，value = 屏幕上的十进制文本（% 或 g/L）或文本值 */
@@ -43,6 +42,42 @@ function bufferOf(list: QcReport["indicators"]): Buffer {
   return b;
 }
 
+/**
+ * 文本型化验指标（气味）。
+ *
+ * 常用结论（ODOR_PRESETS）收进可打字下拉：中栏很挤，气味只是其中一个格，
+ * 平时就是一个文本框，聚焦/点箭头才浮出清单；照旧可直接手打补细节。
+ */
+function TextIndicatorField({
+  code,
+  name,
+  value,
+  onChange,
+}: {
+  code: string;
+  name: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const { options } = useQuickOptions("odor");
+  return (
+    <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+      <Label htmlFor={`qc-ind-${code}`} className="text-xs text-muted-foreground">
+        {name}
+      </Label>
+      <ComboBox
+        id={`qc-ind-${code}`}
+        aria-label={`${name}常用结论`}
+        presets={options}
+        value={value}
+        onChange={onChange}
+        placeholder="选常用结论，或直接填写"
+        className="h-8 text-xs"
+      />
+    </div>
+  );
+}
+
 /** 超基准判定只用于提示色与箭头，不参与任何计算 */
 function compare(meta: IndicatorMeta, num: number | null): { over: 0 | 1; text: string | null } {
   if (num == null || meta.std == null || meta.unit === "text") return { over: 0, text: null };
@@ -56,6 +91,7 @@ function compare(meta: IndicatorMeta, num: number | null): { over: 0 | 1; text: 
 export function QcPanel({ order, variety }: { order: WeighOrder | null; variety: GrainVariety | null }) {
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
+  const { options: rejectOptions } = useQuickOptions("reject");
 
   const { data: reports = [] } = useQuery({
     queryKey: ["qc-of-order", order?.order_no],
@@ -204,24 +240,13 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             const cmp = m.unit === "text" ? { over: 0 as const, text: null } : compare(m, num01(m.code));
             if (m.unit === "text") {
               return (
-                <div key={m.code} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-                  <Label htmlFor={`qc-ind-${m.code}`} className="text-xs text-muted-foreground">
-                    {m.name}
-                  </Label>
-                  <Input
-                    id={`qc-ind-${m.code}`}
-                    value={buf[m.code] ?? ""}
-                    onChange={(e) => setBuf((b) => ({ ...b, [m.code]: e.target.value }))}
-                    placeholder="点下面的常用结论"
-                    className="h-8 text-xs"
-                  />
-                  <ReasonChips
-                    aria-label={`${m.name}常用结论`}
-                    presets={ODOR_PRESETS}
-                    value={buf[m.code] ?? ""}
-                    onChange={(v) => setBuf((b) => ({ ...b, [m.code]: v }))}
-                  />
-                </div>
+                <TextIndicatorField
+                  key={m.code}
+                  code={m.code}
+                  name={m.name}
+                  value={buf[m.code] ?? ""}
+                  onChange={(v) => setBuf((b) => ({ ...b, [m.code]: v }))}
+                />
               );
             }
             return (
@@ -286,15 +311,16 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
         {decision === "reject" && (
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
             <span>拒收原因（必填，不少于 {REASON_MIN} 字）</span>
-            <Textarea
-              rows={1.5}
+            <ComboBox
+              multiline
+              rows={2}
               aria-label="拒收原因"
+              presets={rejectOptions}
               value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="点一条常用的，或写清楚为什么退粮…"
+              onChange={setRejectReason}
+              placeholder="选一条常用的，或写清楚为什么退粮…"
               className="min-h-0 text-sm"
             />
-            <ReasonChips aria-label="常用拒收原因" presets={REJECT_REASONS} value={rejectReason} onChange={setRejectReason} />
           </div>
         )}
 

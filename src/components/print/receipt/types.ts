@@ -11,6 +11,7 @@
  */
 import type { ReactNode } from "react";
 import type { PaperKind } from "@/lib/constants";
+import type { CodeScale } from "./code-size";
 import type { ReceiptLayout } from "./paper";
 import type {
   DailyReport,
@@ -65,8 +66,36 @@ export interface TableDef {
  * 解析规则），但渲染出来是码而不是字。之所以仍让用户模板携带它而不写死在票面里——
  * 热敏机的码由 Rust（escpos 指令）画、A4 的码由前端 SVG 画，两边都必须读到同一份载荷，
  * 否则「预览里有什么、纸上就有什么」这条承诺就破了。
+ *
+ * 这个 kind 叫 `qr`、装的却可能是条码（`codeStyle`）：**kind 是存进用户本机模板里的字符串**，
+ * 改名等于让所有存过码区块的站点一觉醒来发现票上没码了。所以加字段不改名，界面上叫「条码 / 二维码」。
  */
 export type BlockKind = "kv" | "table" | "sign" | "text" | "qr";
+
+/**
+ * 码区块要画哪一种码。
+ *
+ * 现场两种枪都有：激光枪（几十块钱那种键盘口）解不动二维码，影像枪两种都吃。
+ * 票上只印二维码，遇到前一种枪就是一张扫不出来的纸。默认仍是 `"qr"`——
+ * 老模板里没有这个字段，缺什么就照历史行为来，不擅自改任何人已经打顺了的版式。
+ */
+export type CodeStyle = "qr" | "barcode" | "both";
+
+/** 区块类型的中文名。编辑器的添加按钮与预览里"空区块"的提示共用这一份，不抄第二遍 */
+export const BLOCK_LABEL: Record<BlockKind, string> = {
+  kv: "字段区",
+  table: "表格区",
+  sign: "署名区",
+  text: "文本行",
+  qr: "条码 / 二维码",
+};
+
+/** 码制选项的中文名（`ReceiptSection.codeStyle`） */
+export const CODE_STYLE_LABEL: Record<CodeStyle, string> = {
+  qr: "仅二维码",
+  barcode: "仅一维条码（CODE128）",
+  both: "二维码 + 条码都打",
+};
 
 export interface ReceiptSection {
   id: string;
@@ -80,10 +109,18 @@ export interface ReceiptSection {
   columns?: string[];
   /** sign：署名栏标签，如 ["磅员","化验员","售粮人签字"] */
   signers?: string[];
-  /** text / qr：自由文本行（如备注、提示语），qr 区块里这条就是二维码载荷，支持 {{字段}} 占位 */
+  /** text / qr：自由文本行（如备注、提示语），qr 区块里这条就是码的载荷，支持 {{字段}} 占位 */
   text?: string;
-  /** qr：模块倍率（1=小 2=中 3=大）。热敏机另有自己的 size 指令，这里只管 A4/预览的视觉大小 */
-  qrScale?: 1 | 2 | 3;
+  /** qr：画哪种码。缺省 `"qr"`（这个字段出现之前存下来的模板全都只有二维码） */
+  codeStyle?: CodeStyle;
+  /**
+   * qr：码的尺寸档位（见 `code-size.ts` 的档位表，一模块占几个点）。
+   *
+   * 从前只有 A4 与预览认它、热敏机恒用固件默认的 4 点，于是站长把「大」调到最大，
+   * 小票机打出来分毫未变——现在三条路都读它。二维码与一维码共用这一档：
+   * 对条码而言它是窄条的宽度，同一档出来的物理大小与二维码一致。
+   */
+  qrScale?: CodeScale;
   /** qr：码下方是否附一行可读的单号（纸被晒白了、码扫不出来时人工兜底） */
   qrCaption?: boolean;
   /**

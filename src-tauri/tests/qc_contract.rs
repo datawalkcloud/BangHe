@@ -243,11 +243,13 @@ fn queue_excludes_terminal_orders() {
             other_deduct_01kg: 0,
             deduction_fee_fen: 0,
             pay_now: true,
+            paid_amount_fen: None,
             payment_method: "cash".into(),
             settler_id: None,
             price_list_id: None,
             price_override_reason: Some("测试结算：本轮不建价目行".into()),
             party_signed: Some(true),
+            grade: None,
         },
     )
     .unwrap()

@@ -8,11 +8,21 @@ import type {
   GrainVariety,
   Party,
   PriceList,
+  QuickOption,
   Station,
   UserAccount,
   Warehouse,
 } from "./types";
-import type { Grade, PartyType, Role } from "@/lib/constants";
+import type { Grade, PartyType, QuickOptionKind, Role } from "@/lib/constants";
+import {
+  CARD_RETIRE_REASONS,
+  ODOR_PRESETS,
+  ORDER_REMARK_PRESETS,
+  PRICE_REASONS,
+  QUICK_OPTION_KINDS,
+  REJECT_REASONS,
+  VOID_REASONS,
+} from "@/lib/constants";
 import { demoSettings } from "@/lib/settings-catalog";
 import { addDays, atTime, dateKey, makeIdCard, makePlate, mulberry32, pad, todayBase } from "./rng";
 
@@ -337,6 +347,34 @@ export const settings: AppSetting[] = demoSettings().map((s) =>
 export function settingValue(key: string, fallback = ""): string {
   return settings.find((s) => s.key === key)?.value ?? fallback;
 }
+
+/* ------------------------------------------------- 常用语快捷选项（可后台维护） */
+
+/**
+ * 事由/原因/结论类文本框的下拉候选，浏览器预览的常驻小表（桌面端读 `quick_option` 表）。
+ * 种子取 `src/lib/constants.ts` 那六组 presets（与 0015 迁移灌库的内容逐字一致），
+ * 之后可在「基础档案 › 常用语/快捷选项」里增删改，改动只活在本会话内存里、重启回种子。
+ */
+function seedQuickOptions(): QuickOption[] {
+  const groups: Record<QuickOptionKind, { label: string; value: string }[]> = {
+    void: VOID_REASONS.map((p) => ({ label: p.label, value: p.reason })),
+    price: PRICE_REASONS.map((p) => ({ label: p.label, value: p.value })),
+    reject: REJECT_REASONS.map((p) => ({ label: p.label, value: p.value })),
+    card_retire: CARD_RETIRE_REASONS.map((p) => ({ label: p.label, value: p.value })),
+    remark: ORDER_REMARK_PRESETS.map((p) => ({ label: p.label, value: p.value })),
+    odor: ODOR_PRESETS.map((p) => ({ label: p.label, value: p.value })),
+  };
+  const rows: QuickOption[] = [];
+  let seq = 0;
+  for (const { kind } of QUICK_OPTION_KINDS) {
+    groups[kind].forEach((p, i) => {
+      rows.push({ id: ++seq, kind, label: p.label, value: p.value, sort_order: i + 1, is_active: 1 });
+    });
+  }
+  return rows;
+}
+
+export const quickOptions: QuickOption[] = seedQuickOptions();
 
 /* --------------------------------------------------------- 单据号生成器 */
 

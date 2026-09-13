@@ -41,7 +41,7 @@ export const GRID_MIN_WIDTH = 1280;
 /** 停手多久后落库。太短等于每帧一写，太长会让"拖完马上关窗口"丢掉布局 */
 const SAVE_DEBOUNCE_MS = 400;
 
-export type PanelId = "tare" | "camera" | "weigh" | "qc";
+export type PanelId = "identity" | "tare" | "camera" | "weigh" | "qc";
 
 export interface PanelSpec {
   id: PanelId;
@@ -53,11 +53,23 @@ export interface PanelSpec {
   box: { x: number; y: number; w: number; h: number };
   /** 再小就没法用了：称重区要容得下读数，化验区要容得下指标行 */
   min: { w: number; h: number };
+  /**
+   * **版本后加的面板**：老用户存好的排布里按「收起」补进来，不占他已排好的格子（05 §4.1）。
+   * 不加这个标记的话，`sanitize` 会把档案里没有的新面板按默认位补成可见，而老用户的格子
+   * 通常已经占满 12×24 → `normalize` 的压字闸门整份退回 `defaultDoc`——升级等于把他
+   * 排好的界面悄悄重排一遍，正是最招骂的那种"我的界面怎么变了"。本人没存过排布的新账号
+   * 走 `defaultDoc`，不受此标记影响，一进来就能看见。
+   */
+  defaultHidden?: boolean;
 }
 
-// 「身份与制单」不再占格子（05 §4.0：来新人点「制单」弹窗，制单即关）；左栏改由皮重参考顶上。
+// 「身份与制单」回归常驻格子（原 05 §4 左栏第一格，git f9d407b 之前那张）。
+// 「制单」弹窗（F7 / 刷卡带卡）没有撤：两条入口共用同一个 `IdentityPanel`，
+// 弹窗开着时这一格让位不挂载（同一张读卡器的回读只能被一个实例认领，见 WorkstationPage）。
 export const PANELS: readonly PanelSpec[] = [
-  { id: "tare", title: "皮重参考", hint: "历史皮重与容差告警", box: { x: 0, y: 0, w: 3, h: 24 }, min: { w: 2, h: 4 } },
+  // 后加/回归面板一律带 defaultHidden：老用户库里那份排布按「收起」补进来，不挤动他排好的格子。
+  { id: "identity", title: "身份与制单", hint: "读卡、选农户、取号制单", box: { x: 0, y: 0, w: 3, h: 14 }, min: { w: 2, h: 8 }, defaultHidden: true },
+  { id: "tare", title: "皮重参考", hint: "历史皮重与容差告警", box: { x: 0, y: 14, w: 3, h: 10 }, min: { w: 2, h: 4 } },
   { id: "camera", title: "车上磅画面", hint: "实时预览与上磅抓拍", box: { x: 3, y: 0, w: 6, h: 7 }, min: { w: 3, h: 4 } },
   { id: "weigh", title: "称重区", hint: "读数、判稳、捕获", box: { x: 3, y: 7, w: 6, h: 11 }, min: { w: 3, h: 8 } },
   { id: "qc", title: "化验区", hint: "指标录入与等级判定", box: { x: 3, y: 18, w: 6, h: 6 }, min: { w: 3, h: 5 } },
@@ -102,12 +114,14 @@ function isStackable(items: Layout): boolean {
 
 /**
  * 收进来的一串格子规整成能用的布局：认不出的丢、越界的夹、重复的只留第一个，
- * 本次版本新增而档案里没有的面板补回默认位（升级后不会"少一块"）。
+ * 本次版本新增而档案里没有的面板补回默认位（升级后不会"少一块"）；`hidePanelsAbsentFromStore`
+ * 带上时（只有读库那条路）再给标了 `defaultHidden` 的新面板补一个收起标记，
+ * 于是老用户升级后看到的仍是他自己排的那张桌子，新面板在「面板」菜单里等着被勾出来。
  * 这一步**不判互相压字**，因为它的两个调用方对压字的容忍度不一样：
  * 网格在一次缩放的中间帧就是会报回压字的格子（把别人挤开是手势结束时它自己做的事），
  * 而库里读回来的脏值需要 `normalize` 那道退回默认的闸门。
  */
-function sanitize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
+function sanitize(rawItems: unknown, rawHidden: unknown, opts?: { hidePanelsAbsentFromStore?: boolean }): LayoutDoc {
   const seen = new Set<string>();
   const items: LayoutItem[] = [];
   const list = Array.isArray(rawItems) ? rawItems : [];
@@ -117,12 +131,17 @@ function sanitize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
     seen.add(spec.id);
     items.push(toLayoutItem(spec, entry));
   }
-  for (const spec of PANELS) {
-    if (!seen.has(spec.id)) items.push(toLayoutItem(spec));
-  }
-  const hidden = Array.isArray(rawHidden)
-    ? (rawHidden.filter((id): id is PanelId => typeof id === "string" && SPEC_BY_ID.has(id)) as PanelId[])
+  const hidden: PanelId[] = Array.isArray(rawHidden)
+    ? rawHidden.filter((id): id is PanelId => typeof id === "string" && SPEC_BY_ID.has(id))
     : [];
+  const alreadyHidden = new Set(hidden);
+  for (const spec of PANELS) {
+    if (seen.has(spec.id)) continue;
+    items.push(toLayoutItem(spec));
+    // 这一格在档案里压根没有 ⇒ 那份排布是本面板上线以前写的：后加的面板按「收起」补进来，
+    // 只登记显隐标记、不去动他任何一块格子。放出来的权利留给顶栏「面板」里那一下勾选。
+    if (opts?.hidePanelsAbsentFromStore && spec.defaultHidden && !alreadyHidden.has(spec.id)) hidden.push(spec.id);
+  }
   return { items, hidden };
 }
 
@@ -133,7 +152,7 @@ function sanitize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
  * 否则界面上就没有可操作的东西了。
  */
 function normalize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
-  const doc = sanitize(rawItems, rawHidden);
+  const doc = sanitize(rawItems, rawHidden, { hidePanelsAbsentFromStore: true });
   const visible = doc.items.filter((it) => !doc.hidden.includes(it.i as PanelId));
   if (!isStackable(visible) || visible.length === 0) return defaultDoc();
   return doc;
@@ -154,6 +173,11 @@ function settle(doc: LayoutDoc): LayoutDoc {
   return sanitize([...verticalCompactor.compact(visible, GRID_COLS), ...hiddenItems], doc.hidden);
 }
 
+/**
+ * 默认排布：老三栏 + 本次版本的所有面板都在位。这里**不**读 `defaultHidden`——
+ * 那个标记只管"库里那份老排布别被新面板挤动"（走 `normalize`），
+ * 而压根没存过排布的账号第一眼就该看见新面板，不该还要自己去菜单里勾一下。
+ */
 export function defaultDoc(): LayoutDoc {
   return { items: PANELS.map((spec) => toLayoutItem(spec)), hidden: [] };
 }

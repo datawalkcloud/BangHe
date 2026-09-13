@@ -7,6 +7,7 @@ pub mod auth;
 pub mod attachment;
 pub mod camera;
 pub mod cards;
+pub mod codes;
 pub mod dashboard;
 pub mod db;
 pub mod devices;
@@ -125,6 +126,9 @@ pub fn run() {
             masters::master_save_staff,
             masters::master_settings,
             masters::master_save_setting,
+            masters::master_quick_options,
+            masters::master_save_quick_option,
+            masters::master_delete_quick_option,
             dashboard::dashboard_data,
             orders::party_list,
             orders::party_get,

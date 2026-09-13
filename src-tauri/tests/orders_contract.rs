@@ -215,6 +215,7 @@ fn settle_now(conn: &Connection, no: &str, price: i64, pay_now: bool) -> banghe_
             other_deduct_01kg: 0,
             deduction_fee_fen: 0,
             pay_now,
+            paid_amount_fen: None,
             payment_method: "cash".into(),
             settler_id: None,
             price_list_id: Some(latest_price(conn)),
@@ -533,6 +534,7 @@ fn settle_math_and_money_trail() {
             other_deduct_01kg: 0,
             deduction_fee_fen: 5000,
             pay_now: false,
+            paid_amount_fen: None,
             payment_method: "cash".into(),
             settler_id: None,
             price_list_id: Some(latest_price(&conn)),
@@ -561,7 +563,7 @@ fn settle_math_and_money_trail() {
         &actor(4, "cashier"),
         SettleInput {
             order_no: no.clone(), price_fen_per_ton: 240000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
-            other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), settler_id: None,
+            other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), paid_amount_fen: None, settler_id: None,
             price_list_id: Some(latest_price(&conn)), price_override_reason: None, party_signed: None,
             grade: None,
         },
@@ -569,30 +571,34 @@ fn settle_math_and_money_trail() {
     .unwrap_err();
     assert!(e.contains("重复结算"), "回人话：{e}");
 
-    // 手填单价不填事由 → 拒（历史价可追溯出处）
+    // 手填单价不填事由 → 改价事由降为选填：结算照常放行，事由落 NULL
     let no2 = create(&conn, party, xm);
     capture_gross(&conn, &no2, 200000);
     capture_tare(&conn, &no2, 100000, None);
-    let e = settle(
+    let r_no_reason = settle(
         &conn,
         &actor(4, "cashier"),
         SettleInput {
             order_no: no2.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
-            other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), settler_id: None,
+            other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), paid_amount_fen: None, settler_id: None,
             price_list_id: None, price_override_reason: None, party_signed: None,
             grade: None,
         },
     )
-    .unwrap_err();
-    assert!(e.contains("改价事由"), "手填价必须留事由：{e}");
+    .unwrap()
+    .expect("事由选填，不填也必须能结算");
+    assert_eq!(r_no_reason.order.price_override_reason, None, "未填事由应落 NULL");
 
-    // 当场结清：付款流水同事务落，FK 单号同 seq_counter
+    // 当场结清（填了事由）：付款流水同事务落，FK 单号同 seq_counter
+    let no3 = create(&conn, party, xm);
+    capture_gross(&conn, &no3, 200000);
+    capture_tare(&conn, &no3, 100000, None);
     let r2 = settle(
         &conn,
         &actor(4, "cashier"),
         SettleInput {
-            order_no: no2.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
-            other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "wechat".into(), settler_id: None,
+            order_no: no3.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
+            other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "wechat".into(), paid_amount_fen: None, settler_id: None,
             price_list_id: None, price_override_reason: Some("当日市场价上浮，站长口头确认".into()), party_signed: Some(true),
             grade: None,
         },
@@ -990,6 +996,7 @@ fn settle_full(
         other_deduct_01kg: 0,
         deduction_fee_fen: 0,
         pay_now: false,
+        paid_amount_fen: None,
         payment_method: "cash".into(),
         settler_id: None,
         price_list_id: Some(latest_price(conn)),
@@ -1102,6 +1109,105 @@ fn settle_rejects_over_deduction_and_negative_payable() {
     // 合法边界仍应通过：全额净重、无扣款
     let ok = settle_full(&conn, &no, |_| {});
     assert!(ok.is_ok(), "正常结算不应被新闸门误伤：{ok:?}");
+}
+
+#[test]
+fn settle_part_pay_lands_on_credit_and_finishes_with_record_payment() {
+    let conn = db();
+    ensure_users(&conn);
+    let xm = xm_id(&conn);
+    seed_price(&conn, xm);
+    let p = new_party(&conn, "辛", "341204199301272028");
+    // 净重 10 t × 2400 元/吨 → 应付 2_400_000 分
+    let weighed = |conn: &Connection| {
+        let no = create(conn, p, xm);
+        capture_gross(conn, &no, 150000);
+        capture_tare(conn, &no, 50000, None);
+        no
+    };
+    let no_full = weighed(&conn);
+    let no_part = weighed(&conn);
+    let no_zero = weighed(&conn);
+    let no_over = weighed(&conn);
+
+    // ① 老 payload：不带实付金额＝一次付清，行为与改造前一字不差
+    let r = settle_full(&conn, &no_full, |i| i.pay_now = true).unwrap().unwrap();
+    assert_eq!((r.settlement.payment_status.as_str(), r.settlement.paid_fen), ("paid", 2_400_000));
+    assert!(r.order.paid_at.is_some(), "付清才允许落 paid_at");
+
+    // ② 闸门：实付 0 要人改走挂账，超付当场拦（都回中文短句）
+    let e = settle_full(&conn, &no_zero, |i| {
+        i.pay_now = true;
+        i.paid_amount_fen = Some(0);
+    })
+    .unwrap_err();
+    assert!(e.contains("必须大于 0"), "实付 0 应被拦下：{e}");
+    let e2 = settle_full(&conn, &no_over, |i| {
+        i.pay_now = true;
+        i.paid_amount_fen = Some(2_400_001);
+    })
+    .unwrap_err();
+    assert!(e2.contains("超过应付"), "超付应被拦下：{e2}");
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM settlement", [], |r| r.get::<_, i64>(0)).unwrap(),
+        1,
+        "被拦下的结算必须一点没写进去"
+    );
+
+    // ③ 部分付款：只付 1_000 元，差额挂账
+    let r2 = settle_full(&conn, &no_part, |i| {
+        i.pay_now = true;
+        i.paid_amount_fen = Some(100_000);
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(r2.settlement.payment_status, "partial", "付不够就是部分付款");
+    assert_eq!(r2.settlement.paid_fen, 100_000);
+    assert_eq!(r2.order.payment_status, "partial");
+    assert!(r2.order.paid_at.is_none(), "没付清不许落 paid_at");
+    let (flow_fen, flow_remark): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT pr.amount_fen, pr.remark FROM payment_record pr JOIN settlement s ON s.id = pr.settlement_id WHERE s.settle_no = ?1",
+            params![r2.settlement.settle_no],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(flow_fen, 100_000, "流水只登记实付那一段，不许把应付记成已付");
+    assert_eq!(flow_remark.as_deref(), Some("当场部分付款"));
+
+    // ④ 挂账台账与看板同源：这张单要带未付余额出现在台账里
+    let row = banghe_lib::settlements::credits(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.settlement.settle_no == r2.settlement.settle_no)
+        .expect("部分付款的单必须挂进挂账台账");
+    assert_eq!(row.unpaid_fen, 2_300_000, "未付＝应付 − 实付");
+    let in_payable: i64 = conn
+        .query_row("SELECT COUNT(*) FROM v_payable WHERE settle_no=?1", params![r2.settlement.settle_no], |r| r.get(0))
+        .unwrap();
+    assert_eq!(in_payable, 1, "看板挂账告警读的是同一张视图");
+
+    // ⑤ 补录付清后退出台账（与 record_payment 的三档口径接得上）
+    banghe_lib::settlements::record_payment(
+        &conn,
+        &actor(4, "cashier"),
+        banghe_lib::settlements::RecordPaymentInput {
+            settle_no: r2.settlement.settle_no.clone(),
+            amount_fen: 2_300_000,
+            method: "cash".into(),
+            trade_no: None,
+            operator_id: None,
+        },
+    )
+    .unwrap()
+    .expect("补录付款应命中该结算单");
+    assert!(
+        !banghe_lib::settlements::credits(&conn)
+            .unwrap()
+            .iter()
+            .any(|c| c.settlement.settle_no == r2.settlement.settle_no),
+        "付清后必须退出挂账台账"
+    );
 }
 
 #[test]

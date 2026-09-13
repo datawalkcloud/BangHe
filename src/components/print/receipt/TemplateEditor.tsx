@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownIcon, ArrowUpIcon, LoaderCircleIcon, PlusIcon, PrinterIcon, RotateCcwIcon, Trash2Icon, WrenchIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, LoaderCircleIcon, PlusIcon, PrinterIcon, RotateCcwIcon, Trash2Icon, WrenchIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 import { PAPER } from "@/lib/constants";
 import type { PaperKind } from "@/lib/constants";
@@ -27,11 +27,15 @@ import { receiptLines } from "./escpos";
 import { printJob } from "../printPage";
 import { SCENARIOS } from "./scenarios";
 import { MAX_FIT, PaperFrame, ReceiptDocument } from "./render";
+import { qrSideMm } from "./QrGraphic";
+import { measureCode128 } from "./code128";
+import { CODE_SCALE_DOTS, CODE_SCALE_LABEL, type CodeScale, dotsToMm, printableMm, scaleOf } from "./code-size";
 import { defaultLayout, LAYOUT, PAPER_SPEC } from "./paper";
 import type { ReceiptLayout } from "./paper";
 import { effectiveTemplate, useReceiptStore } from "./store";
 import { uid } from "./defaults";
-import type { BlockKind, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
+import type { BlockKind, CodeStyle, ReceiptContext, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
+import { BLOCK_LABEL, CODE_STYLE_LABEL } from "./types";
 
 /** 只有热敏纸能进小票机；A4 / 针式是系统打印队列的设备，不是同一台机器 */
 const THERMAL: PaperKind[] = ["thermal80", "thermal58"];
@@ -42,14 +46,6 @@ const SCENARIO_LIST = Object.values(SCENARIOS) as { id: ReceiptScenario; label: 
 const ZOOM_MIN = 0.25;
 const ZOOM_STEP = 0.05;
 const snapZoom = (v: number) => Math.min(MAX_FIT, Math.max(ZOOM_MIN, Math.round(v / ZOOM_STEP) * ZOOM_STEP));
-
-const BLOCK_LABEL: Record<BlockKind, string> = {
-  kv: "字段区",
-  table: "表格区",
-  sign: "署名区",
-  text: "文本行",
-  qr: "二维码",
-};
 
 export function ReceiptTemplateEditor() {
   const canEdit = useSession((s) => s.can("setting.write"));
@@ -63,10 +59,31 @@ export function ReceiptTemplateEditor() {
   const spec = SCENARIOS[scenario];
   const [draft, setDraft] = useState<ReceiptTemplate>(() => effectiveTemplate(scenario));
 
+  /**
+   * 左栏当前选中的区块：预览里对应的那一格会被描一圈。
+   *
+   * 这条联动同时管住了"排序看起来不一致"——票面上每一格都对应得上左栏第几块，
+   * 空的区块也不再从票面上凭空消失（见 ReceiptDocument 的 markEmptySections）。
+   */
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+
   // 切换场景时载入该场景当前生效模板（用户覆盖优先；effectiveTemplate 会补回流程必备区块）
   useEffect(() => {
     setDraft(effectiveTemplate(scenario));
+    // 区块 id 是"每个场景各自一套"，留着上一个场景的选中会把高亮指到不存在的那一格
+    setActiveSection(null);
   }, [scenario]);
+
+  function focusSection(id: string) {
+    setActiveSection(id);
+    // 纸面通常比预览框长得多：只描边不滚过去，等于让人自己找那格在哪儿
+    requestAnimationFrame(() => {
+      document
+        .getElementById("print-root")
+        ?.querySelector(`[data-receipt-section="${id}"]`)
+        ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }
 
   const sample = useMemo(() => spec.sampleContext(), [scenario]);
 
@@ -128,9 +145,12 @@ export function ReceiptTemplateEditor() {
           : kind === "sign"
             ? { id: uid(), kind, title: "署名", signers: ["经办人", "复核"] }
             : kind === "qr"
-              ? { id: uid(), kind, title: "二维码", text: "{{ticket_code}}", qrCaption: true }
+              // 不写 codeStyle = 只出二维码，与历史模板一致；要条码在区块里切「码制」
+              ? { id: uid(), kind, title: "条码 / 二维码", text: "{{ticket_code}}", qrCaption: true }
               : { id: uid(), kind, text: "说明：{{空缺}}" };
     setDraft((d) => ({ ...d, sections: [...d.sections, base] }));
+    // 票面动辄比预览框长几屏，接在末尾的新块不选中就等于"加了却不知道加在哪儿"
+    focusSection(base.id);
   }
 
   function doSave() {
@@ -362,14 +382,18 @@ export function ReceiptTemplateEditor() {
                   key={sec.id}
                   sec={sec}
                   scenario={scenario}
+                  paper={draft.paper}
+                  sample={sample}
                   index={idx}
                   total={draft.sections.length}
+                  active={sec.id === activeSection}
+                  onFocus={() => focusSection(sec.id)}
                   onPatch={(p) => updateSection(sec.id, p)}
                   onMove={(d) => moveSection(sec.id, d)}
                   onRemove={() => removeSection(sec.id)}
                 />
               ))}
-              {draft.sections.length === 0 && <EmptyState title="还没有区块" description="点上方按钮添加字段区 / 表格区 / 署名区。" />}
+              {draft.sections.length === 0 && <EmptyState title="还没有区块" description="点上方按钮添加字段区 / 表格区 / 署名区 / 条码二维码。" />}
             </div>
           </section>
         </div>
@@ -377,7 +401,10 @@ export function ReceiptTemplateEditor() {
         {/* 右：实时预览（按真实纸型 mm 排版，所见即所得）。标题行固定，只有票面滚 */}
         <div className="flex min-h-0 flex-col rounded-md border bg-muted/30">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b p-3">
-            <p className="text-xs text-muted-foreground">实时预览 · 样例数据，按真实纸张尺寸排版</p>
+            <p className="text-xs text-muted-foreground">
+              实时预览 · 样例数据，按真实纸张尺寸排版
+              <span className="ml-2 text-[10px]">点左栏任意区块，这里对应的那一格会描一圈；虚线框是要打印时跳过的空区块</span>
+            </p>
             <span className="flex items-center gap-3">
               <span className="text-[10px] text-muted-foreground">{PAPER_SPEC[draft.paper].note}</span>
               <span className="flex items-center gap-1.5">
@@ -409,7 +436,7 @@ export function ReceiptTemplateEditor() {
                 : `${PAPER[draft.paper]}不进小票机，「打印测试」将走窗口打印预览`}
             </p>
             <PaperFrame paper={draft.paper} zoom={shownZoom} onFitChange={setFitRatio}>
-              <ReceiptDocument template={draft} context={sample} />
+              <ReceiptDocument template={draft} context={sample} highlightId={activeSection ?? undefined} markEmptySections />
             </PaperFrame>
           </div>
         </div>
@@ -423,16 +450,24 @@ export function ReceiptTemplateEditor() {
 function SectionEditor({
   sec,
   scenario,
+  paper,
+  sample,
   index,
   total,
+  active,
+  onFocus,
   onPatch,
   onMove,
   onRemove,
 }: {
   sec: ReceiptSection;
   scenario: ReceiptScenario;
+  paper: PaperKind;
+  sample: ReceiptContext;
   index: number;
   total: number;
+  active: boolean;
+  onFocus: () => void;
   onPatch: (p: Partial<ReceiptSection>) => void;
   onMove: (d: -1 | 1) => void;
   onRemove: () => void;
@@ -440,7 +475,13 @@ function SectionEditor({
   const spec = SCENARIOS[scenario];
 
   return (
-    <div className="space-y-2 border bg-muted/30 p-2">
+    // 点卡片任意一处 = 选中这一格，预览里对应的那块跟着描边。
+    // 上下移的按钮点击也会冒泡到这里，正好：挪完的那一格仍是当前选中，眼睛不用重新找。
+    <div
+      onClick={onFocus}
+      className={`relative space-y-2 border bg-muted/30 p-2 ${active ? "border-primary pl-3" : ""}`}
+    >
+      {active && <span className="absolute left-0 top-0 h-full w-1 bg-primary" aria-hidden />}
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5">
           <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{BLOCK_LABEL[sec.kind]}</span>
@@ -470,6 +511,11 @@ function SectionEditor({
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
           区块标题
           <Input value={sec.title ?? ""} onChange={(e) => onPatch({ title: e.target.value })} className="h-7 text-xs" />
+          {sec.kind === "kv" && (
+            <span className="text-[10px] text-muted-foreground">
+              字段区只建一个就够：标题留空时，票面上每段的小标题由字段所属的分组自动带出，不必一段建一个区块。
+            </span>
+          )}
         </Label>
       )}
 
@@ -478,7 +524,7 @@ function SectionEditor({
         <TablePicker sec={sec} scenario={scenario} onPatch={onPatch} />
       )}
       {sec.kind === "sign" && <SignEditor sec={sec} onPatch={onPatch} />}
-      {sec.kind === "qr" && <QrEditor sec={sec} scenario={scenario} onPatch={onPatch} />}
+      {sec.kind === "qr" && <CodeEditor sec={sec} scenario={scenario} paper={paper} sample={sample} onPatch={onPatch} />}
       {sec.kind === "text" && (
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
           文本（支持 {"{{字段key}}"} 占位，如 {"{{remark}}"}）
@@ -495,24 +541,43 @@ function SectionEditor({
 }
 
 /**
- * 二维码区块：能改的是"码画多大、要不要在旁边印一行字"，不改载荷。
+ * 码区块：能改的是"出哪种码、码画多大、要不要在旁边印一行字"，不改载荷。
  *
  * 载荷（`{{ticket_code}}`）是结算窗口扫码定位单据的唯一依据，改错一个字符的票仍然印得出来、
  * 只是永远扫不到单——这种错在票面上完全看不出来，等到客户站在窗口才发现。所以必备区块的载荷
  * 一律只读；站长自己新加的码（收款码、小程序码之类）没有这个风险，放开编辑。
+ *
+ * 尺寸这一档从前只管 A4 与预览（小票机恒用固件默认的 4 点），现在三条出纸路都读它，
+ * 所以下面报出来的毫米数在热敏纸上也成立。
  */
-function QrEditor({
+function CodeEditor({
   sec,
   scenario,
+  paper,
+  sample,
   onPatch,
 }: {
   sec: ReceiptSection;
   scenario: ReceiptScenario;
+  paper: PaperKind;
+  sample: ReceiptContext;
   onPatch: (p: Partial<ReceiptSection>) => void;
 }) {
   const spec = SCENARIOS[scenario];
   // 本场景里能当载荷用的凭据字段（约定：key 以 _code 结尾的都是"可扫码的定位符"）
   const codeFields = spec.fields.filter((f) => f.key.endsWith("_code"));
+  const style: CodeStyle = sec.codeStyle ?? "qr";
+  const scale = scaleOf(sec.qrScale);
+
+  // 拿样例数据把 {{字段}} 解析成真实载荷，只为报尺寸用（真票上解析的是这一张单自己的号）
+  const payload = (sec.text ?? "")
+    .replace(/\{\{(.+?)\}\}/g, (_, key: string) => {
+      const v = spec.resolveField(String(key).trim(), sample);
+      return typeof v === "string" ? v : v == null ? "" : String(v);
+    })
+    .trim();
+  const qrMm = payload && style !== "barcode" ? qrSideMm(payload, scale) : null;
+  const bar = payload && style !== "qr" ? measureCode128(payload, paper, scale) : null;
 
   return (
     <div className="space-y-1.5">
@@ -533,36 +598,60 @@ function QrEditor({
 
       <div className="grid grid-cols-2 gap-2">
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          尺寸
+          码制
           <Choose
-            aria-label="二维码尺寸"
+            aria-label="码制"
             size="sm"
-            value={String(sec.qrScale ?? 2)}
-            onChange={(v) => onPatch({ qrScale: Number(v) as 1 | 2 | 3 })}
-            options={[
-              { value: "1", label: "小（0.35mm/点，约 13mm 见方）" },
-              { value: "2", label: "中（0.5mm/点，约 19mm 见方）" },
-              { value: "3", label: "大（0.7mm/点，约 26mm 见方）" },
-            ]}
+            value={style}
+            onChange={(v) => onPatch({ codeStyle: v as CodeStyle })}
+            options={(["qr", "barcode", "both"] as CodeStyle[]).map((k) => ({ value: k, label: CODE_STYLE_LABEL[k] }))}
           />
         </Label>
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          码下方印单号
-          <span className="flex h-8 items-center gap-2">
-            <Switch checked={sec.qrCaption === true} onCheckedChange={(v) => onPatch({ qrCaption: v })} />
-            <span className="text-xs">{sec.qrCaption ? "印（晒白了还能手输）" : "不印"}</span>
-          </span>
+          尺寸
+          <Choose
+            aria-label="码的尺寸"
+            size="sm"
+            value={String(scale)}
+            onChange={(v) => onPatch({ qrScale: Number(v) as CodeScale })}
+            options={([1, 2, 3, 4, 5] as CodeScale[]).map((k) => ({
+              value: String(k),
+              label: `${CODE_SCALE_LABEL[k]}（${dotsToMm(CODE_SCALE_DOTS[k])}mm/模块）`,
+            }))}
+          />
         </Label>
       </div>
+
+      {/* 选了码制就报它在这张纸上的真实尺寸：能不能扫，看的是毫米，不是"大/中/小"这种形容词 */}
+      {(qrMm != null || bar != null) && (
+        <p className="text-[10px] text-muted-foreground">
+          {[
+            qrMm != null ? `二维码约 ${qrMm.toFixed(1)}mm 见方` : null,
+            bar ? `条码约 ${bar.widthMm.toFixed(1)}mm 宽${bar.shrunk ? `（${PAPER[paper]}放不下，已压到 ${bar.dots} 点/模块）` : ""}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          {bar?.shrunk
+            ? "。再宽就得换纸型或只扫二维码"
+            : `；本纸型可打宽度 ${printableMm(paper).toFixed(0)}mm`}
+        </p>
+      )}
+      <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        码下方印单号
+        <span className="flex h-8 items-center gap-2">
+          <Switch checked={sec.qrCaption === true} onCheckedChange={(v) => onPatch({ qrCaption: v })} />
+          <span className="text-xs">{sec.qrCaption ? "印（晒白了还能手输）" : "不印"}</span>
+        </span>
+      </Label>
       <p className="text-[10px] text-muted-foreground">
-        「中」这一档和热敏机自己画的尺寸是同一种物理大小（203dpi、4 点/模块），所以 A4 预览里看着多大、纸上就多大。
-        尺寸只影响 A4 与屏幕预览；热敏纸上的码由机器排点，改的是 ESC/POS 的 size 指令，不在这张模板里。
+        有些扫描枪（尤其老的激光枪）只认一维条码、扫二维码靠模拟图像勉强凑合。结算窗口那台枪扫不动二维码时，把这里切成
+        「二维码 + 条码都打」，客户递上来的票两种枪都能读；载荷完全不变。
       </p>
     </div>
   );
 }
 
-/** 字段区：按分组列出全部可选数据，勾选即加入票面 */
+/** 字段区：按分组列出全部可选数据，勾选即加入票面；票面顺序 = 下面这份清单的顺序 */
 function KvPicker({
   sec,
   scenario,
@@ -574,12 +663,21 @@ function KvPicker({
 }) {
   const spec = SCENARIOS[scenario];
   const selected = sec.fields ?? [];
-  const order = new Map(spec.fields.map((f, i) => [f.key, i]));
-  const sortedSelected = [...selected].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+  const defOf = (k: string) => spec.fields.find((f) => f.key === k);
 
-  function toggle(key: string, on: boolean) {
-    const next = on ? [...selected, key] : selected.filter((k) => k !== key);
+  function setFields(next: string[]) {
     onPatch({ fields: next });
+  }
+  function toggle(key: string, on: boolean) {
+    // 新勾的接在末尾：票面顺序就是这份清单的顺序，不再被字段目录悄悄重排
+    setFields(on ? [...selected, key] : selected.filter((k) => k !== key));
+  }
+  function move(i: number, d: -1 | 1) {
+    const j = i + d;
+    if (j < 0 || j >= selected.length) return;
+    const next = [...selected];
+    [next[i], next[j]] = [next[j], next[i]];
+    setFields(next);
   }
 
   return (
@@ -587,7 +685,7 @@ function KvPicker({
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">已选 {selected.length} 项</span>
         {selected.length > 0 && (
-          <Button size="xs" variant="ghost" onClick={() => onPatch({ fields: [] })}>
+          <Button size="xs" variant="ghost" onClick={() => setFields([])}>
             清空
           </Button>
         )}
@@ -611,8 +709,35 @@ function KvPicker({
           </div>
         );
       })}
-      {sortedSelected.length > 0 && (
-        <p className="text-[10px] text-muted-foreground">票面顺序：{sortedSelected.map((k) => spec.fields.find((f) => f.key === k)?.label ?? k).join(" · ")}</p>
+      {selected.length > 0 && (
+        <details className="rounded border bg-background/60 p-1.5">
+          <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
+            票面顺序（{selected.length} 项 · 这一列就是打印顺序，可上下调）
+          </summary>
+          <ol className="mt-1 space-y-0.5">
+            {selected.map((k, i) => {
+              const def = defOf(k);
+              return (
+                <li key={k} className="flex items-center gap-1 text-xs">
+                  <span className="tnum w-5 shrink-0 text-right text-muted-foreground">{i + 1}</span>
+                  <span className="min-w-0 flex-1 truncate" title={def?.label ?? k}>
+                    {def?.label ?? k}
+                  </span>
+                  {def?.group && <span className="shrink-0 text-[10px] text-muted-foreground">{def.group}</span>}
+                  <Button size="xs" variant="ghost" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`上移 ${def?.label ?? k}`}>
+                    <ArrowUpIcon />
+                  </Button>
+                  <Button size="xs" variant="ghost" disabled={i === selected.length - 1} onClick={() => move(i, 1)} aria-label={`下移 ${def?.label ?? k}`}>
+                    <ArrowDownIcon />
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => toggle(k, false)} aria-label={`从票面移除 ${def?.label ?? k}`}>
+                    <XIcon />
+                  </Button>
+                </li>
+              );
+            })}
+          </ol>
+        </details>
       )}
     </div>
   );

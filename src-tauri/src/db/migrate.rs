@@ -126,6 +126,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0014_idle_lock_setting.sql",
         sql: include_str!("migrations/0014_idle_lock_setting.sql"),
     },
+    Migration {
+        name: "0015_quick_option.sql",
+        sql: include_str!("migrations/0015_quick_option.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

@@ -17,13 +17,13 @@ import { ScanLineIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { CardPoolRow } from "@/mock/types";
-import { CARD_RETIRE_REASONS, CARD_STATUS, type CardStatus, REASON_MIN } from "@/lib/constants";
+import { CARD_STATUS, type CardStatus, REASON_MIN } from "@/lib/constants";
 import { dateTimeShort, orDash } from "@/lib/format";
-import { useSetting } from "@/hooks/useLookups";
+import { useQuickOptions, useSetting } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { IcScanDialog } from "@/components/business/IcScanDialog";
-import { ReasonChips } from "@/components/business/ReasonChips";
+import { ComboBox } from "@/components/business/ComboBox";
 import { QuickDetailLink } from "@/components/business/quickDetail";
 import { ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
@@ -35,6 +35,7 @@ export function CardsPage() {
   const qc = useQueryClient();
   const can = useSession((s) => s.can);
   const warnFree = useSetting("card_pool_warn_free").num || 5;
+  const { options: retireOptions } = useQuickOptions("card_retire");
 
   const [status, setStatus] = useState<CardStatus | "all">("all");
   const [keyword, setKeyword] = useState("");
@@ -179,14 +180,14 @@ export function CardsPage() {
           </DialogHeader>
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
             <span>注销原因（不少于 4 字，迎检可追溯）</span>
-            <Input
-              value={retireReason}
-              onChange={(e) => setRetireReason(e.target.value)}
+            <ComboBox
               aria-label="注销原因"
-              placeholder="点一条常用的，或写清楚这张卡为什么注销…"
+              presets={retireOptions}
+              value={retireReason}
+              onChange={setRetireReason}
+              placeholder="选一条常用的，或写清楚这张卡为什么注销…"
               className="text-xs"
             />
-            <ReasonChips aria-label="常用注销原因" presets={CARD_RETIRE_REASONS} value={retireReason} onChange={setRetireReason} />
           </div>
           <p className="text-xs text-muted-foreground">注销只影响卡池，不动任何磅单与金额；挂在途单上的卡需先退卡或走补发换卡。</p>
           <DialogFooter>

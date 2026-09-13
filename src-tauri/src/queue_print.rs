@@ -23,6 +23,14 @@ use tauri::command;
 use crate::printer::PrintOutcome;
 use ticket_core::model::PrintLine;
 
+/// 二维码静区（模块）：与前端 `QrGraphic` 的 `QUIET` 同值。GDI 这条没有固件帮忙留白，
+/// 自己不补就是"预览扫得动、纸上扫不出"。
+const QR_QUIET_MODULES: i32 = 4;
+
+/// 一维条码静区（模块）：CODE128 规范要求 10 个模块宽，与 `code128.ts` 的
+/// `CODE128_QUIET_MODULES` 同值。
+const BAR_QUIET_MODULES: i32 = 10;
+
 /// 队列直打的入参。
 ///
 /// 与 [`crate::printer::ReceiptPrintInput`]（ESC/POS 直写）的关键差别：**没有 paper 字段**。
@@ -257,7 +265,6 @@ mod imp {
         y: i32,
         /// 正文字号的字高（像素）；倍宽倍高在它上乘
         em: i32,
-        #[allow(dead_code)]
         dpi_x: i32,
         dpi_y: i32,
         page_open: bool,
@@ -345,12 +352,13 @@ mod imp {
                     self.need(h);
                     self.y += h;
                 }
-                PrintLine::Qr { text } => {
+                PrintLine::Qr { text, size } => {
                     if text.is_empty() {
                         return;
                     }
-                    self.qr(text, qr_err);
+                    self.qr(text, *size, qr_err);
                 }
+                PrintLine::Barcode { runs, dots, height } => self.barcode(runs, *dots, *height),
             }
         }
 
@@ -432,9 +440,14 @@ mod imp {
         }
 
         /// 二维码：前端不传位图，位图在这里现算（qrcode 纯 Rust），模块画实心方块。
-        fn qr(&mut self, text: &str, qr_err: &mut Option<String>) {
+        ///
+        /// 尺寸跟着模板的档位走（`size` = 203dpi 下每个模块占几个点），但单位在这里
+        /// 必须换成本台打印机的 dpi：600dpi 的 A4 机上 4 点/模块 = 0.5mm = 12px。
+        /// 纠错等级钉死 **H**，与前端 `QrGraphic` 和热敏固件一致——等级不同会挑到不同的
+        /// QR 版本，模块数一变，"预览里多大、纸上多大"这句承诺就破了。
+        fn qr(&mut self, text: &str, size: u8, qr_err: &mut Option<String>) {
             use qrcode::{Color, EcLevel, QrCode};
-            let code = match QrCode::with_error_correction_level(text.as_bytes(), EcLevel::M) {
+            let code = match QrCode::with_error_correction_level(text.as_bytes(), EcLevel::H) {
                 Ok(c) => c,
                 Err(e) => {
                     if qr_err.is_none() {
@@ -443,16 +456,21 @@ mod imp {
                     return;
                 }
             };
-            let modules = code.width();
+            let modules = code.width() as i32;
             if modules == 0 {
                 return;
             }
-            // 票面码 28mm 见方是"扫码枪在 20cm 外扫得动"的经验值；放不下就退到可打宽的一半
-            let want = mm_px(28, self.dpi_y).min((self.right - self.left) / 2).max(8);
-            let cell = (want / modules as i32).max(1);
-            let side = cell * modules as i32;
+            // 静区 4 模块：与 QrGraphic 同一个数。机器侧由固件自己留，GDI 得自己补
+            let side_modules = modules + QR_QUIET_MODULES * 2;
+            let avail = self.right - self.left;
+            // 先按模板档位算，超出可打宽度就逐点压小模块（宁可码小一点，不能被切掉半边）
+            let mut cell = dots_px(size.max(1) as i32, self.dpi_x).max(1);
+            while cell > 1 && side_modules * cell > avail {
+                cell -= 1;
+            }
+            let side = cell * side_modules;
             self.need(side + self.line_gap());
-            let x0 = self.left + (self.right - self.left - side) / 2;
+            let x0 = self.left + (avail - side) / 2;
             let y0 = self.y;
             let colors = code.to_colors();
             unsafe {
@@ -460,14 +478,57 @@ mod imp {
                 let old = SelectObject(self.hdc, black);
                 for (i, c) in colors.iter().enumerate() {
                     if matches!(c, Color::Dark) {
-                        let cx = (i % modules) as i32;
-                        let cy = (i / modules) as i32;
-                        let _ = PatBlt(self.hdc, x0 + cx * cell, y0 + cy * cell, cell, cell, PATCOPY);
+                        let cx = (i % modules as usize) as i32;
+                        let cy = (i / modules as usize) as i32;
+                        let _ = PatBlt(
+                            self.hdc,
+                            x0 + (cx + QR_QUIET_MODULES) * cell,
+                            y0 + (cy + QR_QUIET_MODULES) * cell,
+                            cell,
+                            cell,
+                            PATCOPY,
+                        );
                     }
                 }
                 SelectObject(self.hdc, old);
             }
             self.y = y0 + side + self.line_gap();
+        }
+
+        /// 一维条码：照前端算好的条空模块序列涂黑方块（偶数位是条）。
+        ///
+        /// 这里**不做任何 CODE128 编码**——条空宽度、模块点数、条高都是前端
+        /// `code128.ts` 一次算出来的，预览、热敏、这一路共用同一条几何。
+        fn barcode(&mut self, runs: &[u8], dots: u8, height: u8) {
+            let total: i32 = runs.iter().map(|&w| w as i32).sum();
+            if total == 0 {
+                return;
+            }
+            let avail = self.right - self.left;
+            // 先按模板档位算模块宽度，超出可打宽度就逐像素压小（宁可码窄，不能被切掉）
+            let mut module = dots_px(dots.max(1) as i32, self.dpi_x).max(1);
+            while module > 1 && (total + BAR_QUIET_MODULES * 2) * module > avail {
+                module -= 1;
+            }
+            let h = dots_px(height.max(1) as i32, self.dpi_y).max(1);
+            let width = (total + BAR_QUIET_MODULES * 2) * module;
+            self.need(h + self.line_gap());
+            let x0 = self.left + (avail - width) / 2 + BAR_QUIET_MODULES * module;
+            let y0 = self.y;
+            let mut x = x0;
+            unsafe {
+                let black = GetStockObject(BLACK_BRUSH);
+                let old = SelectObject(self.hdc, black);
+                for (i, &w) in runs.iter().enumerate() {
+                    let bar = w as i32 * module;
+                    if i % 2 == 0 {
+                        let _ = PatBlt(self.hdc, x, y0, bar, h, PATCOPY);
+                    }
+                    x += bar;
+                }
+                SelectObject(self.hdc, old);
+            }
+            self.y = y0 + h + self.line_gap();
         }
     }
 
@@ -492,10 +553,14 @@ mod imp {
         }
     }
 
-    /// 毫米 → 设备像素（按给定 dpi）。
-    fn mm_px(mm: i32, dpi: i32) -> i32 {
-        // mm·dpi/25.4 写成整数运算：×10/254，+127 即 0.5px 的四舍五入
-        (mm * dpi * 10 + 127) / 254
+    /// 203dpi 的点 → 本机设备像素。
+    ///
+    /// 票面上唯一要按物理尺寸落地的就是两种码，而它们在跨语言契约里一律以"203dpi 的点"
+    /// 为单位（1 点 = 0.125mm，见前端 `code-size.ts`）——热敏机的栅格本来就是点，A4 这边
+    /// 再按本机 dpi 落地：600dpi 的 A4 机上 1 点 ≈ 3px。
+    /// 写成 ×10/2032 再 +1016，就是 0.5px 的四舍五入。
+    fn dots_px(dots: i32, dpi: i32) -> i32 {
+        (dots * dpi * 10 + 1016) / 2032
     }
 
     /// 磅（pt）→ 设备像素：字号只有 DPI 一个换算分母（1pt = 1/72 英寸）。
@@ -508,12 +573,11 @@ mod imp {
         use super::*;
 
         #[test]
-        fn millimetres_round_trip_through_dpi() {
-            // 254mm @ 10dpi = 100px；25.4mm @ 300dpi ≈ 300px（各向都差不过半格）
-            assert_eq!(mm_px(254, 10), 100);
-            assert_eq!(mm_px(25, 300), 295);
-            assert_eq!(mm_px(28, 600), 661);
-            assert_eq!(mm_px(0, 300), 0);
+        fn code_dots_land_on_the_printer_grid() {
+            assert_eq!(dots_px(4, 203), 4, "同机型：4 点就是 4 个栅格点");
+            assert_eq!(dots_px(4, 600), 12, "0.5mm 的模块在 600dpi 机上 12px");
+            assert_eq!(dots_px(96, 300), 142, "12mm 的条高在 300dpi 机上 141.7px → 142");
+            assert_eq!(dots_px(1, 600), 3);
         }
 
         #[test]
@@ -552,6 +616,14 @@ mod imp {
                 },
                 PrintLine::Qr {
                     text: "BH1:BD100120260912000001".into(),
+                    size: 4,
+                },
+                // 条空序列是合成的（这张票判的是"驱动收不收下任务"，不是码的内容），
+                // 但它会真的走一遍 GDI 的条码绘制分支
+                PrintLine::Barcode {
+                    runs: vec![2, 1, 2, 2, 1, 2, 4, 1, 2, 1, 2, 2, 1, 4],
+                    dots: 2,
+                    height: 96,
                 },
                 PrintLine::Feed { n: 2 },
             ];

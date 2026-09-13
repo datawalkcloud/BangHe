@@ -18,14 +18,13 @@ import { AlertTriangleIcon, ArrowLeftIcon, BadgeCheckIcon, FlaskConicalIcon, Map
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
-import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, PRICE_REASONS, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
+import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
-import { useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
+import { useQuickOptions, useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -38,7 +37,7 @@ import {
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { Choose } from "@/components/business/Choose";
 import { VoidReasonField } from "@/components/business/VoidReasonField";
-import { ReasonChips } from "@/components/business/ReasonChips";
+import { ComboBox } from "@/components/business/ComboBox";
 import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
@@ -97,6 +96,7 @@ export function OrderDetailBody({
   const [gradeOpen, setGradeOpen] = useState(false);
   const [gradeValue, setGradeValue] = useState("");
   const [gradeReason, setGradeReason] = useState("");
+  const { options: gradeReasonOptions } = useQuickOptions("price");
 
   const { data: order, isLoading } = useQuery({
     queryKey: ["order", orderNo],
@@ -873,14 +873,14 @@ export function OrderDetailBody({
           </div>
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
             <span>改判事由（可选，填了会一起写进审计）</span>
-            <Input
-              value={gradeReason}
-              onChange={(e) => setGradeReason(e.target.value)}
+            <ComboBox
               aria-label="改判事由"
-              placeholder="点一条常用的，或自己写…"
+              presets={gradeReasonOptions}
+              value={gradeReason}
+              onChange={setGradeReason}
+              placeholder="选一条常用的，或自己写…"
               className="h-8 text-sm"
             />
-            <ReasonChips aria-label="常用改判事由" presets={PRICE_REASONS} value={gradeReason} onChange={setGradeReason} />
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setGradeOpen(false)}>

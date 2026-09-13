@@ -25,6 +25,7 @@ import type {
   PriceList,
   QualityReport,
   QcReport,
+  QuickOption,
   Settlement,
   StaffLoadRow,
   Station,
@@ -40,6 +41,7 @@ import {
   ALL_SLOTS,
   parties,
   priceLists,
+  quickOptions,
   settings,
   station,
   users,
@@ -88,6 +90,15 @@ const OPEN_STATUSES: OrderStatus[] = ["draft", "registered", "qc_done", "gross_w
 /** 卡号归一：去非字母数字、转大写（与 Rust cards::normalize_card_no 同口径） */
 function normCard(raw: string): string {
   return raw.replace(/[^0-9a-zA-Z]/g, "").toUpperCase();
+}
+
+/** 编码留空时的补号：第一个没被占用的 `前缀 + width 位序号`（与 Rust `codes::next_code` 同算法） */
+function nextCode(used: string[], prefix: string, width = 2): string {
+  for (let n = 1; n <= 99999; n += 1) {
+    const code = `${prefix}${String(n).padStart(width, "0")}`;
+    if (!used.includes(code)) return code;
+  }
+  throw new Error(`${prefix.toUpperCase()} 编码已用尽，请手动填写一个`);
 }
 
 /** 卡池演示态：预置一叠空闲卡，浏览器里也能走完"登记→发卡→推进→回收"全链 */
@@ -398,6 +409,67 @@ export const api = {
     return ALL_SLOTS;
   },
 
+  /* ------------------------------------------------ 常用语快捷选项（可后台维护） */
+  /** 整表读出（含停用）：字段用侧的下拉由 `useQuickOptions` 按 kind + is_active 过滤 */
+  async quickOptions(): Promise<QuickOption[]> {
+    await sleep(0);
+    return quickOptions.map((r) => ({ ...r }));
+  },
+
+  /**
+   * 新增 / 修改一条常用语。与真库 `quick_option_save` 同一套闸：分类必须在白名单内、
+   * 简称与内容不为空；落库是自由文本，不做枚举锁死。返回重新读出的那一行。
+   */
+  async saveQuickOption(
+    input: Partial<QuickOption> & { kind: QuickOption["kind"]; label: string; value: string; operator_id: number; id?: number | null },
+  ): Promise<QuickOption> {
+    await sleep(60);
+    const kind = input.kind;
+    const label = input.label.trim();
+    const value = input.value.trim();
+    if (!label) throw new Error("简称必填：下拉清单上就显示这几个字");
+    if (!value) throw new Error("完整内容必填：点一下要填进文本框的就是这句话");
+    const idx = input.id != null ? quickOptions.findIndex((r) => r.id === input.id) : -1;
+    if (idx >= 0) {
+      const next: QuickOption = {
+        ...quickOptions[idx],
+        kind,
+        label,
+        value,
+        sort_order: input.sort_order ?? quickOptions[idx].sort_order,
+        is_active: input.is_active ?? quickOptions[idx].is_active,
+        id: quickOptions[idx].id,
+      };
+      quickOptions[idx] = next;
+      auditMaster("quick_option.update", "quick_option", kind, input.operator_id, label);
+      return { ...next };
+    }
+    const created: QuickOption = {
+      id: quickOptions.reduce((m, r) => Math.max(m, r.id), 0) + 1,
+      kind,
+      label,
+      value,
+      sort_order:
+        input.sort_order && input.sort_order > 0
+          ? input.sort_order
+          : quickOptions.filter((r) => r.kind === kind).reduce((m, r) => Math.max(m, r.sort_order), 0) + 1,
+      is_active: input.is_active ?? 1,
+    };
+    quickOptions.push(created);
+    auditMaster("quick_option.create", "quick_option", kind, input.operator_id, label);
+    return { ...created };
+  },
+
+  /** 删除一条常用语。单据存的是那句文本本身、不引用本表行，删了不动历史。 */
+  async deleteQuickOption(input: { id: number; operator_id: number }): Promise<QuickOption> {
+    await sleep(60);
+    const idx = quickOptions.findIndex((r) => r.id === input.id);
+    if (idx < 0) throw new Error("这条常用语不存在");
+    const [removed] = quickOptions.splice(idx, 1);
+    auditMaster("quick_option.delete", "quick_option", removed.kind, input.operator_id, removed.label);
+    return removed;
+  },
+
   /* ------------------------------------------------------ 档案写入 */
   /**
    * 档案类写操作只在内存里生效，重启回到种子数据。
@@ -461,14 +533,20 @@ export const api = {
     await sleep(100);
     const idx = input.id != null ? varieties.findIndex((v) => v.id === input.id) : -1;
     if (idx >= 0) {
-      const next: GrainVariety = { ...varieties[idx], ...input, id: varieties[idx].id };
+      const next: GrainVariety = {
+        ...varieties[idx],
+        ...input,
+        id: varieties[idx].id,
+        // 编码清空＝沿用原编码：历史磅单与价目都按编码留痕，重新编号会把历史接不上
+        code: input.code.trim() || varieties[idx].code,
+      };
       varieties[idx] = next;
       auditMaster("variety.update", "grain_variety", next.code, input.operator_id);
       return next;
     }
     const created: GrainVariety = {
       id: varieties.reduce((m, v) => Math.max(m, v.id), 0) + 1,
-      code: input.code,
+      code: input.code.trim() || nextCode(varieties.map((v) => v.code), "V"),
       name: input.name,
       category: input.category ?? "其他",
       std_moisture_001pct: input.std_moisture_001pct ?? null,
@@ -571,18 +649,19 @@ export const api = {
     await sleep(100);
     const idx = input.id != null ? users.findIndex((u) => u.id === input.id) : -1;
     if (idx >= 0) {
-      const next: UserAccount = { ...users[idx], ...input, id: users[idx].id };
+      const next: UserAccount = { ...users[idx], ...input, id: users[idx].id, username: input.username.trim() || users[idx].username };
       users[idx] = next;
       auditMaster("staff.update", "user_account", next.username, input.operator_id);
       return next;
     }
-    if (users.some((u) => u.username === input.username)) {
-      auditMaster("staff.create", "user_account", input.username, input.operator_id, "登录名重复，已拒绝");
-      throw new Error(`登录名 ${input.username} 已存在`);
+    const username = input.username.trim() || nextCode(users.map((u) => u.username), "u");
+    if (users.some((u) => u.username === username)) {
+      auditMaster("staff.create", "user_account", username, input.operator_id, "登录名重复，已拒绝");
+      throw new Error(`登录名 ${username} 已存在`);
     }
     const created: UserAccount = {
       id: users.reduce((m, u) => Math.max(m, u.id), 0) + 1,
-      username: input.username,
+      username,
       display_name: input.display_name,
       role: input.role,
       phone: input.phone ?? "",
@@ -702,7 +781,7 @@ export const api = {
   /**
    * 登记现场硬件（新增设备）。真实实现即向 `device_config` 插入一行。
    *
-   * 编码是台账里的人工主键——「导出配置」和换机重建都按它核对，所以必须唯一；
+   * 编码是台账里的人工主键——「导出配置」和换机重建都按它核对，所以必须唯一；但不必由人想，留空即按类型补号。
    * 新设备一律先记「未检测」：登记 ≠ 联机验证，状态灯要等右侧面板做一次真实联机测试
    * 通过后才转绿（02 §M9）。设为默认时自动把同类旧的默认机降级，保证每类至多一台默认。
    */
@@ -717,8 +796,9 @@ export const api = {
     operator_id: number;
   }): Promise<DeviceConfig> {
     await sleep(100);
-    const code = input.code.trim();
-    if (!code) throw new Error("设备编码必填");
+    // 桌面端 devices.rs 拿 DEVICE_SPEC 的前缀补号（cam/prn/cash/sign），预览路径用类型名即可：
+    // 这份数组刷新就重置，补出来的号只要不撞现有台账。
+    const code = input.code.trim() || nextCode(devices.map((d) => d.code), input.kind, 1);
     if (devices.some((d) => d.code === code)) {
       auditMaster("device.create", "device_config", code, input.operator_id, "编码重复，已拒绝");
       throw new Error(`编码 ${code} 已存在：编码是台账主键，不能重复`);
@@ -1086,10 +1166,15 @@ export const api = {
     deduction_fee_fen: number;
     pay_now: boolean;
     payment_method: PaymentMethod;
+    /**
+     * 当场实付金额（分），与 Rust `SettleInput.paid_amount_fen` 逐字同口径：
+     * 不传＝按应付全额付清；传了且小于应付＝部分付款，差额进挂账台账（`partial`）。
+     */
+    paid_amount_fen?: number | null;
     settler_id: number;
     /** 价目表带出时记下来源，便于事后追溯"这个价从哪张表来的" */
     price_list_id?: number | null;
-    /** 偏离价目表时的改价事由，迎检必查 */
+    /** 偏离价目表时的改价事由（选填，写了留痕） */
     price_override_reason?: string | null;
     /** 售粮人是否已在纸质码单上签字 */
     party_signed?: boolean;
@@ -1097,10 +1182,8 @@ export const api = {
     grade?: string | null;
   }): Promise<{ order: WeighOrder; settlement: Settlement } | null> {
     await sleep(160);
-    // 01 §F2.3：偏离价目或没有生效价目时都是手填价，必须留改价事由（与 Rust 端 settle 同口径）
-    if (input.price_list_id == null && !(input.price_override_reason ?? "").trim()) {
-      throw new Error("手填单价必须填写改价事由（历史价是已结算单的唯一可追溯出处）");
-    }
+    // 01 §F2.3 已从「必填」降为「选填」：偏离价目/手工定价不填事由也能结算，
+    // 有值即留痕、无值落 NULL（与 Rust 端 settle 同口径）
     const targetGrade = (input.grade ?? "").trim();
     if (targetGrade && !GRADES.some((g) => g === targetGrade)) {
       throw new Error(`等级「${targetGrade}」不在值域内（${GRADES.join(" / ")}）`);
@@ -1122,6 +1205,18 @@ export const api = {
     const payable = goods - input.deduction_fee_fen;
     // 结算时改判的等级随单落下；化验报告上的判定本身永不改写（复检另立新单，不变式 7）
     if (targetGrade) o.grade = targetGrade as WeighOrder["grade"];
+    // 以下三段与 Rust `orders.rs::settle` 逐字同口径：不带 paid_amount_fen ＝全额付清，
+    // 填小了＝部分付款（差额进挂账台账），零元单没钱可付当场即清。
+    let paidFen = 0;
+    if (input.pay_now && payable > 0) {
+      const want = input.paid_amount_fen ?? payable;
+      if (want <= 0) throw new Error("当场实付金额必须大于 0；一分钱都不付就取消「当场已付」改走挂账");
+      if (want > payable) {
+        throw new Error(`当场实付（${(want / 100).toFixed(2)}元）大于应付（${(payable / 100).toFixed(2)}元），付款不得超过应付`);
+      }
+      paidFen = want;
+    }
+    const payStatus: Settlement["payment_status"] = !input.pay_now ? "unpaid" : paidFen >= payable ? "paid" : "partial";
     Object.assign(o, {
       package_deduct_01kg: input.package_deduct_01kg,
       moisture_deduct_01kg: input.moisture_deduct_01kg,
@@ -1139,16 +1234,11 @@ export const api = {
       settled_at: now,
       updated_at: now,
     });
-    if (input.pay_now) {
-      o.paid_amount_fen = payable;
-      o.payment_status = "paid";
-      o.payment_method = input.payment_method;
-      o.paid_at = now;
-    } else {
-      o.paid_amount_fen = 0;
-      o.payment_status = "unpaid";
-      o.payment_method = null;
-    }
+    o.paid_amount_fen = paidFen;
+    o.payment_status = payStatus;
+    o.payment_method = input.pay_now ? input.payment_method : null;
+    // 部分付款时 paid_at 留 NULL：这一列记的是"钱付清的时刻"，补录付清后才补上（与 record_payment 同口径）
+    o.paid_at = payStatus === "paid" ? now : null;
     // 结算即终态：自动回收该单绑的流转卡回池（与真库 release_for_order 同口径，06 §6.3）
     const settledCardNo = o.card_no;
     if (settledCardNo) {
@@ -1177,7 +1267,7 @@ export const api = {
       total_advance_fen: 0,
       payable_fen: payable,
       paid_fen: o.paid_amount_fen,
-      payment_status: input.pay_now ? "paid" : "unpaid",
+      payment_status: payStatus,
       main_method: input.pay_now ? input.payment_method : null,
       payee_name: o.party_name,
       signed_by_party: input.party_signed ? 1 : 0,
@@ -1188,7 +1278,8 @@ export const api = {
       remark: "工作台当场结算",
     };
     settlements.push(settlement);
-    if (input.pay_now) {
+    // 挂账（paidFen=0）一笔流水都不该有；部分付款只登记实付那一段，剩下的靠补录付款接手
+    if (paidFen > 0) {
       payments.push({
         id: payments.length + 1,
         pay_no: `FK${station.code}${date.replace(/-/g, "")}${String(payments.length + 1).padStart(6, "0")}`,
@@ -1198,7 +1289,7 @@ export const api = {
         order_no: null,
         party_id: o.party_id,
         party_name: o.party_name,
-        amount_fen: payable,
+        amount_fen: paidFen,
         method: input.payment_method,
         trade_no: null,
         payee_name: o.party_name,
@@ -1206,7 +1297,7 @@ export const api = {
         operator_id: input.settler_id,
         voucher_no: null,
         reversed: 0,
-        remark: "当场结清",
+        remark: payStatus === "paid" ? "当场结清" : "当场部分付款",
       });
     }
     return { order: o, settlement };

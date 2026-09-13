@@ -133,6 +133,7 @@ fn settle_credit(conn: &Connection, party: i64, variety: i64) -> String {
             other_deduct_01kg: 0,
             deduction_fee_fen: 0,
             pay_now: false,
+            paid_amount_fen: None,
             payment_method: "cash".into(),
             settler_id: None,
             price_list_id: Some(price),

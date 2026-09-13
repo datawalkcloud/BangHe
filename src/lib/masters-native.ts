@@ -24,6 +24,7 @@ import type {
   AppSetting,
   GrainVariety,
   PriceList,
+  QuickOption,
   StorageSlot,
   Station,
   UserAccount,
@@ -75,6 +76,9 @@ export type SlotInput = {
   operator_id: number;
 };
 
+export type QuickOptionInput = Parameters<typeof mock.saveQuickOption>[0];
+export type DeleteQuickOptionInput = { id: number; operator_id: number };
+
 export const mastersApi = {
   station: route<Station>("master_station", () => mock.station()),
   staff: route<UserAccount[]>("master_staff", () => mock.staff()),
@@ -82,6 +86,8 @@ export const mastersApi = {
   warehouses: route<Warehouse[]>("master_warehouses", () => mock.warehouses()),
   slots: route<StorageSlot[]>("master_slots", () => mock.slots()),
   prices: route<PriceList[]>("master_prices", () => mock.prices()),
+  /** 常用语快捷选项整表读（含停用行），字段用侧的下拉在前端按 kind + is_active 过滤 */
+  quickOptions: route<QuickOption[]>("master_quick_options", () => mock.quickOptions()),
   /** 库里只有键值，界面看到的是目录拼出来的行：浏览器预览照旧读 mock 那一份 */
   settings: (): Promise<AppSetting[]> =>
     runningInTauri() ? call<SettingRow[]>("master_settings").then(mergeSettings) : mock.settings(),
@@ -90,6 +96,13 @@ export const mastersApi = {
   deleteVariety: routeSave<GrainVariety, DeleteVarietyInput>("master_delete_variety", (i) => mock.deleteVariety(i.id, i.operator_id)),
   savePrice: routeSave<PriceList, PriceInput>("master_save_price", (i) => mock.savePrice(i)),
   saveStaff: routeSave<UserAccount, StaffInput>("master_save_staff", (i) => mock.saveStaff(i)),
+
+  saveQuickOption: routeSave<QuickOption, QuickOptionInput>("master_save_quick_option", (i) =>
+    mock.saveQuickOption(i),
+  ),
+  deleteQuickOption: routeSave<QuickOption, DeleteQuickOptionInput>("master_delete_quick_option", (i) =>
+    mock.deleteQuickOption(i),
+  ),
 
   saveWarehouse: (input: WarehouseInput) =>
     runningInTauri()

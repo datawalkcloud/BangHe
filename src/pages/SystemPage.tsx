@@ -226,7 +226,8 @@ function StaffSection() {
         is_active: form.active ? 1 : 0,
       }),
     onSuccess: (u) => {
-      toast.success(`员工「${u.display_name}」已保存`);
+      // 登录名可能是系统补的，回显一次站长才知道拿什么让人登录
+      toast.success(`员工「${u.display_name}」已保存，登录名 ${u.username}`);
       setOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["staff"] });
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
@@ -358,17 +359,23 @@ function StaffSection() {
           <DialogHeader>
             <DialogTitle className="text-sm">{form.id == null ? "新增员工" : `编辑员工 ${form.display_name}`}</DialogTitle>
             <DialogDescription className="text-xs">
-              登录名唯一，停用后不能再用该身份制单，但历史留痕保持不变。新员工首次登录用装机初始密码，进去后被强制改密，此后只有本人知道。
+              登录名唯一，留空则由系统补号、保存后回显；停用后不能再用该身份制单，但历史留痕保持不变。新员工首次登录用装机初始密码，进去后被强制改密，此后只有本人知道。
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              登录名 *
-              <Input value={form.username} onChange={(e) => patch({ username: e.target.value })} className="tnum text-sm" disabled={form.id != null} />
-            </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               姓名 *
               <Input value={form.display_name} onChange={(e) => patch({ display_name: e.target.value })} className="text-sm" />
+            </Label>
+            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              登录名（选填）
+              <Input
+                value={form.username}
+                onChange={(e) => patch({ username: e.target.value })}
+                placeholder="留空自动生成，如 u05"
+                className="tnum text-sm"
+                disabled={form.id != null}
+              />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               岗位
@@ -403,10 +410,7 @@ function StaffSection() {
             <Button variant="ghost" onClick={() => setOpen(false)}>
               取消
             </Button>
-            <Button
-              disabled={!form.username.trim() || !form.display_name.trim() || save.isPending}
-              onClick={() => save.mutate()}
-            >
+            <Button disabled={!form.display_name.trim() || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? "保存中…" : "保存"}
             </Button>
           </DialogFooter>

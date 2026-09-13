@@ -18,6 +18,7 @@ import type {
   PrintChannel,
   PaperKind,
   QcDecision,
+  QuickOptionKind,
   Role,
   TestMethod,
   Tone,
@@ -103,6 +104,22 @@ export interface StorageSlot {
   code: string;
   /** 库里 label 为空时后端回落成货位编码，界面拿到的永远是可显示的串 */
   label: string;
+  is_active: 0 | 1;
+}
+
+/**
+ * 事由/原因/结论类「自由文本 + 常用下拉」的一条候选（03 §9.27）。
+ *
+ * 落库仍是自由文本，本表只是给下拉框备一句现成的人话：`label` 是按钮/清单上看的短词，
+ * `value` 是点一下真正填进文本框、最终进单据与审计的那句完整话。`kind` 归哪一类由
+ * `QuickOptionKind` 白名单约束（不加 CHECK，扩一类只改代码不改表）。
+ */
+export interface QuickOption {
+  id: ID;
+  kind: QuickOptionKind;
+  label: string;
+  value: string;
+  sort_order: number;
   is_active: 0 | 1;
 }
 

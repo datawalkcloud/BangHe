@@ -267,6 +267,49 @@ fn a_slot_pointing_at_a_missing_warehouse_is_refused() {
     assert!(!message.contains("FOREIGN KEY"), "{message}");
 }
 
+// --------------------------------------------------- 编码选填：留空由系统补号
+
+#[test]
+fn blank_codes_get_numbered_instead_of_bouncing_back_to_the_operator() {
+    let conn = db();
+    let a = actor();
+
+    let wh = save_warehouse(&conn, &a, warehouse_input("")).unwrap();
+    assert_eq!(wh.code, "CW01", "仓房补号 = CW + 两位序号，与界面上的示例同形");
+    let slot = save_slot(&conn, &a, slot_input(wh.id, "")).unwrap();
+    assert_eq!(slot.code, "CW01-01", "货位补号带上所属仓房编码，磅单一眼看得出是哪处");
+    assert_eq!(save_variety(&conn, &a, variety_input("")).unwrap().code, "V01", "补号另起 V 段，避开种子里的拼音码");
+    assert_eq!(save_staff(&conn, &a, staff_input("", "weigher")).unwrap().username, "u01");
+
+    // 再留空一次要往后号，不能回头撞刚补出去的那条
+    assert_eq!(save_warehouse(&conn, &a, warehouse_input("")).unwrap().code, "CW02");
+    assert_eq!(save_slot(&conn, &a, slot_input(wh.id, "")).unwrap().code, "CW01-02");
+
+    // 编辑时清空编码＝沿用原号：历史磅单按编码留痕，重新编号会把历史接不上
+    let mut rename = warehouse_input("");
+    rename.id = Some(wh.id);
+    assert_eq!(save_warehouse(&conn, &a, rename).unwrap().code, "CW01");
+    let mut slot_rename = slot_input(wh.id, "");
+    slot_rename.id = Some(slot.id);
+    assert_eq!(save_slot(&conn, &a, slot_rename).unwrap().code, "CW01-01");
+
+    // 补号必须避开软删行仍占着的编码——code 上的 UNIQUE 索引不过滤 deleted_at，
+    // 撞号的后果是 INSERT 直接失败，而不是安静地多出一条同型号。
+    let mut retired = variety_input("");
+    retired.name = "高粱".into();
+    let retired = save_variety(&conn, &a, retired).unwrap();
+    assert_eq!(retired.code, "V02");
+    conn.execute(
+        "UPDATE grain_variety SET deleted_at = ?2 WHERE id = ?1",
+        params![retired.id, "2026-01-01T00:00:00+08:00"],
+    )
+    .unwrap();
+    let mut next = variety_input("");
+    next.name = "荞麦".into();
+    // 只查活行的补号会拿出 V02 —— 看着空着，INSERT 却当场撞 UNIQUE。要 V03 才算避开了软删行。
+    assert_eq!(save_variety(&conn, &a, next).unwrap().code, "V03", "补号要避开软删行仍占着的编码");
+}
+
 // ------------------------------------------------------------------- 价目
 
 #[test]

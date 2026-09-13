@@ -18,15 +18,15 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/mock/types";
-import { PARTY_TYPE, ROLE, ORDER_REMARK_PRESETS } from "@/lib/constants";
+import { PARTY_TYPE, ROLE } from "@/lib/constants";
 import { maskIdCard, ton, validateIdCard, weight } from "@/lib/format";
 import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
 import { useDeviceStore } from "@/store/device";
-import { useSetting } from "@/hooks/useLookups";
+import { useQuickOptions, useSetting } from "@/hooks/useLookups";
 import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
+import { ComboBox } from "@/components/business/ComboBox";
 import { PlateField } from "@/components/business/PlateField";
-import { ReasonChips } from "@/components/business/ReasonChips";
 import { CardScanDialog } from "@/components/business/CardScanDialog";
 import { QuickDetailLink } from "@/components/business/quickDetail";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
@@ -36,7 +36,6 @@ import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "cn";
 
 /** 制单前的草稿。放在这里导出，页面与面板共用同一份形状 */
@@ -91,6 +90,7 @@ export function IdentityPanel({
 }) {
   const actor = useActor();
   const can = useSession((s) => s.can);
+  const { options: remarkOptions } = useQuickOptions("remark");
   const reading = useDeviceStore((s) => s.reader.idcard.reading);
   const lastCard = useDeviceStore((s) => s.reader.idcard.last);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -420,15 +420,14 @@ export function IdentityPanel({
           </div>
           <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
             <span>备注（选填）</span>
-            <Textarea
-              rows={1}
+            <ComboBox
               aria-label="备注"
+              presets={remarkOptions}
               value={draft.remark}
-              onChange={(e) => onDraft({ remark: e.target.value })}
-              placeholder="点一条常用的，或自己写…"
-              className="min-h-[28px] py-0.5 text-xs"
+              onChange={(v) => onDraft({ remark: v })}
+              placeholder="选一条常用的，或自己写…"
+              className="h-8 py-0 text-xs"
             />
-            <ReasonChips aria-label="常用备注" presets={ORDER_REMARK_PRESETS} value={draft.remark} onChange={(v) => onDraft({ remark: v })} />
           </div>
         </div>
 

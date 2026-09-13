@@ -63,6 +63,10 @@ html, body { margin: 0 !important; padding: 0 !important; background: #fff !impo
 body * { visibility: visible !important; }
 #print-root { position: static !important; margin: 0 !important; box-shadow: none !important; }
 * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+/* 模板编辑器的屏幕标记不是票面内容。放在基础样式而不是只放 @media print：
+   这份文档在**量高度之前**就用上了它，占位行若不先藏掉，卷纸会按含占位行的高度多出一截空白。 */
+.receipt-sec-active { outline: none !important; background: transparent !important; }
+.receipt-sec-empty { display: none !important; }
 `;
 
 /** 定长纸：页边距由 @page 出，纸面自身不再留白 */

@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::auth::{self, AuthProfile};
+use crate::codes::{next_code, stored_code};
 use crate::db::{locked, Db};
 use crate::domain::enums::{Role, WarehouseKind};
 
@@ -337,13 +338,16 @@ fn ensure_variety_code_free(conn: &Connection, code: &str, self_id: Option<i64>)
 }
 
 pub fn save_variety(conn: &Connection, actor: &AuthProfile, input: VarietyInput) -> Result<Variety, String> {
-    let code = input.code.trim().to_uppercase();
+    let mut code = input.code.trim().to_uppercase();
     let name = input.name.trim().to_string();
-    if code.is_empty() {
-        return Err("品种编码必填，如 XM".into());
-    }
     if name.is_empty() {
         return Err("品种名称必填".into());
+    }
+    if code.is_empty() {
+        code = match input.id {
+            Some(id) => stored_code(conn, "SELECT code FROM grain_variety WHERE id = ?1", id, "品种")?,
+            None => next_code(conn, "SELECT COUNT(*) FROM grain_variety WHERE code = ?1", "V", 2, "品种")?,
+        };
     }
     if input.enabled_indicators.is_empty() {
         return Err("至少勾选一个检测项目，否则化验面板没有可录指标".into());
@@ -518,10 +522,16 @@ fn warehouse_by_id(conn: &Connection, id: i64) -> Result<Warehouse, String> {
 }
 
 pub fn save_warehouse(conn: &Connection, actor: &AuthProfile, input: WarehouseInput) -> Result<Warehouse, String> {
-    let code = input.code.trim().to_uppercase();
+    let mut code = input.code.trim().to_uppercase();
     let name = input.name.trim().to_string();
-    if code.is_empty() || name.is_empty() {
-        return Err("仓房编码与名称必填".into());
+    if name.is_empty() {
+        return Err("仓房名称必填".into());
+    }
+    if code.is_empty() {
+        code = match input.id {
+            Some(id) => stored_code(conn, "SELECT code FROM warehouse WHERE id = ?1", id, "仓房")?,
+            None => next_code(conn, "SELECT COUNT(*) FROM warehouse WHERE code = ?1", "CW", 2, "仓房")?,
+        };
     }
     if !WarehouseKind::VALUES.contains(&input.kind.as_str()) {
         return Err(format!(
@@ -577,19 +587,25 @@ fn slot_by_id(conn: &Connection, id: i64) -> Result<Slot, String> {
 }
 
 pub fn save_slot(conn: &Connection, actor: &AuthProfile, input: SlotInput) -> Result<Slot, String> {
-    let code = input.code.trim().to_uppercase();
-    if code.is_empty() {
-        return Err("货位编码必填，如 C01-01".into());
-    }
-    let warehouse_exists: i64 = conn
+    let mut code = input.code.trim().to_uppercase();
+    let warehouse_code = conn
         .query_row(
-            "SELECT COUNT(*) FROM warehouse WHERE id = ?1 AND deleted_at IS NULL",
+            "SELECT code FROM warehouse WHERE id = ?1 AND deleted_at IS NULL",
             params![input.warehouse_id],
-            |r| r.get(0),
+            |r| r.get::<_, String>(0),
         )
-        .map_err(|e| format!("检查仓房失败：{e}"))?;
-    if warehouse_exists == 0 {
-        return Err("所属仓房不存在或已删除，货位无法保存".into());
+        .map_err(|_| "所属仓房不存在或已删除，货位无法保存".to_string())?;
+    if code.is_empty() {
+        code = match input.id {
+            Some(id) => stored_code(conn, "SELECT code FROM storage_slot WHERE id = ?1", id, "货位")?,
+            None => next_code(
+                conn,
+                "SELECT COUNT(*) FROM storage_slot WHERE code = ?1",
+                &format!("{warehouse_code}-"),
+                2,
+                "货位",
+            )?,
+        };
     }
     let label = input.label.trim().to_string();
     let result = match input.id {
@@ -800,10 +816,22 @@ fn staff_by_id(conn: &Connection, id: i64) -> Result<Staff, String> {
 }
 
 pub fn save_staff(conn: &Connection, actor: &AuthProfile, input: StaffInput) -> Result<Staff, String> {
-    let username = input.username.trim().to_lowercase();
+    let mut username = input.username.trim().to_lowercase();
     let display_name = input.display_name.trim().to_string();
-    if username.is_empty() || display_name.is_empty() {
-        return Err("登录名与姓名必填".into());
+    if display_name.is_empty() {
+        return Err("员工姓名必填".into());
+    }
+    if username.is_empty() {
+        username = match input.id {
+            Some(id) => stored_code(conn, "SELECT username FROM user_account WHERE id = ?1", id, "员工")?,
+            None => next_code(
+                conn,
+                "SELECT COUNT(*) FROM user_account WHERE username = ?1",
+                "u",
+                2,
+                "登录名",
+            )?,
+        };
     }
     if !Role::VALUES.contains(&input.role.as_str()) {
         return Err(format!("岗位「{}」不在值域内", input.role));
@@ -1182,4 +1210,180 @@ pub async fn master_save_setting(app: AppHandle, input: SettingInput) -> Result<
     tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| save_setting(conn, &actor, input)))
         .await
         .map_err(|e| format!("参数保存任务失败：{e}"))?
+}
+
+
+// ------------------------------------------------------- §9.27 常用语/快捷选项
+
+/// 事由/原因/结论类文本框「点一句人话」的下拉候选（03 §9.27、05 §3）。
+/// 落库仍是自由文本，本表只预备选。DTO 字段与 `src/mock/types.ts::QuickOption` 逐字一致。
+#[derive(Debug, Clone, Serialize)]
+pub struct QuickOption {
+    pub id: i64,
+    pub kind: String,
+    pub label: String,
+    pub value: String,
+    pub sort_order: i64,
+    pub is_active: i64,
+}
+
+/// 分类白名单。与前端 `QuickOptionKind`、§9.27 的 kind 值域逐字一致；库里对 `kind`
+/// 不加 CHECK（扩一类只改这里 + 前端类型 + 迁移种子，不动表结构）。
+pub const QUICK_OPTION_KINDS: [&str; 6] =
+    ["void", "price", "reject", "card_retire", "remark", "odor"];
+
+const QUICK_OPTION_COLS: &str = "id, kind, label, value, sort_order, is_active";
+
+fn map_quick_option(r: &rusqlite::Row<'_>) -> rusqlite::Result<QuickOption> {
+    Ok(QuickOption {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        label: r.get(2)?,
+        value: r.get(3)?,
+        sort_order: r.get(4)?,
+        is_active: r.get(5)?,
+    })
+}
+
+/// 一次读全表（含停用行）：「基础档案 › 常用语/快捷选项」整页维护要看得到停用的，
+/// 字段用侧的下拉由前端按 `is_active` 过滤。按 kind、sort_order、id 稳定排序。
+pub fn list_quick_options(conn: &Connection) -> Result<Vec<QuickOption>, String> {
+    let sql = format!("SELECT {QUICK_OPTION_COLS} FROM quick_option ORDER BY kind, sort_order, id");
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("读取常用语失败：{e}"))?;
+    let rows = stmt
+        .query_map([], map_quick_option)
+        .map_err(|e| format!("读取常用语失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取常用语失败：{e}"))?;
+    Ok(rows)
+}
+
+fn quick_option_by_id(conn: &Connection, id: i64) -> Result<QuickOption, String> {
+    conn.query_row(
+        &format!("SELECT {QUICK_OPTION_COLS} FROM quick_option WHERE id = ?1"),
+        params![id],
+        map_quick_option,
+    )
+    .map_err(|e| format!("常用语保存后读取失败：{e}"))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QuickOptionInput {
+    pub id: Option<i64>,
+    pub kind: String,
+    pub label: String,
+    pub value: String,
+    /// 0＝没给排序号，保存时自动排到同类末尾
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default = "enabled")]
+    pub is_active: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteQuickOptionInput {
+    pub id: i64,
+    /// 前端透传，后端以会话为准忽略
+    #[serde(default)]
+    pub operator_id: i64,
+}
+
+/// 新增 / 修改一条常用语。只保证分类合法、简称与内容不为空；落库是自由文本不做枚举锁死。
+pub fn save_quick_option(
+    conn: &Connection,
+    actor: &AuthProfile,
+    input: QuickOptionInput,
+) -> Result<QuickOption, String> {
+    let kind = input.kind.trim().to_string();
+    let label = input.label.trim().to_string();
+    let value = input.value.trim().to_string();
+    if !QUICK_OPTION_KINDS.contains(&kind.as_str()) {
+        return Err(format!(
+            "常用语分类「{kind}」不在值域内（{}）",
+            QUICK_OPTION_KINDS.join(" / ")
+        ));
+    }
+    if label.is_empty() {
+        return Err("简称必填：下拉清单上就显示这几个字".into());
+    }
+    if value.is_empty() {
+        return Err("完整内容必填：点一下要填进文本框的就是这句话".into());
+    }
+    let sort_order = if input.sort_order > 0 {
+        input.sort_order
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM quick_option WHERE kind = ?1",
+            params![kind],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(1)
+    };
+
+    match input.id {
+        Some(id) => {
+            // 先确认这行在，别对不存在的 id 静默 UPDATE 影响 0 行还回「保存成功」
+            quick_option_by_id(conn, id)?;
+            conn.execute(
+                "UPDATE quick_option SET kind = ?1, label = ?2, value = ?3, sort_order = ?4, is_active = ?5
+                 WHERE id = ?6",
+                params![kind, label, value, sort_order, input.is_active, id],
+            )
+            .map_err(|e| format!("常用语保存失败：{e}"))?;
+            let row = quick_option_by_id(conn, id)?;
+            audit(conn, actor, "quick_option.update", "quick_option", &kind, Some(&label));
+            Ok(row)
+        }
+        None => {
+            conn.execute(
+                "INSERT INTO quick_option (kind, label, value, sort_order, is_active, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![kind, label, value, sort_order, input.is_active, now_iso()],
+            )
+            .map_err(|e| format!("常用语保存失败：{e}"))?;
+            let row = quick_option_by_id(conn, conn.last_insert_rowid())?;
+            audit(conn, actor, "quick_option.create", "quick_option", &kind, Some(&label));
+            Ok(row)
+        }
+    }
+}
+
+/// 删除一条常用语（物理删）。单据上存的是那句文本本身，不引用本表行，删了不动历史。
+pub fn delete_quick_option(conn: &Connection, actor: &AuthProfile, id: i64) -> Result<QuickOption, String> {
+    let row = quick_option_by_id(conn, id)?;
+    conn.execute("DELETE FROM quick_option WHERE id = ?1", params![id])
+        .map_err(|e| format!("常用语删除失败：{e}"))?;
+    audit(conn, actor, "quick_option.delete", "quick_option", &row.kind, Some(&row.label));
+    Ok(row)
+}
+
+#[tauri::command]
+pub async fn master_quick_options(app: AppHandle) -> Result<Vec<QuickOption>, String> {
+    let pool = pool_of(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| list_quick_options(conn)))
+        .await
+        .map_err(|e| format!("常用语读取任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn master_save_quick_option(app: AppHandle, input: QuickOptionInput) -> Result<QuickOption, String> {
+    let pool = pool_of(&app)?;
+    let actor = operator(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| save_quick_option(conn, &actor, input)))
+        .await
+        .map_err(|e| format!("常用语保存任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn master_delete_quick_option(
+    app: AppHandle,
+    input: DeleteQuickOptionInput,
+) -> Result<QuickOption, String> {
+    let pool = pool_of(&app)?;
+    let actor = operator(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| delete_quick_option(conn, &actor, input.id)))
+        .await
+        .map_err(|e| format!("常用语删除任务失败：{e}"))?
 }

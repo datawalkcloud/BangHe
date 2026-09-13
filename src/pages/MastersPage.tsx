@@ -19,13 +19,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { LockIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import type { AppSetting, GrainVariety, PriceList, Warehouse } from "@/mock/types";
-import type { Grade } from "@/lib/constants";
-import { GRADES, INDICATORS } from "@/lib/constants";
+import type { AppSetting, GrainVariety, PriceList, QuickOption, Warehouse } from "@/mock/types";
+import type { Grade, QuickOptionKind } from "@/lib/constants";
+import { GRADES, INDICATORS, QUICK_OPTION_KINDS } from "@/lib/constants";
 import { density, fromPercent, fromYuanPerKg, percent, price as fmtPrice, priceNumber, toYuanPerKg, todayISO, weight } from "@/lib/format";
 import { needsPrintVerify, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import { SETTINGS_GROUP } from "@/lib/settings-catalog";
-import { useStaff, useVarieties, useWarehouses, usePrices, useSettings } from "@/hooks/useLookups";
+import { useAllQuickOptions, useStaff, useVarieties, useWarehouses, usePrices, useSettings } from "@/hooks/useLookups";
 import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
@@ -43,12 +43,13 @@ import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 
-export type MastersSection = "varieties" | "warehouses" | "prices" | "settings";
+export type MastersSection = "varieties" | "warehouses" | "prices" | "options" | "settings";
 
 const SECTIONS: { key: MastersSection; label: string }[] = [
   { key: "varieties", label: "品种与指标" },
   { key: "warehouses", label: "仓房与货位" },
   { key: "prices", label: "收购价目表" },
+  { key: "options", label: "常用语/快捷选项" },
   { key: "settings", label: "站点参数" },
 ];
 
@@ -85,6 +86,7 @@ export function MastersPage({ section }: { section: MastersSection }) {
         {section === "varieties" && <VarietiesSection />}
         {section === "warehouses" && <WarehousesSection />}
         {section === "prices" && <PricesSection />}
+        {section === "options" && <QuickOptionsSection />}
         {section === "settings" && <SettingsSection />}
       </div>
     </div>
@@ -267,7 +269,6 @@ function VarietiesSection() {
   ];
 
   const errors: string[] = [];
-  if (!form.code.trim()) errors.push("编码必填，建议 2 位大写字母");
   if (!form.name.trim()) errors.push("名称必填");
   if (form.indicators.length === 0) errors.push("至少勾选一个检测项目");
 
@@ -300,11 +301,11 @@ function VarietiesSection() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="品种编码 *">
-              <Input value={form.code} onChange={(e) => patch({ code: e.target.value })} placeholder="如 XM" className="tnum text-sm" />
-            </Field>
             <Field label="品种名称 *">
               <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} className="text-sm" />
+            </Field>
+            <Field label="品种编码（选填）">
+              <Input value={form.code} onChange={(e) => patch({ code: e.target.value })} placeholder="留空自动生成" className="tnum text-sm" />
             </Field>
             <Field label="类别">
               <Input value={form.category} onChange={(e) => patch({ category: e.target.value })} className="text-sm" />
@@ -591,10 +592,7 @@ function WarehousesSection() {
   ];
 
   const whErrors: string[] = [];
-  if (form && !form.code.trim()) whErrors.push("编码必填，如 CW01");
   if (form && !form.name.trim()) whErrors.push("名称必填");
-  const slotErrors: string[] = [];
-  if (slotForm && !slotForm.code.trim()) slotErrors.push("货位编码必填，如 C01-01");
 
   return (
     <div className="flex flex-col gap-3">
@@ -648,16 +646,16 @@ function WarehousesSection() {
           </DialogHeader>
           {form && (
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="仓房编码 *">
+              <Field label="仓房名称 *">
+                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="text-sm" />
+              </Field>
+              <Field label="仓房编码（选填）">
                 <Input
                   value={form.code}
                   onChange={(e) => setForm({ ...form, code: e.target.value })}
-                  placeholder="如 CW01"
+                  placeholder="留空自动生成"
                   className="tnum text-sm"
                 />
-              </Field>
-              <Field label="仓房名称 *">
-                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="text-sm" />
               </Field>
               <Field label="类型">
                 <Choose
@@ -700,20 +698,14 @@ function WarehousesSection() {
             <DialogTitle className="text-sm">
               {slotForm?.id == null ? `新增货位 · ${slotForm?.warehouseName}` : `编辑货位 ${slotForm?.code}`}
             </DialogTitle>
-            <DialogDescription className="text-xs">货位编码在同一仓房内唯一；简称用于磅单与看板显示，留空则用编码。</DialogDescription>
+            <DialogDescription className="text-xs">
+              货位编码在同一仓房内唯一，留空即按仓房编码自动补号；简称用于磅单与看板显示，留空则用编码。
+            </DialogDescription>
           </DialogHeader>
           {slotForm && (
             <div className="grid gap-3">
               <Field label="所属仓房">
                 <Input value={slotForm.warehouseName} readOnly className="text-sm" />
-              </Field>
-              <Field label="货位编码 *">
-                <Input
-                  value={slotForm.code}
-                  onChange={(e) => setSlotForm({ ...slotForm, code: e.target.value })}
-                  placeholder="如 C01-01"
-                  className="tnum text-sm"
-                />
               </Field>
               <Field label="货位简称">
                 <Input
@@ -721,6 +713,14 @@ function WarehousesSection() {
                   onChange={(e) => setSlotForm({ ...slotForm, label: e.target.value })}
                   placeholder="如 1号仓东列"
                   className="text-sm"
+                />
+              </Field>
+              <Field label="货位编码（选填）">
+                <Input
+                  value={slotForm.code}
+                  onChange={(e) => setSlotForm({ ...slotForm, code: e.target.value })}
+                  placeholder="留空自动生成"
+                  className="tnum text-sm"
                 />
               </Field>
               <Label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -733,20 +733,11 @@ function WarehousesSection() {
               </Label>
             </div>
           )}
-          {slotErrors.length > 0 && (
-            <CallOut tone="warning" title="还不能保存">
-              <ul className="list-disc pl-4">
-                {slotErrors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </CallOut>
-          )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setSlotOpen(false)}>
               取消
             </Button>
-            <Button disabled={slotErrors.length > 0 || saveSlot.isPending} onClick={() => saveSlot.mutate()}>
+            <Button disabled={saveSlot.isPending} onClick={() => saveSlot.mutate()}>
               {saveSlot.isPending ? "保存中…" : "保存"}
             </Button>
           </DialogFooter>
@@ -908,7 +899,7 @@ function PricesSection() {
         rowKey={(p) => p.id}
         defaultPageSize={100}
         rowClassName={(p) => (today >= p.effective_from && today <= p.effective_to ? undefined : "text-muted-foreground")}
-        empty={<EmptyState title="还没有价目" description="没有价目时工作台只能手工定价，且必须填写改价事由。" />}
+        empty={<EmptyState title="还没有价目" description="没有价目时工作台只能手工定价（建议填写改价事由留痕）。" />}
       />
 
       <Dialog open={open} onOpenChange={setOpen}>

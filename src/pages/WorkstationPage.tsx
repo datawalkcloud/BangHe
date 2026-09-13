@@ -6,7 +6,13 @@
  * 选付款方式完成结算。工作台后台常听 IC（`useIcWorkflow` 唯一收口），弹窗读身份证时让出设备锁。
  * 读卡器故障 / 关掉流转卡时，称重/结算面板仍可应急手点（05 §10-1 无外设闭环）。
  *
- * 排布按登录账号存进 §9.25，磅员/化验员/站长共用一台机互不影响（05 §4.1）；身份与制单不再是面板。
+ * 结算另有一条入口：客户拿着打过码单的票回来，在工作台用扫码枪扫票面码（`BH1:`）即就地弹同一个
+ * 结算框（`useScannerCapture` 常驻捕获，与 `/scan-settle` 共用 `settle-gate.ts` 的判定与话术），
+ * 扫进来的若是质检单/结算凭证/付款凭证/作废/已结单，当场用人话说清"这是什么、该上哪儿去"。
+ *
+ * 排布按登录账号存进 §9.25，磅员/化验员/站长共用一台机互不影响（05 §4.1）。「身份与制单」
+ * 已按最初的版本回归常驻格子（05 §4 ①），「制单」弹窗那条路也在：两者是同一个 `IdentityPanel`，
+ * 弹窗开着时这一格让位，读卡回读只被一个实例认领。
  * 低频留痕（称重轨迹、原始帧、历史皮重）不常驻，只在「单证详情 / 农户档案」里看。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -17,9 +23,14 @@ import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon, 
 import { api } from "@/lib/api";
 import { useSetting, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
+import { useScannerCapture } from "@/hooks/useScannerCapture";
+import { parseScannedCode, settleable } from "@/lib/ticket-code";
+import { scanRejectNote, settleGateOf } from "@/lib/settle-gate";
+import { announce } from "@/lib/voice-prompt";
 import { useDeviceStore } from "@/store/device";
+import { useSession } from "@/store/session";
 import { date, weight } from "@/lib/format";
-import { TarePanel } from "@/components/workstation/IdentityPanel";
+import { IdentityPanel, TarePanel, draftFromOrder, emptyDraft, type OrderDraft } from "@/components/workstation/IdentityPanel";
 import { WeighPanel } from "@/components/workstation/WeighPanel";
 import { QcPanel } from "@/components/workstation/QcPanel";
 import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
@@ -45,6 +56,7 @@ export function WorkstationPage() {
   const navigate = useNavigate();
   const qcClient = useQueryClient();
   const openQuickDetail = useQuickDetail((s) => s.open);
+  const maySettle = useSession((s) => s.can("settle.create"));
   const names = useStaffNames();
   const { data: varieties = [] } = useVarieties();
   const { data: warehouses = [] } = useWarehouses();
@@ -63,6 +75,14 @@ export function WorkstationPage() {
   const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
   const division01kg = useSetting("scale_division_01kg").num || 100;
   const allowCredit = useSetting("settlement_allow_part_pay").bool;
+
+  /**
+   * 制单草稿：左栏「身份与制单」面板自己的表单状态（没单时是草稿，取号成功即切成摘要态）。
+   * 「制单」弹窗另存一份本地草稿（`RegistrationDialog`），两边不共享——共享就会互相改掉对方
+   * 正填的品种/车牌，而读卡回读本来就一次只该被一个实例认领（06 §1.2）。
+   */
+  const [draft, setDraft] = useState<OrderDraft>(() => emptyDraft(null));
+  const setDraftPatch = useCallback((patch: Partial<OrderDraft>) => setDraft((d) => ({ ...d, ...patch })), []);
 
   /** 制单弹窗 */
   const [regOpen, setRegOpen] = useState(false);
@@ -91,6 +111,12 @@ export function WorkstationPage() {
     [navigate],
   );
 
+  /** 「新建下一单」：草稿沿用刚那张单的品种/车牌/去向（磅房最省手），然后把当前单清空回到制单态 */
+  const newOrder = useCallback(() => {
+    if (order) setDraft(draftFromOrder(order));
+    goOrder(null);
+  }, [order, goOrder]);
+
   // 弹窗开着时让出读卡器（06 §1.2）：自己的制单弹窗用 regOpen 即时 pause；
   // 顶部工具条「新建过磅单」开的是同一张弹窗，通过 regHolding 让位；结算框展示期间同样不起 IC 监听
   const regHolding = useDeviceStore((s) => s.regHolding);
@@ -112,6 +138,57 @@ export function WorkstationPage() {
       setRegOpen(true);
     },
   });
+
+  /**
+   * 扫票面码快速结算（02 §F1.4 的另一半入口）：与 `/scan-settle` 同一套判定与话术
+   * （`settle-gate.ts`），扫到一张**可直接结算的码单**就地弹第三刷那个 `SettleForm` 结算框，
+   * 省掉"过完磅还要切去结算窗口再扫一次"。判据、算钱、出票全共用同一份实现，两条入口
+   * 对同一张票一定给出同一个结论。
+   */
+  const handleScan = useCallback(
+    async (raw: string) => {
+      const code = parseScannedCode(raw);
+      // 不是一张能直接结算的码单（质检单 / 结算凭证 / 付款凭证 / 认不出）：说清楚这是什么、该上哪儿去
+      if (!settleable(code)) {
+        const note = scanRejectNote(code);
+        if (note) {
+          const msg = `${note.text}`;
+          if (note.tone === "danger") toast.error(msg, { id: "ws-scan-reject" });
+          else if (note.tone === "warning") toast.warning(msg, { id: "ws-scan-reject" });
+          else toast.info(msg, { id: "ws-scan-reject" });
+          announce("这张票在这儿结不了，请核对票面是不是收购码单", "ws-scan-reject");
+        }
+        return;
+      }
+      const no = code.docNo;
+      let scanned;
+      try {
+        scanned = await api.getOrder(no);
+      } catch {
+        toast.error(`读不到磅单 ${no}，请到「磅单中心」核对单号`, { id: `ws-scan-read:${no}` });
+        return;
+      }
+      // bill 传 null：工作台没预取结算单，"已结算"判据靠 settled_at/status 已足够准（见 settle-gate.ts）
+      const gate = settleGateOf(scanned ?? null, null, maySettle, allowCredit);
+      if (gate) {
+        const msg = `${gate.title}：${gate.body}`;
+        if (gate.tone === "danger") toast.error(msg, { id: `ws-scan-gate:${no}` });
+        else if (gate.tone === "warning") toast.warning(msg, { id: `ws-scan-gate:${no}` });
+        else toast.info(msg, { id: `ws-scan-gate:${no}` });
+        announce(gate.title, `ws-scan-gate:${no}`);
+        return;
+      }
+      goOrder(no);
+      setSettleNo(no);
+      if (!code.prefixed) toast.info(`按单号 ${no} 取单（没扫到票面码，可能是手输或旧版票）`);
+      // 成功进结算框刻意不插话：接下来由结算框（SettleForm）自己念它的话术，与第三刷同一处理
+    },
+    [maySettle, allowCredit, goOrder],
+  );
+
+  // 弹窗/结算框开着时不捕获扫码：那会儿焦点在弹层里，扫进来的码不该把底下的单换掉。
+  // 与扫码窗口同款后台常驻捕获（键盘枪免聚焦，`useScannerCapture` 已反向让位在输入框里打字的人）。
+  useScannerCapture((raw) => void handleScan(raw), { enabled: !regOpen && settleNo == null });
 
   // F7（制单）已收进顶部工具条作全局键：任何页面都弹同一张 RegistrationDialog，
   // 这里不再重复绑定，避免一次按键叠出两层弹窗
@@ -164,7 +241,7 @@ export function WorkstationPage() {
     { enabled: focusMode, allowInInput: true },
   );
 
-  const partyId = order?.party_id ?? null;
+  const partyId = order?.party_id ?? draft.party?.id ?? null;
   const { data: partyDetail } = useQuery({
     queryKey: ["party", partyId],
     queryFn: () => (partyId != null ? api.getParty(partyId) : Promise.resolve(null)),
@@ -180,7 +257,10 @@ export function WorkstationPage() {
     currentTare01kg != null && tareMean01kg != null && tolerancePct > 0 &&
     Math.abs(currentTare01kg - tareMean01kg) > Math.round((tareMean01kg * tolerancePct) / 100);
 
-  const variety = useMemo(() => varieties.find((v) => v.id === order?.variety_id) ?? null, [varieties, order?.variety_id]);
+  const variety = useMemo(
+    () => varieties.find((v) => v.id === (order?.variety_id ?? draft.varietyId)) ?? null,
+    [varieties, order?.variety_id, draft.varietyId],
+  );
   const scaleDevice = devices.find((d) => d.kind === "scale");
   const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
   const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
@@ -230,15 +310,36 @@ export function WorkstationPage() {
     setDirectPrint(false);
   }, [directPrint, printTarget, station, printOrder, printQc, names, printTimes, printReceipt]);
 
-  /** 面板本体按 id 收在这儿；身份与制单、凭票与打印都已移出格子（前者进制单弹窗，后者进结算弹窗） */
+  /** 面板本体按 id 收在这儿；凭票与打印进了结算弹窗，制单弹窗开着时「身份与制单」这一格让位 */
   const bodies: Record<PanelId, ReactNode> = {
+    identity:
+      regOpen || regHolding ? (
+        <RegYieldCard />
+      ) : (
+        <IdentityPanel
+          order={order ?? null}
+          draft={draft}
+          onDraft={setDraftPatch}
+          parties={parties}
+          varieties={varieties}
+          warehouses={warehouses}
+          slots={slots}
+          presetCardNo={regCard}
+          onCreated={(no) => goOrder(no)}
+          onNewOrder={newOrder}
+        />
+      ),
     tare: <TarePanel recent={tareRecent.slice(0, 5)} last01kg={partyDetail?.last_tare_01kg ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} currentTare01kg={currentTare01kg} alert={tareAlert} partyId={partyId} />,
     camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} />,
     weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} cameraOnline={cameraOnline} />,
     qc: <QcPanel order={order ?? null} variety={variety} />,
   };
 
-  const openOrdersHint = order ? `${order.variety_name}${order.grade ? ` · ${order.grade}` : ""}` : "未制单";
+  const openOrdersHint = order
+    ? `${order.variety_name}${order.grade ? ` · ${order.grade}` : ""}`
+    : draft.party
+      ? `${draft.party.name} · 未制单`
+      : "未制单";
 
   return (
     <div className={focusMode ? "fixed inset-0 z-40 flex flex-col bg-background" : "flex min-h-0 flex-1 flex-col"}>
@@ -248,6 +349,7 @@ export function WorkstationPage() {
           description={
             <>
               制单后一张流转卡<b className="font-semibold">刷一次推进一步</b>：毛重 → 皮重（自动出码单）→ 结算。
+              客户拿码单回来<b className="font-semibold">直接扫票面码</b>就地结算，不必切去扫码窗口。
               <Kbd>F7</Kbd> 制单 <Kbd>空格</Kbd>/<Kbd>P</Kbd> 应急手点捕获 <Kbd>F5</Kbd> 化验 <Kbd>F9</Kbd> 打印
             </>
           }
@@ -435,6 +537,19 @@ export function WorkstationPage() {
       )}
 
       <span className="sr-only">{`${openOrdersHint} ${date(order?.registered_at)} ${weight(order?.net_weight_01kg)}`}</span>
+    </div>
+  );
+}
+
+/**
+ * 「身份与制单」让位卡：制单弹窗开着时那一格不挂第二份 `IdentityPanel`。
+ * 读卡回读走的是跨页面共享的设备缓存，两个实例同时在场上会把同一张卡认领两次
+ * （两条 toast、两声播报、两次补照片），而一次制单只该有一个主人。弹窗关掉即回到草稿态。
+ */
+function RegYieldCard() {
+  return (
+    <div className="flex h-full min-h-16 items-center justify-center rounded-2xl border border-dashed px-3 text-center text-xs text-muted-foreground">
+      制单弹窗已打开：读卡与取号由那一框认领，关掉这里就回到草稿态
     </div>
   );
 }

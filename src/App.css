@@ -303,6 +303,30 @@ textarea::placeholder {
     0 10px 30px rgb(0 0 0 / 0.16);
 }
 
+/* 小票模板编辑器：点左栏某个区块 → 票面上那一格描一圈，回答"我点的到底是纸上的哪一块"。
+   outline 不占版面（不会把票面挤高），底色只到刚好看得出。两者都不是票面内容，
+   @media print 里一起抹掉；空区块的占位行更要藏——它在流程里占一行高，
+   热敏卷纸是"先量后打"，藏不干净就会多拖出一截空白纸。 */
+.receipt-sec-active {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+  background: color-mix(in oklab, var(--primary) 7%, transparent);
+}
+.receipt-sec-empty {
+  border: 1px dashed var(--color-border);
+  padding: 1px 4px;
+  text-align: center;
+}
+@media print {
+  .receipt-sec-active {
+    outline: none !important;
+    background: transparent !important;
+  }
+  .receipt-sec-empty {
+    display: none !important;
+  }
+}
+
 /* 打印：只保留 #print-root（纸张本体），其余全部隐藏。
    纸张自带 mm 宽与 mm 内边距，这里把它从屏幕上的"适应宽度缩放 + 投影"还原成真实毫米，保证 1:1 出纸。
 

@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::auth::AuthProfile;
+use crate::codes::next_code;
 use crate::orders::{audit, read_only, write_tx};
 
 /// 写台账要求的岗位。`src/store/session.ts` 的 `device.manage` 只发给站长，
@@ -55,6 +56,19 @@ const DEVICE_ROLES: &[&str] = &["station_master"];
 const KINDS: &[&str] = &["scale", "idcard", "camera", "printer", "led", "cashbox", "signpad"];
 /// `last_status` 的 CHECK 值域，与 `DeviceStatus` 同源
 const STATUSES: &[&str] = &["unknown", "online", "offline", "error"];
+
+/// 补号用的编码前缀，必须和 `src/pages/DevicesPage.tsx` 里 `DEVICE_SPEC[kind].prefix`
+/// 逐字一致：那边给新增表单填建议号，这边接住"把建议号清空再提交"的补号，
+/// 两套前缀拼出来的编码要长得一样。
+fn device_code_prefix(kind: &str) -> &str {
+    match kind {
+        "camera" => "cam",
+        "printer" => "prn",
+        "cashbox" => "cash",
+        "signpad" => "sign",
+        other => other,
+    }
+}
 
 fn now_iso() -> String {
     crate::db::migrate::now_iso()
@@ -373,13 +387,11 @@ impl CreateOutcome {
 }
 
 /// 登记现场硬件（新增一行）。编码是台账里的人工主键（导出配置、换机重建都按它核对），
-/// 必填且站内唯一；`is_default` 先把同类旧的默认机降级再插入——`uk_dev_default` 是
+/// 站内唯一，但**不要求操作员自己想**：表单按类型给了建议号，清空提交就在这里补号。
+/// `is_default` 先把同类旧的默认机降级再插入——`uk_dev_default` 是
 /// 部分唯一索引，同事务不降级就会直接撞 UNIQUE。新设备一律"未检测"：登记 ≠ 联机验证。
 pub fn create_device(conn: &Connection, actor: &AuthProfile, input: CreateDeviceInput) -> Result<CreateOutcome, String> {
-    let code = input.code.trim().to_string();
-    if code.is_empty() {
-        return Err("设备编码必填".into());
-    }
+    let mut code = input.code.trim().to_string();
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Err("设备名称必填：台账靠名字认机器".into());
@@ -389,6 +401,15 @@ pub fn create_device(conn: &Connection, actor: &AuthProfile, input: CreateDevice
     }
     if input.driver.trim().is_empty() {
         return Err("驱动协议必填".into());
+    }
+    if code.is_empty() {
+        code = next_code(
+            conn,
+            "SELECT COUNT(*) FROM device_config WHERE code = ?1",
+            device_code_prefix(&input.kind),
+            1,
+            "设备",
+        )?;
     }
 
     let taken: i64 = conn

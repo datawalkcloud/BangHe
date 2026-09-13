@@ -275,16 +275,28 @@ fn duplicate_code_is_refused_with_mock_wording_and_leaves_a_trace() {
 }
 
 #[test]
-fn blank_code_and_out_of_range_kind_are_refused() {
+fn blank_code_is_numbered_by_kind_and_out_of_range_inputs_are_refused() {
     let conn = db();
     let a = master(&conn);
-    assert_eq!(create_device(&conn, &a, create_input("   ", "printer", "mock", false)).err().unwrap(), "设备编码必填");
+    // 编码留空＝交给台账补号。前缀必须和前端 DEVICE_SPEC 一致（printer → prn，不是 printer1），
+    // 否则建议号和补号在台账里长成两副样子。
+    let first = create_device(&conn, &a, create_input("   ", "printer", "mock", false))
+        .expect("补号登记应成功")
+        .into_result()
+        .expect("首次补号不该撞号");
+    assert_eq!(first.code, "prn1");
+    let second = create_device(&conn, &a, create_input("", "printer", "mock", false))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(second.code, "prn2", "同类型继续往后号");
+
     assert_eq!(
         create_device(&conn, &a, create_input("lif1", "forklift", "mock", false)).err().unwrap(),
         "设备类型「forklift」不在值域内"
     );
     assert_eq!(create_device(&conn, &a, create_input("lif1", "printer", "  ", false)).err().unwrap(), "驱动协议必填");
-    assert_eq!(device_count(&conn), 0);
+    assert_eq!(device_count(&conn), 2, "被拒的两次都不该落行");
 }
 
 // ------------------------------------------------------------------ 探测回写

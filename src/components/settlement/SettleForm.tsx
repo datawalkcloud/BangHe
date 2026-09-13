@@ -16,18 +16,18 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, PriceList, QcReport, Settlement, WeighOrder } from "@/mock/types";
 import type { PaymentMethod } from "@/lib/constants";
-import { GRADES, PAYMENT_METHOD, PRICE_REASONS, REASON_MIN } from "@/lib/constants";
+import { GRADES, PAYMENT_METHOD, REASON_MIN } from "@/lib/constants";
 import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
 import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
+import { useQuickOptions } from "@/hooks/useLookups";
 import { Choose } from "@/components/business/Choose";
-import { ReasonChips } from "@/components/business/ReasonChips";
+import { ComboBox } from "@/components/business/ComboBox";
 import { MoneyField, MoneyLine, PriceField, WeightField } from "@/components/business/NumField";
 import { ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 /** 结算成功的返回：磅单与结算单同时回来，调用方据此刷新与提示 */
@@ -82,8 +82,14 @@ export function SettleForm({
   const [payNow, setPayNow] = useState(true);
   const [signed, setSigned] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
-  /** 现金付款口算找零用，只在前端活着：入库的是应付，实付多少是出纳的手的事 */
+  const { options: priceOptions } = useQuickOptions("price");
+  /** 现金付款口算找零用，只在前端活着：入库的是实付，掏了多少钱是出纳的手的事 */
   const [tenderedFen, setTenderedFen] = useState<number | null>(null);
+  /**
+   * 当场实付金额（分）。`null`＝没动过＝按应付全额付清（与改造前一模一样）；
+   * 填小即为部分付款，差额由服务端落成 `partial` 并进挂账台账（02 §F5.2）。
+   */
+  const [paidFen, setPaidFen] = useState<number | null>(null);
 
   // 等级是**结算时**定的：化验单上的判定只是建议，现场常按实际议价改判，
   // 所以这里存的是本单要按几等结钱，改了就随结算落库（化验报告本身永不改写）。
@@ -106,6 +112,8 @@ export function SettleForm({
     setOverrideReason(order.price_override_reason ?? "");
     setSigned(order.payment_status === "paid");
     setTenderedFen(null);
+    // 换单必清实付金额：留着上一单填的数额，下一单会莫名其妙挂一笔账
+    setPaidFen(null);
     // qc 与 prices 在同一张单的生命周期内基本同步到位，不必列依赖避免反复覆盖输入
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order.order_no, order.settled_at]);
@@ -113,7 +121,8 @@ export function SettleForm({
   // 只有「现行价目原价取值」才算命中价目表；否则一律是手填价
   const matchesList = listed != null && priceFenPerTon != null && priceFenPerTon === listed.price_fen_per_ton;
   const deviates = listed != null && priceFenPerTon != null && priceFenPerTon !== listed.price_fen_per_ton;
-  // 无生效价目时的手工定价与偏离价目同责，都必须留改价事由（01 §F2.3，与后端 settle 同口径）
+  // 无生效价目/偏离价目时把改价事由字段露出来提醒一句；事由已降为选填，
+  // 不再是提交闸门（与后端 settle 同口径，见 orders.rs）
   const needsReason = priceFenPerTon != null && !matchesList;
 
   const preview = previewSettlement({
@@ -126,6 +135,13 @@ export function SettleForm({
     deduction_fee_fen: feeFen,
   });
 
+  /** 本次实付（分）：没动过＝按应付全额付清；填小即为部分付款 */
+  const payAmountFen = paidFen ?? preview.payableAmountFen ?? 0;
+  /** 还欠多少：>0 就是这一单结算完要挂上去的账（`/payments` 挂账台账、看板告警同一口径） */
+  const creditFen = preview.payableAmountFen == null ? null : preview.payableAmountFen - payAmountFen;
+  /** 能不能把实付改小＝部分付款。它与整单挂账是同一个站点参数（名字里的"部分付款"就是这个），关掉只能全额付清 */
+  const canPartPay = allowCredit && payNow;
+
   const settle = useMutation({
     mutationFn: (): Promise<SettleOutcome | null> =>
       api.settle({
@@ -137,6 +153,8 @@ export function SettleForm({
         other_deduct_01kg: other,
         deduction_fee_fen: feeFen,
         pay_now: payNow,
+        // 关着挂账时永远传 null（＝全额付清），与"部分付款"入口露不露出来是同一个开关
+        paid_amount_fen: payNow && allowCredit ? payAmountFen : null,
         payment_method: method,
         settler_id: actorId(),
         price_list_id: matchesList && listed ? listed.id : null,
@@ -150,8 +168,17 @@ export function SettleForm({
         announce("结算没有成功，这张单的净重或扣重不对", `settle-bad:${order.order_no}`);
         return;
       }
-      // 收尾这一声最值钱：钱在手里、票在打，屏幕上那行绿字没人回头确认
-      announce(payNow ? "结算完成，款已付清" : "结算完成，这一单挂账", `settle:${order.order_no}`);
+      // 收尾这一声最值钱：钱在手里、票在打，屏幕上那行绿字没人回头确认。
+      // 以服务端返回的结算单为准——实付与应付差多少，只有落库后的数算数。
+      const leftFen = r.settlement.payable_fen - r.settlement.paid_fen;
+      announce(
+        leftFen <= 0
+          ? "结算完成，款已付清"
+          : r.settlement.paid_fen > 0
+            ? "结算完成，这一单只付了一部分，剩下的挂账"
+            : "结算完成，这一单全额挂账，凭证留好",
+        `settle:${order.order_no}`,
+      );
       onSettled(r);
     },
     // 改价事由缺失、重复结算等闸门原因要原样送到操作员眼前，不许翻译成"操作失败"
@@ -172,17 +199,21 @@ export function SettleForm({
           ? preview.blocked
           : priceFenPerTon == null
             ? "请填写单价，或点「从价目带出」"
-            : needsReason && overrideReason.trim().length < REASON_MIN
-              ? deviates
-                ? "偏离价目表，必须填写改价事由"
-                : "当前无生效价目，手工定价必须填写改价事由"
-              : payNow
-                ? can("pay.record")
-                  ? null
-                  : "当场付款需要出纳或站长登记，当前操作员只能挂账"
+            : // 改价事由已降为选填：不拦提交，只在 submit 里软提示一次（迎检必查 → 建议填写）
+              payNow
+                ? !can("pay.record")
+                  ? "当场付款需要出纳或站长登记，当前操作员只能挂账"
+                  : preview.payableAmountFen != null && payAmountFen > preview.payableAmountFen
+                    ? "本次实付大于应付，付款不能超过应付金额"
+                    : preview.payableAmountFen != null && preview.payableAmountFen > 0 && payAmountFen <= 0
+                      ? "本次实付必须大于 0；一分钱都不付就取消「当场已付」改走挂账"
+                      : null
                 : !allowCredit
                   ? "站点参数已关闭「允许挂账」，只能当场付清"
                   : null;
+
+  // 偏离价目/手工定价且没写够事由——不再是提交闸门，只作为一次软提醒
+  const missingReason = needsReason && overrideReason.trim().length < REASON_MIN;
 
   /** 改等级：价目表带出的价跟着新等级走；手填/已偏离的价不动——那通常是现场议价的结果 */
   function changeGrade(next: string) {
@@ -209,25 +240,31 @@ export function SettleForm({
     announce("已带出价目表的现价", `settle-priced:${order.order_no}`);
   }
 
+  // 找零对着"本次要付的钱"算：部分付款时掏的现金只覆盖实付那一段，剩下的不是欠着不给找零
   const change =
     payNow && method === "cash" && tenderedFen != null && preview.payableAmountFen != null
-      ? tenderedFen - preview.payableAmountFen
+      ? tenderedFen - payAmountFen
       : null;
 
   // 光标停在改价事由、实付现金这些框里也得能按——结算这一下就是本窗口的收尾动作
-  useHotkey(
-    submitHotkey ?? "",
-    () => {
-      if (blocked) {
-        toast.error(blocked);
-        // 这些原因本身就是一句人话（不带单号与金额），照整句话去重：原因换了就该重念一句
-        announce(blocked);
-        return;
-      }
-      if (!settle.isPending) settle.mutate();
-    },
-    { enabled: !!submitHotkey, allowInInput: true },
-  );
+  function submit() {
+    if (blocked) {
+      toast.error(blocked);
+      // 这些原因本身就是一句人话（不带单号与金额），照整句话去重：原因换了就该重念一句
+      announce(blocked);
+      return;
+    }
+    // 事由选填：没写够只提醒一句，不拦结算那一下
+    if (missingReason) {
+      toast.warning("未填写改价事由，本单价格偏离价目表，建议补一句便于事后追溯");
+    }
+    if (!settle.isPending) settle.mutate();
+  }
+
+  useHotkey(submitHotkey ?? "", submit, {
+    enabled: !!submitHotkey,
+    allowInInput: true,
+  });
   // F6 带价目表现价，跟着结算一起搬过来（原先在工作台上）
   useHotkey("f6", pickFromList, { allowInInput: true });
 
@@ -268,14 +305,16 @@ export function SettleForm({
         </div>
         {needsReason && (
           <div className="flex flex-col gap-1 text-xs text-warning">
-            <span>改价事由（迎检必查）</span>
-            <Input
+            <span>改价事由（选填，建议写明便于追溯）</span>
+            <ComboBox
+              aria-label="改价事由"
+              presets={priceOptions}
               value={overrideReason}
-              onChange={(e) => setOverrideReason(e.target.value)}
-              placeholder="点一条常用的，或写清楚为什么改价…"
+              onChange={setOverrideReason}
+              placeholder="选一条常用的，或写清楚为什么改价…"
               className="h-7 border-warning/50 text-xs"
             />
-            <ReasonChips aria-label="常用改价事由" presets={PRICE_REASONS} value={overrideReason} onChange={setOverrideReason} />
+            {missingReason && <p>不填也能结算，但这一单价格偏离价目表，写一句事后好对账。</p>}
           </div>
         )}
       </div>
@@ -337,6 +376,21 @@ export function SettleForm({
           </div>
         </div>
         {!payNow && !allowCredit && <p className="text-xs text-warning">站点参数已关闭挂账，本单必须当场付清。</p>}
+        {canPartPay && preview.payableAmountFen != null && preview.payableAmountFen > 0 && (
+          <div className="flex flex-col gap-0.5">
+            <MoneyField label="本次实付（改小即为部分付款）" keypad valueFen={payAmountFen} onChange={setPaidFen} />
+            <div className="flex items-center justify-between gap-1 text-[11px]">
+              <span className="text-muted-foreground">
+                应付 <span className="tnum">{money(preview.payableAmountFen)}</span>，默认一次付清
+              </span>
+              {paidFen != null && (
+                <button type="button" className="text-primary hover:underline" onClick={() => setPaidFen(null)}>
+                  改回全额
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {payNow && method === "cash" && (
           <div className="flex items-end gap-1.5">
             <MoneyField label="实付现金（算找零用）" valueFen={tenderedFen ?? 0} onChange={setTenderedFen} />
@@ -352,7 +406,7 @@ export function SettleForm({
       <div className="flex flex-col gap-1">
         <Button
           size="default"
-          onClick={() => settle.mutate()}
+          onClick={submit}
           disabled={!!blocked || settle.isPending}
           className="h-8 text-xs"
         >
@@ -360,7 +414,13 @@ export function SettleForm({
           {settle.isPending ? "结算中…" : submitLabel}
         </Button>
         {blocked && <p className="text-xs text-warning">{blocked}</p>}
-        {!payNow && allowCredit && <ToneBadge tone="warning">本单将挂账，之后凭结算凭证核销</ToneBadge>}
+        {!payNow && allowCredit && <ToneBadge tone="warning">本单将全额挂账，之后凭结算凭证核销</ToneBadge>}
+        {payNow && creditFen != null && creditFen > 0 && (
+          <ToneBadge tone="warning">
+            本单实付 <span className="tnum">{money(payAmountFen)}</span>，尚欠 <span className="tnum">{money(creditFen)}</span>{" "}
+            挂账，之后凭结算凭证核销
+          </ToneBadge>
+        )}
       </div>
     </div>
   );

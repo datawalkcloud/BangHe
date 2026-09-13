@@ -15,8 +15,10 @@
  *     热敏机会在边界上自己硬折，那才是"打印效果和预览不一样"的元凶。
  */
 import type { NativePrintLine } from "@/lib/native";
-import { docMeta } from "./render";
+import { docMeta, kvClusters } from "./render";
 import { getSpec } from "./scenarios";
+import { measureCode128 } from "./code128";
+import { BARCODE_HEIGHT_DOTS, CODE_SCALE_DOTS, scaleOf } from "./code-size";
 import type { ReceiptContext, ReceiptTemplate } from "./types";
 
 /**
@@ -65,13 +67,12 @@ export function receiptLines(template: ReceiptTemplate, ctx: ReceiptContext): Na
       const fields = sec.fields ?? [];
       if (fields.length === 0) continue;
       if (sec.title) out.push({ kind: "text", text: sec.title, bold: true });
-      for (const key of fields) {
-        const def = spec.fields.find((f) => f.key === key);
-        out.push({
-          kind: "kv",
-          label: def?.label ?? key,
-          value: asText(spec.resolveField(key, ctx)),
-        });
+      // 与 render.tsx 的 KVBlock 同一条规则：一个区块跨两个以上分组时，每段前打一行分组名
+      const clusters = kvClusters(spec, fields, ctx);
+      const titled = clusters.length > 1;
+      for (const c of clusters) {
+        if (titled && c.group) out.push({ kind: "text", text: c.group, bold: true });
+        for (const r of c.rows) out.push({ kind: "kv", label: r.label, value: asText(r.value) });
       }
       continue;
     }
@@ -111,8 +112,21 @@ export function receiptLines(template: ReceiptTemplate, ctx: ReceiptContext): Na
       // 取字段一律用模板自己的 scenario：靠上下文倒推会在"付款小票"这种同时挂着
       // settlement 和 payment 的场景里拿错目录，编出一个扫出来对不上号的码
       const payload = fillText(sec.text ?? "", (key) => asText(spec.resolveField(key, ctx))).trim();
+      if (!payload) continue;
+      const style = sec.codeStyle ?? "qr";
+      const scale = scaleOf(sec.qrScale);
       // 票头已经印过一行「单号」，纸上不再重复——热敏票纵向每一毫米都是钱
-      if (payload) out.push({ kind: "qr", text: payload });
+      if (style !== "barcode") {
+        // 档位换算成点数一起发过去：从前这里不带 size，机器恒用默认的 4 点，
+        // 站长在编辑器里把码调大，纸上却纹丝不动
+        out.push({ kind: "qr", text: payload, size: CODE_SCALE_DOTS[scale] });
+      }
+      if (style !== "qr") {
+        // 条空宽度是前端算的（CODE128 不在 ESC/POS 功能 A 的七种码制里），
+        // 机器只负责把这段栅格原样排点。measureCode128 与预览共用，纸宽不够时两边一起缩
+        const geo = measureCode128(payload, template.paper, scale);
+        if (geo) out.push({ kind: "barcode", runs: geo.runs, dots: geo.dots, height: BARCODE_HEIGHT_DOTS });
+      }
       continue;
     }
 

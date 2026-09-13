@@ -6,7 +6,9 @@ use std::borrow::Cow;
 use escpos::driver::Driver;
 use escpos::printer::Printer;
 use escpos::printer_options::PrinterOptions;
-use escpos::utils::{CashDrawer, Encoder, JustifyMode, Protocol, UnderlineMode};
+use escpos::utils::{
+    CashDrawer, Encoder, JustifyMode, Protocol, QRCodeCorrectionLevel, QRCodeModel, QRCodeOption, UnderlineMode,
+};
 use encoding_rs::GBK;
 
 use crate::model::{Paper, PrintLine, TextAlign, WeighTicket};
@@ -33,7 +35,7 @@ fn begin<D: Driver>(p: &mut Printer<D>) -> R<()> {
     p.underline(UnderlineMode::None)?;
     p.reverse(false)?;
     // 左对齐是整张票的恒定基准：文字行的对齐全靠空格补齐（见 `aligned`），
-    // 全文只有 `qr` 会临时改 justify，且它自己负责复位。
+    // 全文只有两种码行（`qr` / `barcode`）会临时改 justify，且它们自己负责复位。
     p.justify(JustifyMode::LEFT)?;
     Ok(())
 }
@@ -237,13 +239,71 @@ fn center<D: Driver>(p: &mut Printer<D>, text: &str, cols: usize) -> R<()> {
     line(p, &aligned(text, cols, TextAlign::Center))
 }
 
+/// 二维码缺省模块尺寸（点）：与 escpos 的 `QRCodeOption::default().size()` 同值。
+/// 写死版式的老码单与自检票走这一档，行为与引入尺寸参数之前完全一致。
+const QR_DEFAULT_SIZE: u8 = 4;
+
 /// 二维码。栅格图补不了空格（`GS ( k` 从当前位置起打），居中只能交给 `ESC a 1`——
 /// 于是这是全文件唯一还按**机内可打宽度**对齐的地方：80 机（48 列）装 58 纸、票面按
 /// 32 列排版时，码会落在第 24 列正中而非第 16 列，整体偏右约 8 列 ≈ 12mm。
 /// 发完必须复位左对齐，否则这行 `ESC a 1` 会泄漏给后面的文字行。
-fn qr<D: Driver>(p: &mut Printer<D>, text: &str) -> R<()> {
+///
+/// `size` 是模板里那一档尺寸换算成的点数。**纠错等级钉死 H**：前端画预览用的也是 H
+/// （见 `QrGraphic.tsx`），等级不同会让两边挑到不同的 QR 版本，模块数一变，
+/// "预览里多大、纸上多大"就成了一句空话。
+fn qr<D: Driver>(p: &mut Printer<D>, text: &str, size: u8) -> R<()> {
     p.justify(JustifyMode::CENTER)?;
-    p.qrcode(text)?;
+    p.qrcode_option(
+        text,
+        QRCodeOption::new(QRCodeModel::Model1, size.clamp(1, 16), QRCodeCorrectionLevel::H),
+    )?;
+    p.feed()?;
+    p.justify(JustifyMode::LEFT)?;
+    Ok(())
+}
+
+/// 一维条码：把前端 `code128.ts` 算好的条空模块序列排成 `GS v 0` 栅格打出去。
+///
+/// 为什么不在这里编码：见 [`crate::model::PrintLine::Barcode`]——CODE128 不在 ESC/POS
+/// 功能 A 支持的码制里，让固件自己编码又会让纸比预览窄。这里只按 `runs` 排点，
+/// 于是屏幕上的条空与纸上的条空是同一个数组。
+///
+/// 每一行都一样，所以只算一行再重复 `height` 次；模块宽度取整数个点，窄条正好落在
+/// 203dpi 的栅格上，不会因为 mm 换算取整把两条糊成一条。
+fn barcode<D: Driver>(p: &mut Printer<D>, runs: &[u8], dots: u8, height: u8) -> R<()> {
+    let dots = dots.clamp(1, 16) as usize;
+    let height = (height as usize).clamp(1, 255);
+    let width = runs.iter().map(|&w| w as usize).sum::<usize>() * dots;
+    if width == 0 {
+        return Ok(());
+    }
+    let row_bytes = (width + 7) / 8;
+    let mut row = vec![0u8; row_bytes];
+    let mut x = 0usize;
+    for (i, &w) in runs.iter().enumerate() {
+        let n = w as usize * dots;
+        if i % 2 == 0 {
+            // 偶数个元素是"条"：点亮这一段里的每一个点（MSB 在左，与 GS v 0 一致）
+            for _ in 0..n {
+                row[x / 8] |= 0x80 >> (x % 8);
+                x += 1;
+            }
+        } else {
+            x += n;
+        }
+    }
+    let mut cmd: Vec<u8> = vec![
+        0x1D, 0x76, 0x30, 0x00, // GS v 0，模式 0 = 正常密度
+        (row_bytes & 0xFF) as u8,
+        ((row_bytes >> 8) & 0xFF) as u8,
+        (height & 0xFF) as u8,
+        ((height >> 8) & 0xFF) as u8,
+    ];
+    for _ in 0..height {
+        cmd.extend_from_slice(&row);
+    }
+    p.justify(JustifyMode::CENTER)?;
+    p.custom(&cmd)?;
     p.feed()?;
     p.justify(JustifyMode::LEFT)?;
     Ok(())
@@ -391,7 +451,7 @@ pub fn write_weigh_ticket<D: Driver>(p: &mut Printer<D>, t: &WeighTicket) -> R<(
 
         if !t.qr_text.is_empty() {
             rule(p, cols)?;
-            qr(p, &t.qr_text)?;
+            qr(p, &t.qr_text, QR_DEFAULT_SIZE)?;
         }
 
         rule(p, cols)?;
@@ -481,7 +541,7 @@ pub fn write_self_test<D: Driver>(p: &mut Printer<D>, paper: Paper, device_label
     line(p, "把折行处的刻度数填进「小票机列数」")?;
 
     rule(p, cols)?;
-    qr(p, "BANGHE-SELFTEST")?;
+    qr(p, "BANGHE-SELFTEST", QR_DEFAULT_SIZE)?;
     center(p, "若本页字清晰即通道可用", cols)?;
     p.feeds(4)?;
     p.print_cut()?;
@@ -561,11 +621,12 @@ pub fn write_lines<D: Driver>(
                 PrintLine::Feed { n } => {
                     p.feeds((*n).clamp(1, 8))?;
                 }
-                PrintLine::Qr { text } => {
+                PrintLine::Qr { text, size } => {
                     if !text.is_empty() {
-                        qr(p, text)?;
+                        qr(p, text, *size)?;
                     }
                 }
+                PrintLine::Barcode { runs, dots, height } => barcode(p, runs, *dots, *height)?,
             }
         }
         p.feeds(3)?;
@@ -647,10 +708,12 @@ mod tests {
             {"kind":"pair","l1":"水分","v1":"14.0 %","l2":"杂质","v2":"1.0 %"},
             {"kind":"rule"},
             {"kind":"feed","n":2},
-            {"kind":"qr","text":"BANGHE-SELFTEST"}
+            {"kind":"qr","text":"BANGHE-SELFTEST","size":6},
+            {"kind":"qr","text":"BH1:BD20260912000031"},
+            {"kind":"barcode","runs":[2,2,2,2,2,1,4,4,4,4,4,1],"dots":3,"height":96}
         ]"#;
         let lines: Vec<PrintLine> = serde_json::from_str(json).expect("前端行序列必须能反序列化");
-        assert_eq!(lines.len(), 6);
+        assert_eq!(lines.len(), 8);
         match &lines[0] {
             // 缺省字段（underline / reverse）要走 serde default，不能报缺字段
             PrintLine::Text { text, align, bold, wide, tall, underline, reverse } => {
@@ -663,6 +726,24 @@ mod tests {
             other => panic!("第 0 行应为 Text，实际 {other:?}"),
         }
         assert!(matches!(lines[3], PrintLine::Rule));
+        // 尺寸档位是前端换算好送上来的（见 code-size.ts），Rust 只负责照发
+        match (&lines[5], &lines[6]) {
+            (PrintLine::Qr { size: big, .. }, PrintLine::Qr { size: def, .. }) => {
+                assert_eq!(*big, 6);
+                assert_eq!(
+                    *def, 4,
+                    "不带 size 的老调用必须落回机器出厂的 4 点，不能悄悄变大"
+                );
+            }
+            other => panic!("第 5/6 行应为 Qr，实际 {other:?}"),
+        }
+        match &lines[7] {
+            PrintLine::Barcode { runs, dots, height } => {
+                assert_eq!(runs.as_slice(), &[2, 2, 2, 2, 2, 1, 4, 4, 4, 4, 4, 1]);
+                assert_eq!((*dots, *height), (3, 96));
+            }
+            other => panic!("第 7 行应为 Barcode，实际 {other:?}"),
+        }
         // 极简形态也要成立：只给 kind，其余全默认
         let bare: Vec<PrintLine> = serde_json::from_str(r#"[{"kind":"text","text":"x"}]"#).unwrap();
         match &bare[0] {
@@ -696,8 +777,41 @@ mod tests {
         }
     }
 
+    /// 一维条码的栅格：条空序列 × 模块点数 → `GS v 0` 点阵，MSB 在左。
+    ///
+    /// 这条测试钉的是"纸上那些条到底画在哪"：位序反了、或者行宽少算一字节，
+    /// 打出来就是一根根错位糊在一起的废码，而它在预览里完全看不出来。
+    #[test]
+    fn barcode_emits_a_left_aligned_msb_raster() {
+        let lines = vec![PrintLine::Barcode {
+            runs: vec![2, 1, 2, 1], // 条2 空1 条2 空1 = 6 模块
+            dots: 2,                // 每模块 2 点 → 12 点宽 → 每行 2 字节
+            height: 3,
+        }];
+        let buf = Capture::default();
+        let mut p = new_printer(buf.clone(), Paper::P80);
+        write_lines(&mut p, Paper::P80.cols(), &lines, 1, false).expect("条码行不应失败");
+        let bytes = buf.0.borrow();
+
+        let head = bytes.windows(8).position(|w| w == [0x1D, 0x76, 0x30, 0x00, 2, 0, 3, 0]);
+        assert!(head.is_some(), "未找到 GS v 0 头（xL=2 字节/行，yL=3 行）：{bytes:02X?}");
+        let data = &bytes[head.unwrap() + 8..];
+        // 点 0-3 黑、4-5 白、6-9 黑、10-11 白 → 1111 0011 | 1100 0000
+        assert_eq!(
+            &data[..6],
+            &[0xF3, 0xC0, 0xF3, 0xC0, 0xF3, 0xC0],
+            "点阵必须每行都一样、且黑位在左"
+        );
+        // 码发完必须回到左对齐，否则整张票后半边跟着居中
+        assert!(bytes
+            .windows(3)
+            .skip(head.unwrap() + 8)
+            .any(|w| w == [0x1B, 0x61, 0x00]));
+    }
+
     /// 已知控制序列的字节数。只覆盖本 crate 会发的那几条，不求解析整个 ESC/POS
-    /// （二维码那种带长度域的 `GS ( k` 不在覆盖范围内，测试票面里也别放）。
+    /// （带长度域的序列不在覆盖范围内——二维码的 `GS ( k`、条码的 `GS v 0` 都是，
+    /// 往 `visible_lines` 的测试票面里放这种行，解析结果不作数）。
     fn ctrl_len(b: &[u8]) -> usize {
         match b {
             [0x1B, 0x40, ..] => 2,                // ESC @

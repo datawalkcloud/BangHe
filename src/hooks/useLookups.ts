@@ -4,8 +4,10 @@
  * 品种 / 仓房 / 货位 / 员工 / 站点参数这几张表几乎不变，却又被每个页面用到。
  * 统一在这里出，页面就不必各自 queryKey 拼写，也不会有人绕过 lib/api 去 import mock。
  */
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { QuickOptionKind } from "@/lib/constants";
 
 export function useStaff() {
   return useQuery({ queryKey: ["staff"], queryFn: () => api.staff(), staleTime: 300_000 });
@@ -51,4 +53,30 @@ export function useSetting(key: string): { raw: string | undefined; num: number;
 
 export function useStation() {
   return useQuery({ queryKey: ["station"], queryFn: () => api.station(), staleTime: Infinity });
+}
+
+/* ------------------------------------------------------ 常用语快捷选项 */
+
+/** 整表缓存（含停用行）；后台维护页与六个下拉共用同一份缓存，改完失效一次全体刷新 */
+export function useAllQuickOptions() {
+  return useQuery({ queryKey: ["quick-options"], queryFn: () => api.quickOptions(), staleTime: 300_000 });
+}
+
+/**
+ * 某个分类当前可用的下拉候选（已启用、按 sort_order）。
+ *
+ * 落库是自由文本，这里只是给 ComboBox 备选；取不到（首帧未加载完）就回空数组，
+ * 文本框照旧能打字，不做前端常量兜底——站长把某类删空就该真的没有候选。
+ */
+export function useQuickOptions(kind: QuickOptionKind) {
+  const { data = [], ...rest } = useAllQuickOptions();
+  const options = useMemo(
+    () =>
+      data
+        .filter((r) => r.kind === kind && r.is_active === 1)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((r) => ({ label: r.label, value: r.value })),
+    [data, kind],
+  );
+  return { options, ...rest };
 }

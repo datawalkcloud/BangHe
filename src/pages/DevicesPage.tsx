@@ -528,10 +528,10 @@ export function DevicesPage() {
   const addErrors: string[] = [];
   const trimmedCode = form.code.trim();
   if (!form.name.trim()) addErrors.push("名称必填");
+  // 编码留空＝交给后端按类型补号（见 devices.rs 的 next_code）；
   // 编辑时编码锁定（台账主键），不再校验其格式/唯一性
-  if (!isEdit) {
-    if (!trimmedCode) addErrors.push("编码必填");
-    else if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmedCode)) addErrors.push("编码需字母开头，仅含字母/数字/下划线/连字符");
+  if (!isEdit && trimmedCode) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmedCode)) addErrors.push("编码需字母开头，仅含字母/数字/下划线/连字符");
     else if (devices.some((d) => d.code === trimmedCode)) addErrors.push(`编码 ${trimmedCode} 已存在`);
   }
   for (const f of addFields) {
@@ -858,11 +858,11 @@ export function DevicesPage() {
               />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              设备编码 {isEdit ? "（不可改）" : "*"}
+              设备编码 {isEdit ? "（不可改）" : "（选填）"}
               <Input
                 value={form.code}
                 onChange={(e) => patchDeviceForm({ code: e.target.value })}
-                placeholder={nextCode(form.kind)}
+                placeholder={`留空自动生成，如 ${nextCode(form.kind)}`}
                 disabled={isEdit}
                 className="tnum text-sm font-mono"
               />

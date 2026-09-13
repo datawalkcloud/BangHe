@@ -93,7 +93,7 @@ export const VOID_REASONS: { label: string; reason: string }[] = [
 /** 事由最短字数，与 `SettleForm` / `QcPanel` 前端闸门同源（后端只要求非空） */
 export const REASON_MIN = 4;
 
-/** 改价事由：偏离价目表或无生效价时必填（`orders.rs::settle`） */
+/** 改价事由快捷选项：偏离价目表或无生效价时出现，选填（写了留痕，`orders.rs::settle` 不再强制） */
 export const PRICE_REASONS: { label: string; value: string }[] = [
   { label: "水分超扣价", value: "水分超基准，按本站扣价下调" },
   { label: "杂质超扣价", value: "杂质超基准，按本站扣价下调" },
@@ -137,6 +137,30 @@ export const ODOR_PRESETS: { label: string; value: string }[] = [
   { label: "轻微异味", value: "轻微异味" },
   { label: "有霉味", value: "有霉味" },
   { label: "异味明显", value: "异味明显" },
+];
+
+/* ------------------------------------------------ 常用语快捷选项（可后台自定义维护）
+   上面那几组 presets 是「首版种子」：装库时由 0015 迁移灌进 `quick_option` 表，
+   之后由站长在「基础档案 › 常用语/快捷选项」里增删改（03 §9.27、05 §3）。
+   这里同时是浏览器预览 mock 的种子源，两边共用这一份默认话术。 */
+
+/** 一句常用语归哪一类；与 Rust `masters::QUICK_OPTION_KINDS`、§9.27 的 kind 值域逐字一致 */
+export type QuickOptionKind =
+  | "void"
+  | "price"
+  | "reject"
+  | "card_retire"
+  | "remark"
+  | "odor";
+
+/** 后台分区里的分组名，与展示顺序（按此数组序，不按字母序） */
+export const QUICK_OPTION_KINDS: { kind: QuickOptionKind; label: string; where: string }[] = [
+  { kind: "void", label: "作废事由", where: "工作台 / 磅单详情作废弹窗" },
+  { kind: "price", label: "改价·改判事由", where: "结算改价、磅单改判等级" },
+  { kind: "reject", label: "拒收原因", where: "化验区判定拒收" },
+  { kind: "card_retire", label: "流转卡注销原因", where: "流转卡页注销" },
+  { kind: "remark", label: "制单备注常用语", where: "工作台登记表备注" },
+  { kind: "odor", label: "气味化验结论", where: "化验区气味指标" },
 ];
 
 /**

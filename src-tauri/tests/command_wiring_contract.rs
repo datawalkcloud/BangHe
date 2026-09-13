@@ -96,7 +96,9 @@ fn frontend_commands() -> BTreeMap<String, String> {
     let mut entries: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("src/lib 必须存在")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ts"))
+        // `.tsx` 也算调用点：CSV 导出这类"带一段 JSX 提示"的模块住在 `export-csv.tsx`，
+        // 只认 `.ts` 会把已经接好的线误报成"接了一半就停了"（`export_write` 就这么中过招）
+        .filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("ts") | Some("tsx")))
         .collect();
     entries.sort();
     for f in entries {
