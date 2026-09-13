@@ -15,13 +15,14 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, QcReport, WeighOrder } from "@/mock/types";
 import type { Grade, IndicatorMeta, QcDecision, TestMethod } from "@/lib/constants";
-import { GRADES, INDICATORS, QC_DECISION, TEST_METHOD } from "@/lib/constants";
+import { GRADES, INDICATORS, ODOR_PRESETS, QC_DECISION, REASON_MIN, REJECT_REASONS, TEST_METHOD } from "@/lib/constants";
 import { density, fromPercent, percent, weight } from "@/lib/format";
 import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
 import { Choose } from "@/components/business/Choose";
 import { QcDecisionBadge } from "@/components/business/badges";
 import { NumField, WeightField } from "@/components/business/NumField";
+import { ReasonChips } from "@/components/business/ReasonChips";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -170,8 +171,8 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
       ? "当前岗位无权保存化验，需化验员或站长"
       : metas.some((m) => m.code === "moisture" && num01("moisture") == null)
         ? "水分为必检项，不能留空"
-        : decision === "reject" && rejectReason.trim().length < 4
-          ? "拒收必须填写原因（不少于 4 字）"
+        : decision === "reject" && rejectReason.trim().length < REASON_MIN
+          ? `拒收必须填写原因（不少于 ${REASON_MIN} 字）`
           : null;
 
   useHotkey("f5", () => {
@@ -203,20 +204,30 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             const cmp = m.unit === "text" ? { over: 0 as const, text: null } : compare(m, num01(m.code));
             if (m.unit === "text") {
               return (
-                <Label key={m.code} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-                  {m.name}
+                <div key={m.code} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                  <Label htmlFor={`qc-ind-${m.code}`} className="text-xs text-muted-foreground">
+                    {m.name}
+                  </Label>
                   <Input
+                    id={`qc-ind-${m.code}`}
                     value={buf[m.code] ?? ""}
                     onChange={(e) => setBuf((b) => ({ ...b, [m.code]: e.target.value }))}
-                    placeholder="正常 / 无异味"
+                    placeholder="点下面的常用结论"
                     className="h-8 text-xs"
                   />
-                </Label>
+                  <ReasonChips
+                    aria-label={`${m.name}常用结论`}
+                    presets={ODOR_PRESETS}
+                    value={buf[m.code] ?? ""}
+                    onChange={(v) => setBuf((b) => ({ ...b, [m.code]: v }))}
+                  />
+                </div>
               );
             }
             return (
               <NumField
                 key={m.code}
+                keypad
                 label={`${m.name}${m.std != null ? `(${m.unit === "gL" ? density(m.std) : percent(m.std, "")})` : ""}`}
                 text={buf[m.code] ?? ""}
                 onText={(t) => setBuf((b) => ({ ...b, [m.code]: t }))}
@@ -260,27 +271,31 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
           </Label>
           <WeightField
             label="扣水"
+            keypad
             value01kg={moistureDeduct || null}
             onChange={(v) => setMoistureDeduct(v ?? 0)}
           />
           <WeightField
             label="扣杂"
+            keypad
             value01kg={impurityDeduct || null}
             onChange={(v) => setImpurityDeduct(v ?? 0)}
           />
         </div>
 
         {decision === "reject" && (
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            拒收原因
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>拒收原因（必填，不少于 {REASON_MIN} 字）</span>
             <Textarea
               rows={1.5}
+              aria-label="拒收原因"
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="如：霉变粒超标且气味异常，现场退粮"
+              placeholder="点一条常用的，或写清楚为什么退粮…"
               className="min-h-0 text-sm"
             />
-          </Label>
+            <ReasonChips aria-label="常用拒收原因" presets={REJECT_REASONS} value={rejectReason} onChange={setRejectReason} />
+          </div>
         )}
 
         <div className="flex flex-wrap items-center gap-1.5 border-t pt-1.5">

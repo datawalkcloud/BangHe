@@ -16,12 +16,13 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, PriceList, QcReport, Settlement, WeighOrder } from "@/mock/types";
 import type { PaymentMethod } from "@/lib/constants";
-import { GRADES, PAYMENT_METHOD } from "@/lib/constants";
+import { GRADES, PAYMENT_METHOD, PRICE_REASONS, REASON_MIN } from "@/lib/constants";
 import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
 import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
 import { Choose } from "@/components/business/Choose";
+import { ReasonChips } from "@/components/business/ReasonChips";
 import { MoneyField, MoneyLine, PriceField, WeightField } from "@/components/business/NumField";
 import { ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
@@ -171,7 +172,7 @@ export function SettleForm({
           ? preview.blocked
           : priceFenPerTon == null
             ? "请填写单价，或点「从价目带出」"
-            : needsReason && overrideReason.trim().length < 4
+            : needsReason && overrideReason.trim().length < REASON_MIN
               ? deviates
                 ? "偏离价目表，必须填写改价事由"
                 : "当前无生效价目，手工定价必须填写改价事由"
@@ -252,6 +253,7 @@ export function SettleForm({
       <div className="flex flex-col gap-0.5">
         <PriceField
           label="单价"
+          keypad
           valueFenPerTon={priceFenPerTon}
           onChange={setPrice}
           hint={deviates ? "已偏离价目表现行价" : listed == null && priceFenPerTon != null ? "无生效价目，手工定价" : undefined}
@@ -265,25 +267,26 @@ export function SettleForm({
           </Button>
         </div>
         {needsReason && (
-          <Label className="flex flex-col gap-0.5 text-xs text-warning">
-            改价事由（迎检必查）
+          <div className="flex flex-col gap-1 text-xs text-warning">
+            <span>改价事由（迎检必查）</span>
             <Input
               value={overrideReason}
               onChange={(e) => setOverrideReason(e.target.value)}
-              placeholder="如：水分超基准 1.2%，议价下调 0.04 元/公斤"
+              placeholder="点一条常用的，或写清楚为什么改价…"
               className="h-7 border-warning/50 text-xs"
             />
-          </Label>
+            <ReasonChips aria-label="常用改价事由" presets={PRICE_REASONS} value={overrideReason} onChange={setOverrideReason} />
+          </div>
         )}
       </div>
 
       <div className="grid grid-cols-2 gap-1 border-y py-1">
-        <WeightField label="袋重（含绳网）" value01kg={pkg || null} onChange={(v) => setPkg(v ?? 0)} />
-        <WeightField label="扣水（化验）" value01kg={moisture || null} onChange={(v) => setMoisture(v ?? 0)} />
-        <WeightField label="扣杂" value01kg={impurity || null} onChange={(v) => setImpurity(v ?? 0)} />
-        <WeightField label="其他扣" value01kg={other || null} onChange={(v) => setOther(v ?? 0)} />
+        <WeightField label="袋重（含绳网）" keypad value01kg={pkg || null} onChange={(v) => setPkg(v ?? 0)} />
+        <WeightField label="扣水（化验）" keypad value01kg={moisture || null} onChange={(v) => setMoisture(v ?? 0)} />
+        <WeightField label="扣杂" keypad value01kg={impurity || null} onChange={(v) => setImpurity(v ?? 0)} />
+        <WeightField label="其他扣" keypad value01kg={other || null} onChange={(v) => setOther(v ?? 0)} />
         <div className="col-span-2">
-          <MoneyField label="费用扣款（卸车费、袋钱等）" valueFen={feeFen} onChange={setFeeFen} />
+          <MoneyField label="费用扣款（卸车费、袋钱等）" keypad valueFen={feeFen} onChange={setFeeFen} />
         </div>
       </div>
 

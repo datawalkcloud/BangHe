@@ -30,7 +30,7 @@ import { RESTORE_CONFIRM_TEXT, systemApi, type AuditRow, type BackupFile, type H
 import { SETTLEMENT_SCAN_LIMIT } from "@/lib/reports-native";
 import { useHotkey } from "@/hooks/useHotkey";
 import { actorId, PERMISSIONS, useActor, useSession } from "@/store/session";
-import { useStaff, useStation } from "@/hooks/useLookups";
+import { useSetting, useStaff, useStation } from "@/hooks/useLookups";
 import { StatCard } from "@/components/business/StatCard";
 import { detailColumn, QuickDetailLink } from "@/components/business/quickDetail";
 import { ALL, Choose } from "@/components/business/Choose";
@@ -39,6 +39,7 @@ import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionBar, SectionTitle } from "@/components/business/layout";
 import { ThemeSettingsPanel } from "@/components/business/ThemeSettingsPanel";
 import { WindowBehaviorPanel } from "@/components/business/WindowBehaviorPanel";
+import { SoftKeyboardPanel } from "@/components/business/SoftKeyboardPanel";
 import { ReceiptTemplateEditor } from "@/components/print/receipt/TemplateEditor";
 import { OperatorPanel } from "@/components/business/OperatorSwitch";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "cn";
+import { digitKeys, KeypadInput, type KeypadKey } from "@/components/ui/keypad";
 
 export type SystemSection = "users" | "staff" | "audit" | "backup" | "shift" | "window" | "appearance" | "templates";
 
@@ -93,13 +95,18 @@ export function SystemPage({ section }: { section: SystemSection }) {
           </nav>
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-4">
         {section === "users" && <UsersSection />}
         {section === "staff" && <StaffSection />}
         {section === "audit" && <AuditSection />}
         {section === "backup" && <BackupSection />}
         {section === "shift" && <ShiftSection />}
-        {section === "window" && <WindowBehaviorPanel />}
+        {section === "window" && (
+          <div className="flex flex-col gap-3">
+            <WindowBehaviorPanel />
+            <SoftKeyboardPanel />
+          </div>
+        )}
         {section === "appearance" && <ThemeSettingsPanel />}
         {section === "templates" && <ReceiptTemplateEditor />}
       </div>
@@ -119,8 +126,18 @@ function permissionsOf(role: Role): string[] {
 
 function UsersSection() {
   const actor = useActor();
-  // 空闲失效时长由后端随会话下发，这里只换算成分钟，不在前端抄一份常量
-  const idleMinutes = Math.round((useSession((s) => s.session?.idleTtlSecs) ?? 0) / 60);
+  // 空闲锁屏时长：桌面端以后端随会话下发的值为准（站点参数 idle_lock_minutes），
+  // 浏览器演示没有真会话，直接读参数页的当前值。两条路都不在前端抄常量。
+  const demo = useSession((s) => s.demo);
+  const idleTtlSecs = useSession((s) => s.session?.idleTtlSecs);
+  const idleSetting = useSetting("idle_lock_minutes").raw;
+  const idleMinutes = demo
+    ? idleSetting == null
+      ? null
+      : Number(idleSetting) || 0
+    : idleTtlSecs == null
+      ? null
+      : Math.round(idleTtlSecs / 60);
 
   return (
     <div className="flex flex-col gap-3">
@@ -146,12 +163,14 @@ function UsersSection() {
         <CallOut title="密码与会话都在本机校验，问不到会话就当作没登录">
           登录、设密码、重置与授权全部走桌面端的 <span className="font-mono">auth.rs</span>：
           argon2id 校验、连错若干次临时锁定并在登录页倒计时、
-          {idleMinutes > 0 ? (
+          {idleMinutes == null ? (
+            <>空闲锁屏时长由桌面端会话下发（当前拿不到该值，前端不抄一份常量兜底）；</>
+          ) : idleMinutes === 0 ? (
+            <>自动锁屏已设为「从不」，空闲不锁，只能在左下角手动锁屏；</>
+          ) : (
             <>
               无操作<span className="tnum"> {idleMinutes} </span>分钟后自动锁屏，输本人密码即解锁（登录态不清）；
             </>
-          ) : (
-            <>空闲锁屏时长由桌面端会话下发（当前拿不到该值，前端不抄一份常量兜底）；</>
           )}
           会话只存内存，重启程序必须重登。未登录进不了任何业务页，
           写操作的署名由这个会话给出，而不是前端传进来的 id。新增账号、调整岗位与权限矩阵在
@@ -360,10 +379,21 @@ function StaffSection() {
                 options={ROLE_LIST.map((r) => ({ value: r, label: ROLE[r] }))}
               />
             </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              电话
-              <Input value={form.phone} onChange={(e) => patch({ phone: e.target.value })} className="tnum text-sm" />
-            </Label>
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>电话</span>
+              <KeypadInput
+                aria-label="电话"
+                value={form.phone}
+                onChangeValue={(v) => patch({ phone: v.replace(/[^\d\s-]/g, "") })}
+                keys={digitKeys()}
+                columns={6}
+                maxLength={20}
+                toggleLabel="数字"
+                inputMode="tel"
+                autoComplete="off"
+                inputClassName="tnum text-sm"
+              />
+            </div>
             <Label className="flex items-center gap-2 text-xs text-muted-foreground">
               <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="在职" />
               在职
@@ -661,6 +691,16 @@ const REQUIRE_DOC_YEARS = 3;
 const REQUIRE_BACKUP_KEEP = 30;
 const REQUIRE_CAPTURE_DAYS = REQUIRE_DOC_YEARS * 365;
 
+/**
+ * 换库口令的键阵：把 `恢复备份` 逐字摊开点选。
+ * 口令仍然要逐字相等才放行，这里只是把"必须敲中文"这一步换成"点四个中文"。
+ */
+const restoreConfirmKeys: KeypadKey[] = [
+  ...[...RESTORE_CONFIRM_TEXT].map((ch) => ({ label: ch, insert: ch })),
+  { action: "backspace", label: "退格", span: 2, title: "删掉最后一个字" },
+  { action: "clear", label: "清空", span: 2, title: "全部重来" },
+];
+
 function BackupSection() {
   const desktop = runningInTauri();
   const { data: station } = useStation();
@@ -957,10 +997,23 @@ function BackupSection() {
 
           {preflight.ok && !restored && (
             <div className="mt-2 flex flex-wrap items-end gap-2">
-              <Label className="flex min-w-64 flex-1 flex-col gap-1 text-xs text-muted-foreground">
-                换库会覆盖当前库。逐字输入 <span className="font-mono text-foreground">{RESTORE_CONFIRM_TEXT}</span> 才会执行；执行前会先强制备份当前库
-                <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={RESTORE_CONFIRM_TEXT} className="h-8 text-sm" />
-              </Label>
+              <div className="flex min-w-64 flex-1 flex-col gap-1 text-xs text-muted-foreground">
+                <span>
+                  换库会覆盖当前库。点输入框右侧「点字」展开，再点下面四个字凑出{" "}
+                  <span className="font-mono text-foreground">{RESTORE_CONFIRM_TEXT}</span> 才会执行；执行前会先强制备份当前库
+                </span>
+                <KeypadInput
+                  aria-label="换库确认口令"
+                  value={confirmText}
+                  onChangeValue={setConfirmText}
+                  keys={restoreConfirmKeys}
+                  columns={4}
+                  maxLength={RESTORE_CONFIRM_TEXT.length}
+                  toggleLabel="点字"
+                  placeholder={RESTORE_CONFIRM_TEXT}
+                  inputClassName="h-9 text-sm"
+                />
+              </div>
               <Button
                 size="sm"
                 variant="destructive"

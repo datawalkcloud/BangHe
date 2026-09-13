@@ -6,12 +6,13 @@
  *
  * 两种世界，界面必须说清楚自己在哪个：
  *  - 桌面端（有原生通道）：换人 = 登出后重新输密码。点一下就能换人的做法只留在演示模式。
+ *    锁屏 = 不登出，输入本人密码即解除（后端 idle_lock_minutes 会按同样的规则自动锁）。
  *  - 浏览器预览：没有可校验的密码，沿用 mock 在职名单切换，并显式标注"演示"。
  */
 import { useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { LogOutIcon, PowerIcon, UserCogIcon } from "lucide-react";
+import { LockKeyholeIcon, LogOutIcon, PowerIcon, UserCogIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { ROLE } from "@/lib/constants";
@@ -56,7 +57,7 @@ function OperatorAvatar({ actor }: { actor: AuthProfile }) {
   );
 }
 
-/** 真机上的"换人/锁屏"：都会登出，区别只是要不要马上说明原因 */
+/** 真机上的"换人"：登出后回到登录页，由下一个人重新输密码 */
 function useSignOut() {
   const navigate = useNavigate();
   const signOut = useSession((s) => s.signOut);
@@ -65,6 +66,12 @@ function useSignOut() {
     // 未登录进不去任何业务页（router.tsx 的守卫），这里显式跳一次，省得停在原地
     void navigate({ to: "/login" });
   };
+}
+
+/** 主动锁屏：会话留着，只盖上浮层。点完不做跳转——解锁或换人在浮层里选 */
+function useLockScreen() {
+  const lockScreen = useSession((s) => s.lockScreen);
+  return () => void lockScreen();
 }
 
 /**
@@ -132,6 +139,7 @@ export function OperatorFooter() {
   const demo = useSession((s) => s.demo);
   const { state } = useSidebar();
   const signOut = useSignOut();
+  const lockScreen = useLockScreen();
   // 浏览器预览没有窗口，"退出程序"这个动作无从谈起（和备份页同一条口径：不给点不动的假按钮）
   const desktop = runningInTauri();
   // 折叠态的下拉里也要能换人，所以名单在早退之前取（demo 为假时不发请求）
@@ -150,7 +158,7 @@ export function OperatorFooter() {
                 variant="ghost"
                 size="icon-sm"
                 className="px-0"
-                aria-label={`当前操作员 ${operatorLabel(actor)}，点开可换人或退出`}
+                aria-label={`当前操作员 ${operatorLabel(actor)}，点开可锁屏、换人或退出`}
               />
             }
           >
@@ -177,6 +185,10 @@ export function OperatorFooter() {
               </>
             )}
             <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={lockScreen}>
+              <LockKeyholeIcon />
+              锁屏
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => void signOut()}>
               <LogOutIcon />
               退出登录
@@ -199,22 +211,30 @@ export function OperatorFooter() {
         <OperatorAvatar actor={actor} />
         <p className="min-w-0 truncate text-sm font-medium">{operatorLabel(actor)}</p>
       </div>
-      {demo ? (
-        <DemoPicker value={String(actor.id)} />
-      ) : (
-        <div className="flex gap-1.5">
-          <Button size="xs" variant="outline" className="flex-1" onClick={() => void signOut()}>
-            <LogOutIcon data-slot="icon" />
-            退出登录
+      {demo && <DemoPicker value={String(actor.id)} />}
+      <div className="flex gap-1.5">
+        <Button size="xs" variant="outline" className="flex-1" onClick={lockScreen}>
+          <LockKeyholeIcon data-slot="icon" />
+          锁屏
+        </Button>
+        <Button size="xs" variant="outline" className="flex-1" onClick={() => void signOut()}>
+          <LogOutIcon data-slot="icon" />
+          退出登录
+        </Button>
+        {/* 展开态只有 240px，三个带文字的按钮挤不下：退出程序是低频动作，给它图标 + 悬浮提示 */}
+        {desktop && (
+          <Button
+            size="xs"
+            variant="outline"
+            aria-label="退出程序"
+            title="退出程序"
+            className="px-1.5"
+            onClick={exitApp}
+          >
+            <PowerIcon data-slot="icon" />
           </Button>
-          {desktop && (
-            <Button size="xs" variant="outline" className="flex-1" onClick={exitApp}>
-              <PowerIcon data-slot="icon" />
-              退出程序
-            </Button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </SidebarFooter>
   );
 }
@@ -224,6 +244,7 @@ export function OperatorPanel() {
   const actor = useCurrentActor();
   const demo = useSession((s) => s.demo);
   const signOut = useSignOut();
+  const lockScreen = useLockScreen();
   if (!actor) return null;
   return (
     <div className="flex flex-col gap-2">
@@ -235,10 +256,16 @@ export function OperatorPanel() {
           <p className="text-xs text-muted-foreground">浏览器演示模式：换人只改名单，不校验密码。</p>
         </>
       ) : (
-        <Button size="sm" variant="outline" className="self-start" onClick={() => void signOut()}>
-          <UserCogIcon data-slot="icon" />
-          换人 / 锁屏（需重新输密码）
-        </Button>
+        <div className="flex flex-wrap gap-1.5">
+          <Button size="sm" variant="outline" onClick={lockScreen}>
+            <LockKeyholeIcon data-slot="icon" />
+            锁屏（输本人密码解锁）
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void signOut()}>
+            <UserCogIcon data-slot="icon" />
+            换人（需重新登录）
+          </Button>
+        </div>
       )}
     </div>
   );

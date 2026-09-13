@@ -18,7 +18,7 @@ import { AlertTriangleIcon, ArrowLeftIcon, BadgeCheckIcon, FlaskConicalIcon, Map
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
-import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
+import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, PRICE_REASONS, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
 import { useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
@@ -38,6 +38,7 @@ import {
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { Choose } from "@/components/business/Choose";
 import { VoidReasonField } from "@/components/business/VoidReasonField";
+import { ReasonChips } from "@/components/business/ReasonChips";
 import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
@@ -870,15 +871,17 @@ export function OrderDetailBody({
               </span>
             </Label>
           </div>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            改判事由（可选，填了会一起写进审计）
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>改判事由（可选，填了会一起写进审计）</span>
             <Input
               value={gradeReason}
               onChange={(e) => setGradeReason(e.target.value)}
-              placeholder="如：水分超基准 1.2%，议价下调一档"
+              aria-label="改判事由"
+              placeholder="点一条常用的，或自己写…"
               className="h-8 text-sm"
             />
-          </Label>
+            <ReasonChips aria-label="常用改判事由" presets={PRICE_REASONS} value={gradeReason} onChange={setGradeReason} />
+          </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setGradeOpen(false)}>
               取消

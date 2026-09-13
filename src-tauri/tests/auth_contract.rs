@@ -232,6 +232,32 @@ fn idle_boundary_uses_the_ttl_and_fails_closed_on_garbage() {
     assert!(!idle_expired(&iso_of(now - Duration::minutes(59)), now, IDLE_TTL_SECS), "59 分钟仍在会话内");
     assert!(idle_expired(&iso_of(now - Duration::minutes(61)), now, IDLE_TTL_SECS), "超过 1 小时无操作即锁屏");
     assert!(idle_expired("不是时间串", now, IDLE_TTL_SECS), "时间解析不了就当作要锁屏，宁可多要一次密码");
+    assert!(!idle_expired(&iso_of(now - Duration::days(3)), now, 0), "0＝从不：再久也不锁");
+}
+
+/// 时长是站点参数 `idle_lock_minutes`（0014 种进库、参数页可改），不再是代码里的常量。
+/// 三种拿不到数的样子必须分开：0 是站长明说"从不"，读不进 / 键没了才是退回兜底值——
+/// 把后者也当成 0，等于参数页一填错就全站永不锁屏。
+#[test]
+fn idle_lock_minutes_is_read_from_app_setting_with_a_compile_time_fallback() {
+    let conn = db();
+    assert_eq!(auth::idle_ttl_from_settings(&conn), IDLE_TTL_SECS, "0014 种的是 60 分钟");
+
+    let set = |value: &str| {
+        conn.execute(
+            "UPDATE app_setting SET value_json = ?1 WHERE key = 'idle_lock_minutes'",
+            rusqlite::params![value],
+        )
+        .unwrap();
+    };
+    set("5");
+    assert_eq!(auth::idle_ttl_from_settings(&conn), 5 * 60, "界面填几分钟＝几百秒");
+    set("-1");
+    assert_eq!(auth::idle_ttl_from_settings(&conn), 0, "负数按从不处理，别让 idle_expired 反过来立刻锁");
+    set("\"60\"");
+    assert_eq!(auth::idle_ttl_from_settings(&conn), IDLE_TTL_SECS, "带引号的字符串不是整数，退回兜底而不是当成从不");
+    conn.execute("DELETE FROM app_setting WHERE key = 'idle_lock_minutes'", []).unwrap();
+    assert_eq!(auth::idle_ttl_from_settings(&conn), IDLE_TTL_SECS, "键被删掉也要有兜底");
 }
 
 #[test]

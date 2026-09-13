@@ -18,13 +18,15 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/mock/types";
-import { PARTY_TYPE, ROLE } from "@/lib/constants";
+import { PARTY_TYPE, ROLE, ORDER_REMARK_PRESETS } from "@/lib/constants";
 import { maskIdCard, ton, validateIdCard, weight } from "@/lib/format";
 import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
 import { useDeviceStore } from "@/store/device";
 import { useSetting } from "@/hooks/useLookups";
 import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
+import { PlateField } from "@/components/business/PlateField";
+import { ReasonChips } from "@/components/business/ReasonChips";
 import { CardScanDialog } from "@/components/business/CardScanDialog";
 import { QuickDetailLink } from "@/components/business/quickDetail";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
@@ -33,7 +35,6 @@ import { QuickPartyDialog } from "@/components/workstation/QuickPartyDialog";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "cn";
@@ -350,15 +351,15 @@ export function IdentityPanel({
               ]}
             />
           </Label>
-          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-            车牌号
-            <Input
+          <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+            <span>车牌号</span>
+            <PlateField
+              aria-label="车牌号"
               value={draft.vehicleNo}
-              onChange={(e) => onDraft({ vehicleNo: e.target.value.toUpperCase() })}
-              placeholder="如 豫A12345，农用车可留空"
-              className="h-7 text-xs"
+              onChange={(v) => onDraft({ vehicleNo: v })}
+              inputClassName="h-7 text-xs"
             />
-          </Label>
+          </div>
           {/* 去向是可选登记项：默认折成一行，不跟品种/车牌抢主视线；填了就把值亮在行上，
               免得磅员不知道这单到底带没带去向 */}
           <div className="border-t pt-1">
@@ -413,16 +414,18 @@ export function IdentityPanel({
               </>
             )}
           </div>
-          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-            备注
+          <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+            <span>备注（选填）</span>
             <Textarea
               rows={1}
+              aria-label="备注"
               value={draft.remark}
               onChange={(e) => onDraft({ remark: e.target.value })}
-              placeholder="如：带皮带、需复检"
+              placeholder="点一条常用的，或自己写…"
               className="min-h-[28px] py-0.5 text-xs"
             />
-          </Label>
+            <ReasonChips aria-label="常用备注" presets={ORDER_REMARK_PRESETS} value={draft.remark} onChange={(v) => onDraft({ remark: v })} />
+          </div>
         </div>
 
         <div className="flex flex-col gap-1 border-t pt-1">

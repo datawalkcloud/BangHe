@@ -8,9 +8,9 @@
  * 服务端只认自由文本（事由 ≥6 字，见 `orders.rs::void_order`），快捷选项是
  * 常量表而不是枚举码——作废不需要授权，事由就是唯一的留痕，不能被按钮锁死。
  */
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ReasonChips } from "@/components/business/ReasonChips";
 import { VOID_REASON_MIN, VOID_REASONS } from "@/lib/constants";
 
 export function VoidReasonField({
@@ -36,19 +36,7 @@ export function VoidReasonField({
         placeholder="选一条常用的，或直接写清楚为什么废…"
         rows={3}
       />
-      <div className="flex flex-wrap gap-1">
-        {VOID_REASONS.map((p) => (
-          <Button
-            key={p.label}
-            type="button"
-            size="xs"
-            variant={value === p.reason ? "secondary" : "outline"}
-            onClick={() => onChange(p.reason)}
-          >
-            {p.label}
-          </Button>
-        ))}
-      </div>
+      <ReasonChips aria-label="常用作废事由" presets={VOID_REASONS.map((p) => ({ label: p.label, value: p.reason }))} value={value} onChange={onChange} />
     </div>
   );
 }

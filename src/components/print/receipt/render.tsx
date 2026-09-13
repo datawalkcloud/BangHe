@@ -462,7 +462,7 @@ export function ReceiptDocument({
 }
 
 /** 屏幕预览允许的放大上限：58 热敏只有 219px 宽，不放到这个倍数根本看不清写的什么 */
-const MAX_FIT = 2.5;
+export const MAX_FIT = 2.5;
 
 /**
  * 屏幕上的"纸张托架"：把按真实 mm 排版的票据缩放到容器宽度内显示。
@@ -473,18 +473,25 @@ const MAX_FIT = 2.5;
 export function PaperFrame({
   paper,
   zoom = "fit",
+  onFitChange,
   children,
 }: {
   paper: PaperKind;
   /** "fit" 适应容器宽度（允许放大到 MAX_FIT）；或给具体比例（1 = 实际大小） */
   zoom?: number | "fit";
+  /** 回传量到的适应宽度比例，供外部缩放控件显示当前档位 */
+  onFitChange?: (ratio: number) => void;
   children: ReactNode;
 }) {
   const paperPx = mmToPx(PAPER_SPEC[paper].widthMm);
   const hostRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
+  const fitCb = useRef(onFitChange);
+  fitCb.current = onFitChange;
   const [fit, setFit] = useState(1);
-  const [boxH, setBoxH] = useState<number>();
+  // 未缩放的纸面排版高度：缩放比例随时会由外部指定，所以只存原值，渲染时才乘
+  const [innerH, setInnerH] = useState<number>();
+  const [hostW, setHostW] = useState(0);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -495,7 +502,9 @@ export function PaperFrame({
       // offsetHeight 不受祖先 transform 影响，量到的始终是未缩放的真实排版高度
       const s = avail > 0 ? Math.min(MAX_FIT, avail / paperPx) : 1;
       setFit(s);
-      setBoxH(inner.offsetHeight * s);
+      setHostW(avail);
+      setInnerH(inner.offsetHeight);
+      fitCb.current?.(s);
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -505,10 +514,12 @@ export function PaperFrame({
   }, [paperPx, children]);
 
   const scale = zoom === "fit" ? fit : zoom;
+  // 比栏还宽就别居中：居多的那一半会溢出到滚动区左侧，滚不回来
+  const overflowX = paperPx * scale > hostW;
 
   return (
-    <div ref={hostRef} className="receipt-fit-host flex w-full flex-col items-center">
-      <div className="receipt-fit" style={{ height: boxH, width: paperPx * scale }}>
+    <div ref={hostRef} className={`receipt-fit-host flex w-full flex-col ${overflowX ? "items-start" : "items-center"}`}>
+      <div className="receipt-fit" style={{ height: innerH == null ? undefined : innerH * scale, width: paperPx * scale }}>
         <div
           ref={innerRef}
           className="receipt-fit-inner"

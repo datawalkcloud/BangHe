@@ -37,6 +37,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { KeypadInput, digitKeys } from "@/components/ui/keypad";
 import { Label } from "@/components/ui/label";
 
 /** 读卡只带得出这三项，其余是表单里的可改字段 */
@@ -92,7 +93,7 @@ export function QuickPartyDialog({
   const idOk = code !== "" && validateIdCard(code);
   /** 核验判定与档案页同一条：读进来的证号与保存的证号逐字相等 */
   const verified = form.read_card_no.trim().toUpperCase() !== "" && form.read_card_no.trim().toUpperCase() === code;
-  const taken = parties.find((p) => p.id_card_no.trim().toUpperCase() === code);
+  const taken = code ? parties.find((p) => p.id_card_no.trim().toUpperCase() === code) : undefined;
   /** 手机号一人一号（`uk_party_phone`）：比对形状与真库一致，去空白与 `-` */
   const phoneKey = form.phone.replace(/[\s-]/g, "");
   const phoneTaken = phoneKey ? parties.find((p) => p.phone.replace(/[\s-]/g, "") === phoneKey) : undefined;
@@ -100,8 +101,9 @@ export function QuickPartyDialog({
   const errors = useMemo(() => {
     const out: string[] = [];
     if (!form.name.trim()) out.push("姓名必填");
-    if (!code) out.push("身份证号必填（读卡带入，或手工录入 18 位）");
-    else if (!idOk) out.push("证号校验位不通过（GB 11643），请核对卡面");
+    // 证号与电话至少填一个（02 §F3.1）：没带卡的临时户，留个电话也建得下来
+    if (!code && !phoneKey) out.push("身份证号与手机号至少填一个（证号读卡带入，或手工录入 18 位）");
+    else if (code && !idOk) out.push("证号校验位不通过（GB 11643），请核对卡面");
     else if (taken) out.push(`该证号已建档（${taken.name}），请改用「搜档案」选人`);
     if (phoneTaken) out.push(`该手机号已属于档案「${phoneTaken.name}」，一人一号，请改用「搜档案」选人`);
     return out;
@@ -140,11 +142,14 @@ export function QuickPartyDialog({
       }
     },
     onSuccess: ({ p, photoError }) => {
-      toast.success(`已建档：${p.name}（${p.code}）· ${p.id_card_verified === 1 ? "已核验" : "未核验"}`, {
-        description: photoError
-          ? `档案已建好并选为本单售粮人；人像照片没存上（${photoError}），可到「农户与单位」补。`
-          : "已选为本单售粮人；开户行、挂账额度、参考皮重请到「农户与单位」补全。",
-      });
+      toast.success(
+        `已建档：${p.name}（${p.code}）${p.id_card_no ? ` · ${p.id_card_verified === 1 ? "已核验" : "未核验"}` : ""}`,
+        {
+          description: photoError
+            ? `档案已建好并选为本单售粮人；人像照片没存上（${photoError}），可到「农户与单位」补。`
+            : "已选为本单售粮人；开户行、挂账额度、参考皮重请到「农户与单位」补全。",
+        },
+      );
       qc.invalidateQueries({ queryKey: ["parties"] });
       qc.invalidateQueries({ queryKey: ["party", p.id] });
       qc.invalidateQueries({ queryKey: ["audits"] });
@@ -183,13 +188,20 @@ export function QuickPartyDialog({
               options={PERSON_TYPES.map((k) => ({ value: k, label: PARTY_TYPE[k] }))}
             />
           </Label>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            身份证号 *
-            <Input
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>身份证号（与手机号至少填一个）</span>
+            <KeypadInput
+              aria-label="身份证号"
               value={form.id_card_no}
-              onChange={(e) => patch({ id_card_no: e.target.value })}
+              onChangeValue={(v) => patch({ id_card_no: v.toUpperCase() })}
+              keys={digitKeys({ extra: ["X"] })}
+              columns={6}
+              maxLength={18}
+              toggleLabel="数字"
+              inputMode="numeric"
+              autoComplete="off"
               placeholder="18 位，末位 X 不区分大小写"
-              className="tnum text-sm"
+              inputClassName="tnum text-sm"
             />
             <span className={code === "" ? "hidden" : idOk ? "text-xs text-success" : "text-xs text-destructive"}>
               {idOk ? "格式正确" : "校验位不通过，请核对"}
@@ -201,16 +213,23 @@ export function QuickPartyDialog({
                   : "证号与卡面不一致 · 保存后为「未核验」，重刷一次卡即可核验"}
               </span>
             )}
-          </Label>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            联系电话
-            <Input
+          </div>
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>联系电话</span>
+            <KeypadInput
+              aria-label="联系电话"
               value={form.phone}
-              onChange={(e) => patch({ phone: e.target.value })}
+              onChangeValue={(v) => patch({ phone: v.replace(/[^\d\s-]/g, "") })}
+              keys={digitKeys()}
+              columns={6}
+              maxLength={20}
+              toggleLabel="数字"
+              inputMode="tel"
+              autoComplete="off"
               placeholder="读卡读不出来，可不填"
-              className="tnum text-sm"
+              inputClassName="tnum text-sm"
             />
-          </Label>
+          </div>
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
             住址（写入磅单与台账，迎检必填）
             <Input value={form.address} onChange={(e) => patch({ address: e.target.value })} className="text-sm" />

@@ -17,18 +17,18 @@ import { ScanLineIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { CardPoolRow } from "@/mock/types";
-import { CARD_STATUS, type CardStatus } from "@/lib/constants";
+import { CARD_RETIRE_REASONS, CARD_STATUS, type CardStatus, REASON_MIN } from "@/lib/constants";
 import { dateTimeShort, orDash } from "@/lib/format";
 import { useSetting } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { IcScanDialog } from "@/components/business/IcScanDialog";
+import { ReasonChips } from "@/components/business/ReasonChips";
 import { ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 
 export function CardsPage() {
   const qc = useQueryClient();
@@ -165,16 +165,23 @@ export function CardsPage() {
           <DialogHeader>
             <DialogTitle className="text-sm font-semibold">注销流转卡 {retire?.card_no}</DialogTitle>
           </DialogHeader>
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            注销原因（不少于 4 字，迎检可追溯）
-            <Input value={retireReason} onChange={(e) => setRetireReason(e.target.value)} placeholder="如：农户领走后遗失，已挂失" className="text-xs" />
-          </Label>
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>注销原因（不少于 4 字，迎检可追溯）</span>
+            <Input
+              value={retireReason}
+              onChange={(e) => setRetireReason(e.target.value)}
+              aria-label="注销原因"
+              placeholder="点一条常用的，或写清楚这张卡为什么注销…"
+              className="text-xs"
+            />
+            <ReasonChips aria-label="常用注销原因" presets={CARD_RETIRE_REASONS} value={retireReason} onChange={setRetireReason} />
+          </div>
           <p className="text-xs text-muted-foreground">注销只影响卡池，不动任何磅单与金额；挂在途单上的卡需先退卡或走补发换卡。</p>
           <DialogFooter>
             <Button size="sm" variant="outline" onClick={() => setRetire(null)}>
               取消
             </Button>
-            <Button size="sm" variant="destructive" disabled={retireReason.trim().length < 4 || doRetire.isPending} onClick={() => doRetire.mutate()}>
+            <Button size="sm" variant="destructive" disabled={retireReason.trim().length < REASON_MIN || doRetire.isPending} onClick={() => doRetire.mutate()}>
               {doRetire.isPending ? "注销中…" : "确认注销"}
             </Button>
           </DialogFooter>

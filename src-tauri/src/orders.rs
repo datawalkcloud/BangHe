@@ -1235,8 +1235,10 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
             if name.is_empty() {
                 return Err("售粮人姓名必填".into());
             }
-            if idc.is_empty() {
-                return Err("身份证号必填：读卡或手工录入均可，证号是档案唯一归并依据".into());
+            // 证号与电话至少给一个（02 §F3.1）：只有电话的档案照样能搜到人、能回访，
+            // 两样都空的档案事后认不出是谁，一律拦。
+            if idc.is_empty() && phone.is_none() {
+                return Err("身份证号与手机号至少填一个：证号读卡带入或手工录入，只留电话也可以建档".into());
             }
             if let Some(fp) = &fp {
                 let taken: Option<String> = conn
@@ -1258,8 +1260,13 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
                         default_warehouse_id, default_vehicle_no, last_tare_01kg, remark,
                         status, created_at, created_by)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'active', ?15, ?16)",
+                // 只填电话的档案：证号列存 NULL，别落一个空串——那会让「没证号」与「证号是空」
+                // 在库里长得一样，检索与反查都分不清；没证号也谈不上核验，标记一律 0。
                 params![
-                    name, ptype, idc, fp, input.id_card_verified.unwrap_or(0).clamp(0, 1),
+                    name, ptype,
+                    if idc.is_empty() { None } else { Some(idc.as_str()) },
+                    fp,
+                    if idc.is_empty() { 0 } else { input.id_card_verified.unwrap_or(0).clamp(0, 1) },
                     phone, input.address.unwrap_or_default(),
                     input.bank_name, input.bank_account, input.credit_limit_fen.unwrap_or(0),
                     input.default_warehouse_id, input.default_vehicle_no, input.last_tare_01kg, input.remark,

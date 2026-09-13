@@ -17,6 +17,8 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, KeyRoundIcon, LogInIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { BOOTSTRAP_HINT, type LoginOutcome } from "@/lib/auth";
+import { ROLE } from "@/lib/constants";
+import { useStaff } from "@/hooks/useLookups";
 import { useSession } from "@/store/session";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -24,6 +26,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Kbd } from "@/components/business/layout";
+import { LoginBackdrop } from "@/components/business/LoginBackdrop";
 
 /** 密码最短位数与 Rust 侧同源约定（`auth::PWD_MIN_LEN`） */
 const PWD_MIN_LEN = 6;
@@ -49,10 +52,22 @@ function useCountdown(iso: string | null): number {
 const DEV_LOGIN_USERNAME = "admin";
 const DEV_LOGIN_PASSWORD = "admin123";
 
+/** 本机记住上一次登录成功的人：磅房里天天登的都是同一两个名字 */
+const LAST_USER_KEY = "banghe.login.last-username";
+
+function lastLoginUsername(): string | null {
+  try {
+    return window.localStorage.getItem(LAST_USER_KEY);
+  } catch {
+    // 隐私模式/存储被禁：记不住就回到手输，不该把登录页弄崩
+    return null;
+  }
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
   const session = useSession();
-  const [username, setUsername] = useState(() => (import.meta.env.DEV ? DEV_LOGIN_USERNAME : ""));
+  const [username, setUsername] = useState(() => (import.meta.env.DEV ? DEV_LOGIN_USERNAME : (lastLoginUsername() ?? "")));
   const [password, setPassword] = useState(() => (import.meta.env.DEV ? DEV_LOGIN_PASSWORD : ""));
   const [fresh, setFresh] = useState("");
   const [again, setAgain] = useState("");
@@ -64,7 +79,14 @@ export function LoginPage() {
   const firstField = useRef<HTMLInputElement>(null);
 
   const { data: station } = useQuery({ queryKey: ["station"], queryFn: () => api.station(), staleTime: Infinity });
+  const { data: staff = [] } = useStaff();
   const lockedLeft = useCountdown(result?.lockedUntil ?? null);
+  const passwordField = useRef<HTMLInputElement>(null);
+
+  /** 在册员工按"最近登录过"排：常来的那两三个必然在最前，点一次就选到自己 */
+  const activeStaff = staff
+    .filter((u) => u.is_active === 1)
+    .sort((a, b) => (b.last_login_at ?? "").localeCompare(a.last_login_at ?? ""));
 
   const mustSetup = !!session.session?.actor.mustChangePwd;
   const mode: "signin" | "setup" = mustSetup || result?.needsPasswordSetup === true ? "setup" : "signin";
@@ -77,6 +99,10 @@ export function LoginPage() {
       setPassword(DEV_LOGIN_PASSWORD);
     }
     firstField.current?.focus();
+    if (username.trim()) {
+      // 登录名已经预填（记住了上次的人）：直接把光标放到密码栏，今天只输一次密码
+      window.setTimeout(() => passwordField.current?.focus(), 0);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
@@ -97,6 +123,13 @@ export function LoginPage() {
     const outcome = await session.signIn(username.trim(), password);
     setResult(outcome);
     setBusy(false);
+    if (outcome.ok) {
+      try {
+        window.localStorage.setItem(LAST_USER_KEY, username.trim());
+      } catch {
+        /* 记不住不影响登录本身 */
+      }
+    }
     if (outcome.ok && outcome.session?.actor.mustChangePwd) {
       // 后端对装机初始密码登录会直接建会话并置 mustChangePwd，于是切到"当前密码"这一支；
       // 刚在登录表单敲进去的就是当前密码，带过去免得再输一遍、也免得按钮因空字段而点不动
@@ -160,8 +193,12 @@ export function LoginPage() {
   const setupReady = !busy && !!current && fresh.length >= PWD_MIN_LEN && fresh === again;
 
   return (
-    <div className="flex h-svh w-full items-center justify-center overflow-auto bg-muted/30 p-6">
-      <Card className="w-full max-w-sm">
+    <div className="relative flex h-svh w-full items-center justify-center overflow-auto p-6">
+      {/* 整页背景插画。fixed 而不是 absolute：这层不跟着卡片内容滚，窗口再矮也不会露出一截底色 */}
+      <LoginBackdrop className="fixed inset-0 size-full" />
+      {/* 压暗遮罩：插画自带深浅渐变，卡片是实心的，中间这一层保证两档主题下都拉得开对比 */}
+      <div aria-hidden className="pointer-events-none fixed inset-0 bg-black/20 dark:bg-black/55" />
+      <Card className="relative w-full max-w-sm border-t-2 border-t-warning shadow-lg">
         <CardHeader className="justify-items-center text-center">
           <img src="/logo.png" alt="磅禾" className="size-14 object-contain" />
           <CardTitle className="text-base">{station?.name ?? "磅禾粮站"}</CardTitle>
@@ -203,6 +240,30 @@ export function LoginPage() {
             </Alert>
           )}
 
+          {mode === "signin" && activeStaff.length > 1 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">先点你本人（不必打登录名）</span>
+              <div className="flex flex-wrap gap-1.5">
+                {activeStaff.map((u) => (
+                  <Button
+                    key={u.id}
+                    type="button"
+                    size="sm"
+                    variant={username.trim() === u.username ? "default" : "outline"}
+                    className="h-9 text-sm"
+                    onClick={() => {
+                      setUsername(u.username);
+                      window.setTimeout(() => passwordField.current?.focus(), 0);
+                    }}
+                  >
+                    {u.display_name}
+                    <span className="text-[11px] opacity-70">{ROLE[u.role]}</span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {mode === "signin" ? (
             <form onSubmit={submitSignIn} className="flex flex-col gap-3">
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -220,6 +281,7 @@ export function LoginPage() {
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 密码
                 <Input
+                  ref={passwordField}
                   type="password"
                   className="text-base"
                   value={password}
@@ -301,7 +363,7 @@ export function LoginPage() {
 
         {!session.demo && (
           <CardFooter className="justify-center text-xs text-muted-foreground">
-            {!import.meta.env.DEV && <>连错 5 次锁定 15 分钟；</>}登录后长期有效，无操作 1 小时自动锁屏
+            {!import.meta.env.DEV && <>连错 5 次锁定 15 分钟；</>}登录后长期有效；无操作按站点参数设定的时长自动锁屏，输本人密码即解锁
           </CardFooter>
         )}
       </Card>

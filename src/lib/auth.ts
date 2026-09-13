@@ -129,6 +129,12 @@ export async function beat(): Promise<AuthCall<boolean>> {
   return invoke<boolean>("auth_touch");
 }
 
+/** 手动锁屏（左下角入口）：只置锁不登出，解锁同样走 unlock。演示模式没有服务端会话，就地锁 */
+export async function lockNow(): Promise<AuthCall<ActionOutcome>> {
+  if (!runningInTauri()) return { channel: "demo", data: { ok: true, error: null } };
+  return invoke<ActionOutcome>("auth_lock");
+}
+
 /** 锁屏解锁：只输当前登录人的密码，会话本身不变（审计链不断）。回执同登录（连错计数、锁定倒计时） */
 export async function unlock(password: string): Promise<AuthCall<LoginOutcome>> {
   if (!runningInTauri()) return { channel: "demo", error: NO_CHANNEL };

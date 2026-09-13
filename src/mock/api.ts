@@ -424,6 +424,9 @@ export const api = {
       auditMaster("party.update", "party", next.code, input.operator_id);
       return next;
     }
+    // 建档时证号与电话至少填一个（02 §F3.1）：两样都空的档案事后认不出是谁
+    if (!(input.id_card_no ?? "").trim() && !phoneKey(input.phone))
+      throw new Error("身份证号与手机号至少填一个：证号读卡带入或手工录入，只留电话也可以建档");
     const created: Party = {
       id: parties.reduce((m, p) => Math.max(m, p.id), 0) + 1,
       code: `P${String(parties.length + 1).padStart(4, "0")}`,

@@ -135,7 +135,9 @@ writeFileSync(
 console.log(`已写入 ${outPath}\n基础色板 ${bases.length} 套 / 主题色 ${accents.length} 套`);
 
 /**
- * 守卫：内置默认（neutral）必须与 src/App.css 的 :root / .dark 逐令牌相等。
+ * 守卫：内置默认色板必须与 src/App.css 的 :root / .dark 逐令牌相等。
+ * 默认色板 = 官方 neutral 基础色板 + src/lib/theme.ts 里手写的品牌主题色（BRAND_ACCENT_THEME）：
+ * theme.ts 对默认色板刻意不注入样式，App.css 是它唯一的落地处，所以两边必须逐值相同。
  * 一旦上游把这些值改了而我们的 App.css 没跟着改，"重置默认主题"就会把界面换成另一副样子，
  * 而这种差别只有肉眼能发现——所以放在生成阶段直接拦下。radius 不参与比对（应用阶段被忽略）。
  */
@@ -146,21 +148,40 @@ const readBlock = (re, what) => {
   if (!m) throw new Error(`App.css 结构变了（找不到${what}），需要同步改这个校验`);
   return Object.fromEntries([...m[1].matchAll(/--([a-z0-9-]+): ([^;]+);/g)].map(([, k, v]) => [k, v.trim()]));
 };
+/** 品牌令牌只写在 theme.ts 一处，这里读回来比对，避免第二套真相 */
+const themeTs = readFileSync(fileURLToPath(new URL("../src/lib/theme.ts", import.meta.url)), "utf8");
+const brandSrc = themeTs.match(/const BRAND_ACCENT_THEME: ThemePreset = \{[\s\S]*?\n\};/)?.[0];
+if (!brandSrc) throw new Error("src/lib/theme.ts 里找不到 BRAND_ACCENT_THEME，需要同步改这个校验");
+const brand = {};
+for (const mode of ["light", "dark"]) {
+  const m = brandSrc.match(new RegExp(`${mode}: \\{([\\s\\S]*?)\\n  \\}`));
+  if (!m) throw new Error(`BRAND_ACCENT_THEME 缺 ${mode} 段（写法变了），需要同步改这个校验`);
+  brand[mode] = Object.fromEntries([...m[1].matchAll(/"([a-z0-9-]+)": "([^"]+)",/g)].map(([, k, v]) => [k, v]));
+}
 const cssBlocks = [
   ["light", readBlock(/\n:root \{([\s\S]*?)\n\}/, ":root 块")],
   ["dark", readBlock(/\n\.dark \{([\s\S]*?)\n\}/, ".dark 块")],
 ];
 const drift = [];
+/**
+ * 工程刻意偏离官方的令牌（App.css 里的值与官方不同是有意的）。新增一条必须写清为什么，
+ * 否则宁可去改 App.css——放行越多，这个守卫越接近没作用。
+ */
+const DEVIATIONS = {
+  light: { "sidebar-accent": "侧栏悬停/选中底纹要比官方深一档，浅灰压在浅灰侧栏上几乎看不出来" },
+  dark: {},
+};
 for (const [mode, actual] of cssBlocks) {
-  const want = bases[0].modes[mode];
+  const want = { ...bases[0].modes[mode], ...brand[mode] };
   for (const [token, v] of Object.entries(actual)) {
-    if (token === "radius") continue;
-    if (want[token] !== v) drift.push(`${mode} --${token}：App.css=${v}，官方表=${want[token] ?? "（无此令牌）"}`);
+    // 官方表没这个令牌 = App.css 自己加的工程令牌（component-shadow、sidebar-active-fg 等），不比对
+    if (token === "radius" || !(token in want) || token in DEVIATIONS[mode]) continue;
+    if (want[token] !== v) drift.push(`${mode} --${token}：App.css=${v}，默认色板=${want[token]}`);
   }
   for (const token of Object.keys(want)) {
     if (token === "radius") continue;
-    if (!(token in actual)) drift.push(`${mode} --${token}：官方表有、App.css 没有`);
+    if (!(token in actual)) drift.push(`${mode} --${token}：默认色板有、App.css 没有`);
   }
 }
 if (drift.length) throw new Error(`默认主题漂移，重置后界面会变样：\n${drift.join("\n")}`);
-console.log("默认主题校验：neutral 与 src/App.css 逐令牌一致 ✓");
+console.log("默认主题校验：neutral + 品牌主题色 与 src/App.css 逐令牌一致 ✓");

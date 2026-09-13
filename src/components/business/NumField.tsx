@@ -6,10 +6,13 @@
  *
  * 内部保存字符串缓冲，边输边回传定点整数值，让结算区能"即时重算"（05 §4 ⑤）。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, Ref } from "react";
+import { KeyboardIcon } from "lucide-react";
 import { fromKg, fromPercent, fromYuanPerKg, money, priceNumber, toKg, weight } from "@/lib/format";
+import { useSoftKeyboardVisible } from "@/hooks/useSoftKeyboard";
 import { Input } from "@/components/ui/input";
+import { Keypad, digitKeys } from "@/components/ui/keypad";
 import { cn } from "cn";
 
 export interface NumFieldProps {
@@ -31,6 +34,8 @@ export interface NumFieldProps {
   align?: "right" | "left";
   size?: "sm" | "default";
   onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
+  /** 展开按钮：给不会用物理小键盘的操作员一块屏幕数字键阵（点一下出一个数） */
+  keypad?: boolean;
 }
 
 /** 只允许数字 + 一个小数点 + 可选负号（红冲手录用） */
@@ -67,12 +72,46 @@ export function NumField({
   align = "right",
   size = "default",
   onKeyDown,
+  keypad,
 }: NumFieldProps) {
+  const [padOpen, setPadOpen] = useState(false);
+  /** 全局「屏幕软键盘」偏好：关了就不摆展开按钮，输入框本身照旧可逐字键入 */
+  const showPad = useSoftKeyboardVisible();
+  const padKeys = useMemo(
+    () => digitKeys({ decimalPoint: decimals > 0 }),
+    [decimals],
+  );
+  /** 连点落在同一次渲染之前：只认闭包里的 `text` 会被后一下覆盖，所以本地也记一份 */
+  const live = useRef(text);
+  if (live.current !== text) live.current = text;
+  const apply = (raw: string) => {
+    const next = sanitize(raw, decimals);
+    live.current = next;
+    onText(next);
+  };
   return (
     <div className={cn("flex min-w-0 flex-col gap-1", className)}>
-      <label htmlFor={id} className="text-xs text-muted-foreground">
-        {label}
-      </label>
+      <div className="flex items-baseline justify-between gap-1">
+        <label htmlFor={id} className="text-xs text-muted-foreground">
+          {label}
+        </label>
+        {keypad && showPad && (
+          <button
+            type="button"
+            aria-pressed={padOpen}
+            disabled={disabled}
+            title={padOpen ? "收起数字键盘" : "展开数字键盘，点一下出一个数字"}
+            onClick={() => setPadOpen((v) => !v)}
+            className={cn(
+              "flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px]",
+              padOpen ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <KeyboardIcon className="size-3.5" />
+            键盘
+          </button>
+        )}
+      </div>
       <div className="relative">
         <Input
           id={id}
@@ -83,7 +122,7 @@ export function NumField({
           aria-invalid={invalid || undefined}
           placeholder={placeholder}
           value={text}
-          onChange={(e) => onText(sanitize(e.target.value, decimals))}
+          onChange={(e) => apply(e.target.value)}
           onKeyDown={onKeyDown}
           className={cn(
             "rounded-none border bg-input-bg px-2 font-medium tnum tabular-nums",
@@ -102,6 +141,18 @@ export function NumField({
           </span>
         )}
       </div>
+      {keypad && showPad && padOpen && (
+        <Keypad
+          aria-label={`${label}数字键盘`}
+          keys={padKeys}
+          onInsert={(c) => apply(live.current + c)}
+          onAction={(a) => {
+            if (a === "backspace") apply(live.current.slice(0, -1));
+            else if (a === "clear") apply("");
+            else setPadOpen(false);
+          }}
+        />
+      )}
       {hint && (
         <p className={cn("text-xs", invalid ? "text-destructive" : "text-muted-foreground")}>{hint}</p>
       )}
@@ -126,6 +177,8 @@ export function WeightField({
   className?: string;
   id?: string;
   size?: "sm" | "default";
+  /** 屏幕数字键盘开关，透传给 NumField */
+  keypad?: boolean;
 }) {
   const [text, setText] = useState(() => (value01kg == null ? "" : String(toKg(value01kg))));
   const lastEmit = useRef<number | null>(value01kg);
@@ -168,6 +221,8 @@ export function MoneyField({
   className?: string;
   id?: string;
   size?: "sm" | "default";
+  /** 屏幕数字键盘开关，透传给 NumField */
+  keypad?: boolean;
 }) {
   const [text, setText] = useState(() => (valueFen === 0 ? "0" : (valueFen / 100).toFixed(2)));
   const lastEmit = useRef(valueFen);
@@ -210,6 +265,8 @@ export function PriceField({
   className?: string;
   id?: string;
   size?: "sm" | "default";
+  /** 屏幕数字键盘开关，透传给 NumField */
+  keypad?: boolean;
 }) {
   const [text, setText] = useState(() => (valueFenPerTon == null ? "" : priceNumber(valueFenPerTon)));
   const lastEmit = useRef(valueFenPerTon);
@@ -252,6 +309,8 @@ export function PercentField({
   className?: string;
   id?: string;
   size?: "sm" | "default";
+  /** 屏幕数字键盘开关，透传给 NumField */
+  keypad?: boolean;
 }) {
   const [text, setText] = useState(() => (value001pct == null ? "" : (value001pct / 100).toFixed(2)));
   const lastEmit = useRef(value001pct);

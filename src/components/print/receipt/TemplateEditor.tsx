@@ -26,7 +26,7 @@ import { defaultTemplate } from "./defaults";
 import { receiptLines } from "./escpos";
 import { printJob } from "../printPage";
 import { SCENARIOS } from "./scenarios";
-import { PaperFrame, ReceiptDocument } from "./render";
+import { MAX_FIT, PaperFrame, ReceiptDocument } from "./render";
 import { defaultLayout, LAYOUT, PAPER_SPEC } from "./paper";
 import type { ReceiptLayout } from "./paper";
 import { effectiveTemplate, useReceiptStore } from "./store";
@@ -37,6 +37,11 @@ import type { BlockKind, ReceiptScenario, ReceiptSection, ReceiptTemplate } from
 const THERMAL: PaperKind[] = ["thermal80", "thermal58"];
 
 const SCENARIO_LIST = Object.values(SCENARIOS) as { id: ReceiptScenario; label: string; entry: string }[];
+
+/** 预览缩放滑块：档位与上下限。上限沿用 PaperFrame 的放大上限，不在这里抄第二遍 */
+const ZOOM_MIN = 0.25;
+const ZOOM_STEP = 0.05;
+const snapZoom = (v: number) => Math.min(MAX_FIT, Math.max(ZOOM_MIN, Math.round(v / ZOOM_STEP) * ZOOM_STEP));
 
 const BLOCK_LABEL: Record<BlockKind, string> = {
   kv: "字段区",
@@ -67,6 +72,12 @@ export function ReceiptTemplateEditor() {
 
   /** 正在跑哪一种出纸动作：测试票 / 自检票。同时只允许一个——两条设备命令会抢同一台机器 */
   const [printing, setPrinting] = useState<null | "test" | "self">(null);
+
+  /** 预览缩放：null = 适应栏宽（默认），数字 = 手动比例（1 = 纸的真实毫米）。只影响屏幕，不改纸面 */
+  const [zoom, setZoom] = useState<null | number>(null);
+  // 适应比例由 PaperFrame 量出来后回传。按滑块步长取整再传回去，滑杆位置、百分比和票面才是同一个数
+  const [fitRatio, setFitRatio] = useState(1);
+  const shownZoom = zoom ?? snapZoom(fitRatio);
 
   // "本机能连上哪台小票机"的实时结论，不在前端抄常量（与设备中心同一条 usbprint 通道）
   const printers = useQuery({
@@ -363,21 +374,44 @@ export function ReceiptTemplateEditor() {
           </section>
         </div>
 
-        {/* 右：实时预览（按真实纸型 mm 排版，所见即所得） */}
-        <div className="min-h-0 overflow-y-auto rounded-md border bg-muted/30 p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-1">
+        {/* 右：实时预览（按真实纸型 mm 排版，所见即所得）。标题行固定，只有票面滚 */}
+        <div className="flex min-h-0 flex-col rounded-md border bg-muted/30">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b p-3">
             <p className="text-xs text-muted-foreground">实时预览 · 样例数据，按真实纸张尺寸排版</p>
-            <span className="text-[10px] text-muted-foreground">{PAPER_SPEC[draft.paper].note}</span>
+            <span className="flex items-center gap-3">
+              <span className="text-[10px] text-muted-foreground">{PAPER_SPEC[draft.paper].note}</span>
+              <span className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={ZOOM_MIN}
+                  max={MAX_FIT}
+                  step={ZOOM_STEP}
+                  value={shownZoom}
+                  onChange={(e) => setZoom(Number(e.target.value))}
+                  className="h-4 w-24 accent-primary"
+                  aria-label="预览缩放比例"
+                  title="只缩放屏幕上的预览，纸上仍是真实毫米"
+                />
+                <span className="tnum w-9 text-right text-[10px] text-muted-foreground">{Math.round(shownZoom * 100)}%</span>
+                {zoom !== null && (
+                  <Button size="xs" variant="ghost" onClick={() => setZoom(null)} title="回到适应栏宽">
+                    适应
+                  </Button>
+                )}
+              </span>
+            </span>
           </div>
-          {/* 出纸去向：热敏走小票机（ESC/POS 直连），A4 / 针式走系统打印队列——打印测试据此分流 */}
-          <p className="mb-2 text-[10px] text-muted-foreground">
-            {THERMAL.includes(draft.paper)
-              ? printerNote
-              : `${PAPER[draft.paper]}不进小票机，「打印测试」将走窗口打印预览`}
-          </p>
-          <PaperFrame paper={draft.paper}>
-            <ReceiptDocument template={draft} context={sample} />
-          </PaperFrame>
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {/* 出纸去向：热敏走小票机（ESC/POS 直连），A4 / 针式走系统打印队列——打印测试据此分流 */}
+            <p className="mb-2 text-[10px] text-muted-foreground">
+              {THERMAL.includes(draft.paper)
+                ? printerNote
+                : `${PAPER[draft.paper]}不进小票机，「打印测试」将走窗口打印预览`}
+            </p>
+            <PaperFrame paper={draft.paper} zoom={shownZoom} onFitChange={setFitRatio}>
+              <ReceiptDocument template={draft} context={sample} />
+            </PaperFrame>
+          </div>
         </div>
       </div>
     </div>

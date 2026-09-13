@@ -11,9 +11,9 @@
 //!  4. **文案不区分"用户不存在"与"密码错"**，且账号不存在时也照跑一次假哈希，
 //!     否则响应时间的快慢本身就能把在职登录名枚举出来。
 //!
-//! 会话寿命（2026-09-13 改）：**登录后不设总时长上限、永不自动登出**；空闲满
-//! [`IDLE_TTL_SECS`] 只是把会话**锁屏**（`Session::locked`），业务命令在锁定期一律拒绝，
-//! 输入本人密码经 [`auth_unlock`] 解锁后原地继续。主动登出仍是立刻结束会话；
+//! 会话寿命（2026-09-13 改）：**登录后不设总时长上限、永不自动登出**；空闲满站点参数
+//! `idle_lock_minutes`（0＝从不）只是把会话**锁屏**（`Session::locked`），业务命令在锁定期
+//! 一律拒绝，输入本人密码经 [`auth_unlock`] 解锁后原地继续。主动登出仍是立刻结束会话；
 //! 会话只存内存，所以重启程序必须重登——
 //! 这是"单据署名等于当时坐在磅房里的人"这条链路的唯一支点。
 
@@ -30,10 +30,12 @@ use tauri::{AppHandle, Manager};
 use crate::db::migrate::now_iso;
 use crate::db::{locked, Db};
 
-/// 无操作多久后锁屏（不登出，输密码解锁）。业务上要"不退出就一直用"，但挡不住人离开磅房机后被接手，
-/// 折中成 1 小时空闲锁屏。做成设置项要新增 `app_setting` 键（牵动 03 §9.3.1 与 seed
-/// 契约测试，且 0002 已发布不可改、只能补 0003），本轮先按常量交付。
+/// 空闲锁屏的**兜底默认**（秒）：`app_setting` 里没有 [`IDLE_LOCK_KEY`] 那行时按它算。
+/// 正常装机由 `0014_idle_lock_setting.sql` 种出 `idle_lock_minutes=60`，站长在
+/// 「基础档案 → 站点参数」里改；0＝从不锁屏。业务口径见 [`idle_ttl_from_settings`]。
 pub const IDLE_TTL_SECS: i64 = 3600;
+/// 站点参数键：无操作多少分钟锁屏（int，分钟；0＝从不）。
+pub const IDLE_LOCK_KEY: &str = "idle_lock_minutes";
 /// 连错几次锁多久（02 §11"连续失败锁定"；`failed_count`/`locked_until` 两列 0001 已备）
 pub const MAX_FAILED: i64 = 5;
 pub const LOCK_MINUTES: i64 = 15;
@@ -246,12 +248,31 @@ fn parse_iso(value: &str) -> Option<DateTime<Local>> {
         .map(|d| d.with_timezone(&Local))
 }
 
-/// 纯函数，便于单测：空闲是否已超时
+/// 纯函数，便于单测：空闲是否已超时。`ttl_secs <= 0` 是站点参数选了"从不"，永不锁屏。
 pub fn idle_expired(last_seen_at: &str, now: DateTime<Local>, ttl_secs: i64) -> bool {
+    if ttl_secs <= 0 {
+        return false;
+    }
     match parse_iso(last_seen_at) {
         Some(seen) => (now - seen) > chrono::Duration::seconds(ttl_secs),
         None => true,
     }
+}
+
+/// 当前生效的空闲锁屏时长（秒），真相在 `app_setting.idle_lock_minutes`（0014 种出）：
+/// 键缺失或值坏掉回 [`IDLE_TTL_SECS`]，负数与 0 一律按"从不锁屏"（0）处理。
+/// 登录在这里取一次、心跳 [`auth_touch`] 每分钟再取一次——站长改了参数，
+/// 最迟一分钟内对在线会话生效，不必重登。
+pub fn idle_ttl_from_settings(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT value_json FROM app_setting WHERE key = ?1",
+        params![IDLE_LOCK_KEY],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|raw| serde_json::from_str::<i64>(&raw).ok())
+    .map(|minutes| (minutes * 60).max(0))
+    .unwrap_or(IDLE_TTL_SECS)
 }
 
 /// 库里那套 ISO 8601 本地时间 + 偏移的写法（03 §3.2）。测试也用它，避免第二份格式化器。
@@ -481,7 +502,7 @@ fn conclude(
         session_id: new_session_id(),
         issued_at: stamp.clone(),
         last_seen_at: stamp,
-        idle_ttl_secs: IDLE_TTL_SECS,
+        idle_ttl_secs: idle_ttl_from_settings(conn),
         locked: false,
     });
     audit(
@@ -603,7 +624,7 @@ pub fn logout(conn: &Connection, actor: &AuthProfile, session_id: &str, idle: bo
         &actor.display_name,
         if idle { "login.timeout" } else { "logout" },
         Some(actor.id),
-        if idle { Some("超过 1 小时无操作，已锁屏") } else { None },
+        if idle { Some("无操作超时，已锁屏") } else { None },
         true,
         Some(session_id),
     );
@@ -664,13 +685,21 @@ pub async fn auth_session(app: AppHandle) -> Result<Option<Session>, String> {
 #[tauri::command]
 pub async fn auth_touch(app: AppHandle) -> Result<bool, String> {
     let (pool, store) = handles(&app)?;
+    // 站长可能刚在站点参数里改了 idle_lock_minutes：每次心跳把时长刷进会话，最迟一分钟生效
+    let ttl = {
+        let pool = pool.clone();
+        tauri::async_runtime::spawn_blocking(move || locked(&pool, idle_ttl_from_settings))
+            .await
+            .map_err(|e| format!("心跳任务失败：{e}"))?
+    };
     let just_locked = {
         let mut current = guard(&store);
         match current.as_mut() {
             None => None,
             Some(session) if session.locked => None,
             Some(session) => {
-                if idle_expired(&session.last_seen_at, Local::now(), session.idle_ttl_secs) {
+                session.idle_ttl_secs = ttl;
+                if idle_expired(&session.last_seen_at, Local::now(), ttl) {
                     let stamp = (session.actor.clone(), session.session_id.clone());
                     session.locked = true;
                     Some(stamp)
@@ -690,6 +719,41 @@ pub async fn auth_touch(app: AppHandle) -> Result<bool, String> {
             Ok(false)
         }
         None => Ok(guard(&store).as_ref().map(|s| !s.locked).unwrap_or(true)),
+    }
+}
+
+/// 手动锁屏（侧栏左下角「锁屏」）：只置锁，不登出、不清会话，审计记一笔。
+/// 与空闲锁屏走同一把 `locked` 闸，解锁同样只认本人密码。
+#[tauri::command]
+pub async fn auth_lock(app: AppHandle) -> Result<ActionOutcome, String> {
+    let (pool, store) = handles(&app)?;
+    let stamp = {
+        let mut current = guard(&store);
+        match current.as_mut() {
+            Some(session) => {
+                if session.locked {
+                    return Ok(ActionOutcome { ok: true, error: None });
+                }
+                session.locked = true;
+                Some((session.actor.clone(), session.session_id.clone()))
+            }
+            // 没有会话可锁：本来就在登录页，如实回 ok，前端停在原处
+            None => None,
+        }
+    };
+    match stamp {
+        Some((actor, sid)) => {
+            tauri::async_runtime::spawn_blocking(move || {
+                locked(&pool, |conn| {
+                    audit(conn, Some(actor.id), &actor.display_name, "login.lock", Some(actor.id), Some("手动锁屏"), true, Some(&sid));
+                    ActionOutcome { ok: true, error: None }
+                })
+            })
+            .await
+            .map_err(|e| format!("锁屏任务失败：{e}"))?;
+            Ok(ActionOutcome { ok: true, error: None })
+        }
+        None => Ok(ActionOutcome { ok: true, error: None }),
     }
 }
 

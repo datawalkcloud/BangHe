@@ -236,7 +236,14 @@ export function PartyDetailBody({
                     {
                       label: "证件核验",
                       // 用词与 /parties 列表一致：同一状态不在两处叫两个名字（读卡带入即已核验）
-                      value: detail.id_card_verified === 1 ? <ToneBadge tone="success">已核验</ToneBadge> : <ToneBadge tone="warning">未核验</ToneBadge>,
+                      // 只留电话建档的档案压根没有证号，不能顶着「未核验」——那是刷过卡没核对上的意思
+                      value: !detail.id_card_no ? (
+                        <span className="text-muted-foreground">未采集证号</span>
+                      ) : detail.id_card_verified === 1 ? (
+                        <ToneBadge tone="success">已核验</ToneBadge>
+                      ) : (
+                        <ToneBadge tone="warning">未核验</ToneBadge>
+                      ),
                     },
                     { label: "联系电话", value: <span className="tnum">{orDash(detail.phone)}</span> },
                     { label: "默认车牌", value: <span className="tnum">{orDash(detail.default_vehicle_no)}</span> },

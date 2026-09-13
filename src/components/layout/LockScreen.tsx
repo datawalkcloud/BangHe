@@ -1,8 +1,9 @@
 /**
  * 锁屏浮层（02 §11 M10 改、05 §3）。
  *
- * 登录后的会话**永久有效**：空闲满 1 小时不再踢回登录页，只在 AppShell 上盖一层锁屏，
- * 输入**当前登录人本人**的密码即原地解锁——页面不跳、正在录的单据状态都还在。
+ * 登录后的会话**永久有效**：空闲超过站点参数 idle_lock_minutes（可为「从不」）不再踢回登录页，
+ * 只在 AppShell 上盖一层锁屏；主动锁屏（侧栏左下角）走同一层。输入**当前登录人本人**
+ * 的密码即原地解锁——页面不跳、正在录的单据状态都还在。
  * 真正的闸门在 Rust：`Session::locked` 期间所有业务命令一律被拒，这里只是界面。
  *
  * 与登录页同款的现场约束：进入即聚焦、回车提交、Caps Lock 有提示、失败就地显示不弹窗。
@@ -22,6 +23,8 @@ import { Kbd } from "@/components/business/layout";
 
 export function LockScreen() {
   const locked = useSession((s) => s.locked);
+  const notice = useSession((s) => s.notice);
+  const demo = useSession((s) => s.demo);
   const actor = useSession((s) => s.session?.actor ?? null);
   const unlock = useSession((s) => s.unlock);
   const signOut = useSession((s) => s.signOut);
@@ -64,14 +67,18 @@ export function LockScreen() {
   return (
     <div data-lock-screen className="fixed inset-0 z-[200] flex items-center justify-center bg-background/95 p-6 backdrop-blur-sm">
       <Card className="w-full max-w-sm">
-        <CardHeader className="items-center text-center">
+        <CardHeader className="justify-items-center text-center">
           <div className="mb-1 flex size-12 items-center justify-center rounded-full bg-muted">
             <LockKeyholeIcon className="size-6 text-muted-foreground" />
           </div>
           <CardTitle className="text-base">已锁屏</CardTitle>
-          <CardDescription>
-            {actor ? `${actor.displayName} · ${ROLE[actor.role]}，超过 1 小时无操作` : "登录会话仍在，需验证身份后继续"}
-          </CardDescription>
+          {/* 为什么锁的（超时 / 手动）由 store 的 notice 说清楚，这里不再自己抄一份时长 */}
+          <CardDescription>{notice ?? "登录会话仍在，需验证身份后继续"}</CardDescription>
+          {actor && (
+            <p className="text-xs text-muted-foreground">
+              请输入 <span className="font-medium text-foreground">{actor.displayName}</span>（{ROLE[actor.role]}）的登录密码
+            </p>
+          )}
         </CardHeader>
 
         <CardContent>
@@ -110,7 +117,7 @@ export function LockScreen() {
               {busy ? "校验中…" : "解锁继续"}
             </Button>
             <p className="text-center text-xs text-muted-foreground">
-              回车即解锁 <Kbd>Enter</Kbd>
+              {demo ? "演示模式不校验密码，输入任意内容即解锁" : <>回车即解锁 <Kbd>Enter</Kbd></>}
             </p>
           </form>
         </CardContent>

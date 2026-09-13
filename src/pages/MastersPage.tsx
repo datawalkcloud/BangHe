@@ -38,6 +38,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { digitKeys, KeypadInput } from "@/components/ui/keypad";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -308,24 +309,12 @@ function VarietiesSection() {
             <Field label="类别">
               <Input value={form.category} onChange={(e) => patch({ category: e.target.value })} className="text-sm" />
             </Field>
-            <Field label="排序号">
-              <Input value={form.sortOrder} onChange={(e) => patch({ sortOrder: e.target.value })} inputMode="numeric" className="tnum text-sm" />
-            </Field>
-            <Field label="水分基准（%）">
-              <Input value={form.moisture} onChange={(e) => patch({ moisture: e.target.value })} inputMode="decimal" className="tnum text-sm" />
-            </Field>
-            <Field label="拒收水分（%）">
-              <Input value={form.rejectMoisture} onChange={(e) => patch({ rejectMoisture: e.target.value })} inputMode="decimal" className="tnum text-sm" />
-            </Field>
-            <Field label="杂质基准（%）">
-              <Input value={form.impurity} onChange={(e) => patch({ impurity: e.target.value })} inputMode="decimal" className="tnum text-sm" />
-            </Field>
-            <Field label="不完善粒（%）">
-              <Input value={form.unsound} onChange={(e) => patch({ unsound: e.target.value })} inputMode="decimal" className="tnum text-sm" />
-            </Field>
-            <Field label="容重基准（g/L）">
-              <Input value={form.bulkDensity} onChange={(e) => patch({ bulkDensity: e.target.value })} inputMode="numeric" className="tnum text-sm" />
-            </Field>
+            <DecimalField label="排序号" value={form.sortOrder} onChange={(v) => patch({ sortOrder: v })} />
+            <DecimalField label="水分基准（%）" decimal value={form.moisture} onChange={(v) => patch({ moisture: v })} />
+            <DecimalField label="拒收水分（%）" decimal value={form.rejectMoisture} onChange={(v) => patch({ rejectMoisture: v })} />
+            <DecimalField label="杂质基准（%）" decimal value={form.impurity} onChange={(v) => patch({ impurity: v })} />
+            <DecimalField label="不完善粒（%）" decimal value={form.unsound} onChange={(v) => patch({ unsound: v })} />
+            <DecimalField label="容重基准（g/L）" value={form.bulkDensity} onChange={(v) => patch({ bulkDensity: v })} />
             <div className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground">默认扣包</span>
               <WeightField label="" value01kg={form.package01kg} onChange={(v) => patch({ package01kg: v })} hint="每车固定皮扣" />
@@ -678,14 +667,7 @@ function WarehousesSection() {
                   options={WAREHOUSE_KINDS}
                 />
               </Field>
-              <Field label="核定容量（吨）">
-                <Input
-                  value={form.capacity}
-                  onChange={(e) => setForm({ ...form, capacity: e.target.value })}
-                  inputMode="numeric"
-                  className="tnum text-sm"
-                />
-              </Field>
+              <DecimalField label="核定容量（吨）" decimal maxLength={10} value={form.capacity} onChange={(v) => setForm({ ...form, capacity: v })} placeholder="留空＝尚未核定" />
               <Label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
                 <Switch checked={form.active} onCheckedChange={(v) => setForm({ ...form, active: v === true })} aria-label="启用仓房" />
                 启用（停用后不可再作为新单去向）
@@ -956,10 +938,7 @@ function PricesSection() {
                 options={GRADES.map((g) => ({ value: g, label: g }))}
               />
             </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              单价（元/公斤）*
-              <Input value={form.yuanPerKg} onChange={(e) => patch({ yuanPerKg: e.target.value })} inputMode="decimal" className="tnum text-sm" />
-            </Label>
+            <DecimalField label="单价（元/公斤）*" decimal maxLength={10} value={form.yuanPerKg} onChange={(v) => patch({ yuanPerKg: v })} placeholder="如 2.680" />
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               有效期
               <DateRangePicker
@@ -1094,6 +1073,20 @@ function SettingRow({ s, onSave, busy }: { s: AppSetting; onSave: (value: string
             }}
             options={s.options.map((o) => ({ value: o.value, label: o.label }))}
           />
+        ) : s.kind === "number" ? (
+          <KeypadInput
+            aria-label={s.label}
+            value={draft}
+            onChangeValue={setDraft}
+            keys={digitKeys()}
+            columns={6}
+            maxLength={8}
+            toggleLabel="数字"
+            disabled={busy}
+            inputMode="numeric"
+            className="w-56"
+            inputClassName="tnum h-8 text-sm"
+          />
         ) : (
           <Input
             value={draft}
@@ -1124,5 +1117,47 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {label}
       {children}
     </Label>
+  );
+}
+
+/**
+ * 配置表单里的数字项：点一下出一个数字，不必敲键盘。
+ *
+ * 标题走 `span` 而不套 `Field`（`<Label>`）：软键盘那颗展开按钮嵌在 label 里会被浏览器
+ * 当成"点标签聚焦输入框"，反而把游标从刚点的键上抢走。控件自己带 `aria-label` 补名称。
+ */
+function DecimalField({
+  label,
+  value,
+  onChange,
+  decimal = false,
+  maxLength = 8,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  /** 百分比、单价这类带小数的给 true；位数、份数、容量这类整数不给小数点键 */
+  decimal?: boolean;
+  maxLength?: number;
+  placeholder?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+      <span>{label}</span>
+      <KeypadInput
+        aria-label={label}
+        value={value}
+        onChangeValue={onChange}
+        keys={digitKeys({ decimalPoint: decimal })}
+        columns={6}
+        maxLength={maxLength}
+        toggleLabel="数字"
+        inputMode={decimal ? "decimal" : "numeric"}
+        autoComplete="off"
+        placeholder={placeholder}
+        inputClassName="tnum text-sm"
+      />
+    </div>
   );
 }

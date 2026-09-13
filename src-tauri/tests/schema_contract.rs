@@ -966,7 +966,14 @@ fn upgrade_from_older_version_backs_up_and_fills_gap() {
 /// **同号只留最早那份**，其余置空并逐条留审计；空号一律 NULL（NULL 不占唯一位）。
 #[test]
 fn migration_0013_dedupes_party_phones_before_the_unique_index() {
-    let before: &'static [Migration] = &MIGRATIONS[..MIGRATIONS.len() - 1];
+    // 按名字定位而不是 `len()-1`：以后再往末尾补 0014、0015 时这个测试不必跟着改
+    let idx = MIGRATIONS
+        .iter()
+        .position(|m| m.name == "0013_party_phone_unique.sql")
+        .expect("0013 必须还在迁移清单里");
+    let before: &'static [Migration] = &MIGRATIONS[..idx];
+    // 执行器会核对"库里记的脚本都在清单里"，所以子集要一直带到 0013，而不是只给那一条
+    let through_0013: &'static [Migration] = &MIGRATIONS[..idx + 1];
     assert_eq!(before.last().unwrap().name, "0012_reader_prompt_voice.sql");
     let mut conn = in_memory_migrated("0.1.0-test", before).expect("0013 之前的脚本应能独立跑完");
 
@@ -986,7 +993,7 @@ fn migration_0013_dedupes_party_phones_before_the_unique_index() {
     }
 
     // 补跑 0013：走生产同一执行器（校验和、逐脚本事务、记账都真）
-    let r = migrate::apply(&mut conn, "0.1.0-test", None, None).expect("0013 应当补齐并成功");
+    let r = migrate::apply_with(&mut conn, "0.1.0-test", None, None, through_0013).expect("0013 应当补齐并成功");
     assert_eq!(r.applied, vec!["0013_party_phone_unique.sql".to_string()]);
 
     let phones: Vec<(String, Option<String>)> = {

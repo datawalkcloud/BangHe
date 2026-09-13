@@ -723,6 +723,60 @@ fn party_phone_is_unique_and_names_the_conflicting_archive() {
     assert_eq!(nulls, 2, "空电话必须存 NULL，否则 `uk_party_phone` 会把第二户顶掉：{nulls}");
 }
 
+/// 建档最低要求＝姓名 + 证号与电话至少一个（02 §F3.1）：没带卡的临时户留个电话也得建得下来，
+/// 此时证号列存 NULL（不是空串）、核验标记一律 0；两样都空才拦。
+#[test]
+fn phone_only_party_archives_are_allowed_and_stay_distinct() {
+    let conn = db();
+    let e = save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput { name: Some("临时户".into()), party_type: Some("farmer".into()), ..empty_party_input() },
+    )
+    .unwrap_err();
+    assert!(e.contains("至少填一个"), "证号与电话都空要拦下：{e}");
+
+    let a = save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput {
+            name: Some("临时户".into()),
+            party_type: Some("farmer".into()),
+            phone: Some("13900001111".into()),
+            // 这一刻根本没有证号可读，即便调用方把核验标记带过来也不该认账
+            id_card_verified: Some(1),
+            ..empty_party_input()
+        },
+    )
+    .expect("只填电话应当建得档")
+    .id;
+    let p = get_party(&conn, a).unwrap().unwrap().party;
+    assert_eq!(p.id_card_no, "");
+    assert_eq!(p.id_card_verified, 0, "没证号谈不上已核验");
+    let (enc_null, fp_null): (bool, bool) = conn
+        .query_row(
+            "SELECT id_card_no_enc IS NULL, id_card_no_fp IS NULL FROM party WHERE id = ?1",
+            params![a],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!(enc_null && fp_null, "空证号必须存 NULL，不能落一个和「没填」长得一样的空串");
+    assert!(list_parties(&conn, "13900001111", None).unwrap().iter().any(|x| x.id == a), "电话就是搜人的抓手");
+
+    // 无证号的档案之间不该被 fp 误认成同一人（NULL 不参与唯一约束）
+    save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput {
+            name: Some("另一临时户".into()),
+            party_type: Some("farmer".into()),
+            phone: Some("13900002222".into()),
+            ..empty_party_input()
+        },
+    )
+    .expect("第二张只填电话的档案照样建得出来");
+}
+
 fn empty_party_input() -> PartySaveInput {
     PartySaveInput {
         id: None, name: None, party_type: None, id_card_no: None, phone: None, address: None, bank_name: None,

@@ -31,6 +31,8 @@ import { PartyPortrait } from "@/components/business/PartyPortrait";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge } from "@/components/business/badges";
 import { WeightField } from "@/components/business/NumField";
+import { PlateField } from "@/components/business/PlateField";
+import { alnumKeys, digitKeys, KeypadInput } from "@/components/ui/keypad";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { detailColumn } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
@@ -291,7 +293,7 @@ export function PartiesPage() {
     onSuccess: ({ p, photoError }) => {
       toast.success(
         form.id == null
-          ? `已建档：${p.name}（${p.code}）· ${p.id_card_verified === 1 ? "已核验" : "未核验"}`
+          ? `已建档：${p.name}（${p.code}）${p.id_card_no ? ` · ${p.id_card_verified === 1 ? "已核验" : "未核验"}` : ""}`
           : `档案已更新：${p.name}`,
       );
       if (photoError) {
@@ -322,13 +324,14 @@ export function PartiesPage() {
   /** 提示用：按当前表单状态，保存后这张档案会不会是「已核验」 */
   const verifiedByCard = cardVerified(form) === 1;
   const errors: string[] = [];
-  if (!form.name.trim()) errors.push("姓名必填");
-  if (!code) errors.push(isOrg ? "统一社会信用代码必填" : "身份证号必填");
-  else if (!idOk) errors.push(isOrg ? "应为 18 位数字/大写字母" : "证号校验位不通过（GB 11643）");
-  else if (all.some((p) => p.id_card_no.toUpperCase() === code && p.id !== form.id))
-    errors.push("该证号已建档，请检索后修改原档案");
-  // 手机号同样一人一号（`uk_party_phone`）：比对形状与真库一致，去空白与 `-`
+  // 手机号一人一号（`uk_party_phone`）：比对形状与真库一致，去空白与 `-`
   const phoneKey = form.phone.replace(/[\s-]/g, "");
+  if (!form.name.trim()) errors.push("姓名必填");
+  // 证号与电话至少填一个：只留电话也建得了档（02 §F3.1），两样都空的档案事后认不出是谁
+  if (!code && !phoneKey) errors.push(isOrg ? "统一社会信用代码与手机号至少填一个" : "身份证号与手机号至少填一个");
+  else if (code && !idOk) errors.push(isOrg ? "应为 18 位数字/大写字母" : "证号校验位不通过（GB 11643）");
+  else if (code && all.some((p) => p.id_card_no.toUpperCase() === code && p.id !== form.id))
+    errors.push("该证号已建档，请检索后修改原档案");
   if (phoneKey) {
     const dup = all.find((p) => p.id !== form.id && p.phone.replace(/[\s-]/g, "") === phoneKey);
     if (dup) errors.push(`该手机号已是档案「${dup.name}（${dup.code}）」的号码，一人一号，请检索后修改原档案`);
@@ -356,11 +359,13 @@ export function PartiesPage() {
         cell: (p) => (
           <span className="flex items-center gap-1.5">
             <span className="tnum">{maskIdCard(p.id_card_no)}</span>
-            {p.id_card_verified === 1 ? (
-              <span className="text-[11px] text-muted-foreground">已核验</span>
-            ) : (
-              <span className="text-[11px] text-warning">未核验</span>
-            )}
+            {/* 没采集证号的档案不亮角标：只留电话建档是正常状态，不是「核验没通过」 */}
+            {p.id_card_no &&
+              (p.id_card_verified === 1 ? (
+                <span className="text-[11px] text-muted-foreground">已核验</span>
+              ) : (
+                <span className="text-[11px] text-warning">未核验</span>
+              ))}
           </span>
         ),
       },
@@ -551,13 +556,20 @@ export function PartiesPage() {
                 options={(Object.keys(PARTY_TYPE) as PartyType[]).map((k) => ({ value: k, label: PARTY_TYPE[k] }))}
               />
             </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              {isOrg ? "统一社会信用代码 *" : "身份证号 *"}
-              <Input
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>{isOrg ? "统一社会信用代码" : "身份证号"}</span>
+              <KeypadInput
+                aria-label={isOrg ? "统一社会信用代码" : "身份证号"}
                 value={form.id_card_no}
-                onChange={(e) => patch({ id_card_no: e.target.value })}
+                onChangeValue={(v) => patch({ id_card_no: v.toUpperCase() })}
+                keys={isOrg ? alnumKeys() : digitKeys({ extra: ["X"] })}
+                columns={isOrg ? 9 : 6}
+                maxLength={18}
+                toggleLabel={isOrg ? "键盘" : "数字"}
+                inputMode={isOrg ? "text" : "numeric"}
+                autoComplete="off"
                 placeholder={isOrg ? "18 位代码" : "18 位，末位 X 不区分大小写"}
-                className="tnum text-sm"
+                inputClassName="tnum text-sm"
               />
               {code !== "" && (
                 <span className={idOk ? "text-xs text-success" : "text-xs text-destructive"}>
@@ -571,11 +583,22 @@ export function PartiesPage() {
                     : "证号手工录入 · 保存后为「未核验」，放卡刷一次即可核验"}
                 </span>
               )}
-            </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              联系电话
-              <Input value={form.phone} onChange={(e) => patch({ phone: e.target.value })} className="tnum text-sm" />
-            </Label>
+            </div>
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>联系电话（与证件号至少填一个）</span>
+              <KeypadInput
+                aria-label="联系电话"
+                value={form.phone}
+                onChangeValue={(v) => patch({ phone: v.replace(/[^\d\s-]/g, "") })}
+                keys={digitKeys()}
+                columns={6}
+                maxLength={20}
+                toggleLabel="数字"
+                inputMode="tel"
+                autoComplete="off"
+                inputClassName="tnum text-sm"
+              />
+            </div>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               住址（写入磅单与台账，迎检必填）
               <Input value={form.address} onChange={(e) => patch({ address: e.target.value })} className="text-sm" />
@@ -584,20 +607,37 @@ export function PartiesPage() {
               开户行
               <Input value={form.bank_name} onChange={(e) => patch({ bank_name: e.target.value })} className="text-sm" />
             </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              银行账号
-              <Input value={form.bank_account} onChange={(e) => patch({ bank_account: e.target.value })} className="tnum text-sm" />
-            </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              挂账额度（元）
-              <Input
-                value={form.creditYuan}
-                onChange={(e) => patch({ creditYuan: e.target.value })}
-                inputMode="decimal"
-                placeholder="0 表示不允许挂账"
-                className="tnum text-sm"
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>银行账号</span>
+              <KeypadInput
+                aria-label="银行账号"
+                value={form.bank_account}
+                onChangeValue={(v) => patch({ bank_account: v.replace(/[^\d]/g, "") })}
+                keys={digitKeys()}
+                columns={6}
+                maxLength={32}
+                toggleLabel="数字"
+                inputMode="numeric"
+                autoComplete="off"
+                inputClassName="tnum text-sm"
               />
-            </Label>
+            </div>
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>挂账额度（元）</span>
+              <KeypadInput
+                aria-label="挂账额度"
+                value={form.creditYuan}
+                onChangeValue={(v) => patch({ creditYuan: v })}
+                keys={digitKeys({ decimalPoint: true })}
+                columns={6}
+                maxLength={12}
+                toggleLabel="数字"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0 表示不允许挂账"
+                inputClassName="tnum text-sm"
+              />
+            </div>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               默认进仓房
               <Choose
@@ -610,13 +650,18 @@ export function PartiesPage() {
                 ]}
               />
             </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              默认车牌
-              <Input value={form.defaultVehicleNo} onChange={(e) => patch({ defaultVehicleNo: e.target.value })} className="tnum text-sm" />
-            </Label>
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>默认车牌</span>
+              <PlateField
+                aria-label="默认车牌"
+                value={form.defaultVehicleNo}
+                onChange={(v) => patch({ defaultVehicleNo: v })}
+                inputClassName="tnum text-sm"
+              />
+            </div>
             <div className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground">参考皮重</span>
-              <WeightField label="" value01kg={form.tare01kg} onChange={(v) => patch({ tare01kg: v })} hint="仅供皮重比对" />
+              <WeightField label="" keypad value01kg={form.tare01kg} onChange={(v) => patch({ tare01kg: v })} hint="仅供皮重比对" />
             </div>
             <Label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
               <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="档案启用" />

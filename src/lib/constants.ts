@@ -86,6 +86,74 @@ export const VOID_REASONS: { label: string; reason: string }[] = [
   { label: "取样与本单不符", reason: "化验取样与本单不符，需重采重检" },
 ];
 
+/* ------------------------------------------------- 其余事由的快捷选项（同 VOID_REASONS 口径）
+   磅房里这些话来去就那么几句，且多为闸门必填项；让不会打字的操作员现敲，
+   只会得到"便宜点""质量差"这种迎检看不懂的话。点一下即填一句完整的人话，仍可手改。 */
+
+/** 事由最短字数，与 `SettleForm` / `QcPanel` 前端闸门同源（后端只要求非空） */
+export const REASON_MIN = 4;
+
+/** 改价事由：偏离价目表或无生效价时必填（`orders.rs::settle`） */
+export const PRICE_REASONS: { label: string; value: string }[] = [
+  { label: "水分超扣价", value: "水分超基准，按本站扣价下调" },
+  { label: "杂质超扣价", value: "杂质超基准，按本站扣价下调" },
+  { label: "等级下调", value: "化验等级下调，按低一等计价" },
+  { label: "外观欠佳", value: "外观色差霉粒偏多，现场议价下调" },
+  { label: "无生效价目", value: "该品种该等级暂无生效价目，手工定价" },
+  { label: "随行就市议价", value: "与售粮人现场议价，价格与价目表不同" },
+];
+
+/** 拒收原因：判定拒收时必填（`QcPanel`） */
+export const REJECT_REASONS: { label: string; value: string }[] = [
+  { label: "水分超高", value: "水分超过拒收上限，现场退粮" },
+  { label: "霉变超标", value: "霉变粒超标，现场退粮" },
+  { label: "气味异常", value: "气味异常有异味，现场退粮" },
+  { label: "杂质太多", value: "杂质过多含土含秆，现场退粮" },
+  { label: "掺假掺杂", value: "疑似掺假掺杂，现场退粮并报站长" },
+  { label: "品种不符", value: "实物与登记品种不符，现场退粮" },
+];
+
+/** 流转卡注销原因（`CardsPage`，服务端要求 ≥4 字） */
+export const CARD_RETIRE_REASONS: { label: string; value: string }[] = [
+  { label: "农户领走遗失", value: "农户领走后遗失，已挂失停用" },
+  { label: "卡面损坏", value: "流转卡破损，感应失灵无法使用" },
+  { label: "升级换发新卡", value: "卡面信息过期，注销后换发新卡" },
+  { label: "卡池清点回收", value: "日结账卡卡数不符，注销留存根" },
+];
+
+/** 制单备注常用语（可空，纯省手） */
+export const ORDER_REMARK_PRESETS: { label: string; value: string }[] = [
+  { label: "带皮带", value: "带皮带过磅" },
+  { label: "需复检", value: "需复检" },
+  { label: "自带编织袋", value: "自带编织袋装粮" },
+  { label: "换车再来", value: "本车未卸完，换车继续售粮" },
+  { label: "司机代售", value: "农户未到场，司机代售" },
+];
+
+/** 气味等文本型化验指标的常用结论（仍可手改补细节） */
+export const ODOR_PRESETS: { label: string; value: string }[] = [
+  { label: "正常", value: "正常" },
+  { label: "无异味", value: "无异味" },
+  { label: "轻微异味", value: "轻微异味" },
+  { label: "有霉味", value: "有霉味" },
+  { label: "异味明显", value: "异味明显" },
+];
+
+/**
+ * 车牌省份简称（民用车口径）。
+ *
+ * 车牌栏看着短，对不会中文输入法的人却是全场最难的一格：第一位必须是汉字。
+ * 给一排点选键，剩下的字母数字用软键盘，整格就不必碰输入法。
+ */
+export const PLATE_PROVINCES = [
+  "豫", "冀", "鲁", "皖", "苏", "京", "津", "沪", "浙", "闽", "赣", "鄂", "湘",
+  "粤", "桂", "琼", "渝", "川", "贵", "云", "藏", "陕", "甘", "青", "宁", "新",
+  "蒙", "辽", "吉", "黑",
+];
+
+/** 发牌机关代号字母 + 数字：按 GB 917 口径不含易混的 I、O */
+export const PLATE_ALNUM = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789".split("");
+
 /* --------------------------------------------------------------- 售粮人类型 */
 
 export type PartyType = "farmer" | "large_grower" | "broker" | "cooperative" | "company";

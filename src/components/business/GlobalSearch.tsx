@@ -12,6 +12,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { CreditCardIcon, FileTextIcon, UsersIcon } from "lucide-react";
 import { api } from "@/lib/api";
+import { ORDER_STATUS } from "@/lib/constants";
 import { money, ton } from "@/lib/format";
 import {
   Dialog,
@@ -31,7 +32,7 @@ import { Kbd } from "@/components/business/layout";
 
 interface Hit {
   key: string;
-  group: "磅单" | "售粮人" | "结算单";
+  group: "磅单" | "售粮人" | "结算单" | "在场";
   icon: typeof FileTextIcon;
   title: string;
   desc: string;
@@ -51,6 +52,12 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     queryKey: ["global-search", kw],
     queryFn: () => api.search(kw),
     enabled: open && kw.trim().length > 0,
+  });
+  /** 空输入时改给"在场名单"：不打字的人点开就能挑今天在场的那张单 */
+  const { data: openOrders = [] } = useQuery({
+    queryKey: ["openOrders"],
+    queryFn: () => api.openOrders(),
+    enabled: open && kw.trim().length === 0,
   });
 
   const hits = useMemo<Hit[]>(() => {
@@ -88,6 +95,22 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
     ];
   }, [data]);
 
+  /** 空输入时的那份"在场名单"：形状与命中项一致，点一下同样直达磅单页 */
+  const openHits = useMemo<Hit[]>(
+    () =>
+      openOrders.map<Hit>((o) => ({
+        key: `w${o.order_no}`,
+        group: "在场",
+        icon: FileTextIcon,
+        title: o.order_no,
+        desc: `${o.party_name} · ${ORDER_STATUS[o.status].label}`,
+        trailing: o.settlement_weight_01kg != null ? ton(o.settlement_weight_01kg) : undefined,
+        to: "/orders/$orderNo",
+        params: { orderNo: o.order_no },
+      })),
+    [openOrders],
+  );
+
   function go(h: Hit) {
     onOpenChange(false);
     // 命中项的 to/params 是从三个不同路由拼出来的 union，
@@ -101,7 +124,7 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
         <DialogHeader className="border-b px-4 py-3">
           <DialogTitle className="flex items-center gap-2 text-sm font-medium">
             全局检索
-            <span className="text-xs font-normal text-muted-foreground">单号 / 姓名 / 证号后 4 位 / 车牌</span>
+            <span className="text-xs font-normal text-muted-foreground">不必打字：直接点下面在场的单</span>
           </DialogTitle>
         </DialogHeader>
         {/* 输入框容器自带 p-1，这里按对话框的 16 px 栅格纠正为 px-3。 */}
@@ -109,13 +132,15 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
           shouldFilter={false}
           className="rounded-none bg-transparent p-0 [&_[data-slot=command-input-wrapper]]:px-3 [&_[data-slot=command-input-wrapper]]:pt-3"
         >
-          <CommandInput autoFocus value={kw} onValueChange={setKw} placeholder="输入关键词…" />
+          <CommandInput autoFocus value={kw} onValueChange={setKw} placeholder="会打字就输单号 / 姓名 / 证号后 4 位 / 车牌" />
           <CommandList className="max-h-[320px] scroll-py-1">
             <CommandEmpty className="px-4 py-6 text-muted-foreground">
-              {kw.trim() ? "没有匹配结果，换个关键词或到磅单中心按日期查" : "输入单号 / 姓名 / 证号后 4 位"}
+              {kw.trim()
+                ? "没有匹配结果，换个关键词或到磅单中心按日期查"
+                : "此刻没有在场单；要查历史单请输单号 / 姓名 / 证号后 4 位"}
             </CommandEmpty>
-            {GROUP_ORDER.map((g) => {
-              const rows = hits.filter((h) => h.group === g);
+            {(kw.trim() ? GROUP_ORDER : (["在场"] as Hit["group"][])).map((g) => {
+              const rows = (kw.trim() ? hits : openHits).filter((h) => h.group === g);
               if (rows.length === 0) return null;
               return (
                 <CommandGroup key={g} heading={g}>

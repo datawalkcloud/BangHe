@@ -67,8 +67,10 @@ interface SessionState {
   signOut: () => Promise<void>;
   /** 心跳：无操作超过后端给的 idleTtlSecs 即锁屏（不登出），返回 false 时调用方交给浮层 */
   beat: () => Promise<boolean>;
-  /** 本地判定空闲超限（机器休眠、时钟跳变）：就地锁屏，Rust 的 last_seen 仍是真相 */
+  /** 本地判定空闲超限（机器休眠、时钟跳变）：就地锁屏，Rust 的 last_seen 才是真相 */
   lock: (reason?: string) => void;
+  /** 主动锁屏（左下角入口）：先让 Rust 置锁（业务命令随即被拒），再弹浮层 */
+  lockScreen: () => Promise<void>;
   /** 锁屏解锁：只验本人密码，会话与审计链不变；失败回执带剩余次数 / 锁定时间 */
   unlock: (password: string) => Promise<LoginOutcome>;
   setPassword: (old: string, fresh: string) => Promise<ActionOutcome>;
@@ -145,7 +147,7 @@ export const useSession = create<SessionState>((set, get) => ({
     // 通道错误不等于锁屏：问不到就当还在，避免网络/进程抖动把磅员踢进锁屏
     if (r.channel === "native" && r.error) return true;
     if (r.data === false) {
-      get().lock("已超过 1 小时无操作，请输入密码解锁");
+      get().lock("无操作超时，已自动锁屏");
       return false;
     }
     return true;
@@ -155,10 +157,23 @@ export const useSession = create<SessionState>((set, get) => ({
     set((s) => ({
       locked: true,
       session: s.session ? { ...s.session, locked: true } : null,
-      notice: reason ?? "已超过 1 小时无操作，请输入密码解锁",
+      notice: reason ?? "已锁屏，需验证身份后继续",
     })),
 
+  lockScreen: async () => {
+    const s = get();
+    if (s.phase !== "in" || s.locked) return;
+    // 演示模式没有服务端会话，auth.lockNow 直接回 ok；桌面端先置锁再弹层，顺序反了会漏开放行窗口
+    await auth.lockNow();
+    get().lock("已在左下角手动锁屏");
+  },
+
   unlock: async (password) => {
+    if (get().demo) {
+      // 演示模式密码本就不校验（顶部有横幅），锁屏也只当摆设：给个密码形状就放行
+      set((s) => ({ locked: false, session: s.session ? { ...s.session, locked: false } : null, notice: null }));
+      return { ok: true, error: null, session: null, needsPasswordSetup: null, attemptsLeft: null, lockedUntil: null };
+    }
     const r = await auth.unlock(password);
     const outcome: LoginOutcome =
       r.data ??

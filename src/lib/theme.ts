@@ -3,9 +3,9 @@
  *
  * 为什么拆成"基础色板 + 主题色"两层：这是 shadcn 官方主题编辑器的模型
  * （registry:theme 里基础色板给全套灰阶令牌，主题色只覆盖 primary/secondary/chart 等少数令牌），
- * 数值全部来自 tools/gen-theme-presets.mjs 生成的 src/lib/theme-presets.ts，不在这里手抄。
+ * 数值全部来自 tools/gen-theme-presets.mjs 生成的 src/lib/theme-presets.ts，不在这里手抄（唯一例外是下面的品牌色板）。
  *
- * 四条边界，避免以后有人把这里改成第二套真相：
+ * 五条边界，避免以后有人把这里改成第二套真相：
  *  1. **只管颜色，不管模式**。light/dark/system 由 next-themes 持有（storageKey 用下面的
  *     THEME_MODE_KEY），因为 src/components/ui/sonner.tsx 已经读 useTheme()，
  *     再另起一套会让 toast 配色与界面分叉。
@@ -15,6 +15,8 @@
  *     官方主题色覆盖的是 --chart-1..5，而 @theme inline 已把 --color-chart-* 指向 --chart-color-*，
  *     所以换主题色不会影响图表配色——这是有意的，界面里也写明了。
  *  4. **不进 app_setting**。主题是本机显示偏好，不需要站长权限、不写审计（05 §7.4）。
+ *  5. **BRAND_ACCENT_THEME 是本文件里唯一手写的色板**（官方表重跑脚本会整体覆盖，品牌色不能放那儿）。
+ *     它是出厂默认，而默认色板不注入样式，所以同一批值在 src/App.css 里还有一份镜像——改这里必须改那里。
  */
 import { ACCENT_THEMES, BASE_THEMES, type ThemePreset, type ThemeTokens } from "@/lib/theme-presets";
 
@@ -46,7 +48,12 @@ export const THEME_STYLE_ID = "banghe-theme";
  * 但仍提供深色——夜班与遮阳棚下更省力；跟随系统给两面班的人。
  */
 export const DEFAULT_MODE: ThemeMode = "light";
-export const DEFAULT_PALETTE: ThemePalette = { base: "neutral", accent: "default", style: "maia", radius: "default", chart: "default", menu: "default" };
+/**
+ * 出厂主题色 = 品牌绿（BRAND_ACCENT_THEME，取自 logo 主色）。
+ * 注意它走的是"默认色板"分支：isDefaultPalette 命中时 applyPalette 不注入任何样式，
+ * 界面完全由 src/App.css 的 :root / .dark 决定，所以那两段必须与本文件的令牌逐值一致。
+ */
+export const DEFAULT_PALETTE: ThemePalette = { base: "neutral", accent: "banghe", style: "maia", radius: "default", chart: "default", menu: "default" };
 
 export const THEME_STYLES: readonly { value: ThemeStyle; label: string; shadow: string; surface: string }[] = [
   { value: "vega", label: "Vega", shadow: "0 1px 3px color-mix(in oklch, var(--foreground) 12%, transparent)", surface: "var(--card)" },
@@ -77,9 +84,48 @@ export const THEME_MODES: readonly { value: ThemeMode; label: string; hint: stri
 
 export const BASE_COLOR_THEMES: readonly ThemePreset[] = BASE_THEMES;
 
+/**
+ * 品牌主题色（手写，不在 tools/gen-theme-presets.mjs 的生成范围内）。
+ *
+ * 色相取自 logo 主色 #34914f = oklch(0.585 0.133 150)，但出厂直接用这个值不合格：
+ * 它相对白底只有 3.79:1，而 --primary 在本工程既当按钮底色又当 text-primary 前景色
+ * （ChoiceCard / OperatorSwitch / TemplateEditor / badge link 等 6 处以上直接落在页面背景上），
+ * 对比度是对称的，所以同一个值必须同时撑住两种用法——只能往下压明度。
+ * 这里压到 oklch(0.515 0.105 151)（≈ #327847，5.14:1），色相与观感仍跟 logo 一致，只是深一档。
+ * 深色档反过来：--primary 要亮于背景（0.145）才读得出来，所以用 0.75 配深绿前景，
+ * 与 neutral 基础色板"深色下 primary 是浅色"的约定同向。
+ */
+const BRAND_ACCENT_THEME: ThemePreset = {
+  key: "banghe",
+  title: "BangHe",
+  zh: "磅禾绿",
+  light: {
+    "primary": "oklch(0.515 0.105 151)",
+    "ring": "oklch(0.62 0.11 151)",
+    "sidebar-primary": "oklch(0.515 0.105 151)",
+    "chart-1": "oklch(0.871 0.15 154.449)",
+    "chart-2": "oklch(0.723 0.219 149.579)",
+    "chart-3": "oklch(0.627 0.194 149.214)",
+    "chart-4": "oklch(0.527 0.154 150.069)",
+    "chart-5": "oklch(0.448 0.119 151.328)",
+  },
+  dark: {
+    "primary": "oklch(0.75 0.11 151)",
+    "primary-foreground": "oklch(0.24 0.06 151)",
+    "ring": "oklch(0.62 0.11 151)",
+    "sidebar-primary": "oklch(0.55 0.13 151)",
+    "chart-1": "oklch(0.871 0.15 154.449)",
+    "chart-2": "oklch(0.723 0.219 149.579)",
+    "chart-3": "oklch(0.627 0.194 149.214)",
+    "chart-4": "oklch(0.527 0.154 150.069)",
+    "chart-5": "oklch(0.448 0.119 151.328)",
+  },
+};
+
 /** 主题色列表：第一项"跟随基础色板"= 不叠加，其余取自官方色板 */
 export const ACCENT_COLOR_THEMES: readonly ThemePreset[] = [
   { key: "default", title: "Default", zh: "跟随基础色板", light: {}, dark: {} },
+  BRAND_ACCENT_THEME,
   ...ACCENT_THEMES,
 ];
 

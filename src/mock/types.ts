@@ -401,7 +401,7 @@ export interface AppSetting {
   key: string;
   value: string;
   label: string;
-  group: "doc" | "weigh" | "settle" | "print" | "retain" | "other";
+  group: "doc" | "weigh" | "settle" | "print" | "retain" | "session" | "other";
   kind: "text" | "number" | "bool" | "select";
   options?: { value: string; label: string }[];
   hint?: string;

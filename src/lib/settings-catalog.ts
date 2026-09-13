@@ -38,6 +38,7 @@ export const SETTINGS_GROUP: Record<AppSetting["group"], string> = {
   settle: "结算与付款",
   print: "打印与联次",
   retain: "留样与数据保留",
+  session: "登录与锁屏",
   other: "库里新增、目录还没补",
 };
 
@@ -155,6 +156,19 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
   {
     key: "backup_auto_interval_days", demo: "1", label: "自动备份间隔（天）", group: "retain", kind: "number",
     hint: "程序每小时醒一次比对上次副本的时间，够数才补一份；填 0 按 1 天处理",
+  },
+  {
+    key: "idle_lock_minutes", demo: "60", label: "无操作自动锁屏（分钟）", group: "session", kind: "select",
+    options: [
+      { value: "5", label: "5 分钟" },
+      { value: "10", label: "10 分钟" },
+      { value: "30", label: "30 分钟" },
+      { value: "60", label: "1 小时" },
+      { value: "120", label: "2 小时" },
+      { value: "180", label: "3 小时" },
+      { value: "0", label: "从不" },
+    ],
+    hint: "到点只是锁屏：输本人密码即原地解锁，不退出登录、正在录的单据不丢；选「从不」则不自动锁屏，左下角仍可手动锁。改动最迟一分钟内对在线会话生效",
   },
 ];
 

@@ -105,6 +105,7 @@ pub fn run() {
             auth::auth_login,
             auth::auth_session,
             auth::auth_touch,
+            auth::auth_lock,
             auth::auth_unlock,
             auth::auth_logout,
             auth::auth_change_password,

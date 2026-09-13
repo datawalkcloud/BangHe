@@ -24,7 +24,7 @@ import { MoneyLine } from "@/components/business/NumField";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { Button } from "@/components/ui/button";
 import { Choose } from "@/components/business/Choose";
-import { Input } from "@/components/ui/input";
+import { KeypadInput, alnumKeys, digitKeys } from "@/components/ui/keypad";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PaymentRecord } from "@/mock/types";
@@ -293,26 +293,32 @@ export function SettlementDetailBody({
               <section className={cn("border bg-card", !can("pay.record") && "opacity-70")}>
                 <header className="border-b px-3 py-2 text-sm font-semibold">登记付款</header>
                 <div className="flex flex-col gap-3 p-3">
-                  <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    本次金额（元）
-                    <Input
+                  <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                    <span>本次金额（元）</span>
+                    <KeypadInput
+                      aria-label="本次付款金额"
                       value={amountYuan}
-                      onChange={(e) => setAmountYuan(e.target.value)}
+                      onChangeValue={setAmountYuan}
+                      keys={digitKeys({ decimalPoint: true })}
+                      columns={6}
+                      maxLength={12}
+                      toggleLabel="数字"
                       inputMode="decimal"
+                      autoComplete="off"
                       placeholder={unpaidFen ? String(unpaidFen / 100) : "0"}
-                      className="tnum text-sm"
+                      inputClassName="tnum text-base"
                     />
                     {unpaidFen > 0 && (
                       <Button
                         type="button"
-                        variant="link"
-                        className="h-auto self-start p-0 text-xs font-normal text-info underline underline-offset-2"
+                        variant="outline"
+                        className="h-8 self-stretch text-sm"
                         onClick={() => setAmountYuan(String(unpaidFen / 100))}
                       >
-                        填为全部未付 {money(unpaidFen)}
+                        全额付清 {money(unpaidFen)}
                       </Button>
                     )}
-                  </Label>
+                  </div>
                   <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                     付款方式
                     <Choose
@@ -327,10 +333,21 @@ export function SettlementDetailBody({
                       }))}
                     />
                   </Label>
-                  <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    交易流水号 / 凭证号
-                    <Input value={tradeNo} onChange={(e) => setTradeNo(e.target.value)} className="tnum text-sm" placeholder="现金可不填" />
-                  </Label>
+                  <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                    <span>交易流水号 / 凭证号</span>
+                    <KeypadInput
+                      aria-label="交易流水号"
+                      value={tradeNo}
+                      onChangeValue={setTradeNo}
+                      keys={alnumKeys()}
+                      columns={9}
+                      maxLength={32}
+                      toggleLabel="键盘"
+                      autoComplete="off"
+                      placeholder="现金可不填"
+                      inputClassName="tnum text-sm"
+                    />
+                  </div>
                   {payErrors.length > 0 && (
                     <ul className="list-disc pl-4 text-xs text-warning">
                       {payErrors.map((e) => (

@@ -35,8 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { KeypadInput, alnumKeys } from "@/components/ui/keypad";
 
 interface IcScanDialogProps {
   open: boolean;
@@ -317,27 +316,42 @@ export function IcScanDialog({
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              卡号（{ready ? "读到" : submitting ? "读到 · 提交中" : "—"}）
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>卡号（{ready ? "读到" : submitting ? "读到 · 提交中" : "—"}）</span>
               <div className="flex items-center gap-2">
-                <ScanLineIcon className="size-3.5 text-primary" />
-                <span className="tnum text-sm font-semibold tracking-wide text-foreground">{cardNo || "—"}</span>
+                <ScanLineIcon className="size-3.5 shrink-0 text-primary" />
+                <KeypadInput
+                  aria-label="卡号"
+                  value={cardNo}
+                  onChangeValue={(v) => setCardNo(v.toUpperCase())}
+                  keys={alnumKeys({ extra: ["-"] })}
+                  columns={9}
+                  maxLength={20}
+                  toggleLabel="键盘"
+                  disabled={submitting}
+                  placeholder="贴上卡自动填入；读不出点键盘输"
+                  inputClassName="h-8 text-sm tnum"
+                />
                 {cardNo && (
-                  <span className="text-[11px] text-muted-foreground">（存根 {maskSn(cardNo)}）</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">（存根 {maskSn(cardNo)}）</span>
                 )}
               </div>
-            </Label>
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              贴签编号（选填，便于现场辨认）
-              <Input
+            </div>
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>贴签编号（选填，便于现场辨认，不填也能登记）</span>
+              <KeypadInput
+                aria-label="贴签编号"
                 value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                placeholder="如 CARD-013"
+                onChangeValue={(v) => setLabel(v.toUpperCase())}
+                keys={alnumKeys({ extra: ["-"] })}
+                columns={9}
+                maxLength={16}
+                toggleLabel="键盘"
                 disabled={submitting}
-                className="h-8 text-xs"
-                autoFocus
+                placeholder="如 CARD-013"
+                inputClassName="h-8 text-xs tnum"
               />
-            </Label>
+            </div>
             {errors.length > 0 && (
               <ul className="list-disc pl-4 text-xs text-destructive">
                 {errors.map((e) => (
