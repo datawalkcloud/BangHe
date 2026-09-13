@@ -18,7 +18,7 @@ import { AlertTriangleIcon, ArrowLeftIcon, BadgeCheckIcon, FlaskConicalIcon, Map
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
-import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, TONE_DOT, VOID_REASON_MIN } from "@/lib/constants";
+import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, VOID_REASON_MIN } from "@/lib/constants";
 import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
 import { useQuickOptions, useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
@@ -40,6 +40,7 @@ import { VoidReasonField } from "@/components/business/VoidReasonField";
 import { ComboBox } from "@/components/business/ComboBox";
 import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
+import { CapturePhotoThumb } from "@/components/business/CapturePhotoThumb";
 import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
 import { QuickDetailLink, useQuickDetail } from "@/components/business/quickDetail";
@@ -710,20 +711,8 @@ export function OrderDetailBody({
                 ) : (
                   <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {photos.map((p) => (
-                      <li key={p.id} className="flex min-w-0 flex-col gap-1">
-                        <div
-                          className={cn(
-                            "flex aspect-[4/3] items-end p-1.5 text-[10px] text-white",
-                            TONE_DOT[p.tone],
-                            p.missing && "items-center justify-center opacity-60",
-                          )}
-                        >
-                          {p.missing ? "无画面" : ""}
-                        </div>
-                        <span className="truncate text-xs">{p.label}</span>
-                        <span className="tnum text-[11px] text-muted-foreground">
-                          {p.missing ? "抓拍失败" : dateTime(p.captured_at)}
-                        </span>
+                      <li key={p.id} className="min-w-0">
+                        <CapturePhotoThumb photo={p} />
                       </li>
                     ))}
                   </ul>

@@ -1421,6 +1421,37 @@ pub fn party_photo_view(
     Ok(Some(img))
 }
 
+/// 过磅抓拍图的读通道（04 §4.3 欠的"原图查看那半边"，本轮接上）。
+///
+/// 键用**称重记录 id**而非附件 id：与档案人像吃业务 id 同一口径，前端拿不到也不必拿
+/// `attachment.id` 和本机路径；顺带挡住"枚举附件 id 去拖别人的单证"——记录不挂在磅单上就读不到。
+/// 没抓拍（设备离线降级）回 `Ok(None)`，那是"无抓拍"的正常状态不是错误。
+/// 与档案人像一样不设岗位闸门：viewer 也要能在详情页核对现场，管住它的是每次查看都留痕。
+pub fn capture_photo_view(
+    conn: &Connection,
+    app_dir: &Path,
+    actor: &AuthProfile,
+    record_id: i64,
+) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
+    let row: Option<(Option<i64>, String)> = conn
+        .query_row(
+            "SELECT wr.photo_attachment_id, wo.order_no
+             FROM weigh_record wr JOIN weigh_order wo ON wo.id = wr.order_id
+             WHERE wr.id = ?1",
+            params![record_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| format!("读取抓拍记录失败：{e}"))?;
+    let Some((att, order_no)) = row else {
+        return Err("称重记录不存在，读不到它名下的抓拍".into());
+    };
+    let Some(att) = att else { return Ok(None) };
+    let img = crate::attachment::read_for_display(conn, app_dir, att, actor.id)?;
+    audit(conn, actor, "pii.read", "weigh_order", &order_no, Some("查看过磅抓拍画面"), None);
+    Ok(Some(img))
+}
+
 // --------------------------------------------------------------------- 入仓去向
 // 去向在磅单上是选填项（03 §9.9：多数站点制单时不登记），但一旦填了就必须自洽：
 // 只记货位不记仓房的"半截去向"会让按仓房汇总的那批粮在报表里凭空消失。
@@ -1610,6 +1641,10 @@ pub struct CaptureInput {
     /// 客户端（称重面板 / IC 刷皮重）判出偏差超容差时附上的人话文案；是否记录以服务端复算为准
     #[serde(default)]
     pub tare_warning: Option<String>,
+    /// 本机 USB 摄像头的抓拍帧：面板从 WebView2 实时画面就地取一帧、base64(JPEG) 回传
+    /// （04 §4 方案 A 前端半边）。IP 摄像机忽略此字段（自带 HTTP 抓图通道）；空串按没带处理。
+    #[serde(default)]
+    pub photo_b64: Option<String>,
 }
 
 /// 警示文案入库前的长度上限（票面一栏、日志一行，够写清偏差就够了）
@@ -2490,6 +2525,18 @@ pub async fn party_photo(app: AppHandle, party_id: i64) -> Result<Option<crate::
         .map_err(|e| format!("档案照片读取任务失败：{e}"))?
 }
 
+/// 过磅抓拍图的读通道命令。与 `party_photo` 同一口径：先取会话身份（访问痕迹要记到人），
+/// 再进锁按称重记录 id 读附件；`read_for_display` 内部已刷 `attachment.accessed_*`，这里再落一条 `pii.read`。
+#[tauri::command]
+pub async fn capture_photo(app: AppHandle, record_id: i64) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
+    let actor = auth::current_actor(&app).ok_or_else(|| "登录已失效或已锁屏，请先解锁再继续作业".to_string())?;
+    let pool = pool_of(&app)?;
+    let dir = app_data_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, move |conn| capture_photo_view(conn, &dir, &actor, record_id)))
+        .await
+        .map_err(|e| format!("抓拍读取任务失败：{e}"))?
+}
+
 #[tauri::command]
 pub async fn order_get(app: AppHandle, no: String) -> Result<Option<WeighOrder>, String> {
     read_only(&app, move |conn| load_order_full(conn, &no), "磅单读取").await
@@ -2512,13 +2559,15 @@ pub async fn order_create(app: AppHandle, input: CreateOrderInput) -> Result<Wei
 }
 
 #[tauri::command]
-pub async fn order_capture(app: AppHandle, input: CaptureInput) -> Result<Option<WeighOrder>, String> {
+pub async fn order_capture(app: AppHandle, mut input: CaptureInput) -> Result<Option<WeighOrder>, String> {
     // 前端的 has_photo 只是"当时摄像头在线"的自我声明，拿来当门闩：离线时连这三秒的网络都不去堵。
     let want_photo = input.has_photo.unwrap_or(false);
+    // 本机摄像头的帧是前端就地取的：带了帧就想落，不必再等 has_photo 那声自我声明（空串按没带处理）
+    let local_frame = input.photo_b64.take().filter(|s| !s.trim().is_empty());
     let order = write_tx(&app, move |conn, actor| capture(conn, actor, input), FLOOR_ROLES, "称重").await?;
-    if want_photo {
+    if want_photo || local_frame.is_some() {
         if let Some(weighed) = order.as_ref() {
-            attach_weigh_photo(&app, weighed).await;
+            attach_weigh_photo(&app, weighed, local_frame).await;
         }
     }
     Ok(order)
@@ -2526,11 +2575,15 @@ pub async fn order_capture(app: AppHandle, input: CaptureInput) -> Result<Option
 
 /// 过磅抓拍（04 §2.4）：磅单已经提交，这里只往那条称重轨迹上挂一张图。
 ///
+/// 两条取图通道在这儿分叉：`local_frame` 是 Some 时走 [`camera::store_provided_frame`]
+/// （本机 USB 摄像头，画面本来就开在工作台 WebView2 里，捕获瞬间取帧回传）；
+/// 否则走 [`camera::capture_snapshot`]（内网 IP 摄像机，HTTP 抓图）。
+///
 /// 取图要等摄像机应答（连接与收图各 3 秒），所以放在称重事务**之外**——让一张照片
 /// 把已经成立的过磅拖回滚、或者把单连接的写事务开足三秒，都是把主次颠倒了（04 §4）。
 /// 于是这里的所有失败都就地降级成"无抓拍"，含"配置非法"那类：原因由 `camera` 写进
 /// `device_config.last_error`，站长在设备中心看得到，不该由一次称重去替它报警。
-async fn attach_weigh_photo(app: &AppHandle, weighed: &WeighOrder) {
+async fn attach_weigh_photo(app: &AppHandle, weighed: &WeighOrder, local_frame: Option<String>) {
     // capture() 成功即新增一条轨迹，`records` 按 seq 升序，最后一条就是刚称的那个头
     let Some(record) = weighed.records.as_ref().and_then(|rs| rs.last()) else {
         return;
@@ -2545,7 +2598,10 @@ async fn attach_weigh_photo(app: &AppHandle, weighed: &WeighOrder) {
             return Ok(None);
         }
         let ctx = crate::camera::CaptureContext { order_id, weigh_record_id: record_id, operator_id };
-        let photo = crate::camera::capture_snapshot(&conn, &app_dir, &ctx)?;
+        let photo = match &local_frame {
+            Some(b64) => crate::camera::store_provided_frame(&conn, &app_dir, &ctx, b64)?,
+            None => crate::camera::capture_snapshot(&conn, &app_dir, &ctx)?,
+        };
         if let Some(att) = photo {
             conn.execute(
                 "UPDATE weigh_record SET photo_attachment_id = ?1 WHERE id = ?2",
@@ -2807,4 +2863,77 @@ pub fn set_grade(conn: &Connection, actor: &AuthProfile, input: GradeAdjustInput
 #[tauri::command]
 pub async fn order_set_grade(app: AppHandle, input: GradeAdjustInput) -> Result<Option<WeighOrder>, String> {
     write_tx(&app, move |conn, actor| set_grade(conn, actor, input), GRADE_ROLES, "调整等级").await
+}
+
+// --------------------------------------------------------------- 修改基本信息（车牌 / 备注）
+// 制单只录了一次车牌/备注，现场常有"先把单取出来、车开上磅才想起没填车牌"或"备注要随过磅补充"。
+// 这两个字段不碰钱、不碰状态机（不同于 grade——grade 一旦结算就是货款的一部分，故另设 VOIDABLE 闸），
+// 因此过磅与结算期间都允许就地改；闸门只留会话岗位一道（与制单同一 FLOOR_ROLES：磅员/登记员/站长）。
+// 与 set_grade 一样，值没变就直接回读、既不写库也不在审计表里留"改了个寂寞"的噪音。
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateOrderInput {
+    pub order_no: String,
+    /// 车牌号，空串 / null ＝ 清除
+    #[serde(default)]
+    pub vehicle_no: Option<String>,
+    /// 备注，空串 / null ＝ 清除
+    #[serde(default)]
+    pub remark: Option<String>,
+    /// 操作人以会话为准，此字段只为与 mock 签名对齐而存在
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub operator_id: Option<i64>,
+}
+
+pub fn update_meta(conn: &Connection, actor: &AuthProfile, input: UpdateOrderInput) -> Result<Option<WeighOrder>, String> {
+    let order: Option<WeighOrder> = conn
+        .query_row(&format!("{ORDER_SELECT} WHERE o.order_no = ?1"), params![input.order_no], map_order_row)
+        .optional()
+        .map_err(|e| format!("读取磅单失败：{e}"))?;
+    let Some(order) = order else { return Ok(None) };
+    let vehicle_no = input
+        .vehicle_no
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let remark = input
+        .remark
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if order.vehicle_no == vehicle_no && order.remark == remark {
+        return Ok(Some(order));
+    }
+    let dash = |s: Option<&String>| s.cloned().unwrap_or_else(|| "—".into());
+    let mut changes: Vec<String> = Vec::new();
+    if order.vehicle_no != vehicle_no {
+        changes.push(format!("车牌 {} → {}", dash(order.vehicle_no.as_ref()), dash(vehicle_no.as_ref())));
+    }
+    if order.remark != remark {
+        changes.push(format!("备注 {} → {}", dash(order.remark.as_ref()), dash(remark.as_ref())));
+    }
+    let now = now_iso();
+    conn.execute(
+        "UPDATE weigh_order SET vehicle_no = ?2, remark = ?3, updated_at = ?4, updated_by = ?5 WHERE id = ?1",
+        params![order.id, vehicle_no, remark, now, actor.id],
+    )
+    .map_err(|e| format!("修改磅单信息失败：{e}"))?;
+    audit(
+        conn,
+        actor,
+        "order.update",
+        "weigh_order",
+        &order.order_no,
+        Some(&changes.join("；")),
+        None,
+    );
+    load_order_full(conn, &order.order_no)
+}
+
+#[tauri::command]
+pub async fn order_update(app: AppHandle, input: UpdateOrderInput) -> Result<Option<WeighOrder>, String> {
+    write_tx(&app, move |conn, actor| update_meta(conn, actor, input), FLOOR_ROLES, "修改磅单信息").await
 }

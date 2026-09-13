@@ -3,8 +3,12 @@
  *
  * 整条"读卡器 → 定位磅单 → 按单据落库状态推进一步"的判断**只收在这一个 hook 里**：
  *  ① 工作台默认起 `reader.ic.watch` 后台常听；
- *  ② 每读到一张卡先 `api.cardLocate(sn)`：空闲卡→发卡绑到最近无卡单，**一张等卡的单都没有时
- *     直接把制单框弹出来并把这张卡带进去**（制成就绑它，不让人把同一张卡再刷一遍）；在途卡→按这张单缺什么推进；
+ *  ② 每读到一张卡先 `api.cardLocate(sn)`：**不在册的卡就地自动登记入库**（06 §4.1 闸门 3，
+ *     不再把磅员赶去「流转卡」页点一次登记；站点参数 `card_auto_register` 关掉才退回硬拦），
+ *     登记完与空闲卡同路；空闲卡→发卡绑到最近无卡单，
+ *     **一张等卡的单都没有时直接把这张卡交给常驻的「身份与制单」面板就地制单**（不弹窗，
+ *     制成就绑它，不让人把同一张卡再刷一遍）；在途卡→**先把工作台定位到这张卡绑的那张单**
+ *     （哪怕此刻仪表离线、读数未稳，也要让面板说的是这张单），再按这张单缺什么推进；
  *  ③ 推进只认"此刻地磅稳定读数"，读数未稳 / 皮重超容差一律不写库、交回面板手点（06 §2.2 三条硬规矩）；
  *  ④ "一刷"的判据是**边沿**：`reader.ic.watch` 只在换卡、或天线空过一次之后再放上时才命中，
  *    卡压在感应区不动不会一轮轮重复推进（06 §4.2）；本 hook 再叠一层 `card_swipe_debounce_ms`
@@ -23,8 +27,10 @@ import { useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { autoRegisterCard, autoRegisterOn } from "@/lib/card-auto-register";
 import { announce } from "@/lib/voice-prompt";
-import type { WeighOrder } from "@/mock/types";
+import type { DeviceConfig, WeighOrder } from "@/mock/types";
+import { grabLocalCameraFrame } from "@/lib/local-camera";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
 import { runningInTauri } from "@/lib/native";
@@ -33,6 +39,11 @@ import { useSetting } from "@/hooks/useLookups";
 /** 一张单当前缺的下一步；settled/终态返回 done */
 function nextStep(o: WeighOrder): "gross" | "tare" | "settle" | "done" {
   if (o.settled_at != null || o.status === "settled" || o.status === "paid" || o.status === "archived") return "done";
+  // 作废 / 拒收退粮 / 红冲：这张单已经不会再回炉过磅了，卡在农户手里只是"待收回"。
+  // 不并进终态，就会被下一步当成"缺毛重"去要一次地磅读数，弹出一句误导人的"仪表离线"——
+  // 明明单子早结束了，操作员却以为是自己没连上磅。（发卡/建卡侧 check_usable_for_create 早已对
+  // 挂着终态单的卡就地收回，推进侧此前漏了这同一条，这里补齐同一口径。）
+  if (o.status === "voided" || o.status === "rejected" || o.status === "reversed") return "done";
   if (o.gross_weight_01kg == null) return "gross";
   if (o.tare_weight_01kg == null) return "tare";
   return "settle";
@@ -61,18 +72,28 @@ const WATCH_RETRY_MAX_MS = 15_000;
 
 export function useIcWorkflow({
   paused,
+  camera,
   onRequestSettle,
   onWeighed,
   onRequestRegister,
+  onFocusOrder,
 }: {
   /** 弹窗开着 / 结算框开着时为真，本 hook 让出设备锁不监听（`card_flow_mode=off` 在内部同样按不监听处理） */
   paused: boolean;
+  /** 台账里那台启用的抓拍机（04 §4）：本机 USB 摄像头时，刷卡通行的捕获也顺手就地取帧回传 */
+  camera: DeviceConfig | null;
   /** 第三刷：把这张单交给页面的结算框（复用 SettleForm） */
   onRequestSettle: (orderNo: string) => void;
   /** 皮重捕获成功（算完净重）后回调，页面据此自动出码单 */
   onWeighed: (order: WeighOrder) => void;
   /** 刷到一张空闲卡、但库里没有等发卡的在途单：把这张卡交给页面弹制单框，制成就绑这张卡 */
   onRequestRegister: (cardNo: string) => void;
+  /**
+   * 刷到一张在途卡：先把工作台**定位**到这张卡绑的那张单，再去推进它缺的那一步。
+   * 定位与推进是两件事——仪表离线、读数未稳、这一刷落在去抖窗口里，拦下的都只是"写库"那一下，
+   * 没有理由让面板继续报上一张单。操作员刷谁的卡，屏幕上就该是谁的单（06 §4.2）。
+   */
+  onFocusOrder: (orderNo: string) => void;
 }) {
   const qc = useQueryClient();
   const watch = useDeviceStore((s) => s.reader.ic.watch);
@@ -80,6 +101,11 @@ export function useIcWorkflow({
   const debounceMs = useSetting("card_swipe_debounce_ms").num || 1500;
   /** 该站用不用流转卡：off＝不起监听、全程面板手点（06 §4.4 C1 的退路，读卡器故障时同样靠它） */
   const flowMode = useSetting("card_flow_mode").raw ?? "auto";
+  /**
+   * 该站准不准用**未登记**的卡（06 §4.1 闸门 3）：开＝刷到陌生卡当场自动登记入库再用；
+   * 关＝闸门退回硬拦，提示先到「流转卡」页登记。缺省按开，与 `card_required_on_create` 同一式。
+   */
+  const autoRegister = autoRegisterOn(useSetting("card_auto_register").raw);
   /**
    * 这台机此刻有没有 IC 通道：浏览器预览 / 台账没登记启用 / 台账切成 Mock 都算**没有**。
    * 没有就别起循环，更别跟着退避重起——那是配置态不是故障，反复轮只会白刷 store。
@@ -96,10 +122,11 @@ export function useIcWorkflow({
    * 页面传进来的两个回调每次渲染都是新的箭头函数。直接进 `useCallback` 依赖，
    * `handle` 就跟着每帧换身份，底下那条监听 effect 每帧 stopWatch + 重起——
    * 真机上正压着卡的那一轮 read 会被 epoch 判废、这一刷凭空丢掉。收成 ref，effect 只依赖稳定量。
+   * `camera` 同理：它来自 devices 查询，每次刷新都是新对象，只能进 ref，绝不能进依赖。
    */
-  const cbs = useRef({ onRequestSettle, onWeighed, onRequestRegister });
+  const cbs = useRef({ onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, camera });
   useEffect(() => {
-    cbs.current = { onRequestSettle, onWeighed, onRequestRegister };
+    cbs.current = { onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, camera };
   });
 
   const refresh = useCallback((orderNo: string, partyId: number) => {
@@ -110,7 +137,7 @@ export function useIcWorkflow({
     qc.invalidateQueries({ queryKey: ["party", partyId] });
   }, [qc]);
 
-  /** 处理一张在途卡：按单据缺项推进一步。命中即写，闸门不过则只提示、交回手点 */
+  /** 处理一张在途卡：先把工作台定位到这张单，再按单据缺项推进一步。命中即写，闸门不过则只提示、交回手点 */
   const advance = useCallback(
     async (orderNo: string) => {
       const scale = useDeviceStore.getState().scale;
@@ -127,10 +154,20 @@ export function useIcWorkflow({
       }
       const step = nextStep(o);
       if (step === "done") {
-        toast.info(`${o.party_name} 的单已结算，卡可收回；要继续请到卡池页退卡`, sticky(`ic-order-done:${o.order_no}`));
-        announce("这张单已经结算完了，把卡收回来", `ic-order-done:${o.order_no}`);
+        const doneLabel =
+          o.status === "voided" ? "已作废" : o.status === "rejected" ? "已拒收退粮" : o.status === "reversed" ? "已被红冲" : "已结算";
+        toast.info(`${o.party_name} 的单${doneLabel}，卡可收回；要继续请到「流转卡」页退卡`, sticky(`ic-order-done:${o.order_no}`));
+        announce("这张单已经不能继续了，把卡收回来", `ic-order-done:${o.order_no}`);
         return;
       }
+      /**
+       * 定位在推进之前、且在仪表与去抖两道闸门之前：这张卡挂的是哪张单，屏幕上就说哪张单。
+       * 仪表离线/读数未稳/连击去抖拦下的都只是"这一刷写不写库"，不是"工作台该显示谁"——先前那一步
+       * 先撞闸门就 return，面板还停在上一张单上，操作员看着别人的单核对这次的读数，比多刷一次危险得多。
+       * 页面侧只在单号真的变了时才导航，所以这一句重复刷同一张卡不会产生多余的history。
+       */
+      cbs.current.onFocusOrder(o.order_no);
+
       const key = `${o.order_no}:${step}`;
       const now = Date.now();
       const prev = lastFire.current.get(key);
@@ -159,6 +196,8 @@ export function useIcWorkflow({
       }
       // 皮重超容差不在这里拦：一刷照样捕获，服务端复算后把警示记在磅单上（成功提示后补一条警告）
       try {
+        // 本机 USB 摄像头：与手点那条路同一就地取帧（IP 机的抓图仍在服务端，IC 通行不额外拉网）
+        const photoB64 = await grabLocalCameraFrame(cbs.current.camera);
         const updated = await api.capture({
           order_no: o.order_no,
           weigh_type: step,
@@ -166,7 +205,8 @@ export function useIcWorkflow({
           source: "scale",
           operator_id: actorId(),
           raw_frame: scale.rawFrame ?? undefined,
-          has_photo: false,
+          has_photo: photoB64 != null,
+          photo_b64: photoB64 ?? undefined,
         });
         if (!updated) {
           toast.error("捕获失败：磅单不存在或已被他人修改", sticky(`ic-capture:${o.order_no}`));
@@ -195,13 +235,14 @@ export function useIcWorkflow({
   );
 
   /**
-   * 没有可发的单：把制单框弹出来，并把这张卡一并带进去。
-   * 卡已经贴在感应区上、人已经站在窗口前，此时回一句"请先点制单"等于让人把同一张卡再刷一遍。
+   * 没有可发的单：把这张卡交给常驻的「身份与制单」面板就地制单（不再弹制单框，减少弹窗次数）。
+   * 卡已经贴在感应区上、人已经站在窗口前，此时回一句"请先点制单"等于让人把同一张卡再刷一遍；
+   * 面板经 `presetCardNo` 收到这张卡后，选好售粮人点「取号并制单」即随单绑上，不必再刷第二次。
    */
   const openRegister = useCallback((cardNo: string) => {
     cbs.current.onRequestRegister(cardNo);
-    toast.warning("当前没有等待发卡的在途单：已打开制单窗口，制好即绑这张卡", sticky(`ic-need-order:${cardNo}`));
-    announce("当前卡未使用，请制单", `ic-need-order:${cardNo}`);
+    toast.warning("当前没有等待发卡的在途单：已把这张卡贴到「身份与制单」，选好售粮人点取号即随单绑上", sticky(`ic-need-order:${cardNo}`));
+    announce("当前卡未使用，请在制单面板选人取号", `ic-need-order:${cardNo}`);
   }, []);
 
   /** 读到一张空闲卡：按 06 §4.1 把它发给最近一张无卡在途单；一张都没有就直接请人制单 */
@@ -252,8 +293,28 @@ export function useIcWorkflow({
         return;
       }
       if (!loc.found) {
-        toast.error(`卡 ${sn} 未在卡池登记，请先到「流转卡」页登记`, sticky(`ic-unregistered:${sn}`));
-        announce("这张卡没有登记过，换一张卡", `ic-unregistered:${sn}`);
+        /**
+         * 站点关掉「允许使用未登记的流转卡」＝闸门 3 退回硬拦：这一刷到此为止，请人去卡池页登记。
+         * 默认（开着）才走下面那条就地补登记的路，不让磅员为一张新卡切两屏、再刷第二遍。
+         */
+        if (!autoRegister) {
+          toast.error(`卡 ${sn} 未在卡池登记，请先到「流转卡」页登记`, sticky(`ic-unregistered:${sn}`));
+          announce("这张卡没有登记过，换一张卡", `ic-unregistered:${sn}`);
+          return;
+        }
+        /**
+         * 未登记不再是"这一刷到此为止、你去「流转卡」页点一次登记再回来重刷"（06 §4.1 闸门 3）：
+         * 卡已经贴在感应区上，就地走 `card_pool_register` 入池留痕，然后与一张普通空闲卡走同一条分支。
+         * 登记不上（岗位无权 / 没解锁 / 库锁）才拦下这一刷——原因写在屏上，也必须出声。
+         */
+        const reg = await autoRegisterCard(qc, sn, "发卡");
+        if (!reg.ok) {
+          toast.error(`卡 ${sn} 自动登记失败：${reg.reason}；请换一张卡或到「流转卡」页登记`, sticky(`ic-unregistered:${sn}`));
+          announce("这张卡登记不上，换一张卡", `ic-unregistered:${sn}`);
+          return;
+        }
+        // 成功不再另念一句：紧接着发卡/交给制单面板那一路自己会说话，抢着念反而听不清结论
+        await issueFree(sn);
         return;
       }
       if (loc.status === "retired") {
@@ -273,7 +334,7 @@ export function useIcWorkflow({
         announce("这张卡挂的单已经做完了，把卡收回来", `ic-loose:${sn}`);
       }
     },
-    [advance, issueFree],
+    [advance, issueFree, qc, autoRegister],
   );
 
   // 单一循环监听：该听时拉起 watch，命中一张卡就 handle，然后接着听下一张。

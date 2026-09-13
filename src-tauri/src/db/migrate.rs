@@ -130,6 +130,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0015_quick_option.sql",
         sql: include_str!("migrations/0015_quick_option.sql"),
     },
+    Migration {
+        name: "0016_card_auto_register.sql",
+        sql: include_str!("migrations/0016_card_auto_register.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

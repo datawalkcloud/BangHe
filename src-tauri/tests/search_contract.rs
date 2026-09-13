@@ -118,6 +118,7 @@ fn weighed_order(conn: &Connection, party_id: i64, variety: i64, vehicle_no: Opt
                 has_photo: Some(false),
                 tare_override: None,
                 tare_warning: None,
+                photo_b64: None,
             },
         )
         .unwrap()

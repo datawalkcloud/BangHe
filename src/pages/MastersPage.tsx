@@ -967,6 +967,266 @@ function PricesSection() {
   );
 }
 
+/* ---------------------------------------------------------------- 常用语 */
+
+/**
+ * 一条常用语的编辑态。排序号留空＝排到同类末尾：编号由后端算（真库 `save_quick_option`
+ * 收到 0 就取 `MAX(sort_order)+1`，mock 同口径），前端不自己抢号。
+ */
+interface QuickOptionForm {
+  id: number | null;
+  kind: QuickOptionKind;
+  label: string;
+  value: string;
+  sortOrder: string;
+  active: boolean;
+}
+
+function quickOptionForm(kind: QuickOptionKind, o?: QuickOption): QuickOptionForm {
+  if (!o) return { id: null, kind, label: "", value: "", sortOrder: "", active: true };
+  return {
+    id: o.id,
+    kind: o.kind,
+    label: o.label,
+    value: o.value,
+    sortOrder: String(o.sort_order),
+    active: o.is_active === 1,
+  };
+}
+
+function QuickOptionsSection() {
+  const { data: rows = [] } = useAllQuickOptions();
+  const queryClient = useQueryClient();
+  const can = useSession((s) => s.can);
+  const editable = can("setting.write");
+
+  const [form, setForm] = useState<QuickOptionForm | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<QuickOption | null>(null);
+  const patch = (p: Partial<QuickOptionForm>) => setForm((f) => (f ? { ...f, ...p } : f));
+
+  /** 六个字段用侧的下拉与本页共用 ["quick-options"] 这一份缓存，改完一起刷 */
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["quick-options"] });
+    void queryClient.invalidateQueries({ queryKey: ["audits"] });
+  };
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.saveQuickOption({
+        id: form?.id ?? undefined,
+        operator_id: actorId(),
+        kind: form?.kind ?? "void",
+        label: (form?.label ?? "").trim(),
+        value: (form?.value ?? "").trim(),
+        sort_order: Number(form?.sortOrder) || 0,
+        is_active: form?.active ? 1 : 0,
+      }),
+    onSuccess: (o) => {
+      toast.success(`常用语「${o.label}」已保存`);
+      setForm(null);
+      refresh();
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  });
+
+  const del = useMutation({
+    mutationFn: (id: number) => api.deleteQuickOption({ id, operator_id: actorId() }),
+    onSuccess: (o) => {
+      toast.success(`已删除常用语「${o.label}」`);
+      setPendingDelete(null);
+      refresh();
+    },
+    onError: (e: Error) => toast.error(`删除失败：${e.message}`),
+  });
+
+  const columns: Column<QuickOption>[] = [
+    {
+      key: "label",
+      header: "简称",
+      cell: (o) => (
+        <span className="flex items-center gap-1.5">
+          <span className="whitespace-nowrap">{o.label}</span>
+          {o.is_active === 0 && <ToneBadge tone="neutral">停用</ToneBadge>}
+        </span>
+      ),
+      sortValue: (o) => o.label,
+    },
+    {
+      key: "value",
+      header: "点一下填进文本框的那句话",
+      cell: (o) => <span className="text-xs text-muted-foreground">{o.value}</span>,
+    },
+    { key: "sort", header: "排序", align: "right", cell: (o) => <span className="tnum">{o.sort_order}</span>, sortValue: (o) => o.sort_order },
+    {
+      key: "op",
+      header: "操作",
+      cell: (o) => (
+        <span className="flex items-center gap-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setForm(quickOptionForm(o.kind, o));
+            }}
+          >
+            编辑
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="text-destructive hover:text-destructive"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setPendingDelete(o);
+            }}
+          >
+            <Trash2Icon /> 删除
+          </Button>
+        </span>
+      ),
+    },
+  ];
+
+  const errors: string[] = [];
+  if (form && !form.label.trim()) errors.push("简称必填：下拉清单上就显示这几个字");
+  if (form && !form.value.trim()) errors.push("完整内容必填：点一下要填进文本框的就是这句话");
+
+  /** 分组顺序按 QUICK_OPTION_KINDS（不按字母序、不按库里的 kind 字典序），与字段用侧的话术一致 */
+  return (
+    <div className="flex flex-col gap-3">
+      <SectionBar note="这里只预备下拉里的候选，不锁死输入：作废事由、改价事由、拒收原因等落库仍是自由文本，操作员照样能手打一句没备过的话。停用只是从清单里收起来，删除也不动历史单据——单据上存的是那句话本身，不引用这里的行。" />
+      {!editable && (
+        <CallOut tone="neutral" title="当前岗位只能查看">
+          常用语的增删改属基础档案写入，需站长岗位（02 §11 权限矩阵）。
+        </CallOut>
+      )}
+      {QUICK_OPTION_KINDS.map(({ kind, label, where }) => {
+        const group = rows.filter((r) => r.kind === kind).sort((a, b) => a.sort_order - b.sort_order);
+        const on = group.filter((r) => r.is_active === 1).length;
+        return (
+          <section key={kind} className="border bg-card">
+            <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">{label}</p>
+                <p className="text-xs text-muted-foreground">用在：{where}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="tnum text-xs text-muted-foreground">
+                  {on}/{group.length} 条启用
+                </span>
+                <Button size="xs" disabled={!editable} onClick={() => setForm(quickOptionForm(kind))}>
+                  {editable ? <PlusIcon /> : <LockIcon />}
+                  新增
+                </Button>
+              </div>
+            </header>
+            <DataTable
+              columns={columns}
+              rows={group}
+              rowKey={(o) => o.id}
+              rowClassName={(o) => (o.is_active === 1 ? undefined : "text-muted-foreground")}
+              empty={
+                <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+                  这一类已经删空，工作台上就没有候选、只能手打。
+                  <Button size="xs" variant="link" disabled={!editable} onClick={() => setForm(quickOptionForm(kind))}>
+                    补一句
+                  </Button>
+                </div>
+              }
+            />
+          </section>
+        );
+      })}
+
+      <Dialog open={form !== null} onOpenChange={(v) => !v && setForm(null)}>
+        <DialogContent className="max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">
+              {form?.id == null ? `新增常用语 · ${form ? QUICK_OPTION_KINDS.find((k) => k.kind === form.kind)?.label : ""}` : `编辑常用语「${form?.label}」`}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              简称是下拉清单上看的短词，完整内容是点一下真正填进文本框、进单据与审计的那句话；两者可以不一样（简称「水分超高」，内容「水分超过拒收上限，现场退粮」）。
+            </DialogDescription>
+          </DialogHeader>
+          {form && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="分类">
+                <Choose
+                  aria-label="常用语分类"
+                  value={form.kind}
+                  onChange={(v) => patch({ kind: v })}
+                  options={QUICK_OPTION_KINDS.map((k) => ({ value: k.kind, label: k.label }))}
+                />
+              </Field>
+              <DecimalField label="排序号" value={form.sortOrder} onChange={(v) => patch({ sortOrder: v })} placeholder="留空排到末尾" />
+              <Field label="简称 *">
+                <Input value={form.label} onChange={(e) => patch({ label: e.target.value })} className="text-sm" />
+              </Field>
+              <Field label="完整内容 *">
+                <Input value={form.value} onChange={(e) => patch({ value: e.target.value })} className="text-sm" />
+              </Field>
+              <Label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
+                <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="启用常用语" />
+                启用（停用只从下拉里收起来，不删历史单据上的那句话）
+              </Label>
+            </div>
+          )}
+          {errors.length > 0 && (
+            <CallOut tone="warning" title="还不能保存">
+              <ul className="list-disc pl-4">
+                {errors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            </CallOut>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setForm(null)}>
+              取消
+            </Button>
+            <Button disabled={errors.length > 0 || save.isPending} onClick={() => save.mutate()}>
+              {save.isPending ? "保存中…" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingDelete !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingDelete(null);
+        }}
+      >
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">删除常用语</DialogTitle>
+            <DialogDescription className="text-xs">
+              将彻底移除
+              {pendingDelete ? <span className="font-medium"> {pendingDelete.label}</span> : null}
+              。单据上存的是那句文本本身、不引用这一行，所以删掉不影响任何历史单据，只是以后下拉里不再候选。需要留档的话改用「停用」。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={del.isPending}
+              onClick={() => pendingDelete && del.mutate(pendingDelete.id)}
+            >
+              {del.isPending ? "删除中…" : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- 参数 */
 
 function SettingsSection() {

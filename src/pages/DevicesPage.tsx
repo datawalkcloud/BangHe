@@ -25,6 +25,8 @@ import {
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { nativeCamera, nativeIdcard, nativePrinter, nativeSerial, runningInTauri, toNativePaper, type NativeLocalCamera, type NativePaper, type NativePrinterDevice, type NativePrinterStatus, type NativeReaderStatus, type NativeWindowsPrinter } from "@/lib/native";
+import { localCameraSpec, probeLocalCamera } from "@/lib/local-camera";
+import { LocalCameraLive } from "@/components/business/LocalCameraLive";
 import { MEDIUM, READER_DRIVER_IDS, readerFields, readerSpec } from "@/lib/card-reader";
 import { ESCPOS_DRIVERS, PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import type { DeviceConfig } from "@/mock/types";
@@ -1226,6 +1228,29 @@ function TestPanel({ d }: { d: DeviceConfig }) {
     },
   });
 
+  /**
+   * 本机 USB 摄像头的联机测试只能在前端做：那条流活在 WebView2 里，服务端 device_test
+   * 没有（也不该有）第二条开设备的通路。探测=真开流取一帧，和工作台抓拍同一条通道——
+   * 这里绿了，过磅就拍得出；和地磅一样把结论当场回写台账，卡片与状态灯不会出现两种说法。
+   */
+  const localCam = d.kind === "camera" ? localCameraSpec(d) : null;
+  const camProbe = useMutation({
+    mutationFn: () => probeLocalCamera(d),
+    onSuccess: (r) => {
+      setResult({ ...r, at: now() });
+      reportProbe.mutate(r);
+    },
+  });
+  const autoProbedFor = useRef<string | null>(null);
+  useEffect(() => {
+    // 选中这台就探一次（读卡器面板同式）：新登记的本机摄像头停在"未检测"，不主动摸一遍永远灰着
+    if (!localCam || d.is_mock === 1) return;
+    if (autoProbedFor.current === d.code) return;
+    autoProbedFor.current = d.code;
+    camProbe.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.code, d.is_mock, localCam != null]);
+
   return (
     <>
       <div className="flex items-start justify-between gap-2">
@@ -1257,6 +1282,17 @@ function TestPanel({ d }: { d: DeviceConfig }) {
               结论当场回写上方状态灯。台账里标成 Mock 或已停用的磅不会去碰端口。
             </p>
           </>
+        ) : localCam ? (
+          <>
+            <Button size="sm" variant="outline" onClick={() => camProbe.mutate()} disabled={camProbe.isPending || d.is_mock === 1}>
+              {camProbe.isPending ? "正在开流取帧…" : "联机测试"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              {d.is_mock === 1
+                ? "这台标成 Mock 的本机摄像头不做真机探测：切回真实设备后再测。"
+                : "本机摄像头的测试直接从画面里开一次真流、取一帧——和工作台抓拍是同一条通道，这里测得过，过磅就拍得出。结论当场回写上方状态灯；被别的程序（如 Windows 相机）占用时会如实报「打不开」。"}
+            </p>
+          </>
         ) : (
           <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending}>
             {testing.isPending ? "正在握手…" : "联机测试"}
@@ -1284,7 +1320,7 @@ function TestPanel({ d }: { d: DeviceConfig }) {
 
       {d.kind === "scale" && <ScalePanel key={d.code} d={d} />}
       {d.kind === "idcard" && <CardReaderPanel key={d.code} d={d} />}
-      {d.kind === "camera" && <CameraPanel />}
+      {d.kind === "camera" && <CameraPanel d={d} />}
       {d.kind === "printer" && <PrinterPanel key={d.code} d={d} />}
     </>
   );
@@ -1672,19 +1708,26 @@ function IcMedium({ d }: { d: DeviceConfig }) {
 
 /* ------------------------------------------------------------ 摄像机 */
 
-function CameraPanel() {
+function CameraPanel({ d }: { d: DeviceConfig }) {
   const camera = useDeviceStore((s) => s.camera);
+  // Mock 档不碰真机（与联机测试同一闸门）：演示机上这块画面不该悄悄把摄像头打开
+  const spec = d.is_mock === 0 ? localCameraSpec(d) : null;
   return (
     <div className="flex flex-col gap-2">
       <SectionTitle>抓图</SectionTitle>
-      <div className="flex aspect-video min-w-0 items-center justify-center border bg-muted/40">
-        <p className="text-xs text-muted-foreground">
-          {camera.busy ? "正在抓图…" : camera.lastCaptureAt ? `上次抓图 ${camera.lastCaptureAt}` : "尚无抓图记录"}
-        </p>
+      <div className="relative flex aspect-video min-w-0 items-center justify-center overflow-hidden border bg-muted/40">
+        {spec ? (
+          <LocalCameraLive spec={spec} />
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {camera.busy ? "正在抓图…" : camera.lastCaptureAt ? `上次抓图 ${camera.lastCaptureAt}` : "尚无抓图记录"}
+          </p>
+        )}
       </div>
       <p className="text-xs text-muted-foreground">
-        真实抓图发生在工作台捕获读数的瞬间（触发时机 triggerOn=capture），图片随磅单入附件表。
-        这里不单独发起，是为了避免产生没有单据归属的野图。测试抓图接口待 Rust 侧 DeviceHub 提供。
+        真实抓拍发生在工作台捕获读数的瞬间（触发时机 triggerOn=capture），图片随磅单入附件表。
+        这里不单独发起落库，是为了避免产生没有单据归属的野图；本机 USB 摄像头可用上方「联机测试」
+        真开一次流取一帧验通不通（只测不存），IP 摄像机则看台账地址能否被工作台抓到。
       </p>
     </div>
   );

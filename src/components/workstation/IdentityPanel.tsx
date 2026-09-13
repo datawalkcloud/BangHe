@@ -11,7 +11,7 @@
  * 先弹刷卡框，读到一张可用的空闲卡才取号——读不到卡这张单就制不成。关掉该参数
  * （或本站压根不用流转卡）才回到"无卡制单、事后靠后台监听发卡"。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDownIcon, ChevronRightIcon, CreditCardIcon, SearchIcon, UserRoundPlusIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -19,7 +19,7 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/mock/types";
 import { PARTY_TYPE, ROLE } from "@/lib/constants";
-import { maskIdCard, ton, validateIdCard, weight } from "@/lib/format";
+import { maskIdCard, ton, weight } from "@/lib/format";
 import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
 import { useDeviceStore } from "@/store/device";
 import { useQuickOptions, useSetting } from "@/hooks/useLookups";
@@ -93,6 +93,7 @@ export function IdentityPanel({
   const { options: remarkOptions } = useQuickOptions("remark");
   const reading = useDeviceStore((s) => s.reader.idcard.reading);
   const lastCard = useDeviceStore((s) => s.reader.idcard.last);
+  const setPanelHolding = useDeviceStore((s) => s.setPanelHolding);
   const [pickerOpen, setPickerOpen] = useState(false);
   /** 「请放卡」监听弹窗：点读卡不再一次性点读，而是开弹窗连续寻卡（与档案页读卡建档同一套） */
   const [scanOpen, setScanOpen] = useState(false);
@@ -106,6 +107,17 @@ export function IdentityPanel({
   useEffect(() => {
     if (presetCardNo) setCardNo(presetCardNo);
   }, [presetCardNo]);
+  /**
+   * 本面板自己弹的读卡框 / 绑卡框要用那台共用读卡器（06 §1.2：一台读卡器一次只解一种介质）。
+   * 常驻在网格里的这一份没有 `regHolding` 兜底（复用它会连带把开框的面板自己卸载成占位卡），
+   * 所以由面板自己挂 `panelHolding` 让工作台的后台 IC 常听让出设备锁。
+   * 拆成两个效果：设值只看两框的开合，复位只在卸载那一次跑——避免依赖变化时上一轮 cleanup
+   * 抢先把标记打回 false、让 watch 抖一下，把正压在感应区上那一轮 `read` 判废。
+   */
+  useEffect(() => {
+    setPanelHolding(scanOpen || bindOpen);
+  }, [scanOpen, bindOpen, setPanelHolding]);
+  useEffect(() => () => setPanelHolding(false), [setPanelHolding]);
   /** 去向默认折起来：多数站点制单时不登记仓房/货位，不该占住磅员的主视线 */
   const [destOpen, setDestOpen] = useState(false);
   const qc = useQueryClient();
@@ -183,15 +195,15 @@ export function IdentityPanel({
     },
   });
 
+  // 档案证号的 GB 11643 校验位**不是制单闸门**：老档案里手录错的证号不该把农户整个人挡在磅外，
+  // 建档/编辑时的校验提示（档案页、快捷登记框）仍在那两处把关
   const blocked = !can("order.create")
     ? `当前岗位「${actor ? ROLE[actor.role] : "—"}」无权制单，需磅员、登记员或站长`
     : !draft.party
       ? "尚未确定售粮人（读卡、搜档案或手工登记三选一）"
       : !draft.varietyId
         ? "请选择收购品种"
-        : draft.party && !validateIdCard(draft.party.id_card_no)
-          ? "该档案身份证号校验位不通过，请到农户档案更正"
-          : null;
+        : null;
 
   /** 「取号并制单」：本站要求绑卡而卡还没就位时先弹刷卡框，读到可用的卡由弹窗直接落这一单（06 §4.0） */
   const submit = () => {
@@ -246,7 +258,7 @@ export function IdentityPanel({
               {order.grade ? <span className="text-foreground">{order.grade}</span> : null}
             </p>
             <p className="text-muted-foreground">
-              车牌 <span className="tnum text-foreground">{order.vehicle_no ?? "—"}</span> · 去向{" "}
+              去向{" "}
               <span className={orderDestination ? "text-foreground" : "text-muted-foreground"}>
                 {orderDestination || "未登记"}
               </span>
@@ -255,7 +267,9 @@ export function IdentityPanel({
               制单 <span className="tnum text-foreground">{order.registered_at.slice(5, 16).replace("T", " ")}</span>
             </p>
           </div>
-          {order.remark && <p className="border-t pt-1 text-xs text-muted-foreground">备注：{order.remark}</p>}
+          {/* 车牌与备注：制单成功后仍就地可改（过磅/结算时才发现没填车牌、要补备注是现场常态），
+              输入停顿即自动落库并留痕——不碰钱也不碰状态，所以不设终态闸门 */}
+          <OrderMetaEditor key={order.order_no} order={order} editable={can("order.create")} />
           <div className="flex flex-wrap gap-1.5 pt-0.5">
             <Button size="sm" variant="outline" onClick={onNewOrder} disabled={!can("order.create")} className="h-7 text-xs">
               <UserRoundPlusIcon />
@@ -504,6 +518,130 @@ export function IdentityPanel({
     </Card>
   );
 }
+
+/**
+ * 制单成功后车牌 / 备注的就地编辑 + 自动保存。
+ *
+ * 单抽一个组件是为了让它持有**自己的输入态**：`order` 每次被订单查询刷新都会传下一个新对象，
+ * 直接把输入框受控于 `order`，正在输入时那一刷就把光标位置 / 还没落库的半截字冲掉。这里只在
+ * 挂载时（按 order_no 换单，见调用处 `key`）以 `order` 播种，之后以本地态为准，落库成功再回填基线。
+ *
+ * 落库走 `api.updateOrder`（真库 order_update / 浏览器 mock）：输入停顿 700ms 自动保存一次，
+ * 卸载时（切单、让位成占位卡）把还没发出去的改动补发一次，绝不吞。岗位无权改（非磅房工位）时
+ * 退回只读文本——不摆一个点了会报错的输入框骗人。
+ */
+function OrderMetaEditor({ order, editable }: { order: WeighOrder; editable: boolean }) {
+  const qc = useQueryClient();
+  const { options: remarkOptions } = useQuickOptions("remark");
+  const [vehicleNo, setVehicleNo] = useState(order.vehicle_no ?? "");
+  const [remark, setRemark] = useState(order.remark ?? "");
+  const [status, setStatus] = useState<SaveStatus>("idle");
+
+  // 最新值放 ref，供防抖与卸载补发读到，避免 setTimeout / cleanup 闭包拿到旧值
+  const cur = useRef({ vehicleNo, remark });
+  cur.current = { vehicleNo, remark };
+  // 已落库基线（trim 后比较，避免尾部空格抖动反复写库）
+  const saved = useRef({ vehicleNo: order.vehicle_no ?? "", remark: order.remark ?? "" });
+  const isDirty = () =>
+    cur.current.vehicleNo.trim() !== saved.current.vehicleNo.trim() ||
+    cur.current.remark.trim() !== saved.current.remark.trim();
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.updateOrder({
+        order_no: order.order_no,
+        vehicle_no: cur.current.vehicleNo.trim() || null,
+        remark: cur.current.remark.trim() || null,
+        operator_id: actorId(),
+      }),
+    onMutate: () => setStatus("saving"),
+    onSuccess: () => {
+      saved.current = { vehicleNo: cur.current.vehicleNo, remark: cur.current.remark };
+      setStatus("saved");
+      qc.invalidateQueries({ queryKey: ["order", order.order_no] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      qc.invalidateQueries({ queryKey: ["open-orders"] });
+    },
+    // 与面板其余写操作同一口径：真库闸门回的是人话，原样送到眼前，绝不静默失败
+    onError: (e: Error) => {
+      setStatus("error");
+      toast.error(`没保存上：${e.message || "请重试"}`);
+    },
+  });
+
+  const dirty = vehicleNo.trim() !== saved.current.vehicleNo.trim() || remark.trim() !== saved.current.remark.trim();
+
+  // 输入停顿 700ms 自动落库；期间再改就重新计时（save/dirty 用最新闭包，不列依赖以免自触发）
+  useEffect(() => {
+    if (!dirty) return;
+    const t = window.setTimeout(() => save.mutate(), 700);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicleNo, remark, dirty]);
+
+  // 卸载 / 切单时把还没发出去的改动补发一次（不 setState，避免对已卸载组件回写）
+  useEffect(
+    () => () => {
+      if (!isDirty()) return;
+      void api
+        .updateOrder({
+          order_no: order.order_no,
+          vehicle_no: cur.current.vehicleNo.trim() || null,
+          remark: cur.current.remark.trim() || null,
+          operator_id: actorId(),
+        })
+        .then(() => qc.invalidateQueries({ queryKey: ["order", order.order_no] }));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  if (!editable) {
+    return (
+      <div className="flex flex-col gap-0.5 border-t pt-1 text-xs text-muted-foreground">
+        <p>
+          车牌 <span className="tnum text-foreground">{order.vehicle_no ?? "—"}</span>
+        </p>
+        {order.remark ? <p>备注：{order.remark}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1 border-t pt-1">
+      <div className="grid grid-cols-2 items-end gap-1.5">
+        <div className="flex min-w-0 flex-col gap-0.5 text-xs text-muted-foreground">
+          <span>车牌号</span>
+          <PlateField aria-label="车牌号" value={vehicleNo} onChange={setVehicleNo} inputClassName="h-7 text-xs" />
+        </div>
+        <div className="flex min-w-0 flex-col gap-0.5 text-xs text-muted-foreground">
+          <span>备注（选填）</span>
+          <ComboBox
+            aria-label="备注"
+            presets={remarkOptions}
+            value={remark}
+            onChange={setRemark}
+            placeholder="选一条常用的，或自己写…"
+            className="h-8 py-0 text-xs"
+          />
+        </div>
+      </div>
+      {status !== "idle" && (
+        <p className={cn("text-[11px]", status === "error" ? "text-warning" : "text-muted-foreground")}>
+          {SAVE_STATE[status]}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** 自动保存的三种反馈态（idle 不占行，故不进 SAVE_STATE） */
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+const SAVE_STATE: Record<Exclude<SaveStatus, "idle">, string> = {
+  saving: "保存中…",
+  saved: "已自动保存",
+  error: "保存失败，正在等你重改",
+};
 
 /** 状态 → 下一步动作提示，避免"卡在中间态不知道该干什么" */
 const ORDER_HINT: Record<WeighOrder["status"], string> = {

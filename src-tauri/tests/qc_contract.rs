@@ -105,6 +105,7 @@ fn capture_gross(conn: &Connection, no: &str, w: i64) {
             has_photo: None,
             tare_override: None,
             tare_warning: None,
+            photo_b64: None,
         },
     )
     .unwrap()
@@ -125,6 +126,7 @@ fn capture_tare(conn: &Connection, no: &str, w: i64) {
             has_photo: None,
             tare_override: None,
             tare_warning: None,
+            photo_b64: None,
         },
     )
     .unwrap()

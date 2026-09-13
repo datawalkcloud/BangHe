@@ -1,20 +1,25 @@
 /**
  * 「制单请放流转卡」监听弹窗（06 §4.0）。
  *
- * 点「取号并制单」弹出：磅员把那张 IC 小白卡贴到感应区，读到卡号就地过三道闸
- * （在册 / 未注销 / 没挂着没做完的单），全过才把卡号交回制单——绑卡与取号在同一次
- * 事务里完成，所以**读不到卡这张单就制不成**。
+ * 点「取号并制单」弹出：磅员把那张 IC 小白卡贴到感应区，读到卡号就地过闸——**不在册的先当场
+ * 自动登记入库**（06 §4.1 闸门 3），再判未注销、没挂着没做完的单，全过才把卡号交回制单——绑卡与
+ * 取号在同一次事务里完成，所以**读不到卡这张单就制不成**。
  *
  * 闸门不过时不关窗、也不叠 toast：原因直接写在弹窗里继续监听，磅员换一张卡就是下一轮，
- * 不必重新点按钮（与 `IcScanDialog`/`CardScanDialog` 同一套节奏）。
+ * 不必重新点按钮（与 `IcScanDialog`/`CardScanDialog` 同一套节奏）。未登记已经不算闸门不过，
+ * 回写到弹窗里的只剩"已注销 / 还挂着没做完的单 / 自动登记这一步本身失败"三种。
  *
- * 弹窗开着＝`RegistrationDialog` 已置 `regHolding`，工作台的 IC 常听让出设备锁（06 §1.2），
- * 这里起的这一条循环是那段时间里唯一在读 IC 的人。
+ * 弹窗开着＝工作台的 IC 常听让出设备锁（06 §1.2），这里起的这一条循环是那段时间里唯一在读 IC 的人。
+ * 让位由进入本框的那一侧负责：从制单弹窗（`RegistrationDialog`）进来靠它置 `regHolding`；从常驻的
+ * 「身份与制单」面板（`IdentityPanel`）进来靠面板在 `bindOpen` 期间挂 `panelHolding`。
  */
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { autoRegisterCard, autoRegisterOn } from "@/lib/card-auto-register";
 import { useDeviceStore } from "@/store/device";
+import { useSetting } from "@/hooks/useLookups";
 import { announce } from "@/lib/voice-prompt";
 import { useReaderPromptVoice } from "@/hooks/useVoicePrompt";
 import { Button } from "@/components/ui/button";
@@ -82,6 +87,17 @@ function PlaceIcArt() {
 }
 
 export function CardBindDialog({ open, onOpenChange, required, onPicked, onSkip, timeoutSeconds = 60 }: CardBindDialogProps) {
+  const qc = useQueryClient();
+  /**
+   * 站点参数「允许使用未登记的流转卡」`card_auto_register`（06 §4.1 闸门 3，缺省＝开）：
+   * 开＝读到陌生卡号当场入库留痕再绑本单；关＝退回硬拦，要磅员先去「流转卡」页登记。
+   *
+   * 走 ref 不进监听 effect 依赖：参数是异步查回来的，进依赖会让本框在刚开的那一刻
+   * stopWatch + 重起一轮，正压在感应区上那一次 `read` 被任期号判废——这刷就凭空丢了
+   * （与 `IdentityPanel` 那对 `panelHolding` 拆成两个 effect 挡抖动是同一个坑）。
+   */
+  const autoRegisterRef = useRef(true);
+  autoRegisterRef.current = autoRegisterOn(useSetting("card_auto_register").raw);
   const watchNote = useDeviceStore((s) => s.reader.ic.watchNote);
   const icError = useDeviceStore((s) => s.reader.ic.error);
   // 弹出即念一句"请将流转卡贴在读卡器感应区"：这一框挡在取号制单前面，农户不贴卡整张单都开不了
@@ -89,7 +105,7 @@ export function CardBindDialog({ open, onOpenChange, required, onPicked, onSkip,
   const [left, setLeft] = useState(timeoutSeconds);
   /** 监听被设备故障/没有 IC 通道打断：弹窗留着说清原因，不静默关掉让磅员以为是自己手快 */
   const [halted, setHalted] = useState(false);
-  /** 闸门拦下的原因（卡未登记 / 已注销 / 还挂着没做完的单），写在弹窗里继续等下一张卡 */
+  /** 闸门拦下的原因（已注销 / 还挂着没做完的单 / 未登记但自动入库失败），写在弹窗里继续等下一张卡 */
   const [rejected, setRejected] = useState<string | null>(null);
 
   // 关窗动作来自定时器与监听回调，不该因为这些回调重跑监听 effect
@@ -120,10 +136,29 @@ export function CardBindDialog({ open, onOpenChange, required, onPicked, onSkip,
         try {
           const loc = await api.cardLocate(sn);
           if (!loc.found) {
-            setRejected(`卡 ${sn} 未在卡池登记：请到「流转卡」页登记后再制单，或换一张已登记的卡`);
-            // 拒绝原因写在屏上，农户看不见——这一句得从喇叭里出去才知道下一步干什么
-            announce("这张卡没有登记过，换一张卡");
-            continue;
+            // 站点关掉「允许使用未登记的流转卡」＝闸门 3 退回硬拦：不替它登记，只说清去哪儿登记
+            if (!autoRegisterRef.current) {
+              setRejected(`卡 ${sn} 未在卡池登记：请到「流转卡」页登记后再制单，或换一张已登记的卡`);
+              // 拒绝原因写在屏上，农户看不见——这一句得从喇叭里出去才知道下一步干什么
+              announce("这张卡没有登记过，换一张卡");
+              continue;
+            }
+            /**
+             * 不在册不再是"这一张用不了、你去另一屏登记"（06 §4.1 闸门 3）：卡已经贴在感应区上、
+             * 农户站在窗口前，就地补一次登记入库再按正常空闲卡走完这一框。
+             * 只有登记这一步本身失败（岗位无权 / 没解锁 / 库锁）才回写弹窗，换一张卡就是下一轮。
+             */
+            const reg = await autoRegisterCard(qc, sn, "制单绑卡");
+            if (!reg.ok) {
+              setRejected(`卡 ${sn} 自动登记失败：${reg.reason}；请换一张卡，或到「流转卡」页登记后再制单`);
+              // 拒绝原因写在屏上，农户看不见——这一句得从喇叭里出去才知道下一步干什么
+              announce("这张卡登记不上，换一张卡");
+              continue;
+            }
+            announce("这张新卡已经登记好了，正在取号制单");
+            useDeviceStore.getState().reader.ic.stopWatch();
+            pickedRef.current(sn);
+            return;
           }
           if (loc.status === "retired") {
             setRejected(`卡 ${sn} 已注销，不能再用：请换一张空闲卡`);

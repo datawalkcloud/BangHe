@@ -110,6 +110,7 @@ fn open_order(conn: &Connection, party: i64, variety: i64) -> String {
                 has_photo: Some(false),
                 tare_override: None,
                 tare_warning: None,
+                photo_b64: None,
             },
         )
         .unwrap()

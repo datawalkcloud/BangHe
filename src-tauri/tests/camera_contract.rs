@@ -11,6 +11,9 @@
 //!  5. **落盘与落库**：文件真的写进 `AppDataDir/attachments/YYYY-MM/`（临时目录），
 //!     `attachment` 行字段逐列对，`file_path` 是相对路径；**路径穿越跑不出数据目录**；
 //!     写库失败时不留没归属的"野图"。
+//!  6. **本机摄像头回传帧**（`store_provided_frame`，04 §4 方案 A 前端半边）：base64 与
+//!     编码器成对往返、dataURL 前缀与换行的容错；好帧落附件并把抓拍机刷回在线，
+//!     坏码/非 JPEG/超限一律降级 + 回写设备台账，过磅照常、盘上不留半个字节。
 //!
 //! 真实发网络请求那条路（`grab`/`http_get`/`connect`）**不在这里跑**：没有摄像头，
 //! 跑一次就是把测试挂在现场网络与一台不存在的 IP 上。它的外壳由 `capture_snapshot`
@@ -21,8 +24,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 
 use banghe_lib::camera::{
-    attachment_rel_path, base64_standard, build_get_request, check_jpeg, hex_preview, http_body,
-    http_status_reason, parse_http_head, safe_stem, store_snapshot, target_from_config,
+    attachment_rel_path, base64_decode, base64_standard, build_get_request, check_jpeg, hex_preview,
+    http_body, http_status_reason, parse_http_head, safe_stem, store_snapshot, target_from_config,
     AuthKind, AttachmentMeta, CaptureContext, HTTPS_UNSUPPORTED,
 };
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
@@ -532,6 +535,18 @@ fn missing_or_mock_camera_degrades_without_touching_the_network() {
     seed_camera(&conn, "cammock", r#"{"host":"192.168.1.64","snapshotUrl":"/snap.jpg"}"#, None);
     conn.execute("UPDATE device_config SET is_mock = 1 WHERE code = 'cammock'", []).unwrap();
     assert_eq!(banghe_lib::camera::capture_snapshot(&conn, &tmp.path, &ctx).unwrap(), None);
+
+    // 本机回传帧通道吃同一套 mock 闸门（"没配摄像机"那半由上面的 capture_snapshot 钉，两条共用同一句查询）
+    let ok_b64 = base64_standard(&fake_jpeg());
+    assert_eq!(banghe_lib::camera::store_provided_frame(&conn, &tmp.path, &ctx, &ok_b64).unwrap(), None);
+    conn.execute("DELETE FROM device_config WHERE code = 'cammock'", []).unwrap();
+    let dev = seed_camera(&conn, "cammock2", r#"{"transport":"local"}"#, None);
+    conn.execute("UPDATE device_config SET is_mock = 1 WHERE id = ?1", params![dev]).unwrap();
+    assert_eq!(banghe_lib::camera::store_provided_frame(&conn, &tmp.path, &ctx, &ok_b64).unwrap(), None);
+    let err_count: i64 = conn
+        .query_row("SELECT err_count FROM device_config WHERE id = ?1", params![dev], |r| r.get(0))
+        .unwrap();
+    assert_eq!(err_count, 0, "mock 是配置态不是故障，不该计入设备错误数");
 }
 
 #[test]
@@ -591,4 +606,82 @@ fn the_timeout_constant_is_the_one_the_design_doc_promised() {
     assert_eq!(banghe_lib::camera::SNAPSHOT_TIMEOUT, std::time::Duration::from_secs(3));
     let t = target_from_config(1, "cam1", r#"{"host":"192.168.1.64","snapshotUrl":"/snap.jpg"}"#, None).unwrap();
     assert_eq!((t.device_id, t.device_code.as_str()), (1, "cam1"));
+}
+
+// ---------------------------------------------------- 本机摄像头回传帧（store_provided_frame）
+
+#[test]
+fn base64_decode_pairs_with_the_encoder_and_tolerates_the_dataurl_shapes() {
+    for bytes in [Vec::new(), b"J".to_vec(), fake_jpeg(), vec![0u8; 300]] {
+        assert_eq!(
+            base64_decode(&base64_standard(&bytes)).as_deref(),
+            Some(bytes.as_slice()),
+            "与编码器逐字节成对：任何长度都不得错一个位"
+        );
+    }
+    let plain = base64_standard(&fake_jpeg());
+    // canvas 的真实产出带 dataURL 前缀；有人会在 76 列折行——两种都得吃
+    assert_eq!(
+        base64_decode(&format!("data:image/jpeg;base64,{plain}")).as_deref(),
+        Some(fake_jpeg().as_slice())
+    );
+    let folded = plain.replace("AA", "AA\n");
+    assert_eq!(base64_decode(&folded).as_deref(), Some(fake_jpeg().as_slice()), "换行按空白跳过");
+    // 字母表外字符＝数据已坏，明确回 None 让调用方降级，而不是"解出什么算什么"
+    assert!(base64_decode("!!!!not base64!!!!").is_none());
+}
+
+#[test]
+fn a_local_frame_is_stored_and_flips_the_camera_online() {
+    let conn = mem_db();
+    let tmp = TempDir::new("localframe");
+    let ctx = seed_fixture(&conn);
+    let dev = seed_camera(&conn, "camuvc", r#"{"transport":"local","deviceName":"Integrated Camera"}"#, None);
+
+    let att = banghe_lib::camera::store_provided_frame(&conn, &tmp.path, &ctx, &base64_standard(&fake_jpeg()))
+        .unwrap()
+        .expect("本机取到的好帧必须落库");
+    let (path, biz, mime): (String, Option<i64>, String) = conn
+        .query_row(
+            "SELECT file_path, biz_id, mime FROM attachment WHERE id = ?1",
+            params![att],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(biz, Some(ctx.weigh_record_id), "抓拍附件归属那条称重记录（与 IP 通道同式）");
+    assert_eq!(mime, "image/jpeg");
+    let written = count_files(&tmp.path);
+    assert_eq!(written.len(), 1, "盘上就一张，路径进库的是相对路径");
+    assert!(written[0].ends_with(path.rsplit('/').next().unwrap()), "文件名对得上：{} vs {path}", written[0].display());
+    let status: String = conn
+        .query_row("SELECT last_status FROM device_config WHERE id = ?1", params![dev], |r| r.get(0))
+        .unwrap();
+    assert_eq!(status, "online", "回传帧成功一次就把这台抓拍机刷回在线（04 §1 状态口径）");
+}
+
+#[test]
+fn broken_local_frames_degrade_and_blame_the_device_not_the_weighing() {
+    let conn = mem_db();
+    let tmp = TempDir::new("badframe");
+    let ctx = seed_fixture(&conn);
+    let dev = seed_camera(&conn, "camuvc", r#"{"transport":"local"}"#, None);
+
+    // 坏 base64、解出来不是 JPEG、编码长度先超限——三种坏帧一律 Ok(None)，过磅照常
+    assert_eq!(banghe_lib::camera::store_provided_frame(&conn, &tmp.path, &ctx, "@@@not-base64@@@").unwrap(), None);
+    assert_eq!(
+        banghe_lib::camera::store_provided_frame(&conn, &tmp.path, &ctx, &base64_standard(b"definitely not a jpeg")).unwrap(),
+        None
+    );
+    let huge = "A".repeat(4 * 1024 * 1024); // 远超默认 500KB 的编码长度：解码前就该拒
+    assert_eq!(banghe_lib::camera::store_provided_frame(&conn, &tmp.path, &ctx, &huge).unwrap(), None);
+    assert_eq!(count_files(&tmp.path).len(), 0, "坏帧不得在盘上留下半个字节");
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM attachment", [], |r| r.get::<_, i64>(0)).unwrap(),
+        0
+    );
+    let (status, count, last): (String, i64, Option<String>) = conn
+        .query_row("SELECT last_status, err_count, last_error FROM device_config WHERE id = ?1", params![dev], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap();
+    assert_eq!((status.as_str(), count), ("error", 3), "坏帧计入设备状态，现场在设备中心看得见");
+    assert!(last.unwrap().contains("上限"), "最后这句得说清为什么拒：超限在解码前");
 }

@@ -21,9 +21,10 @@
 //!    这两个字段在本系统里没有任何消费方（磅单只印缩略图，台账不按像素统计），
 //!    写一段二进制解析换来的是无人读的数。等真接上图像解码那轮再一并填。
 //!  - **`accessed_at`/`accessed_by` 这条抓拍自己不写**：读图的通道与 `pii.read` 审计
-//!    已经收在 [`crate::attachment::read_for_display`]（档案人像那轮建的），但抓拍缩略图
-//!    走的是"过磅当场本机可见"的路径，还没接上那条读通道——等 04 §4.3 的前端附件展示
-//!    那一轮统一换过去，不在这里半接半留。
+//!    收在 [`crate::attachment::read_for_display`]。04 §4.3 的前端附件展示那轮已接上——
+//!    详情页/工作台按**称重记录 id** 走 [`crate::orders::capture_photo_view`] 读回原图，
+//!    由那条通道刷 `accessed_*` 并落 `pii.read`。本模块只管落图，读图留痕不归它，
+//!    所以这里既不写也不该写这两列（写了反而像"抓拍自己看过自己"）。
 //!
 //! **PII**：抓拍画面含农户人像与车牌（04 §4.3）。因此本模块**不把文件路径写进任何
 //! 日志或返回值**——`attachment.file_path` 是库里唯一一处，取用时按岗位判权限；
@@ -58,7 +59,7 @@ const DEFAULT_MAX_KB: i64 = 500;
 /// HTTPS 的拒绝话术（配置里出现 https 时原样回给调用方，不假装能取图）。
 pub const HTTPS_UNSUPPORTED: &str = "本轮只支持内网 HTTP 抓图，HTTPS 摄像机需另接 TLS 通道";
 
-// ------------------------------------------------------ 本机 USB 摄像头枚举（添加设备表单用）
+// ------------------------------------------ 本机 USB 摄像头（枚举供添加设备表单；回传帧收口见 [`store_provided_frame`]）
 
 use serde::Serialize;
 use tauri::command;
@@ -72,7 +73,9 @@ use windows::core::{GUID, PWSTR};
 pub struct LocalCamera {
     /// 设备友好名（如 "Integrated Camera" / "USB Camera"）
     pub name: String,
-    /// 稳定设备标识（MF 符号链接，含 vid/pid/实例）；抓图通道将来按它开设备
+    /// 稳定设备标识（MF 符号链接，含 vid/pid/实例）。**注意**：Chromium 的 deviceId 是
+    /// 另一套哈希，本机取帧走 WebView2 `getUserMedia`，前端只能按 `name` 认机器
+    /// （`src/lib/local-camera.ts`），这个串留作台账侧的稳定指纹与排障线索。
     pub device_id: String,
 }
 
@@ -401,6 +404,39 @@ pub fn base64_standard(input: &[u8]) -> String {
         out.push(if chunk.len() > 2 { TBL[(n & 63) as usize] as char } else { '=' });
     }
     out
+}
+
+/// Base64 解码（标准字母表，与 [`base64_standard`] 配对）。喂进来的是前端 canvas 的产物，
+/// 容忍两种真实形状：`data:image/jpeg;base64,` 前缀与 `=` 补位/换行空白（一律跳过）；
+/// 出现其它字母表外字符就判定数据已坏回 `None`，由调用方按"坏帧"降级，不做 URL 安全字母表猜谜。
+pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let body = match input.find(";base64,") {
+        Some(i) => &input[i + ";base64,".len()..],
+        None => input,
+    };
+    let mut out = Vec::with_capacity(body.len().div_ceil(4) * 3);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for b in body.bytes() {
+        if b == b'=' || b.is_ascii_whitespace() {
+            continue;
+        }
+        let v: u32 = match b {
+            b'A'..=b'Z' => (b - b'A') as u32,
+            b'a'..=b'z' => (b - b'a') as u32 + 26,
+            b'0'..=b'9' => (b + 52 - b'0') as u32,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 /// 组一次 `GET` 的请求字节。纯函数，所以认证串、Host、端口、路径都能离线钉死。
@@ -892,6 +928,86 @@ pub fn store_snapshot(
     )
 }
 
+/// 本机 USB 摄像头的回传帧收口（04 §4 方案 A 的前端半边）：画面由工作台在 WebView2 里
+/// `getUserMedia` 打开，捕获毛/皮重时就地取一帧 JPEG、base64 回传；本函数只做
+/// 「解码 → 校验 → 落库 → 台账状态回写」，**不开任何设备**。
+///
+/// 为什么不在 Rust 侧同样开设备：Media Foundation 采集栈（source reader + NV12→JPEG 转码）
+/// 比复用 Edge 已解码上屏的那帧画面贵得多；且台账 `deviceId` 是 MF 符号链接，Chromium
+/// 根本不认——认机器只能靠 webview 里按名字匹配（`src/lib/local-camera.ts`）。
+///
+/// 失败口径与 [`capture_snapshot`] 一致：坏码/非 JPEG/超上限都不否定这次过磅，原因写进
+/// `device_config.last_error` 后回 `Ok(None)` 按「无抓拍」处理。
+pub fn store_provided_frame(
+    conn: &Connection,
+    app_dir: &Path,
+    ctx: &CaptureContext,
+    photo_b64: &str,
+) -> Result<Option<i64>, String> {
+    let row: Option<(i64, String, i64)> = conn
+        .query_row(
+            "SELECT id, code, is_mock FROM device_config
+             WHERE kind = 'camera' AND is_enabled = 1
+             ORDER BY is_default DESC, id LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| format!("读取摄像机配置失败：{e}"))?;
+    let Some((id, code, is_mock)) = row else {
+        degrade("本机未启用抓拍摄像机（设备中心里加一台 kind=camera 并勾选启用）")?;
+        return Ok(None);
+    };
+    if is_mock == 1 {
+        degrade(&format!("摄像机「{code}」当前为模拟模式，本轮不出真图"))?;
+        return Ok(None);
+    }
+
+    let max_bytes = max_snapshot_bytes(conn);
+    let fail = |conn: &Connection, reason: String| -> Result<Option<i64>, String> {
+        note_fail(conn, id, &reason);
+        degrade(&reason)?;
+        Ok(None)
+    };
+    // 先按编码长度拒收再解码：把几十 MB 的 base64 拖进内存再判超限是白给的攻击面
+    if photo_b64.len() > max_bytes / 3 * 4 + HEAD_SLACK {
+        return fail(
+            conn,
+            format!(
+                "回传帧过大（base64 约 {} KB，图像上限 {} KB）：到摄像机侧调低分辨率与质量，本轮按无抓拍处理",
+                photo_b64.len() / 1024 * 3 / 4,
+                max_bytes / 1024
+            ),
+        );
+    }
+    let jpeg = match base64_decode(photo_b64) {
+        Some(bytes) => bytes,
+        None => return fail(conn, "回传帧不是合法的 base64（疑似被截断或改码）：本轮按无抓拍处理".into()),
+    };
+    if let Err(e) = check_jpeg(&jpeg, max_bytes) {
+        return fail(conn, format!("回传帧校验失败：{e}"));
+    }
+    let attached = store_snapshot(
+        conn,
+        app_dir,
+        &jpeg,
+        &AttachmentMeta {
+            order_id: ctx.order_id,
+            weigh_record_id: ctx.weigh_record_id,
+            operator_id: ctx.operator_id,
+            device_id: Some(id),
+            device_code: code.clone(),
+        },
+    );
+    match attached {
+        Ok(att) => {
+            note_ok(conn, id);
+            Ok(Some(att))
+        }
+        Err(reason) => fail(conn, reason),
+    }
+}
+
 pub(crate) fn with_suffix(path: &Path, n: u32) -> PathBuf {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("shot");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("jpg");
@@ -979,8 +1095,9 @@ pub fn capture_snapshot(
         return Ok(None);
     }
 
-    // 本机 USB 摄像头（表单里「扫描本机摄像头」登记的那类）：抓图通道本轮还没接过磅链路，
-    // 明确按无抓拍降级，而不是掉进下面 target_from_config 的「未配置 host / 抓图路径」误报。
+    // 本机 USB 摄像头的正常取帧通道是「前端画面就地取一帧回传」（[`store_provided_frame`]，
+    // 04 §4 方案 A 的前端半边）。走到这里还没带帧＝预览此刻没开成/取帧失败：明确按无抓拍降级，
+    // 而不是掉进下面 target_from_config 的「未配置 host / 抓图路径」误报。
     let is_local = serde_json::from_str::<serde_json::Value>(&config_json)
         .ok()
         .and_then(|v| {
@@ -990,7 +1107,9 @@ pub fn capture_snapshot(
         })
         .unwrap_or(false);
     if is_local {
-        degrade(&format!("摄像机「{code}」是本机 USB 摄像头，其抓拍通道本轮尚未接入过磅链路（当前抓拍只支持内网 IP 摄像机 HTTP 取图）"))?;
+        degrade(&format!(
+            "摄像机「{code}」是本机 USB 摄像头，这一轮没拿到回传帧（工作台画面未打开或取帧失败）：按无抓拍处理"
+        ))?;
         return Ok(None);
     }
 

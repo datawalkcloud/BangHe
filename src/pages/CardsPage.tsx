@@ -1,9 +1,15 @@
 /**
  * 流转卡卡池（06 篇 §8；§9.26 `card`）。
  *
- * 卡是循环资产：**先在册才能发**。这页管三件事——把新卡登记入库、看空闲/占用/注销分布、
- * 注销丢失或磨损的卡。工作台上的"发卡"是靠后台监听读到一张在册空闲卡自动绑单（06 §4.1），
- * 不在这里手点；这里只维护"哪些卡在池子里可用"这本账。
+ * 卡是循环资产：**在册才能用**；一次流转内被一张磅单独占，终态即释放回池。这页管三件事——
+ * 批量登记入库、看空闲/占用/注销分布、注销丢失或磨损的卡。工作台上的"发卡"是靠后台监听读到一张
+ * 空闲卡自动绑单（06 §4.1），不在这里手点；这里只维护"哪些卡在池子里可用"这本账。
+ *
+ * 未登记的外来卡**不必先跑到这一页来登**（前提：站点参数 `card_auto_register`「允许使用未登记的流转卡」
+ * 开着，默认就是开）：工作台后台常听与「制单请放流转卡」读到陌生卡号时，当场走同一条
+ * `card_pool_register` 入池留痕（06 §4.1 闸门 3），来源写在「来源 / 备注」列。把它关掉即退回
+ * 硬闸门——新卡必须先在本页登记才能用。开着时本页也就从"不发卡的前置闸门"退成
+ * **批量登记 + 事后纠错**：新卡贴签在这里补，误收进来的公交卡也在这里注销。
  *
  * 登记闭环在 `IcScanDialog` 里：点「读卡登记」开弹窗，连续监听读到卡号后再补一条贴签就
  * 直接入库，不再有"页面输入卡号、读卡、点登记"来回切两屏的老节奏。读不到或想绕过读卡
@@ -94,6 +100,12 @@ export function CardsPage() {
             <span className="text-muted-foreground">—</span>
           ),
       },
+      {
+        key: "remark",
+        header: "来源 / 备注",
+        // 工作台刷到未登记的卡会当场自动入库并写明出处（06 §4.1 闸门 3）：这列就是"哪些卡不是批量登记的"
+        cell: (r) => <span className="text-muted-foreground">{orDash(r.remark)}</span>,
+      },
       { key: "issued_at", header: "发卡时间", cell: (r) => (r.issued_at ? dateTimeShort(r.issued_at) : "—") },
       { key: "issued_by", header: "领卡人", cell: (r) => orDash(r.issued_by_name) },
       {
@@ -122,7 +134,7 @@ export function CardsPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="流转卡卡池"
-        description="卡只认单不认人：先登记在册，工作台上才能发；结算/作废自动回收，丢损在此注销。"
+        description="卡只认单不认人：工作台上刷到没登记的卡会当场自动入库（来源记在备注里），本页批量登记贴签、注销丢损，结算/作废自动回收。"
         actions={
           <>
             <Button size="sm" onClick={() => setScanOpen(true)} disabled={!can("order.create")}>
@@ -160,7 +172,7 @@ export function CardsPage() {
             empty={
               <EmptyState
                 title="卡池里还没有卡"
-                description="把新卡读卡登记入库后，工作台才能发卡。"
+                description="批量登记便于贴签辨认；不登也行——工作台上刷到没登记的卡会当场自动入库。"
                 action={
                   <Button size="sm" onClick={() => setScanOpen(true)}>
                     <ScanLineIcon />

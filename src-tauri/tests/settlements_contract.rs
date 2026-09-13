@@ -116,6 +116,7 @@ fn settle_credit(conn: &Connection, party: i64, variety: i64) -> String {
                 has_photo: Some(false),
                 tare_override: None,
                 tare_warning: None,
+                photo_b64: None,
             },
         )
         .unwrap()
@@ -212,6 +213,7 @@ fn settle_to_create(conn: &Connection, party: i64, variety: i64) -> String {
                 has_photo: Some(false),
                 tare_override: None,
                 tare_warning: None,
+                photo_b64: None,
             },
         )
         .unwrap()

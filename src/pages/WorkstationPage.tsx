@@ -1,7 +1,9 @@
 /**
  * 磅房工作台（05 §4 核心界面）。
  *
- * 交互已从"点按钮"改成"刷卡推进"（06 篇）：来新人点「制单」弹窗读卡制单 → 关框；
+ * 交互已从"点按钮"改成"刷卡推进"（06 篇）：新人来料直接在常驻的「身份与制单」格里读卡、选品种、
+ * 取号制单（刷到一张空闲流转卡而库里没有在途单时，也走这一格就地制单、制即绑卡，不再弹制单框）；
+ * 需要更聚焦地填单时才点「制单」/F7 弹出同一份 `IdentityPanel` 的弹窗版 → 关框。
  * 之后一张流转卡刷一次推进一步——①刷捕毛重 ②刷捕皮重并自动出码单 ③刷弹结算框（复用 SettleForm）
  * 选付款方式完成结算。工作台后台常听 IC（`useIcWorkflow` 唯一收口），弹窗读身份证时让出设备锁。
  * 读卡器故障 / 关掉流转卡时，称重/结算面板仍可应急手点（05 §10-1 无外设闭环）。
@@ -35,6 +37,7 @@ import { WeighPanel } from "@/components/workstation/WeighPanel";
 import { QcPanel } from "@/components/workstation/QcPanel";
 import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
 import { CameraPanel } from "@/components/workstation/CameraPanel";
+import { localCameraSpec } from "@/lib/local-camera";
 import { PanelTile, WorkstationGrid } from "@/components/workstation/WorkstationGrid";
 import { useWorkstationLayout } from "@/components/workstation/layout";
 import type { PanelId } from "@/components/workstation/layout";
@@ -120,8 +123,16 @@ export function WorkstationPage() {
   // 弹窗开着时让出读卡器（06 §1.2）：自己的制单弹窗用 regOpen 即时 pause；
   // 顶部工具条「新建过磅单」开的是同一张弹窗，通过 regHolding 让位；结算框展示期间同样不起 IC 监听
   const regHolding = useDeviceStore((s) => s.regHolding);
+  // 常驻面板自己弹读卡/绑卡框时占用共用读卡器：只让后台 IC 常听让位，不换占位卡（否则连带卸载开框的面板本身）
+  const panelHolding = useDeviceStore((s) => s.panelHolding);
+  // 抓拍机（04 §4）：本机 USB 摄像头的可用性＝WebView2 能不能开那条流，不由台账的探活状态决定；
+  // IP 摄像机仍认 last_status。必须在 useIcWorkflow 之前算出来——捕获瞬间的取帧回传归它管。
+  const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
+  const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
+  const cameraOnline = localCameraSpec(cameraDevice) != null || cameraDevice?.last_status === "online";
   useIcWorkflow({
-    paused: regOpen || settleNo != null || regHolding,
+    paused: regOpen || settleNo != null || regHolding || panelHolding,
+    camera: cameraDevice,
     onRequestSettle: (no) => {
       goOrder(no);
       setSettleNo(no);
@@ -133,9 +144,16 @@ export function WorkstationPage() {
       setDirectPrint(true);
     },
     onRequestRegister: (card) => {
-      // 卡还在感应区上：弹制单框并预填这张卡，取号那一刻一起绑上（06 §4.0 同事务）
+      // 卡还在感应区上：不再弹制单框，直接把工作台切回制单草稿态并把这张卡交给常驻面板，
+      // IdentityPanel 经 presetCardNo 就位，选好售粮人点「取号并制单」即随单绑上（06 §4.0 同事务）
+      goOrder(null);
       setRegCard(card);
-      setRegOpen(true);
+    },
+    // 刷到在途卡＝把整台工作台定位到这张卡绑的单，仪表离线/读数未稳也照样切：
+    // 面板报的是"这一刷属于谁"，写库那一步自有闸门拦着（06 §4.2）。
+    // 只在单号真的变了时导航——同一张卡反复刷不该往 history 里塞一串同样的 URL。
+    onFocusOrder: (no) => {
+      if (no !== orderNo) goOrder(no);
     },
   });
 
@@ -262,9 +280,6 @@ export function WorkstationPage() {
     [varieties, order?.variety_id, draft.varietyId],
   );
   const scaleDevice = devices.find((d) => d.kind === "scale");
-  const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
-  const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
-  const cameraOnline = cameraDevice?.last_status === "online";
   const photos = order?.photos ?? [];
 
   // ── 第三刷结算框：拿 settleNo 对应单的 order / variety / qc ──
@@ -325,13 +340,16 @@ export function WorkstationPage() {
           warehouses={warehouses}
           slots={slots}
           presetCardNo={regCard}
-          onCreated={(no) => goOrder(no)}
+          onCreated={(no) => {
+            setRegCard(null); // 这张卡已随单绑上，别让它在下一张草稿里残留
+            goOrder(no);
+          }}
           onNewOrder={newOrder}
         />
       ),
     tare: <TarePanel recent={tareRecent.slice(0, 5)} last01kg={partyDetail?.last_tare_01kg ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} currentTare01kg={currentTare01kg} alert={tareAlert} partyId={partyId} />,
     camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} />,
-    weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} cameraOnline={cameraOnline} />,
+    weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} cameraOnline={cameraOnline} camera={cameraDevice} />,
     qc: <QcPanel order={order ?? null} variety={variety} />,
   };
 

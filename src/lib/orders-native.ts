@@ -55,6 +55,7 @@ const ARGS_MAP: Record<string, string[]> = {
   party_list: ["keyword", "partyType"],
   party_get: ["id"],
   party_photo: ["partyId"],
+  capture_photo: ["recordId"],
   qc_list: ["opts"],
 };
 function a2args(cmd: string, a: unknown[]): Record<string, unknown> {
@@ -69,6 +70,7 @@ function a2args(cmd: string, a: unknown[]): Record<string, unknown> {
 export type PartySaveInput = Parameters<typeof mock.saveParty>[0];
 export type PartyPhotoInput = Parameters<typeof mock.setPartyPhoto>[0];
 export type CreateOrderInput = Parameters<typeof mock.createOrder>[0];
+export type UpdateOrderInput = Parameters<typeof mock.updateOrder>[0];
 export type CaptureInput = Parameters<typeof mock.capture>[0];
 export type SaveQcInput = Parameters<typeof mock.saveQc>[0];
 export type SettleInput = Parameters<typeof mock.settle>[0];
@@ -82,6 +84,8 @@ export const ordersApi = {
   saveParty: routeSave<Party, PartySaveInput>("party_save", (i) => mock.saveParty(i)),
   /** 档案人像的读通道：真库回附件字节的 data URL，浏览器预览回演示头像 */
   partyPhoto: route1<[partyId: number], PartyPhotoImage | null>("party_photo", (id) => mock.partyPhoto(id)),
+  /** 过磅抓拍图的读通道（04 §4.3）：键是称重记录 id，真库回附件 JPEG 的 data URL 并记 pii.read，浏览器预览回演示抓拍 */
+  capturePhoto: route1<[recordId: number], PartyPhotoImage | null>("capture_photo", (id) => mock.capturePhoto(id)),
   /** 换/清档案人像（`source_path` 空串＝清除）。与 saveParty 分开一条：照片写不进去不该回滚已成立的建档 */
   setPartyPhoto: routeSave<Party, PartyPhotoInput>("party_photo_set", (i) => mock.setPartyPhoto(i)),
 
@@ -90,6 +94,8 @@ export const ordersApi = {
   getOrder: route1<[no: string], WeighOrder | null>("order_get", (no) => mock.getOrder(no)),
   openOrders: route("order_open", () => mock.openOrders()),
   createOrder: routeSave<WeighOrder, CreateOrderInput>("order_create", (i) => mock.createOrder(i)),
+  /** 制单后就地补改车牌 / 备注：不碰钱与状态，过磅结算期间都允许改（对齐 Rust order_update） */
+  updateOrder: routeSave<WeighOrder | null, UpdateOrderInput>("order_update", (i) => mock.updateOrder(i)),
   capture: routeSave<WeighOrder | null, CaptureInput>("order_capture", (i) => mock.capture(i)),
 
   /* -------------------------------------------------------------- 化验 */

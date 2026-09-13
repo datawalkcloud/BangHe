@@ -24,7 +24,7 @@ use banghe_lib::cards::{pool_register, pool_retire, RegisterInput, RetireInput};
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::orders::{
     capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, void_order, assign_destination,
-    party_photo_view, set_party_photo, CaptureInput, CreateOrderInput, OrderFilters, PartyPhotoInput, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VoidOrderInput, AssignDestinationInput,
+    party_photo_view, capture_photo_view, set_party_photo, update_meta, CaptureInput, CreateOrderInput, OrderFilters, PartyPhotoInput, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VoidOrderInput, AssignDestinationInput, UpdateOrderInput,
 };
 
 fn db() -> Connection {
@@ -144,6 +144,7 @@ fn capture_gross(conn: &Connection, no: &str, w: i64) {
             has_photo: Some(true),
             tare_override: None,
             tare_warning: None,
+            photo_b64: None,
         },
     )
     .unwrap()
@@ -164,6 +165,7 @@ fn capture_tare(conn: &Connection, no: &str, w: i64, warning: Option<&str>) {
             has_photo: Some(false),
             tare_override: None,
             tare_warning: warning.map(str::to_string),
+            photo_b64: None,
         },
     )
     .unwrap()
@@ -395,7 +397,7 @@ fn weigh_flow_drives_status_and_party_tare() {
     let e = capture(
         &conn,
         &actor(2, "weigher"),
-        CaptureInput { order_no: no.clone(), weigh_type: "gross".into(), weight_01kg: 1, source: "scale".into(), operator_id: None, raw_frame: None, has_photo: None, tare_override: None, tare_warning: None },
+        CaptureInput { order_no: no.clone(), weigh_type: "gross".into(), weight_01kg: 1, source: "scale".into(), operator_id: None, raw_frame: None, has_photo: None, tare_override: None, tare_warning: None, photo_b64: None },
     )
     .unwrap_err();
     assert!(e.contains("不能再称重"), "拒绝原因要回人话：{e}");
@@ -977,6 +979,7 @@ fn cap(
             has_photo: Some(false),
             tare_override: None,
             tare_warning: warning.map(str::to_string),
+            photo_b64: None,
         },
     )
 }
@@ -1501,6 +1504,58 @@ fn card_photo_lands_on_the_party_and_reads_back_as_a_data_url() {
 }
 
 #[test]
+fn a_scale_capture_reads_back_by_record_and_absent_is_not_an_error() {
+    use banghe_lib::camera::{store_snapshot, AttachmentMeta};
+    let conn = db();
+    let dir = PhotoDir::new("cap-read");
+    let party = new_party(&conn, "抓拍甲", "341204199301272061");
+    let no = create(&conn, party, 1);
+    capture_gross(&conn, &no, 300000);
+    let (record_id, order_id): (i64, i64) = conn
+        .query_row(
+            "SELECT wr.id, wr.order_id FROM weigh_record wr JOIN weigh_order wo ON wo.id = wr.order_id WHERE wo.order_no = ?1",
+            params![no],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+
+    // 没抓拍时读图：回 Ok(None) 不是错误（详情页据此显示"无抓拍"），且绝不虚记一次 PII 访问
+    assert!(capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), record_id).unwrap().is_none());
+    assert_eq!(audits(&conn, "pii.read"), 0, "没读到图就不该记一次'看过'");
+
+    // 落一张 scale_capture 附件并挂到这条轨迹（模拟 attach_weigh_photo 的产物）
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    jpeg.extend_from_slice(b"JFIF-scale-capture");
+    jpeg.extend_from_slice(&[0xFF, 0xD9]);
+    let att = store_snapshot(
+        &conn,
+        &dir.path,
+        &jpeg,
+        &AttachmentMeta { order_id, weigh_record_id: record_id, operator_id: 2, device_id: None, device_code: "cam1".into() },
+    )
+    .unwrap();
+    conn.execute("UPDATE weigh_record SET photo_attachment_id = ?1 WHERE id = ?2", params![att, record_id]).unwrap();
+
+    let img = capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), record_id)
+        .unwrap()
+        .expect("挂了附件就该读得回来");
+    assert!(img.data_url.starts_with("data:image/jpeg;base64,"), "回的是 data URL：{}", &img.data_url[..24]);
+    assert_eq!(audits(&conn, "pii.read"), 1, "看过磅抓拍是一次 PII 访问，必须留痕");
+    let accessed_by: Option<i64> = conn
+        .query_row("SELECT accessed_by FROM attachment WHERE id = ?1", params![att], |r| r.get(0))
+        .unwrap();
+    assert_eq!(accessed_by, Some(1), "读图要记到人");
+    let audit_no: Option<String> = conn
+        .query_row("SELECT entity_no FROM audit_log WHERE action = 'pii.read' AND entity = 'weigh_order' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(audit_no.as_deref(), Some(no.as_str()), "pii.read 审计要挂到这张磅单，不是别的单据");
+
+    // 记录不存在：回人话 Err（那是"没这张记录"，与"这张没抓拍"的 Ok(None) 分得清）
+    let e = capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), 999_999).unwrap_err();
+    assert!(is_chinese(&e), "要中文短句：{e}");
+}
+
+#[test]
 fn replacing_a_portrait_leaves_no_stale_row_or_file() {
     let conn = db();
     let dir = PhotoDir::new("replace");
@@ -1642,4 +1697,56 @@ fn party_rows_carry_the_photo_reference_through_list_and_detail() {
     assert!(by_id(a).is_some());
     assert_eq!(by_id(b), None);
     assert!(get_party(&conn, b).unwrap().unwrap().party.photo_attachment_id.is_none());
+}
+
+// --------------------------------------------------------- 制单后就地补改车牌 / 备注
+
+fn update_meta_no(conn: &Connection, no: &str, vehicle: Option<&str>, remark: Option<&str>) -> Option<banghe_lib::orders::WeighOrder> {
+    update_meta(
+        conn,
+        &actor(1, "weigher"),
+        UpdateOrderInput { order_no: no.into(), vehicle_no: vehicle.map(str::to_string), remark: remark.map(str::to_string), operator_id: None },
+    )
+    .unwrap()
+}
+
+fn meta_audit_count(conn: &Connection, no: &str) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM audit_log WHERE action='order.update' AND entity_no=?1", params![no], |r| r.get(0)).unwrap()
+}
+
+#[test]
+fn meta_edit_autosaves_vehicle_and_remark_with_one_audit_per_change() {
+    let conn = db();
+    ensure_users(&conn);
+    let no = create(&conn, new_party(&conn, "补录车牌", "341204199301272060"), xm_id(&conn));
+
+    // 改车牌 + 补备注：一次事务两条都落，回读到的就是库里的样子
+    let o = update_meta_no(&conn, &no, Some("皖K88888"), Some("带皮带过磅")).unwrap();
+    assert_eq!(o.vehicle_no.as_deref(), Some("皖K88888"));
+    assert_eq!(o.remark.as_deref(), Some("带皮带过磅"));
+    assert_eq!(meta_audit_count(&conn, &no), 1, "一次改动画两个字段仍只留一条审计");
+
+    // 值没变：既不写库也不留痕（防抖抖动 / 卸载补发都不该在审计表里堆"改了个寂寞"）
+    let same = update_meta_no(&conn, &no, Some("皖K88888"), Some("带皮带过磅")).unwrap();
+    assert_eq!(same.vehicle_no.as_deref(), Some("皖K88888"));
+    assert_eq!(meta_audit_count(&conn, &no), 1, "无变化不该再记一条");
+
+    // 空串 / 仅空格 → 清除该字段（对齐前端 trim 后落 null）
+    let cleared = update_meta_no(&conn, &no, Some("   "), None).unwrap();
+    assert_eq!(cleared.vehicle_no, None);
+    assert_eq!(cleared.remark, None);
+    assert_eq!(meta_audit_count(&conn, &no), 2, "把车牌和备注都清空又是一次变更");
+}
+
+#[test]
+fn meta_edit_is_not_blocked_by_settlement_state() {
+    // 车牌/备注不碰钱也不碰状态机：过磅、结算途中照样能就地补改（与 grade 的 VOIDABLE 闸门刻意不同）
+    let conn = db();
+    ensure_users(&conn);
+    let no = create(&conn, new_party(&conn, "结算后补车牌", "341204199301272061"), xm_id(&conn));
+    capture_gross(&conn, &no, 52000);
+    // 只改这两个字段不该被任何状态闸门挡下
+    let o = update_meta_no(&conn, &no, Some("豫B00001"), Some("复检留样")).unwrap();
+    assert_eq!(o.vehicle_no.as_deref(), Some("豫B00001"));
+    assert_eq!(o.remark.as_deref(), Some("复检留样"));
 }

@@ -7,13 +7,14 @@
  *  3. 皮重与历史偏差超容差 → **不拦下这次捕获**：数据照常有效，只给一句警告，
  *     并在磅单上留醒目提醒（本面板醒目条、详情页、码单票面「皮重警示」栏、审计）
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PenLineIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
-import type { WeighOrder } from "@/mock/types";
+import type { DeviceConfig, WeighOrder } from "@/mock/types";
+import { grabLocalCameraFrame, localCameraSpec } from "@/lib/local-camera";
 import { dateTime, fromKg, nowLocalISO, toKg, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
@@ -39,6 +40,7 @@ export function WeighPanel({
   scalePort,
   scaleDivision01kg,
   cameraOnline,
+  camera,
 }: {
   order: WeighOrder | null;
   mean01kg: number | null;
@@ -46,6 +48,8 @@ export function WeighPanel({
   scalePort: string;
   scaleDivision01kg: number;
   cameraOnline: boolean;
+  /** 台账里那台抓拍机（04 §4）：本机 USB 摄像头时捕获瞬间就地取一帧回传 */
+  camera: DeviceConfig | null;
 }) {
   const scale = useDeviceStore((s) => s.scale);
   const setCamera = useDeviceStore((s) => s.setCamera);
@@ -56,6 +60,8 @@ export function WeighPanel({
   const [manualTare, setManualTare] = useState<number | null>(null);
   const [manualGross, setManualGross] = useState<number | null>(null);
   const [flash, setFlash] = useState<"gross" | "tare" | null>(null);
+  /** 这一捕有没有真把本机摄像头的帧带出去（onSuccess 里决定时标与「无抓拍」口径） */
+  const frameOut = useRef(false);
 
   /** 待捕项：缺哪项就优先提示哪项，两项都有则为复称 */
   const next: "gross" | "tare" | null = !order
@@ -67,8 +73,13 @@ export function WeighPanel({
         : null;
 
   const capture = useMutation({
-    mutationFn: (args: Pending & { weigh_type: "gross" | "tare"; warning?: string | null }) =>
-      api.capture({
+    mutationFn: async (args: Pending & { weigh_type: "gross" | "tare"; warning?: string | null }) => {
+      // 本机摄像头：先就地取帧再提交——面板画面流常开时只是 snap 一帧（毫秒级）；面板被
+      // 收起时冷开也各封顶 2.5 s（开流+等帧，与 IP 机"事务外等 3 s 抓图"同量级），取不到就按无抓拍提交。
+      const isLocal = localCameraSpec(camera) != null;
+      const photoB64 = isLocal ? await grabLocalCameraFrame(camera) : null;
+      frameOut.current = photoB64 != null;
+      return api.capture({
         order_no: order!.order_no,
         weigh_type: args.weigh_type,
         weight_01kg: args.weight_01kg,
@@ -79,9 +90,11 @@ export function WeighPanel({
             ? // 真机流的原帧是迎检时唯一能对回仪表报文的证据；只有模拟流才用合成句占位
               (scale.rawFrame ?? `=W${(args.weight_01kg / 10).toFixed(1)}kg ST`)
             : undefined,
-        has_photo: cameraOnline,
+        has_photo: isLocal ? photoB64 != null : cameraOnline,
+        photo_b64: photoB64 ?? undefined,
         tare_warning: args.warning ?? null,
-      }),
+      });
+    },
     onSuccess: (o, args) => {
       if (!o) {
         toast.error("捕获失败：磅单不存在或已被他人修改");
@@ -89,7 +102,7 @@ export function WeighPanel({
         return;
       }
       // 抓拍时间给下游用 dateTime 按字面切分展示，存 UTC 串会让时标少 8 小时
-      if (cameraOnline) setCamera({ lastCaptureAt: nowLocalISO() });
+      if (cameraOnline || frameOut.current) setCamera({ lastCaptureAt: nowLocalISO() });
       setFlash(args.weigh_type);
       window.setTimeout(() => setFlash(null), 700);
       const manualTag = args.source === "manual" ? "（手录）" : "";

@@ -288,6 +288,26 @@ export const api = {
   },
 
   /**
+   * 过磅抓拍图的读通道，对应真库 `capture_photo`（键是称重记录 id，不是附件 id）。
+   * mock 没有文件系统，按记录 `has_photo` 回一张演示抓拍（含车牌/时标占位），无图回 null——
+   * 界面这一侧与真库完全不区分两者，形状必须与 `PartyPhotoImage` 一致。
+   */
+  async capturePhoto(recordId: number): Promise<PartyPhotoImage | null> {
+    await sleep();
+    for (const o of orders) {
+      const rec = (o.records ?? []).find((r) => r.id === recordId);
+      if (!rec) continue;
+      if (!rec.has_photo) return null;
+      return {
+        dataUrl: demoCapture(rec.weigh_type === "gross" ? "毛重抓拍" : "皮重抓拍", o.vehicle_no ?? "", rec.captured_at),
+        size: 4096,
+        capturedAt: rec.captured_at,
+      };
+    }
+    return null;
+  },
+
+  /**
    * 换/清档案人像，对应真库 `party_photo_set`。
    * `source_path` 是操作员本机选中的图片路径（读卡带入时是读卡器本次落出的暂存文件），
    * 空串＝清除。mock 不真的读文件，只把这行档案的附件引用挪个位置并留审计。
@@ -430,13 +450,16 @@ export const api = {
     if (!label) throw new Error("简称必填：下拉清单上就显示这几个字");
     if (!value) throw new Error("完整内容必填：点一下要填进文本框的就是这句话");
     const idx = input.id != null ? quickOptions.findIndex((r) => r.id === input.id) : -1;
+    /** 与真库同口径：排序号只有大于 0 才算数，否则排到同类末尾（含被改的本行，故清空即"挪到最后"） */
+    const nextSortOrder = () =>
+      quickOptions.filter((r) => r.kind === kind).reduce((m, r) => Math.max(m, r.sort_order), 0) + 1;
     if (idx >= 0) {
       const next: QuickOption = {
         ...quickOptions[idx],
         kind,
         label,
         value,
-        sort_order: input.sort_order ?? quickOptions[idx].sort_order,
+        sort_order: input.sort_order && input.sort_order > 0 ? input.sort_order : nextSortOrder(),
         is_active: input.is_active ?? quickOptions[idx].is_active,
         id: quickOptions[idx].id,
       };
@@ -449,10 +472,7 @@ export const api = {
       kind,
       label,
       value,
-      sort_order:
-        input.sort_order && input.sort_order > 0
-          ? input.sort_order
-          : quickOptions.filter((r) => r.kind === kind).reduce((m, r) => Math.max(m, r.sort_order), 0) + 1,
+      sort_order: input.sort_order && input.sort_order > 0 ? input.sort_order : nextSortOrder(),
       is_active: input.is_active ?? 1,
     };
     quickOptions.push(created);
@@ -1053,6 +1073,9 @@ export const api = {
     has_photo: boolean;
     /** 皮重偏差超容差的警示文案（称重面板判出后附上）；捕获照常有效，只随单留醒目提醒 */
     tare_warning?: string | null;
+    /** 本机 USB 摄像头就地取帧回传的 base64(JPEG)，与 Rust `CaptureInput::photo_b64` 逐字对齐；
+     *  mock 模式没有附件可落，只照 Rust 的闸门口径把"带了帧"并进 has_photo 显示 */
+    photo_b64?: string | null;
   }): Promise<WeighOrder | null> {
     await sleep(80);
     const o = orderOf(input.order_no);
@@ -1073,7 +1096,7 @@ export const api = {
       stable: 1,
       captured_at: at,
       operator_id: input.operator_id,
-      has_photo: input.has_photo,
+      has_photo: input.has_photo || input.photo_b64 != null,
     });
     if (input.weigh_type === "gross") {
       o.gross_weight_01kg = input.weight_01kg;
@@ -1346,6 +1369,40 @@ export const api = {
       reason: `等级 ${before} → ${next ?? "未定级"}：${reason}`,
       authorized_by: null,
       result: "ok",
+    });
+    return o;
+  },
+
+  /**
+   * 修改磅单基本信息（车牌 / 备注）——制单成功后仍可在「身份与制单」面板就地补改。
+   *
+   * 这两个字段不碰钱、不碰状态，过磅与结算期间都允许改，所以不设状态闸门（对齐 Rust
+   * `order_update`：只有会话岗位 `FLOOR_ROLES` 一道闸）。两值都没变就不写库也不留痕。
+   */
+  async updateOrder(input: {
+    order_no: string;
+    vehicle_no: string | null;
+    remark: string | null;
+    operator_id: number;
+  }): Promise<WeighOrder | null> {
+    await sleep(120);
+    const o = orderOf(input.order_no);
+    if (!o) return null;
+    const vehicle_no = input.vehicle_no?.trim() || null;
+    const remark = input.remark?.trim() || null;
+    if (o.vehicle_no === vehicle_no && o.remark === remark) return o;
+    const changes: string[] = [];
+    if (o.vehicle_no !== vehicle_no) changes.push(`车牌 ${o.vehicle_no || "—"} → ${vehicle_no || "—"}`);
+    if (o.remark !== remark) changes.push(`备注 ${o.remark || "—"} → ${remark || "—"}`);
+    const now = localIso(new Date());
+    o.vehicle_no = vehicle_no;
+    o.remark = remark;
+    o.updated_at = now;
+    auditLogs.unshift({
+      id: o.id, at: now, actor_id: input.operator_id,
+      actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
+      action: "order.update", entity: "weigh_order", entity_no: o.order_no,
+      reason: changes.join("；"), authorized_by: null, result: "ok",
     });
     return o;
   },
@@ -1675,6 +1732,32 @@ function demoAvatar(name: string): string {
     `<circle cx="51" cy="45" r="20" fill="#c3cfdd"/>` +
     `<path d="M13 126c0-23 17-37 38-37s38 14 38 37z" fill="#c3cfdd"/>` +
     `<text x="51" y="119" font-size="30" text-anchor="middle" fill="#5b6b80" font-family="sans-serif">${ch}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/**
+ * 演示抓拍图：16:9 横向，模拟磅区机位——天空/地面渐变 + 一辆车 + 车牌与时标角标。
+ * 只服务浏览器预览（mock 没有文件系统可读）。真库 `capture_photo` 回的是附件里的真实 JPEG 字节，
+ * 界面这一侧完全不区分两者，所以形状与 `demoAvatar` 一样进 `PartyPhotoImage.dataUrl`。
+ */
+function demoCapture(label: string, plate: string, at: string): string {
+  const esc = (s: string) => s.replace(/[&<>"']/g, "");
+  const hhmmss = (at.match(/[T ](\d{2}:\d{2}:\d{2})/) ?? [, ""])[1];
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270" viewBox="0 0 480 270">` +
+    `<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="0" stop-color="#8aa3bd"/><stop offset="1" stop-color="#c7d3df"/></linearGradient></defs>` +
+    `<rect width="480" height="180" fill="url(#sky)"/>` +
+    `<rect y="180" width="480" height="90" fill="#6b7280"/>` +
+    `<rect x="40" y="150" width="400" height="34" fill="#4b5563"/>` +
+    `<rect x="150" y="120" width="180" height="60" rx="6" fill="#374151"/>` +
+    `<rect x="170" y="96" width="120" height="34" rx="5" fill="#4b5563"/>` +
+    `<circle cx="180" cy="184" r="16" fill="#1f2937"/><circle cx="300" cy="184" r="16" fill="#1f2937"/>` +
+    `<rect x="16" y="16" width="150" height="26" rx="4" fill="rgba(0,0,0,.45)"/>` +
+    `<text x="26" y="34" font-size="15" fill="#fff" font-family="sans-serif">${esc(label)}</text>` +
+    `<rect x="16" y="228" width="220" height="26" rx="4" fill="rgba(0,0,0,.45)"/>` +
+    `<text x="26" y="246" font-size="14" fill="#fff" font-family="monospace">${esc(plate || "未登记车牌")} · ${esc(hhmmss)}</text>` +
     `</svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }

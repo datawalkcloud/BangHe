@@ -213,6 +213,13 @@ export interface DeviceHubState {
    */
   regHolding: boolean;
   setRegHolding: (v: boolean) => void;
+  /**
+   * 常驻网格里的「身份与制单」面板（`IdentityPanel`）自己弹的读卡/绑卡框正占用那台共用读卡器
+   * （06 §1.2 设备互斥）。不能复用 `regHolding`：那会让 `WorkstationPage` 把这一格换成占位卡、
+   * 连带把正开着框的面板本身卸载掉。所以单列一个只用于「让后台 IC 常听让位」的标记。
+   */
+  panelHolding: boolean;
+  setPanelHolding: (v: boolean) => void;
   setScale: (patch: Partial<ScaleState>) => void;
   /** Rust `device://scale` 的一帧落成界面状态（判稳已在后端做完，这里不再二次加工） */
   applyScaleFrame: (r: ScaleReading) => void;
@@ -611,6 +618,8 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
   printer: { status: "online", name: "HP LaserJet M403d", busy: false, lastError: null },
   regHolding: false,
   setRegHolding: (v) => set({ regHolding: v }),
+  panelHolding: false,
+  setPanelHolding: (v) => set({ panelHolding: v }),
   setScale: (patch) => set((s) => ({ scale: { ...s.scale, ...patch } })),
   applyScaleFrame: (r) => {
     // 仍然逐字段挑，不整体展开：界面要的是读数 + 判稳依据 + 这帧属于哪台磅；
