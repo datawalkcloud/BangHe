@@ -4,7 +4,7 @@
  * 三张票据都按"套打黑白仍可判读"来做：
  *  - 字体用宋体系，与界面雅黑区隔，保证与存量纸质码单观感一致
  *  - 证号中间 6 位掩码；迎检需完整证号由站长单独导出
- *  - 金额并列元/吨与元/斤，并打印人民币大写
+ *  - 单价一律印元/公斤，金额打印人民币大写
  *  - 磅员 / 化验员 / 结算员三署名栏 + 售粮人签字栏 + 联次标注
  *  - 补打时右上角"补打"字样（05 §9 明确要求）
  */
@@ -163,8 +163,7 @@ export function WeighOrderSheet({
 
       <div className="mt-2 grid grid-cols-2 gap-2">
         <div className="border border-black">
-          <Line label="单价" v={p.perTon} />
-          <Line label="折合" v={p.perJin} />
+          <Line label="单价" v={p} />
           <Line label="货款" v={money(order.goods_amount_fen)} />
           <Line label="扣款" v={money(order.deduction_fee_fen)} />
           <Line label="应付" v={money(order.payable_amount_fen)} />
@@ -330,14 +329,14 @@ export function SettlementVoucherSheet({
             <tr key={o.order_no}>
               <td className="border border-black px-2 py-1 font-mono">{o.order_no}</td>
               <td className="border border-black px-2 py-1 text-right font-mono">{weight(o.settlement_weight_01kg)}</td>
-              <td className="border border-black px-2 py-1 text-right font-mono">{price(o.price_fen_per_ton).perTon}</td>
+              <td className="border border-black px-2 py-1 text-right font-mono">{price(o.price_fen_per_ton)}</td>
               <td className="border border-black px-2 py-1 text-right font-mono">{money(o.goods_amount_fen)}</td>
             </tr>
           ))}
           <tr className="bg-black/5 font-bold">
             <td className="border border-black px-2 py-1">合计</td>
             <td className="border border-black px-2 py-1 text-right font-mono">{weight(settlement.total_settle_01kg)}</td>
-            <td className="border border-black px-2 py-1 text-right">{p.perJin}</td>
+            <td className="border border-black px-2 py-1 text-right">{p}</td>
             <td className="border border-black px-2 py-1 text-right font-mono">{money(settlement.total_goods_fen)}</td>
           </tr>
         </tbody>

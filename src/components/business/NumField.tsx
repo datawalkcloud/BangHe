@@ -8,7 +8,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, Ref } from "react";
-import { fromKg, fromPercent, fromYuanPerTon, money, pricePerTonNumber, toKg, toYuanPerJin, weight } from "@/lib/format";
+import { fromKg, fromPercent, fromYuanPerKg, money, priceNumber, toKg, weight } from "@/lib/format";
 import { Input } from "@/components/ui/input";
 import { cn } from "cn";
 
@@ -89,7 +89,7 @@ export function NumField({
             "rounded-none border bg-input-bg px-2 font-medium tnum tabular-nums",
             size === "default" ? "h-9" : "h-8 text-xs",
             align === "right" ? "text-right" : "text-left",
-            unit && "pr-10",
+            unit && (unit.length > 2 ? "pr-14" : "pr-10"),
             invalid
               ? "border-destructive ring-1 ring-destructive/40"
               : "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40",
@@ -194,7 +194,7 @@ export function MoneyField({
   );
 }
 
-/** 单价：内部分/吨，界面元/吨，并在 hint 里并列元/斤 */
+/** 单价：内部分/吨，界面元/公斤 */
 export function PriceField({
   label = "单价",
   valueFenPerTon,
@@ -211,27 +211,27 @@ export function PriceField({
   id?: string;
   size?: "sm" | "default";
 }) {
-  const [text, setText] = useState(() => (valueFenPerTon == null ? "" : pricePerTonNumber(valueFenPerTon)));
+  const [text, setText] = useState(() => (valueFenPerTon == null ? "" : priceNumber(valueFenPerTon)));
   const lastEmit = useRef(valueFenPerTon);
   useEffect(() => {
     if (valueFenPerTon !== lastEmit.current) {
       lastEmit.current = valueFenPerTon;
-      setText(valueFenPerTon == null ? "" : pricePerTonNumber(valueFenPerTon));
+      setText(valueFenPerTon == null ? "" : priceNumber(valueFenPerTon));
     }
   }, [valueFenPerTon]);
   return (
     <NumField
       label={label}
       text={text}
-      unit="元/吨"
-      decimals={2}
+      unit="元/公斤"
+      decimals={3}
       onText={(t) => {
         setText(t);
-        const v = t === "" ? null : fromYuanPerTon(t);
+        const v = t === "" ? null : fromYuanPerKg(t);
         lastEmit.current = v;
         onChange(v);
       }}
-      hint={hint ?? (valueFenPerTon == null ? undefined : `折合 ${toYuanPerJin(valueFenPerTon).toFixed(2)} 元/斤`)}
+      hint={hint}
       {...rest}
     />
   );

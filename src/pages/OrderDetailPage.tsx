@@ -11,7 +11,7 @@
  * 红冲（ reversals ）在 mock 层没有对应接口，因此这里只给出跳转与说明，
  * 绝不伪装成已完成的操作（02 §F6.3 要求红冲另立新单，接口未实现）。
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangleIcon, ArrowLeftIcon, BadgeCheckIcon, FlaskConicalIcon, MapPinIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
@@ -42,6 +42,7 @@ import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { OrderStatusBadge, PaymentStatusBadge, QcDecisionBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
+import { QuickDetailLink, useQuickDetail } from "@/components/business/quickDetail";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { cn } from "cn";
 
@@ -57,8 +58,24 @@ import { cn } from "cn";
 const DETAIL_TABLE =
   "border-collapse text-sm [&_th]:h-auto [&_th]:px-0 [&_th]:py-1.5 [&_th]:font-normal [&_th]:text-inherit [&_td]:px-0 [&_td]:py-1.5";
 
-export function OrderDetailPage() {
-  const { orderNo } = useParams({ from: "/orders/$orderNo" });
+/**
+ * 磅单正文（整页与详情抽屉共用）。
+ *
+ * `embedded` 给抽屉用：标题条要让开 Sheet 右上角的关闭按钮，
+ * 「返回列表」这类整页导航由整页壳通过 `headerExtra` 传进来；
+ * 抽屉里点去扫码结算这种功能页的链接要先收起抽屉，否则抽屉会盖在新页面上。
+ */
+export function OrderDetailBody({
+  orderNo,
+  embedded = false,
+  headerExtra,
+}: {
+  orderNo: string;
+  embedded?: boolean;
+  headerExtra?: ReactNode;
+}) {
+  const headerCls = embedded ? "pr-11" : undefined;
+  const closeDetail = useQuickDetail((s) => s.close);
   const queryClient = useQueryClient();
   const names = useStaffNames();
   const can = useSession((s) => s.can);
@@ -194,7 +211,7 @@ export function OrderDetailPage() {
   if (isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="磅单详情" description="加载中…" />
+        <PageHeader title="磅单详情" description="加载中…" className={headerCls} />
         <div className="grid gap-4 px-6 py-4 xl:grid-cols-2">
           {Array.from({ length: 4 }, (_, i) => (
             <Skeleton key={i} className="h-52" />
@@ -207,14 +224,16 @@ export function OrderDetailPage() {
   if (!order) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="磅单详情" />
+        <PageHeader title="磅单详情" className={headerCls} />
         <EmptyState
           title={`找不到磅单 ${orderNo}`}
           description="单号可能被手动改过，或这张单属于另一台电脑的数据。回列表按日期找一下。"
           action={
-            <Button size="sm" variant="outline" render={<Link to="/orders" />}>
-              返回磅单中心
-            </Button>
+            embedded ? undefined : (
+              <Button size="sm" variant="outline" render={<Link to="/orders" />}>
+                返回磅单中心
+              </Button>
+            )
           }
         />
       </div>
@@ -319,6 +338,7 @@ export function OrderDetailPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        className={headerCls}
         title={
           <span className="flex items-center gap-2">
             <span className="tnum">{order.order_no}</span>
@@ -329,10 +349,7 @@ export function OrderDetailPage() {
         description={`${order.business_date} · ${order.party_name}（${PARTY_TYPE[order.party_type]}）· ${order.variety_name}${order.grade ? ` ${order.grade}` : ""} · ${statusDesc}`}
         actions={
           <>
-            <Button size="sm" variant="outline" render={<Link to="/orders" />}>
-              <ArrowLeftIcon />
-              返回列表
-            </Button>
+            {headerExtra}
             <Button size="sm" variant="outline" onClick={reprintQcReport} disabled={!qc || !can("print")}>
               <FlaskConicalIcon />
               质检单
@@ -377,7 +394,7 @@ export function OrderDetailPage() {
           )}
           {order.price_override_reason && (
             <CallOut tone="info" title={order.price_list_id != null ? "单价偏离价目表" : "手工定价（当时无生效价目）"}>
-              {orDash(order.price_override_reason)}（执行单价 {fmtPrice(order.price_fen_per_ton).perTon}）
+              {orDash(order.price_override_reason)}（执行单价 {fmtPrice(order.price_fen_per_ton)}）
             </CallOut>
           )}
           {order.reversed_order_id != null && (
@@ -428,7 +445,7 @@ export function OrderDetailPage() {
                   items={[
                     { label: "磅单号", value: <span className="tnum font-medium">{order.order_no}</span> },
                     { label: "业务日期", value: <span className="tnum">{order.business_date}</span> },
-                    { label: "售粮人", value: order.party_name },
+                    { label: "售粮人", value: <QuickDetailLink type="party" id={order.party_id}>{order.party_name}</QuickDetailLink> },
                     { label: "身份类型", value: PARTY_TYPE[order.party_type] },
                     { label: "证件号", value: <span className="tnum">{maskIdCard(order.id_card_no)}</span> },
                     { label: "联系电话", value: <span className="tnum">{orDash(partyDetail?.phone)}</span> },
@@ -530,7 +547,7 @@ export function OrderDetailPage() {
                     <InfoGrid
                       cols={2}
                       items={[
-                        { label: "质检单号", value: <span className="tnum">{qc.report_no}</span> },
+                        { label: "质检单号", value: <QuickDetailLink type="qc" id={qc.report_no} className="tnum">{qc.report_no}</QuickDetailLink> },
                         { label: "样品号", value: <span className="tnum">{qc.sample_no}</span> },
                         { label: "检测方法", value: TEST_METHOD[qc.test_method] },
                         { label: "定级", value: orDash(qc.grade) },
@@ -618,14 +635,7 @@ export function OrderDetailPage() {
                         { label: "结算人", value: names(order.weigher_id) },
                         {
                           label: "执行单价",
-                          value: (
-                            <span className="tnum">
-                              {fmtPrice(order.price_fen_per_ton).perTon}
-                              <span className="ml-1 text-xs text-muted-foreground">
-                                （{fmtPrice(order.price_fen_per_ton).perJin}）
-                              </span>
-                            </span>
-                          ),
+                          value: <span className="tnum">{fmtPrice(order.price_fen_per_ton)}</span>,
                         },
                         {
                           label: "计价依据",
@@ -649,13 +659,13 @@ export function OrderDetailPage() {
                     {settlement && (
                       <div className="flex flex-wrap items-center gap-2 border-t pt-3 text-xs">
                         <span className="text-muted-foreground">所属结算单</span>
-                        <Link
-                          to="/settlements/$settleNo"
-                          params={{ settleNo: settlement.settle_no }}
+                        <QuickDetailLink
+                          type="settlement"
+                          id={settlement.settle_no}
                           className="tnum font-medium underline underline-offset-2"
                         >
                           {settlement.settle_no}
-                        </Link>
+                        </QuickDetailLink>
                         <PaymentStatusBadge status={settlement.payment_status} />
                       </div>
                     )}
@@ -664,7 +674,12 @@ export function OrderDetailPage() {
                 {order.status !== "voided" && order.status !== "rejected" && order.settled_at == null && (
                   <CallOut tone="info" title="下一步">
                     结算在「扫码结算」窗口做：凭这张码单上的二维码取单、现场计价付款，结完本页自动出现金额明细。
-                    <Link to="/scan-settle" search={{ orderNo: order.order_no }} className="ml-1 underline underline-offset-2">
+                    <Link
+                      to="/scan-settle"
+                      search={{ orderNo: order.order_no }}
+                      onClick={() => embedded && closeDetail()}
+                      className="ml-1 underline underline-offset-2"
+                    >
                       带去扫码结算
                     </Link>
                     {(order.prints ?? []).length === 0 && order.net_weight_01kg != null && (
@@ -916,5 +931,21 @@ export function OrderDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/** 整页路由入口：深链与 Ctrl+点击新窗口仍走这里，正文与详情抽屉共用 */
+export function OrderDetailPage() {
+  const { orderNo } = useParams({ from: "/orders/$orderNo" });
+  return (
+    <OrderDetailBody
+      orderNo={orderNo}
+      headerExtra={
+        <Button size="sm" variant="outline" render={<Link to="/orders" />}>
+          <ArrowLeftIcon />
+          返回列表
+        </Button>
+      }
+    />
   );
 }

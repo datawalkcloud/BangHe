@@ -5,7 +5,7 @@
  * 余下走卡是常态），所以付款表单默认金额 = 未付余额但允许改小，
  * 每次登记都追加一条 payment_record，绝不覆盖已付数（01 §F5.2）。
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftIcon, BanknoteIcon, PrinterIcon } from "lucide-react";
@@ -13,13 +13,13 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { PaymentMethod } from "@/lib/constants";
 import { PAYMENT_METHOD, PAYMENT_STATUS } from "@/lib/constants";
-import { dateTime, money, orDash, rmbUpper, weight } from "@/lib/format";
+import { dateTime, money, orDash, priceNumber, rmbUpper, weight } from "@/lib/format";
 import { useStaffNames, useStation } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
-import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
+import { detailColumn } from "@/components/business/quickDetail";
 import { MoneyLine } from "@/components/business/NumField";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { Button } from "@/components/ui/button";
@@ -30,8 +30,22 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { PaymentRecord } from "@/mock/types";
 import { cn } from "cn";
 
-export function SettlementDetailPage() {
-  const { settleNo } = useParams({ from: "/settlements/$settleNo" });
+/**
+ * 结算单正文（整页与详情抽屉共用）。
+ *
+ * `embedded` 是给抽屉用的：右上角那枚关闭按钮是 Sheet 自带的，标题条要主动让开；
+ * 「返回台账」这种属于整页导航的按钮在抽屉里没有意义，由整页通过 `headerExtra` 传进来。
+ */
+export function SettlementDetailBody({
+  settleNo,
+  embedded = false,
+  headerExtra,
+}: {
+  settleNo: string;
+  embedded?: boolean;
+  headerExtra?: ReactNode;
+}) {
+  const headerCls = embedded ? "pr-11" : undefined;
   const queryClient = useQueryClient();
   const names = useStaffNames();
   const can = useSession((s) => s.can);
@@ -90,7 +104,7 @@ export function SettlementDetailPage() {
   if (isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="结算单" description="加载中…" />
+        <PageHeader title="结算单" description="加载中…" className={headerCls} />
         <div className="grid gap-4 px-6 py-4 xl:grid-cols-2">
           <Skeleton className="h-56" />
           <Skeleton className="h-56" />
@@ -102,14 +116,16 @@ export function SettlementDetailPage() {
   if (!data) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="结算单" />
+        <PageHeader title="结算单" className={headerCls} />
         <EmptyState
           title={`找不到结算单 ${settleNo}`}
           description="单号可能在别的电脑上，或该磅单尚未结算。"
           action={
-            <Button size="sm" variant="outline" render={<Link to="/settlements" />}>
-              返回结算台账
-            </Button>
+            embedded ? undefined : (
+              <Button size="sm" variant="outline" render={<Link to="/settlements" />}>
+                返回结算台账
+              </Button>
+            )
           }
         />
       </div>
@@ -119,23 +135,15 @@ export function SettlementDetailPage() {
   const { settlement: s, orders, payments } = data;
 
   const orderCols: Column<(typeof orders)[number]>[] = [
-    {
-      key: "order_no",
-      header: "磅单号",
-      cell: (o) => (
-        <QuickDetailLink type="order" id={o.order_no} className="tnum font-medium text-primary">
-          {o.order_no}
-        </QuickDetailLink>
-      ),
-    },
+    { key: "order_no", header: "磅单号", cell: (o) => <span className="tnum font-medium">{o.order_no}</span> },
     { key: "date", header: "业务日期", cell: (o) => <span className="tnum">{o.business_date}</span> },
     { key: "variety", header: "品种/等级", cell: (o) => `${o.variety_name}${o.grade ? ` ${o.grade}` : ""}` },
     { key: "settle", header: "结算重量", align: "right", cell: (o) => <span className="tnum">{weight(o.settlement_weight_01kg)}</span> },
     {
       key: "price",
-      header: "单价",
+      header: "单价（元/公斤）",
       align: "right",
-      cell: (o) => <span className="tnum">{o.price_fen_per_ton == null ? "—" : (o.price_fen_per_ton / 100).toFixed(2)}</span>,
+      cell: (o) => <span className="tnum">{priceNumber(o.price_fen_per_ton)}</span>,
     },
     {
       key: "goods",
@@ -153,6 +161,7 @@ export function SettlementDetailPage() {
       footer: (list) => <span className="tnum">{money(list.reduce((n, o) => n + (o.payable_amount_fen ?? 0), 0))}</span>,
     },
     { key: "status", header: "状态", cell: (o) => <OrderStatusBadge status={o.status} /> },
+    detailColumn("order", (o) => o.order_no),
   ];
 
   const payCols: Column<PaymentRecord>[] = [
@@ -173,6 +182,7 @@ export function SettlementDetailPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        className={headerCls}
         title={
           <span className="flex items-center gap-2">
             <span className="tnum">{s.settle_no}</span>
@@ -183,10 +193,7 @@ export function SettlementDetailPage() {
         description={`${s.payee_name} · 期间 ${s.period_from} ~ ${s.period_to} · ${s.order_count} 张磅单 · 结算人 ${names(s.settler_id)}`}
         actions={
           <>
-            <Button size="sm" variant="outline" render={<Link to="/settlements" />}>
-              <ArrowLeftIcon />
-              返回台账
-            </Button>
+            {headerExtra}
             <Button
               size="sm"
               variant="outline"
@@ -354,5 +361,21 @@ export function SettlementDetailPage() {
       {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
       {printFallback}
     </div>
+  );
+}
+
+/** 整页路由入口：深链与 Ctrl+点击新窗口仍走这里，正文与详情抽屉共用 */
+export function SettlementDetailPage() {
+  const { settleNo } = useParams({ from: "/settlements/$settleNo" });
+  return (
+    <SettlementDetailBody
+      settleNo={settleNo}
+      headerExtra={
+        <Button size="sm" variant="outline" render={<Link to="/settlements" />}>
+          <ArrowLeftIcon />
+          返回台账
+        </Button>
+      }
+    />
   );
 }

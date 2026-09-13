@@ -961,6 +961,77 @@ fn upgrade_from_older_version_backs_up_and_fills_gap() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// 0013 手机号唯一：现场库里同号的多份档案（中介拿自己号给几户建档是真事）若直接建
+/// 唯一索引，站点机会开不了机——人进不了界面改档案。脚本必须自己把冲突收敛掉：
+/// **同号只留最早那份**，其余置空并逐条留审计；空号一律 NULL（NULL 不占唯一位）。
+#[test]
+fn migration_0013_dedupes_party_phones_before_the_unique_index() {
+    let before: &'static [Migration] = &MIGRATIONS[..MIGRATIONS.len() - 1];
+    assert_eq!(before.last().unwrap().name, "0012_reader_prompt_voice.sql");
+    let mut conn = in_memory_migrated("0.1.0-test", before).expect("0013 之前的脚本应能独立跑完");
+
+    {
+        let ins = |name: &str, phone: &str| {
+            conn.execute(
+                "INSERT INTO party (name, party_type, phone_enc, created_at, created_by)
+                 VALUES (?1, 'farmer', NULLIF(?2, ''), '2026-09-01T08:00:00.000', 1)",
+                rusqlite::params![name, phone],
+            )
+            .unwrap();
+        };
+        ins("孙大娘", "138-0013 8000"); // 同号里最早的一份，且带分隔符
+        ins("李二", "13800138000");
+        ins("王三", "");
+        ins("赵四", "   ");
+    }
+
+    // 补跑 0013：走生产同一执行器（校验和、逐脚本事务、记账都真）
+    let r = migrate::apply(&mut conn, "0.1.0-test", None, None).expect("0013 应当补齐并成功");
+    assert_eq!(r.applied, vec!["0013_party_phone_unique.sql".to_string()]);
+
+    let phones: Vec<(String, Option<String>)> = {
+        let mut st = conn
+            .prepare("SELECT name, CAST(phone_enc AS TEXT) FROM party ORDER BY id")
+            .unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(
+        phones,
+        vec![
+            ("孙大娘".into(), Some("13800138000".into())),
+            ("李二".into(), None),
+            ("王三".into(), None),
+            ("赵四".into(), None),
+        ],
+        "保留方还要归一成比对形状；只填空白的号码算没填，不许互相顶掉"
+    );
+
+    let cleared: Vec<String> = {
+        let mut st = conn.prepare("SELECT reason FROM audit_log WHERE action = 'party.phone.dedupe'").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+    };
+    assert_eq!(cleared.len(), 1, "置空要留得下一张补录清单：{cleared:?}");
+    assert!(cleared[0].contains("13800138000"), "审计要点清被抹掉的号码：{cleared:?}");
+
+    // 索引真立起来了：绕过服务层直接写库也顶不动
+    let e = conn
+        .execute(
+            "INSERT INTO party (name, party_type, phone_enc, created_at, created_by)
+             VALUES ('绕过服务层', 'farmer', '13800138000', '2026-09-01T09:00:00.000', 1)",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("party.phone_enc"), "实际：{e}");
+    let dup_idx: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_party_phone'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(dup_idx, 0, "唯一索引顶掉普通索引后，同一列上不该留两个索引");
+}
+
 /// 覆盖安装端到端：走生产同一条 `open_and_migrate`，记号是临时目录里**真的**
 /// `install.stamp` 文件（安装包 NSIS 钩子写的），只认它的修改时间。
 /// 「首装 → 重启若干 → 再覆盖装 → 重启」全程：每次"新安装"恰好一份快照，普通重启零噪音。

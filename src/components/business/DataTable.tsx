@@ -2,7 +2,8 @@
  * 统一列表表格（05 §6.3）。
  *
  * 特性：表头点击排序、分页（默认 50，可选 50/100/200）、固定表尾合计行、
- * 行点击进详情、Ctrl+点击新窗口、加载骨架、带下一步动作的空状态。
+ * Ctrl+点击行新窗口打开整页详情、加载骨架、带下一步动作的空状态。
+ * 行本身不响应单击：详情从末列「操作」的按钮进（05 §6.3）。
  *
  * 没有引入第三方表格库：@tanstack/react-table v9 换成了全新的 useTable API，
  * 在只展示 mock 数据的阶段自研更稳，也避免为一个表格组件背未知 API 的风险。
@@ -38,7 +39,6 @@ export function DataTable<T>({
   rows,
   rowKey,
   loading = false,
-  onRowClick,
   rowHref,
   toolbar,
   defaultPageSize = 50,
@@ -52,7 +52,6 @@ export function DataTable<T>({
   rows: T[];
   rowKey: (row: T, index: number) => string | number;
   loading?: boolean;
-  onRowClick?: (row: T, index: number) => void;
   /** 给出后 Ctrl+点击 可在新窗口打开同一张单（对账时并排看两张单是真实需求） */
   rowHref?: (row: T) => string;
   toolbar?: ReactNode;
@@ -213,13 +212,12 @@ export function DataTable<T>({
                   <TableRow
                     key={rowKey(row, i)}
                     onClick={(e) => {
+                      /* 单击不留任何动作：详情走末列「操作」，误碰一行不该弹东西 */
                       if ((e.ctrlKey || e.metaKey) && rowHref) {
                         window.open(`${window.location.pathname}${window.location.search}#${rowHref(row)}`, "_blank");
-                        return;
                       }
-                      onRowClick?.(row, i);
                     }}
-                    className={cn(onRowClick && "cursor-pointer", rowClassName?.(row))}
+                    className={cn(rowClassName?.(row))}
                   >
                     {allCols.map((c) => (
                       <TableCell

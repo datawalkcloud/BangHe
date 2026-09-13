@@ -31,7 +31,8 @@ import type { DeviceConfig } from "@/mock/types";
 import type { DeviceKind, DeviceStatus, Tone } from "@/lib/constants";
 import { DEVICE_KIND, DEVICE_STATUS, ROLE, TONE_BOX, TONE_DOT, TONE_TEXT } from "@/lib/constants";
 import { maskIdCard, orDash, weight } from "@/lib/format";
-import { csvName, downloadCsv } from "@/lib/csv";
+import { csvName } from "@/lib/csv";
+import { exportCsvFile } from "@/lib/export-csv";
 import { actorId, useActor, useSession } from "@/store/session";
 import { useDeviceStore, useScaleTick, type ReaderProbe } from "@/store/device";
 import { DeviceStatusLight, ToneBadge } from "@/components/business/badges";
@@ -45,11 +46,12 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "cn";
 
-/** 卡片的分组顺序：地磅排第一，它是现场最高频的故障源 */
-const KIND_ORDER: DeviceKind[] = ["scale", "idcard", "camera", "printer", "led", "cashbox", "signpad"];
+/** 卡片的分组顺序：地磅排第一，它是现场最高频的故障源。
+ *  户外显示屏、钱箱、签名板站点没装，不进分组也不进登记表单候选（枚举值仍留在库里，见 constants.ts） */
+const KIND_ORDER: DeviceKind[] = ["scale", "idcard", "camera", "printer"];
 
 /** 串口类设备：port 不由静态 fields 维护，而走本机扫描 + 下拉选择 */
-const SERIAL_KINDS: DeviceKind[] = ["scale", "cashbox"];
+const SERIAL_KINDS: DeviceKind[] = ["scale"];
 
 const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
   scale: UsbIcon,
@@ -222,7 +224,7 @@ export function DevicesPage() {
   const [camScanState, setCamScanState] = useState<"idle" | "running" | "done">("idle");
   const [camHint, setCamHint] = useState<string | null>(null);
 
-  /** 本机串口列表（地磅、钱箱登记表单「串口」下拉的数据源） */
+  /** 本机串口列表（地磅登记表单「串口」下拉的数据源） */
   const [serialScan, setSerialScan] = useState<string[] | null>(null);
   const [serialScanState, setSerialScanState] = useState<"idle" | "running" | "done">("idle");
   const [serialHint, setSerialHint] = useState<string | null>(null);
@@ -404,7 +406,7 @@ export function DevicesPage() {
   }
 
   /**
-   * 扫描本机串口：地磅 / 钱箱都走 RS-232，现场通常记不住 COM 号。
+   * 扫描本机串口：地磅走 RS-232，现场通常记不住 COM 号。
    * 扫到就给下拉选择，扫不到回退手填并说明原因（浏览器预览没有原生通道）。
    */
   async function runSerialScan() {
@@ -430,7 +432,7 @@ export function DevicesPage() {
     }
     const list = r.data ?? [];
     setSerialScan(list);
-    if (list.length === 0) setSerialHint("本机没有扫到串口。确认称重仪表/钱箱已接电、USB 转串口驱动已安装，或改用手动输入。");
+    if (list.length === 0) setSerialHint("本机没有扫到串口。确认称重仪表已接电、USB 转串口驱动已安装，或改用手动输入。");
   }
 
   /** 选中一个扫到的串口：回填到 cfg.port（仍可手改） */
@@ -642,11 +644,11 @@ export function DevicesPage() {
   const offlineCount = devices.filter((d) => d.is_enabled === 1 && d.last_status !== "online").length;
   const mockCount = devices.filter((d) => d.is_mock === 1).length;
 
-  function exportConfig() {
-    const n = downloadCsv(
-      csvName("设备配置"),
-      ["编码", "名称", "类型", "驱动", "启用", "Mock", "默认", "状态", "最后成功", "错误计数", "最后错误", "配置JSON"],
-      devices.map((d) => [
+  async function exportConfig() {
+    await exportCsvFile({
+      filename: csvName("设备配置"),
+      headers: ["编码", "名称", "类型", "驱动", "启用", "Mock", "默认", "状态", "最后成功", "错误计数", "最后错误", "配置JSON"],
+      rows: devices.map((d) => [
         d.code,
         d.name,
         DEVICE_KIND[d.kind],
@@ -660,8 +662,8 @@ export function DevicesPage() {
         d.last_error ?? "",
         JSON.stringify(d.config),
       ]),
-    );
-    toast.success(`已导出 ${n} 台设备的配置快照（换机时按此表重建）`);
+      unit: "台设备的配置快照",
+    });
   }
 
   return (
@@ -1284,11 +1286,6 @@ function TestPanel({ d }: { d: DeviceConfig }) {
       {d.kind === "idcard" && <CardReaderPanel key={d.code} d={d} />}
       {d.kind === "camera" && <CameraPanel />}
       {d.kind === "printer" && <PrinterPanel key={d.code} d={d} />}
-      {(d.kind === "led" || d.kind === "cashbox" || d.kind === "signpad") && (
-        <CallOut tone="neutral" title="该外设为后续期实现">
-          LED 播报、钱箱联动、签名板在 02 §M9 里标为 P2，首版不接线；这里保留卡片是为了现场清点硬件时知道有没有插对。
-        </CallOut>
-      )}
     </>
   );
 }

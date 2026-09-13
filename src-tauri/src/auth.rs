@@ -11,8 +11,10 @@
 //!  4. **文案不区分"用户不存在"与"密码错"**，且账号不存在时也照跑一次假哈希，
 //!     否则响应时间的快慢本身就能把在职登录名枚举出来。
 //!
-//! 会话寿命（2026-09-11 定）：**不设总时长上限，但空闲满 [`IDLE_TTL_SECS`] 即失效**；
-//! 主动登出或进程退出则立刻结束。会话只存内存，所以重启程序必须重登——
+//! 会话寿命（2026-09-13 改）：**登录后不设总时长上限、永不自动登出**；空闲满
+//! [`IDLE_TTL_SECS`] 只是把会话**锁屏**（`Session::locked`），业务命令在锁定期一律拒绝，
+//! 输入本人密码经 [`auth_unlock`] 解锁后原地继续。主动登出仍是立刻结束会话；
+//! 会话只存内存，所以重启程序必须重登——
 //! 这是"单据署名等于当时坐在磅房里的人"这条链路的唯一支点。
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,8 +30,8 @@ use tauri::{AppHandle, Manager};
 use crate::db::migrate::now_iso;
 use crate::db::{locked, Db};
 
-/// 无操作多久后登录失效。业务上要"不退出就一直用"，但挡不住人离开磅房机后被接手，
-/// 折中成 1 小时空闲失效。做成设置项要新增 `app_setting` 键（牵动 03 §9.3.1 与 seed
+/// 无操作多久后锁屏（不登出，输密码解锁）。业务上要"不退出就一直用"，但挡不住人离开磅房机后被接手，
+/// 折中成 1 小时空闲锁屏。做成设置项要新增 `app_setting` 键（牵动 03 §9.3.1 与 seed
 /// 契约测试，且 0002 已发布不可改、只能补 0003），本轮先按常量交付。
 pub const IDLE_TTL_SECS: i64 = 3600;
 /// 连错几次锁多久（02 §11"连续失败锁定"；`failed_count`/`locked_until` 两列 0001 已备）
@@ -111,6 +113,8 @@ pub struct Session {
     pub last_seen_at: String,
     /// 下发给前端，"还有多久掉登录"这类提示因此不必抄常量
     pub idle_ttl_secs: i64,
+    /// 空闲超时锁屏中：会话还在，但业务命令一律拒绝，直到 [`auth_unlock`] 验密解锁
+    pub locked: bool,
 }
 
 /// `auth_login` 的回执。字段全部可缺省，前端按 `ok` 分支。
@@ -185,15 +189,21 @@ fn guard(store: &Store) -> RwLockWriteGuard<'_, Option<Session>> {
     store.write().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// 当前有效会话（供命令与测试复用）；空闲超时就地清掉
+/// 当前会话（供命令与测试复用）；空闲超时**就地转入锁屏**而不清掉——
+/// 登录态本身永久有效，锁屏只是要一次密码确认"人还是刚才那个人"。
 fn live(store: &Store) -> Option<Session> {
     let mut current = guard(store);
     if let Some(session) = current.as_mut() {
-        if idle_expired(&session.last_seen_at, Local::now(), session.idle_ttl_secs) {
-            *current = None;
+        if !session.locked && idle_expired(&session.last_seen_at, Local::now(), session.idle_ttl_secs) {
+            session.locked = true;
         }
     }
     current.clone()
+}
+
+/// 未锁定的当前会话：业务命令与权限判定用它，锁屏期间一律当作"没登录"。
+fn unlocked(store: &Store) -> Option<Session> {
+    live(store).filter(|session| !session.locked)
 }
 
 // ------------------------------------------------------------------- 哈希与会话
@@ -311,12 +321,14 @@ fn audit(
     }
 }
 
-/// 一次校验的两种入口。登录不限岗位；授权必须是站长。
-/// 两者共用同一套失败计数与锁定阈值，区别只在是否签发会话、是否写 `last_login_at`。
+/// 一次校验的三种入口。登录不限岗位；授权必须是站长；解锁只验密、不签发新会话。
+/// 三者共用同一套失败计数与锁定阈值，区别只在是否签发会话、是否写 `last_login_at`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Login,
     Authorize,
+    /// 锁屏后输回本人密码：走同一套 argon2 校验与连错锁定，但不动 `issued_at`/`session_id`
+    Unlock,
 }
 
 impl Kind {
@@ -324,6 +336,7 @@ impl Kind {
         match self {
             Kind::Login => "login",
             Kind::Authorize => "authorize",
+            Kind::Unlock => "login.unlock",
         }
     }
 }
@@ -469,6 +482,7 @@ fn conclude(
         issued_at: stamp.clone(),
         last_seen_at: stamp,
         idle_ttl_secs: IDLE_TTL_SECS,
+        locked: false,
     });
     audit(
         conn,
@@ -581,6 +595,7 @@ pub fn reset_password(conn: &Connection, actor: &AuthProfile, target: i64) -> Ac
     }
 }
 
+/// 留痕：`idle=true` 是空闲锁屏前的记一笔（会话并没被清掉），`idle=false` 是主动登出。
 pub fn logout(conn: &Connection, actor: &AuthProfile, session_id: &str, idle: bool) -> ActionOutcome {
     audit(
         conn,
@@ -588,7 +603,7 @@ pub fn logout(conn: &Connection, actor: &AuthProfile, session_id: &str, idle: bo
         &actor.display_name,
         if idle { "login.timeout" } else { "logout" },
         Some(actor.id),
-        if idle { Some("超过 1 小时无操作") } else { None },
+        if idle { Some("超过 1 小时无操作，已锁屏") } else { None },
         true,
         Some(session_id),
     );
@@ -611,10 +626,10 @@ fn handles(app: &AppHandle) -> Result<(Arc<Mutex<Connection>>, Store), String> {
 
 /// 当前登录人，供其它命令模块在 Rust 侧判岗位（`masters` 的档案写入就用它）。
 /// 会话是**权限的最后一道闸**：前端的 `can()` 只管按钮显隐（05 §5），改不动这里。
-/// 已过空闲时限的会话同样在这里就地清掉，口径与 [`auth_session`] 一致。
+/// 锁屏期间同样在这里就地拒绝——界面浮层可以被绕过，这里不能。
 pub fn current_actor(app: &AppHandle) -> Option<AuthProfile> {
     let store = app.try_state::<AuthState>()?.store();
-    live(&store).map(|session| session.actor)
+    unlocked(&store).map(|session| session.actor)
 }
 
 #[tauri::command]
@@ -637,26 +652,27 @@ pub async fn auth_login(app: AppHandle, username: String, password: String) -> R
 }
 
 /// 取回当前会话：WebView 刷新/HMR 后 JS 状态全丢，靠这条恢复，不必重打密码。
-/// 已过空闲时限的会话在这里就地清掉。
+/// 已过空闲时限的会话在这里就地转入锁屏，`locked` 一并下发给前端弹锁屏浮层。
 #[tauri::command]
 pub async fn auth_session(app: AppHandle) -> Result<Option<Session>, String> {
     let (_, store) = handles(&app)?;
     Ok(live(&store))
 }
 
-/// 活动心跳：界面上的键盘/鼠标事件节流后打这里。回 `false` = 会话已失效，
-/// 前端立刻回登录页（不弹窗、不阻塞正在录的单据，与 05 §6"离线不拦路"一致）。
+/// 活动心跳：界面上的键盘/鼠标事件节流后打这里。回 `false` = 已锁屏，
+/// 前端弹锁屏浮层（会话还在，不登出、不跳登录页，与 05 §6"离线不拦路"一致）。
 #[tauri::command]
 pub async fn auth_touch(app: AppHandle) -> Result<bool, String> {
     let (pool, store) = handles(&app)?;
-    let expired_actor = {
+    let just_locked = {
         let mut current = guard(&store);
         match current.as_mut() {
             None => None,
+            Some(session) if session.locked => None,
             Some(session) => {
                 if idle_expired(&session.last_seen_at, Local::now(), session.idle_ttl_secs) {
                     let stamp = (session.actor.clone(), session.session_id.clone());
-                    *current = None;
+                    session.locked = true;
                     Some(stamp)
                 } else {
                     session.last_seen_at = now_iso();
@@ -665,16 +681,43 @@ pub async fn auth_touch(app: AppHandle) -> Result<bool, String> {
             }
         }
     };
-    match expired_actor {
-        // 空闲失效也要留痕，否则"这单到底是谁打的"会断在无人值守的那段时间
+    match just_locked {
+        // 锁屏也留痕，否则"这单到底是谁打的"会断在无人值守的那段时间
         Some((actor, sid)) => {
             tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| logout(conn, &actor, &sid, true)))
                 .await
-                .map_err(|e| format!("失效处理任务失败：{e}"))?;
+                .map_err(|e| format!("锁屏处理任务失败：{e}"))?;
             Ok(false)
         }
-        None => Ok(true),
+        None => Ok(guard(&store).as_ref().map(|s| !s.locked).unwrap_or(true)),
     }
+}
+
+/// 锁屏解锁：只验**当前登录人本人**的密码，会话本身（session_id/issued_at）不变，
+/// 锁屏前后仍是同一条审计链。连错同样走登录那套 5 次锁 15 分钟（Kind::Unlock 复用三段式）。
+#[tauri::command]
+pub async fn auth_unlock(app: AppHandle, password: String) -> Result<LoginOutcome, String> {
+    let (pool, store) = handles(&app)?;
+    let Some(session) = guard(&store).clone() else {
+        return Ok(LoginOutcome::denied("没有可解锁的登录会话，请重新登录"));
+    };
+    let username = session.actor.username.clone();
+    let sid = session.session_id.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let pending = locked(&pool, |conn| precheck(conn, &username, Kind::Unlock, Some(&sid), Local::now()));
+        let verified = verify_for(&pending, &password);
+        locked(&pool, |conn| conclude(conn, pending, verified, Kind::Unlock, Some(&sid), Local::now()))
+    })
+    .await
+    .map_err(|e| format!("解锁任务失败：{e}"))?;
+    if outcome.ok {
+        let mut current = guard(&store);
+        if let Some(s) = current.as_mut() {
+            s.locked = false;
+            s.last_seen_at = now_iso();
+        }
+    }
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -694,8 +737,8 @@ pub async fn auth_logout(app: AppHandle) -> Result<ActionOutcome, String> {
 #[tauri::command]
 pub async fn auth_change_password(app: AppHandle, old: String, new: String) -> Result<ActionOutcome, String> {
     let (pool, store) = handles(&app)?;
-    let Some(session) = live(&store) else {
-        return Ok(ActionOutcome { ok: false, error: Some("登录已失效，请重新登录".into()) });
+    let Some(session) = unlocked(&store) else {
+        return Ok(ActionOutcome { ok: false, error: Some("登录已失效或处于锁屏，请先处理后再试".into()) });
     };
     let actor = session.actor.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| change_password(&conn, &actor, &old, &new)))
@@ -713,8 +756,8 @@ pub async fn auth_change_password(app: AppHandle, old: String, new: String) -> R
 #[tauri::command]
 pub async fn auth_reset_password(app: AppHandle, target: i64) -> Result<ActionOutcome, String> {
     let (pool, store) = handles(&app)?;
-    let Some(session) = live(&store) else {
-        return Ok(ActionOutcome { ok: false, error: Some("登录已失效，请重新登录".into()) });
+    let Some(session) = unlocked(&store) else {
+        return Ok(ActionOutcome { ok: false, error: Some("登录已失效或处于锁屏，请先处理后再试".into()) });
     };
     let actor = session.actor.clone();
     tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| reset_password(&conn, &actor, target)))

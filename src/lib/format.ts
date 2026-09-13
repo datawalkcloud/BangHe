@@ -5,7 +5,7 @@
  *  - 重量以 0.1kg 为单位存整数（字段后缀 `_01kg`），真实实现由 Rust 侧 rust_decimal 计算，
  *    这里只做展示层换算，业务计算不在前端发生
  *  - 金额以分为单位（`_fen`）
- *  - 单价以分/吨为单位（`price_fen_per_ton`）
+ *  - 单价以分/吨为单位存（`price_fen_per_ton`），界面一律按元/公斤录入与展示，不再出现元/吨、元/斤
  *  - 化验指标以 0.01% 为单位（`_001pct`）
  *
  * 除本文件外，任何组件与页面都不允许出现 `/10`、`*100` 之类的散落换算。
@@ -57,34 +57,31 @@ export function money(fen: number | null | undefined, withSymbol = true): string
   return `${withSymbol ? "¥" : ""}${group(y, 2)}`;
 }
 
-/** 分/吨 → 三种行业口径并列展示 */
-export function price(fenPerTon: number | null | undefined): {
-  perTon: string;
-  perJin: string;
-  perKg: string;
-} {
-  if (nil(fenPerTon)) {
-    return { perTon: EMPTY, perJin: EMPTY, perKg: EMPTY };
-  }
-  return {
-    // 分/吨 → 元/吨 仅除以 100，不要再除 1000
-    perTon: `${money(fenPerTon)} / 吨`,
-    perJin: `${group(fenPerTon / 2000 / 100, 2)} 元/斤`,
-    perKg: `${group(fenPerTon / 1000 / 100, 2)} 元/公斤`,
-  };
-}
-
-/** 简写：元/吨（不带货币符） */
-export function pricePerTonNumber(fenPerTon: number | null | undefined): string {
+/** 单价展示串，全站唯一口径：元/公斤 */
+export function price(fenPerTon: number | null | undefined): string {
   if (nil(fenPerTon)) return EMPTY;
-  return group(fenPerTon / 100, 2);
+  return `${priceNumber(fenPerTon)} 元/公斤`;
 }
 
-/** 元/吨 → 分/吨整数 */
-export function fromYuanPerTon(yuanPerTon: number | string): number {
-  const n = typeof yuanPerTon === "string" ? Number(yuanPerTon) : yuanPerTon;
+/** 分/吨 → 元/公斤的纯数值，用于比较、输入回填与拼接 */
+export function toYuanPerKg(fenPerTon: number): number {
+  return fenPerTon / 1000 / 100;
+}
+
+/** 元/公斤，2 位小数、最多 3 位（0.001 元/公斤 = 1 元/吨），不带货币符 */
+export function priceNumber(fenPerTon: number | null | undefined): string {
+  if (nil(fenPerTon)) return EMPTY;
+  return (Math.round(toYuanPerKg(fenPerTon) * 1000) / 1000).toLocaleString("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 3,
+  });
+}
+
+/** 元/公斤 → 分/吨整数 */
+export function fromYuanPerKg(yuanPerKg: number | string): number {
+  const n = typeof yuanPerKg === "string" ? Number(yuanPerKg.replace(/[,，\s]/g, "")) : yuanPerKg;
   if (Number.isNaN(n)) return 0;
-  return Math.round(n * 100);
+  return Math.round(n * 100 * 1000);
 }
 
 /** 0.01% → "14.80 %" */
@@ -258,11 +255,6 @@ export function fileSize(bytes: number): string {
 export function ratioText(r: number | null | undefined, digits = 2): string {
   if (nil(r)) return EMPTY;
   return `${(r * 100).toFixed(digits)}%`;
-}
-
-/** 分/吨 输入 → 元/斤 展示用数值 */
-export function toYuanPerJin(fenPerTon: number): number {
-  return fenPerTon / 2000 / 100;
 }
 
 export const NUM_CELL = "tnum text-right tabular-nums";

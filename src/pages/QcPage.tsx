@@ -22,7 +22,7 @@ import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { QcDecisionBadge, ToneBadge } from "@/components/business/badges";
 import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
-import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
+import { detailColumn, QuickDetailLink } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -138,6 +138,7 @@ export function QcPage() {
       },
       { key: "inspector", header: "化验员", cell: (q) => <span className="text-xs">{names(q.inspector_id)}</span> },
       { key: "at", header: "化验时间", cell: (q) => <span className="tnum text-xs">{dateTime(q.inspected_at)}</span>, sortValue: (q) => q.inspected_at },
+      detailColumn("qc", (q) => q.report_no),
     ],
     [names, varieties],
   );
@@ -168,8 +169,7 @@ export function QcPage() {
           <Button
             size="xs"
             variant="outline"
-            onClick={(e) => {
-              e.stopPropagation();
+            onClick={() => {
               void navigate({ to: "/workstation", search: { orderNo: o.order_no } });
             }}
           >
@@ -266,7 +266,6 @@ export function QcPage() {
               rowKey={(q) => q.report_no}
               loading={isPending}
               rowHref={(q) => `/qc/${q.report_no}`}
-              onRowClick={(q) => void navigate({ to: "/qc/$reportNo", params: { reportNo: q.report_no } })}
               rowClassName={(q) => (q.is_effective === 0 ? "text-muted-foreground" : undefined)}
               empty={
                 <EmptyState
@@ -276,7 +275,7 @@ export function QcPage() {
               }
               toolbar={
                 <span className="text-xs text-muted-foreground">
-                  灰色行是被复检替换掉的旧单，仅作留档，不参与计价。水分/杂质超基准只标色提示。
+                  末列「详情」在本页右侧弹出完整质检单。灰色行是被复检替换掉的旧单，仅作留档，不参与计价。水分/杂质超基准只标色提示。
                 </span>
               }
             />
@@ -288,7 +287,6 @@ export function QcPage() {
               rows={queue}
               rowKey={(o) => o.order_no}
               loading={queuePending}
-              onRowClick={(o) => void navigate({ to: "/workstation", search: { orderNo: o.order_no } })}
               empty={
                 <EmptyState
                   title="待检队列是空的"

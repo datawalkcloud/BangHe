@@ -416,8 +416,10 @@ export const api = {
   ): Promise<Party> {
     await sleep(120);
     const idx = input.id != null ? parties.findIndex((p) => p.id === input.id) : -1;
+    // 证号 / 手机号占用先查后写：报错点出既有档案姓名，与真库 party_save 同一套文案
+    assertPartyUnique(input.id_card_no, input.phone, idx >= 0 ? parties[idx].id : null);
     if (idx >= 0) {
-      const next: Party = { ...parties[idx], ...input, id: parties[idx].id };
+      const next: Party = { ...parties[idx], ...input, phone: phoneKey(input.phone), id: parties[idx].id };
       parties[idx] = next;
       auditMaster("party.update", "party", next.code, input.operator_id);
       return next;
@@ -430,7 +432,7 @@ export const api = {
       id_card_no: input.id_card_no,
       // 与真库 save_party 同口径：核验标记由调用方（证号是否读卡带入）决定，缺省未核验
       id_card_verified: input.id_card_verified ?? 0,
-      phone: input.phone ?? "",
+      phone: phoneKey(input.phone),
       address: input.address ?? "",
       bank_name: input.bank_name ?? null,
       bank_account: input.bank_account ?? null,
@@ -1541,6 +1543,28 @@ function tzSuffix(d: Date): string {
 
 function localIso(d: Date): string {
   return `${dateKey(d)}T${d.toTimeString().slice(0, 8)}${tzSuffix(d)}`;
+}
+
+/**
+ * 手机号归一：与真库 `orders.rs::phone_key` 同口径（去空白与 `-`、转大写）。
+ * 入库的形状就是比对的形状，`uk_party_phone` 才顶得住 `138-0013-8000` 与 `13800001380` 并存。
+ */
+function phoneKey(raw: string | null | undefined): string {
+  return (raw ?? "").replace(/[\s-]/g, "").toUpperCase();
+}
+
+/** 建档/改档去重（02 §F3.1 一人一档、一人一号），报错文案与真库 `party_save` 同口径 */
+function assertPartyUnique(idCard: string | null | undefined, phone: string | null | undefined, selfId: number | null): void {
+  const idc = (idCard ?? "").trim().toUpperCase();
+  if (idc) {
+    const dup = parties.find((p) => p.id !== selfId && p.id_card_no.trim().toUpperCase() === idc);
+    if (dup) throw new Error(`该身份证号已是档案「${dup.name}」，一人一档，请搜索后编辑原档案`);
+  }
+  const ph = phoneKey(phone);
+  if (ph) {
+    const dup = parties.find((p) => p.id !== selfId && phoneKey(p.phone) === ph);
+    if (dup) throw new Error(`该手机号已是档案「${dup.name}」的号码，一人一号，请搜索后编辑原档案`);
+  }
 }
 
 /**

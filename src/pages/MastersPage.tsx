@@ -22,7 +22,7 @@ import { api } from "@/lib/api";
 import type { AppSetting, GrainVariety, PriceList, Warehouse } from "@/mock/types";
 import type { Grade } from "@/lib/constants";
 import { GRADES, INDICATORS } from "@/lib/constants";
-import { density, fromPercent, percent, price as fmtPrice, fromYuanPerTon, todayISO, weight } from "@/lib/format";
+import { density, fromPercent, fromYuanPerKg, percent, price as fmtPrice, priceNumber, toYuanPerKg, todayISO, weight } from "@/lib/format";
 import { needsPrintVerify, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import { SETTINGS_GROUP } from "@/lib/settings-catalog";
 import { useStaff, useVarieties, useWarehouses, usePrices, useSettings } from "@/hooks/useLookups";
@@ -780,7 +780,7 @@ interface PriceForm {
   id: number | null;
   varietyId: string;
   grade: Grade;
-  yuanPerTon: string;
+  yuanPerKg: string;
   from: string;
   to: string;
   remark: string;
@@ -809,7 +809,7 @@ function PricesSection() {
       id: null,
       varietyId: "",
       grade: "二等",
-      yuanPerTon: "",
+      yuanPerKg: "",
       from: today,
       to: `${today.slice(0, 4)}-12-31`,
       remark: "",
@@ -823,7 +823,7 @@ function PricesSection() {
         operator_id: actorId(),
         variety_id: Number(form.varietyId),
         grade: form.grade,
-        price_fen_per_ton: fromYuanPerTon(form.yuanPerTon),
+        price_fen_per_ton: fromYuanPerKg(form.yuanPerKg),
         effective_from: form.from,
         effective_to: form.to,
         basis: "",
@@ -831,7 +831,7 @@ function PricesSection() {
       }),
     onSuccess: (p) => {
       const v = varieties.find((x) => x.id === p.variety_id);
-      toast.success(`已发布新价目：${v?.name ?? `#${p.variety_id}`} ${p.grade} ${fmtPrice(p.price_fen_per_ton).perTon}`);
+      toast.success(`已发布新价目：${v?.name ?? `#${p.variety_id}`} ${p.grade} ${fmtPrice(p.price_fen_per_ton)}`);
       setOpen(false);
       setForm(emptyPrice());
       void queryClient.invalidateQueries({ queryKey: ["prices"] });
@@ -842,7 +842,7 @@ function PricesSection() {
 
   const errors: string[] = [];
   if (!form.varietyId) errors.push("请选择品种");
-  if (!(Number(form.yuanPerTon) > 0)) errors.push("单价必须是大于 0 的元/吨");
+  if (!(Number(form.yuanPerKg) > 0)) errors.push("单价必须是大于 0 的元/公斤");
   if (form.from > form.to) errors.push("生效起始日不能晚于截止日");
 
   const columns: Column<PriceList>[] = [
@@ -855,14 +855,9 @@ function PricesSection() {
     { key: "grade", header: "等级", cell: (p) => p.grade, sortValue: (p) => p.grade },
     {
       key: "price",
-      header: "单价",
+      header: "单价（元/公斤）",
       align: "right",
-      cell: (p) => (
-        <span className="tnum">
-          {fmtPrice(p.price_fen_per_ton).perTon}
-          <span className="ml-1 text-xs text-muted-foreground">{fmtPrice(p.price_fen_per_ton).perJin}</span>
-        </span>
-      ),
+      cell: (p) => <span className="tnum">{priceNumber(p.price_fen_per_ton)}</span>,
       sortValue: (p) => p.price_fen_per_ton,
     },
     {
@@ -895,7 +890,7 @@ function PricesSection() {
               id: p.id,
               varietyId: String(p.variety_id),
               grade: p.grade,
-              yuanPerTon: String(p.price_fen_per_ton / 100),
+              yuanPerKg: String(toYuanPerKg(p.price_fen_per_ton)),
               from: p.effective_from,
               to: p.effective_to,
               remark: p.remark ?? "",
@@ -939,7 +934,7 @@ function PricesSection() {
           <DialogHeader>
             <DialogTitle className="text-sm">{form.id == null ? "发布新价目" : "修改价目"}</DialogTitle>
             <DialogDescription className="text-xs">
-              单价单位是「分/吨」定点存储，界面上按元/吨录入并同步显示元/斤，避免口算出错。
+              单价按「元/公斤」录入，最多三位小数。
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -962,13 +957,8 @@ function PricesSection() {
               />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              单价（元/吨）*
-              <Input value={form.yuanPerTon} onChange={(e) => patch({ yuanPerTon: e.target.value })} inputMode="decimal" className="tnum text-sm" />
-              {Number(form.yuanPerTon) > 0 && (
-                <span className="tnum text-xs text-muted-foreground">
-                  约合 {fmtPrice(fromYuanPerTon(form.yuanPerTon)).perJin} / {fmtPrice(fromYuanPerTon(form.yuanPerTon)).perKg}
-                </span>
-              )}
+              单价（元/公斤）*
+              <Input value={form.yuanPerKg} onChange={(e) => patch({ yuanPerKg: e.target.value })} inputMode="decimal" className="tnum text-sm" />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               有效期

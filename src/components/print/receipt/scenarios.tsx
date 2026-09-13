@@ -293,8 +293,7 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("settlement_weight_ton", "结算重量(吨)", "重量明细", "ton"),
   // 皮重偏差超容差的醒目提醒：捕获不被拦下，但票面必须印得出来（迎检与事后核对都看这一栏）
   mk("tare_warning", "皮重警示", "重量明细", "text"),
-  mk("price_per_ton", "单价(元/吨)", "金额", "money"),
-  mk("price_per_jin", "单价(元/斤)", "金额", "money"),
+  mk("price_per_kg", "单价(元/公斤)", "金额", "money"),
   mk("goods_amount", "货款", "金额", "money"),
   mk("deduction_fee", "扣款", "金额", "money"),
   mk("advance_fee", "预付款", "金额", "money"),
@@ -503,8 +502,7 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "deduct_total": return weight(o.deduct_total_01kg);
       case "settlement_weight": return weight(o.settlement_weight_01kg);
       case "settlement_weight_ton": return ton(o.settlement_weight_01kg);
-      case "price_per_ton": return price(o.price_fen_per_ton).perTon;
-      case "price_per_jin": return price(o.price_fen_per_ton).perJin;
+      case "price_per_kg": return price(o.price_fen_per_ton);
       case "goods_amount": return money(o.goods_amount_fen);
       case "deduction_fee": return money(o.deduction_fee_fen);
       case "advance_fee": return money(o.advance_fee_fen);
@@ -610,7 +608,7 @@ const SETTLE_SPEC: ScenarioSpec = {
     return ctx.settlement.orders.map((o) => ({
       order_no: o.order_no,
       settlement_weight: weight(o.settlement_weight_01kg),
-      price: price(o.price_fen_per_ton).perTon,
+      price: price(o.price_fen_per_ton),
       goods_amount: money(o.goods_amount_fen),
     }));
   },

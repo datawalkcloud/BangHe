@@ -118,6 +118,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0012_reader_prompt_voice.sql",
         sql: include_str!("migrations/0012_reader_prompt_voice.sql"),
     },
+    Migration {
+        name: "0013_party_phone_unique.sql",
+        sql: include_str!("migrations/0013_party_phone_unique.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

@@ -18,8 +18,9 @@ import { api } from "@/lib/api";
 import type { DailyReport, LedgerRow, PartyRankRow, QualityReport, StaffLoadRow } from "@/mock/types";
 import type { Grade, Tone } from "@/lib/constants";
 import { PARTY_TYPE, PAYMENT_METHOD, ROLE, TONE_DOT, WEIGHT_SOURCE } from "@/lib/constants";
-import { maskIdCard, money, orDash, percent, price as fmtPrice, ratioText, shiftDay, todayISO, weight } from "@/lib/format";
-import { csvName, downloadCsv } from "@/lib/csv";
+import { maskIdCard, money, orDash, percent, price as fmtPrice, priceNumber, ratioText, shiftDay, toYuanPerKg, todayISO, weight } from "@/lib/format";
+import { csvName } from "@/lib/csv";
+import { exportCsvFile } from "@/lib/export-csv";
 import { RANGE_PRESETS, resolveRange } from "@/lib/date-range";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useStation, useStaffNames } from "@/hooks/useLookups";
@@ -29,7 +30,7 @@ import { BarList, MiniBars, RatioBar, SplitBar, StatCard } from "@/components/bu
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
-import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
+import { detailColumn } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
@@ -145,7 +146,7 @@ function printReport() {
 
 function useExportGuard() {
   const can = useSession((s) => s.can);
-  return (headers: string[], rows: (string | number)[][], base: string) => {
+  return async (headers: string[], rows: (string | number)[][], base: string) => {
     if (!can("data.export")) {
       toast.error("当前岗位没有导出权限（需 data.export）");
       return;
@@ -154,8 +155,7 @@ function useExportGuard() {
       toast.error("当前期间没有数据可导出");
       return;
     }
-    const n = downloadCsv(csvName(base), headers, rows);
-    toast.success(`已导出 ${n} 行到 CSV（Excel 双击即为中文）`);
+    await exportCsvFile({ filename: csvName(base), headers, rows });
   };
 }
 
@@ -232,11 +232,7 @@ function LedgerReport() {
       {
         key: "no",
         header: "磅单号",
-        cell: (r) => (
-          <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-primary">
-            {r.order_no}
-          </QuickDetailLink>
-        ),
+        cell: (r) => <span className="tnum font-medium">{r.order_no}</span>,
         sortValue: (r) => r.order_no,
       },
       { key: "party", header: "售粮人", cell: (r) => r.party_name, sortValue: (r) => r.party_name },
@@ -268,7 +264,7 @@ function LedgerReport() {
       { key: "settle", header: "结算重量", align: "right", cell: (r) => <Num>{weight(r.settlement_weight_01kg)}</Num>, footer: () => <Num>{weight(sum.settle)}</Num> },
       { key: "m", header: "水分", align: "right", cell: (r) => <Num>{percent(r.moisture_001pct, "")}</Num> },
       { key: "i", header: "杂质", align: "right", cell: (r) => <Num>{percent(r.impurity_001pct, "")}</Num> },
-      { key: "price", header: "单价", align: "right", cell: (r) => <Num>{r.price_fen_per_ton ? fmtPrice(r.price_fen_per_ton).perTon : "—"}</Num> },
+      { key: "price", header: "单价（元/公斤）", align: "right", cell: (r) => <Num>{priceNumber(r.price_fen_per_ton)}</Num> },
       { key: "goods", header: "粮款", align: "right", cell: (r) => <Num>{money(r.goods_amount_fen)}</Num>, footer: () => <Num>{money(sum.goods)}</Num> },
       { key: "fee", header: "扣款", align: "right", cell: (r) => <Num>{money(r.deduction_fee_fen)}</Num>, footer: () => <Num>{money(sum.fee)}</Num> },
       { key: "payable", header: "应付", align: "right", cell: (r) => <Num>{money(r.payable_amount_fen)}</Num>, footer: () => <Num>{money(sum.payable)}</Num> },
@@ -289,13 +285,14 @@ function LedgerReport() {
         header: "状态",
         cell: (r) => (r.settled ? <ToneBadge tone="info">已结算</ToneBadge> : <ToneBadge tone="neutral">未结算</ToneBadge>),
       },
+      detailColumn("order", (r) => r.order_no),
     ],
     [sum],
   );
 
   function doExport() {
     exportGuard(
-      ["序号", "业务日期", "磅单号", "售粮人", "身份", "证件号", "住址", "品种", "等级", "车号", "仓房/货位", "毛重kg", "皮重kg", "净重kg", "扣量kg", "结算重量kg", "水分%", "杂质%", "元/吨", "粮款元", "扣款元", "应付元", "已付元", "未付元", "付款方式", "称重来源", "磅员", "化验员", "状态"],
+      ["序号", "业务日期", "磅单号", "售粮人", "身份", "证件号", "住址", "品种", "等级", "车号", "仓房/货位", "毛重kg", "皮重kg", "净重kg", "扣量kg", "结算重量kg", "水分%", "杂质%", "元/公斤", "粮款元", "扣款元", "应付元", "已付元", "未付元", "付款方式", "称重来源", "磅员", "化验员", "状态"],
       data.map((r) => [
         r.seq,
         r.business_date,
@@ -315,7 +312,7 @@ function LedgerReport() {
         (r.settlement_weight_01kg ?? 0) / 10,
         r.moisture_001pct == null ? "" : r.moisture_001pct / 100,
         r.impurity_001pct == null ? "" : r.impurity_001pct / 100,
-        r.price_fen_per_ton == null ? "" : r.price_fen_per_ton / 100,
+        r.price_fen_per_ton == null ? "" : toYuanPerKg(r.price_fen_per_ton),
         (r.goods_amount_fen ?? 0) / 100,
         r.deduction_fee_fen / 100,
         (r.payable_amount_fen ?? 0) / 100,
@@ -519,7 +516,7 @@ function DailyReportView() {
               label="粮款"
               value={money(total.goods_fen, false)}
               unit="元"
-              hint={`均价 ${total.settle_01kg ? fmtPrice(Math.round(total.goods_fen / (total.settle_01kg / 10000))).perTon : "—"}`}
+              hint={`均价 ${total.settle_01kg ? fmtPrice(Math.round(total.goods_fen / (total.settle_01kg / 10000))) : "—"}`}
               delta={vsWeek.text ? { text: `净重较上周同期 ${vsWeek.text}`, dir: vsWeek.dir } : undefined}
             />
             <StatCard
@@ -763,11 +760,7 @@ function PartyRankReport() {
       {
         key: "name",
         header: "售粮人",
-        cell: (r) => (
-          <QuickDetailLink type="party" id={r.party_id} className="font-medium text-primary">
-            {r.name}
-          </QuickDetailLink>
-        ),
+        cell: (r) => <span className="font-medium">{r.name}</span>,
         sortValue: (r) => r.name,
       },
       { key: "type", header: "身份", cell: (r) => <span className="text-xs">{PARTY_TYPE[r.party_type]}</span> },
@@ -792,6 +785,7 @@ function PartyRankReport() {
         title: "该售粮人全部历史过磅记录的皮重均值，不受上方日期区间影响",
         cell: (r) => <Num>{weight(r.avg_tare_01kg)}</Num>,
       },
+      detailColumn("party", (r) => r.party_id),
     ],
     [rows],
   );

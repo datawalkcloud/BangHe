@@ -15,7 +15,8 @@ import { api } from "@/lib/api";
 import type { PaymentRecord } from "@/mock/types";
 import { PAYMENT_METHOD, TONE_DOT } from "@/lib/constants";
 import { dateTime, money, orDash, shiftDay, todayISO } from "@/lib/format";
-import { csvName, downloadCsv } from "@/lib/csv";
+import { csvName } from "@/lib/csv";
+import { exportCsvFile } from "@/lib/export-csv";
 import { useSetting, useStaffNames, useStation } from "@/hooks/useLookups";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { useHotkey } from "@/hooks/useHotkey";
@@ -24,7 +25,7 @@ import { BarList, StatCard } from "@/components/business/StatCard";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
-import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
+import { QuickDetailLink } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
@@ -122,15 +123,15 @@ export function PaymentsPage() {
     [names, station, printReceipt],
   );
 
-  function exportCsv() {
+  async function exportCsv() {
     if (payments.length === 0) {
       toast.error("当前期间没有付款流水");
       return;
     }
-    const n = downloadCsv(
-      csvName(`付款流水_${from}_${to}`),
-      ["付款流水号", "付款时间", "收款人", "金额元", "方式", "结算单号", "磅单号", "交易流水", "凭证号", "经手人", "状态"],
-      payments.map((p) => [
+    await exportCsvFile({
+      filename: csvName(`付款流水_${from}_${to}`),
+      headers: ["付款流水号", "付款时间", "收款人", "金额元", "方式", "结算单号", "磅单号", "交易流水", "凭证号", "经手人", "状态"],
+      rows: payments.map((p) => [
         p.pay_no,
         dateTime(p.paid_at),
         p.party_name,
@@ -143,8 +144,7 @@ export function PaymentsPage() {
         names(p.operator_id),
         p.reversed === 1 ? "已冲销" : "有效",
       ]),
-    );
-    toast.success(`已导出 ${n} 行付款流水`);
+    });
   }
 
   useHotkey("ctrl+e", exportCsv, { allowInInput: true });

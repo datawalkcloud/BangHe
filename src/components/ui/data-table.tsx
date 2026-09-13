@@ -156,7 +156,6 @@ export function DataTable<T extends RowData>({
   rows,
   rowKey,
   loading = false,
-  onRowClick,
   rowHref,
   toolbar,
   defaultPageSize = 50,
@@ -170,7 +169,6 @@ export function DataTable<T extends RowData>({
   rows: T[]
   rowKey: (row: T, index: number) => string | number
   loading?: boolean
-  onRowClick?: (row: T, index: number) => void
   /** 给出后 Ctrl+点击 可在新窗口打开同一张单（对账时并排看两张单是真实需求） */
   rowHref?: (row: T) => string
   toolbar?: React.ReactNode
@@ -417,14 +415,9 @@ export function DataTable<T extends RowData>({
                           `${window.location.pathname}${window.location.search}#${rowHref(row.original)}`,
                           "_blank",
                         )
-                        return
                       }
-                      onRowClick?.(row.original, row.index)
                     }}
-                    className={cn(
-                      onRowClick && "cursor-pointer",
-                      rowClassName?.(row.original),
-                    )}
+                    className={cn(rowClassName?.(row.original))}
                   >
                     {row.getAllCells().map((cell) => {
                       const col = byKey.get(cell.column.id)

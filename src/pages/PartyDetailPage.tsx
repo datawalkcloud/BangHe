@@ -26,7 +26,7 @@ import { PartyPortrait } from "@/components/business/PartyPortrait";
 import { OrderStatusBadge, PaymentStatusBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { StatCard } from "@/components/business/StatCard";
-import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
+import { detailColumn, QuickDetailLink } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -40,9 +40,22 @@ import { cn } from "cn";
 const DETAIL_TABLE =
   "border-collapse text-sm [&_th]:h-auto [&_th]:px-0 [&_th]:py-1.5 [&_th]:font-normal [&_th]:text-inherit [&_td]:px-0 [&_td]:py-1.5";
 
-export function PartyDetailPage() {
-  const { id } = useParams({ from: "/parties/$id" });
-  const partyId = Number(id);
+/**
+ * 档案正文（整页与详情抽屉共用）。
+ *
+ * `embedded` 给抽屉用：标题条要让开 Sheet 右上角的关闭按钮；
+ * 「返回列表」这类整页导航由整页壳通过 `headerExtra` 传进来。
+ */
+export function PartyDetailBody({
+  partyId,
+  embedded = false,
+  headerExtra,
+}: {
+  partyId: number;
+  embedded?: boolean;
+  headerExtra?: ReactNode;
+}) {
+  const headerCls = embedded ? "pr-11" : undefined;
   const qc = useQueryClient();
   const readCard = useDeviceStore((s) => s.reader.idcard.read);
   const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
@@ -72,7 +85,7 @@ export function PartyDetailPage() {
   if (isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="售粮人档案" description="加载中…" />
+        <PageHeader title="售粮人档案" description="加载中…" className={headerCls} />
         <div className="grid gap-4 px-6 py-4 xl:grid-cols-2">
           {Array.from({ length: 4 }, (_, i) => (
             <Skeleton key={i} className="h-48" />
@@ -85,14 +98,16 @@ export function PartyDetailPage() {
   if (!detail) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="售粮人档案" />
+        <PageHeader title="售粮人档案" className={headerCls} />
         <EmptyState
-          title={`找不到编号 ${id} 的档案`}
+          title={`找不到编号 ${partyId} 的档案`}
           description="档案可能已被删除，或这台电脑的数据与另一台不在一起。"
           action={
-            <Button size="sm" variant="outline" render={<Link to="/parties" />}>
-              返回档案列表
-            </Button>
+            embedded ? undefined : (
+              <Button size="sm" variant="outline" render={<Link to="/parties" />}>
+                返回档案列表
+              </Button>
+            )
           }
         />
       </div>
@@ -133,15 +148,7 @@ export function PartyDetailPage() {
   }
 
   const recentCols: Column<OrderRow>[] = [
-    {
-      key: "order_no",
-      header: "磅单号",
-      cell: (r) => (
-        <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-primary">
-          {r.order_no}
-        </QuickDetailLink>
-      ),
-    },
+    { key: "order_no", header: "磅单号", cell: (r) => <span className="tnum font-medium">{r.order_no}</span> },
     { key: "date", header: "业务日期", cell: (r) => <span className="tnum">{r.business_date}</span>, sortValue: (r) => r.business_date },
     { key: "variety", header: "品种/等级", cell: (r) => `${r.variety_name}${r.grade ? ` ${r.grade}` : ""}` },
     { key: "vehicle", header: "车牌", cell: (r) => <span className="tnum">{orDash(r.vehicle_no)}</span> },
@@ -151,11 +158,13 @@ export function PartyDetailPage() {
     { key: "status", header: "状态", cell: (r) => <OrderStatusBadge status={r.status} /> },
     { key: "payment", header: "付款", cell: (r) => <PaymentStatusBadge status={r.payment_status} /> },
     { key: "source", header: "称重来源", cell: (r) => <WeightSourceBadge source={r.weight_source} /> },
+    detailColumn("order", (r) => r.order_no),
   ];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        className={headerCls}
         title={
           <span className="flex items-center gap-2">
             {detail.name}
@@ -166,10 +175,7 @@ export function PartyDetailPage() {
         description={`${detail.code} · 建档 ${detail.created_at?.slice(0, 10) ?? ""} · 证号 ${maskIdCard(detail.id_card_no)}`}
         actions={
           <>
-            <Button size="sm" variant="outline" render={<Link to="/parties" />}>
-              <ArrowLeftIcon />
-              返回列表
-            </Button>
+            {headerExtra}
             <Button size="sm" variant="outline" onClick={() => void verifyByCard()}>
               <ScanLineIcon />
               读卡核对
@@ -316,13 +322,9 @@ export function PartyDetailPage() {
               <ul className="flex flex-col gap-1.5">
                 {myCredits.map((c) => (
                   <li key={c.settlement.settle_no} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                    <Link
-                      to="/settlements/$settleNo"
-                      params={{ settleNo: c.settlement.settle_no }}
-                      className="tnum font-medium underline underline-offset-2"
-                    >
+                    <QuickDetailLink type="settlement" id={c.settlement.settle_no} className="tnum font-medium underline underline-offset-2">
                       {c.settlement.settle_no}
-                    </Link>
+                    </QuickDetailLink>
                     <span className="text-xs text-muted-foreground">
                       {c.settlement.period_from} ~ {c.settlement.period_to} · {c.settlement.order_count} 张
                     </span>
@@ -346,6 +348,22 @@ export function PartyDetailPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** 整页路由入口：深链与 Ctrl+点击新窗口仍走这里，正文与详情抽屉共用 */
+export function PartyDetailPage() {
+  const { id } = useParams({ from: "/parties/$id" });
+  return (
+    <PartyDetailBody
+      partyId={Number(id)}
+      headerExtra={
+        <Button size="sm" variant="outline" render={<Link to="/parties" />}>
+          <ArrowLeftIcon />
+          返回列表
+        </Button>
+      }
+    />
   );
 }
 

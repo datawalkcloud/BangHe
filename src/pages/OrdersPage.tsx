@@ -18,8 +18,9 @@ import type { OrderRow } from "@/mock/api";
 import type { OrderFilters } from "@/mock/types";
 import type { OrderStatus, PaymentStatus, WeightSource } from "@/lib/constants";
 import { ORDER_STATUS, PARTY_TYPE, PAYMENT_STATUS, WEIGHT_SOURCE } from "@/lib/constants";
-import { maskIdCard, money, orDash, price as fmtPrice, shiftDay, toKg, todayISO, weight } from "@/lib/format";
-import { downloadCsv, csvName } from "@/lib/csv";
+import { maskIdCard, money, orDash, priceNumber, shiftDay, toKg, toYuanPerKg, todayISO, weight } from "@/lib/format";
+import { csvName } from "@/lib/csv";
+import { exportCsvFile } from "@/lib/export-csv";
 import { useStaffNames, useVarieties } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
 import { actorId, useSession } from "@/store/session";
@@ -39,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
 import { EmptyState, PageHeader } from "@/components/business/layout";
+import { detailColumn } from "@/components/business/quickDetail";
 import { cn } from "cn";
 
 /** 默认只显示磅员天天要看的列，其余收进「列」下拉，1280 px 才放得下 */
@@ -149,9 +151,9 @@ export function OrdersPage() {
       {
         col: {
           key: "price",
-          header: "单价",
+          header: "单价（元/公斤）",
           align: "right",
-          cell: (r) => <span className="tnum">{r.price_fen_per_ton == null ? "—" : fmtPrice(r.price_fen_per_ton).perTon}</span>,
+          cell: (r) => <span className="tnum">{priceNumber(r.price_fen_per_ton)}</span>,
           sortValue: (r) => r.price_fen_per_ton,
         },
       },
@@ -179,15 +181,15 @@ export function OrdersPage() {
       { col: { key: "payment", header: "付款", cell: (r) => <PaymentStatusBadge status={r.payment_status} /> } },
       { col: { key: "source", header: "称重来源", cell: (r) => <WeightSourceBadge source={r.weight_source} /> } },
     ];
-    return slots.filter((s) => !s.opt || show[s.opt]).map((s) => s.col);
+    return [...slots.filter((s) => !s.opt || show[s.opt]).map((s) => s.col), detailColumn("order", (r) => r.order_no)];
   }, [show, summary]);
 
-  function exportCsv() {
+  async function exportCsv() {
     if (rows.length === 0) {
       toast.error("当前筛选结果为空，没有可导出的行");
       return;
     }
-    const headers = ["磅单号", "业务日期", "售粮人", "证号", "品种", "等级", "车牌", "仓房/货位", "毛重kg", "皮重kg", "净重kg", "扣重kg", "结算重量kg", "单价元/吨", "货款元", "扣款元", "应付元", "已付元", "状态", "付款状态", "称重来源", "磅员", "制单时间"];
+    const headers = ["磅单号", "业务日期", "售粮人", "证号", "品种", "等级", "车牌", "仓房/货位", "毛重kg", "皮重kg", "净重kg", "扣重kg", "结算重量kg", "单价元/公斤", "货款元", "扣款元", "应付元", "已付元", "状态", "付款状态", "称重来源", "磅员", "制单时间"];
     const data = rows.map((r) => [
       r.order_no,
       r.business_date,
@@ -202,7 +204,7 @@ export function OrdersPage() {
       r.net_weight_01kg == null ? "" : toKg(r.net_weight_01kg),
       toKg(r.deduct_total_01kg),
       r.settlement_weight_01kg == null ? "" : toKg(r.settlement_weight_01kg),
-      r.price_fen_per_ton == null ? "" : r.price_fen_per_ton / 100,
+      r.price_fen_per_ton == null ? "" : toYuanPerKg(r.price_fen_per_ton),
       r.goods_amount_fen == null ? "" : r.goods_amount_fen / 100,
       r.deduction_fee_fen / 100,
       r.payable_amount_fen == null ? "" : r.payable_amount_fen / 100,
@@ -213,8 +215,7 @@ export function OrdersPage() {
       names(r.weigher_id),
       r.registered_at.slice(0, 19).replace("T", " "),
     ]);
-    const n = downloadCsv(csvName(`磅单台账_${filters.dateFrom}_${filters.dateTo}`), headers, data);
-    toast.success(`已导出 ${n} 行（CSV，Excel 可直接打开）`);
+    await exportCsvFile({ filename: csvName(`磅单台账_${filters.dateFrom}_${filters.dateTo}`), headers, rows: data });
   }
 
   useHotkey("ctrl+e", exportCsv, { allowInInput: true });
@@ -373,7 +374,6 @@ export function OrdersPage() {
             rowKey={(r) => r.order_no}
             loading={query.isPending}
             rowHref={(r) => `/orders/${r.order_no}`}
-            onRowClick={(r) => void navigate({ to: "/orders/$orderNo", params: { orderNo: r.order_no } })}
             selected={selected}
             onSelectedChange={setSelected}
             rowClassName={(r) =>
@@ -395,7 +395,7 @@ export function OrdersPage() {
             }
             toolbar={
               <span className="text-xs text-muted-foreground">
-                点击行进详情，Ctrl+点击在新窗口并排对单；勾选后可批量补打（需站长授权）。
+                末列「详情」在本页右侧弹出完整磅单，Ctrl+点击行在新窗口并排对单；勾选后可批量补打（需站长授权）。
               </span>
             }
           />

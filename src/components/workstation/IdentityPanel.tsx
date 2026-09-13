@@ -26,7 +26,7 @@ import { useSetting } from "@/hooks/useLookups";
 import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { CardScanDialog } from "@/components/business/CardScanDialog";
-import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
+import { QuickDetailLink } from "@/components/business/quickDetail";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
 import { CardBindDialog } from "@/components/workstation/CardBindDialog";
 import { QuickPartyDialog } from "@/components/workstation/QuickPartyDialog";

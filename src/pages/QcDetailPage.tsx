@@ -5,6 +5,7 @@
  * 唯一能自证的说法就是"首检多少、复检多少、差多少、谁测的、用哪台方法"。
  * 所以这个页面在复检时强制渲染对比列，而不是藏在折叠里。
  */
+import { type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon, PrinterIcon } from "lucide-react";
@@ -16,7 +17,7 @@ import { useSession } from "@/store/session";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { QcDecisionBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, InfoGrid, PageHeader } from "@/components/business/layout";
-import { useQuickDetail } from "@/components/business/QuickDetailSheet";
+import { QuickDetailLink, useQuickDetail } from "@/components/business/quickDetail";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,8 +32,22 @@ import { cn } from "cn";
 const DETAIL_TABLE =
   "border-collapse text-sm [&_th]:h-auto [&_th]:px-0 [&_th]:py-1.5 [&_th]:font-normal [&_th]:text-inherit [&_td]:px-0 [&_td]:py-1.5";
 
-export function QcDetailPage() {
-  const { reportNo } = useParams({ from: "/qc/$reportNo" });
+/**
+ * 质检单正文（整页与详情抽屉共用）。
+ *
+ * `embedded` 给抽屉用：标题条要主动让开 Sheet 右上角的关闭按钮；
+ * 「返回台账」这类整页导航按钮由整页壳通过 `headerExtra` 传进来。
+ */
+export function QcDetailBody({
+  reportNo,
+  embedded = false,
+  headerExtra,
+}: {
+  reportNo: string;
+  embedded?: boolean;
+  headerExtra?: ReactNode;
+}) {
+  const headerCls = embedded ? "pr-11" : undefined;
   const names = useStaffNames();
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
@@ -54,7 +69,7 @@ export function QcDetailPage() {
   if (isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="质检单" description="加载中…" />
+        <PageHeader title="质检单" description="加载中…" className={headerCls} />
         <div className="grid gap-4 px-6 py-4 xl:grid-cols-2">
           <Skeleton className="h-64" />
           <Skeleton className="h-64" />
@@ -66,14 +81,16 @@ export function QcDetailPage() {
   if (!data) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader title="质检单" />
+        <PageHeader title="质检单" className={headerCls} />
         <EmptyState
           title={`找不到质检单 ${reportNo}`}
           description="单号可能来自另一台电脑的数据，或该化验尚未保存。"
           action={
-            <Button size="sm" variant="outline" render={<Link to="/qc" />}>
-              返回化验台账
-            </Button>
+            embedded ? undefined : (
+              <Button size="sm" variant="outline" render={<Link to="/qc" />}>
+                返回化验台账
+              </Button>
+            )
           }
         />
       </div>
@@ -87,6 +104,7 @@ export function QcDetailPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        className={headerCls}
         title={
           <span className="flex items-center gap-2">
             <span className="tnum">{report.report_no}</span>
@@ -98,10 +116,7 @@ export function QcDetailPage() {
         description={`${report.party_name} · 样品 ${report.sample_no} · ${TEST_METHOD[report.test_method]} · ${dateTime(report.inspected_at)}`}
         actions={
           <>
-            <Button size="sm" variant="outline" render={<Link to="/qc" />}>
-              <ArrowLeftIcon />
-              返回台账
-            </Button>
+            {headerExtra}
             <Button size="sm" onClick={() => openQuickDetail("order", report.order_no)}>
               对应磅单
             </Button>
@@ -146,9 +161,9 @@ export function QcDetailPage() {
                     {
                       label: "对应磅单",
                       value: (
-                        <Link to="/orders/$orderNo" params={{ orderNo: report.order_no }} className="tnum underline underline-offset-2">
+                        <QuickDetailLink type="order" id={report.order_no} className="tnum underline underline-offset-2">
                           {report.order_no}
-                        </Link>
+                        </QuickDetailLink>
                       ),
                     },
                     { label: "售粮人", value: `${report.party_name}${order ? `（${maskIdCard(order.id_card_no)}）` : ""}` },
@@ -262,5 +277,21 @@ export function QcDetailPage() {
       {/* 直打失败时的兜底预览框：没发起过出票就是 null，不占 DOM */}
       {printFallback}
     </div>
+  );
+}
+
+/** 整页路由入口：深链与 Ctrl+点击新窗口仍走这里，正文与详情抽屉共用 */
+export function QcDetailPage() {
+  const { reportNo } = useParams({ from: "/qc/$reportNo" });
+  return (
+    <QcDetailBody
+      reportNo={reportNo}
+      headerExtra={
+        <Button size="sm" variant="outline" render={<Link to="/qc" />}>
+          <ArrowLeftIcon />
+          返回台账
+        </Button>
+      }
+    />
   );
 }

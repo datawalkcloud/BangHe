@@ -318,16 +318,6 @@ export const devices: DeviceConfig[] = [
     config: { paper: "thermal80", cols: 48, vid: "0x0483", pid: "0x5720", transport: "usbprint.sys" },
     is_enabled: 1, is_mock: 0, is_default: 0, last_status: "unknown", last_ok_at: null, last_error: null, err_count: 0,
   },
-  {
-    id: 9, code: "led1", name: "户外 LED 显示屏", kind: "led", driver: "mock",
-    config: { host: "192.168.1.70", lines: 2 },
-    is_enabled: 0, is_mock: 1, is_default: 0, last_status: "unknown", last_ok_at: null, last_error: null, err_count: 0,
-  },
-  {
-    id: 10, code: "signpad1", name: "电子签名板", kind: "signpad", driver: "hidapi",
-    config: { vid: "0x056a", pid: "0x00b1" },
-    is_enabled: 0, is_mock: 0, is_default: 0, last_status: "unknown", last_ok_at: null, last_error: null, err_count: 0,
-  },
 ];
 
 export const defaultDevice = (kind: DeviceConfig["kind"]) =>

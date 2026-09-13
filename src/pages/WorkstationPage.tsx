@@ -34,7 +34,7 @@ import { TicketPrintSection } from "@/components/settlement/TicketPrintSection";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
-import { useQuickDetail } from "@/components/business/QuickDetailSheet";
+import { useQuickDetail } from "@/components/business/quickDetail";
 import { Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";

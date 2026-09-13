@@ -93,6 +93,9 @@ export function QuickPartyDialog({
   /** 核验判定与档案页同一条：读进来的证号与保存的证号逐字相等 */
   const verified = form.read_card_no.trim().toUpperCase() !== "" && form.read_card_no.trim().toUpperCase() === code;
   const taken = parties.find((p) => p.id_card_no.trim().toUpperCase() === code);
+  /** 手机号一人一号（`uk_party_phone`）：比对形状与真库一致，去空白与 `-` */
+  const phoneKey = form.phone.replace(/[\s-]/g, "");
+  const phoneTaken = phoneKey ? parties.find((p) => p.phone.replace(/[\s-]/g, "") === phoneKey) : undefined;
 
   const errors = useMemo(() => {
     const out: string[] = [];
@@ -100,8 +103,9 @@ export function QuickPartyDialog({
     if (!code) out.push("身份证号必填（读卡带入，或手工录入 18 位）");
     else if (!idOk) out.push("证号校验位不通过（GB 11643），请核对卡面");
     else if (taken) out.push(`该证号已建档（${taken.name}），请改用「搜档案」选人`);
+    if (phoneTaken) out.push(`该手机号已属于档案「${phoneTaken.name}」，一人一号，请改用「搜档案」选人`);
     return out;
-  }, [form.name, code, idOk, taken]);
+  }, [form.name, code, idOk, taken, phoneTaken]);
 
   const save = useMutation({
     mutationFn: async () => {

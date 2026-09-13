@@ -190,7 +190,7 @@ export function SettleForm({
     const nextListed = lookupPrice(prices, order.variety_id, next || null, order.business_date);
     if (nextListed && nextListed.price_fen_per_ton !== priceFenPerTon) {
       setPrice(nextListed.price_fen_per_ton);
-      toast.success(`等级改为 ${next || "未定级"}，单价跟进价目表 ${money(nextListed.price_fen_per_ton)}/吨`);
+      toast.success(`等级改为 ${next || "未定级"}，单价跟进价目表 ${fmtPrice(nextListed.price_fen_per_ton)}`);
       // 只报"跟着改了"：新单价归屏幕与码单（05 §6.5 规矩①）
       announce("等级改了，单价已按新等级带出", `settle-grade:${order.order_no}`);
     }
@@ -203,7 +203,7 @@ export function SettleForm({
       return;
     }
     setPrice(listed.price_fen_per_ton);
-    toast.success(`已带出 ${listed.grade} ${money(listed.price_fen_per_ton)}/吨（生效至 ${listed.effective_to}）`);
+    toast.success(`已带出 ${listed.grade} ${fmtPrice(listed.price_fen_per_ton)}（生效至 ${listed.effective_to}）`);
     // 只报"带出来了"，价格数字归屏幕与码单（05 §6.5 规矩①）
     announce("已带出价目表的现价", `settle-priced:${order.order_no}`);
   }
@@ -258,7 +258,7 @@ export function SettleForm({
         />
         <div className="flex items-center justify-between gap-1">
           <span className="text-[11px] text-muted-foreground truncate">
-            {listed ? `价目表：${listed.grade} · ${money(listed.price_fen_per_ton)}/吨` : "价目表无现行价"}
+            {listed ? `价目表：${listed.grade} · ${fmtPrice(listed.price_fen_per_ton)}` : "价目表无现行价"}
           </span>
           <Button size="xs" variant="outline" onClick={pickFromList} disabled={!listed} className="h-5 px-1.5 text-[10px] shrink-0">
             从价目带出
@@ -270,7 +270,7 @@ export function SettleForm({
             <Input
               value={overrideReason}
               onChange={(e) => setOverrideReason(e.target.value)}
-              placeholder="如：水分超基准 1.2%，议价下调 40 元/吨"
+              placeholder="如：水分超基准 1.2%，议价下调 0.04 元/公斤"
               className="h-7 border-warning/50 text-xs"
             />
           </Label>
@@ -303,7 +303,7 @@ export function SettleForm({
             <span className="ml-1 text-xs font-normal text-muted-foreground">（{ton(preview.settlementWeight01kg)}）</span>
           </span>
         </div>
-        <MoneyLine label="货款" valueFen={preview.goodsAmountFen} hint={fmtPrice(priceFenPerTon).perJin} />
+        <MoneyLine label="货款" valueFen={preview.goodsAmountFen} />
         <MoneyLine label="扣款" valueFen={feeFen} />
         <MoneyLine label="应付" emphasis valueFen={preview.payableAmountFen} hint={rmbUpper(preview.payableAmountFen)} />
       </div>

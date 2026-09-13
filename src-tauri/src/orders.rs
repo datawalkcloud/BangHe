@@ -21,6 +21,8 @@
 //! 存入 BLOB。AES-GCM + keyring 的加密基建还没写（`pii_encrypt_enabled` 参数目前
 //! 只是占位），单独一轮补；但**证号 SHA-256 fp 从第一天就落**——读卡反查
 //! （`idx_party_fp`）与建档去重靠它，密文化时只需换编解码列，索引与流程不动。
+//! 电话的唯一性（`uk_party_phone`，0013）则**确实吃明文**：密文化时要与证号同路子
+//! 换成确定性哈希列 `phone_fp`，[`phone_key`] 的归一口径跟着搬到那一列。
 //! 界面照旧全程走 `maskIdCard`，明文不出 WebView（invoke 返回值除外——和档案页
 //! 现行为一致，密文基建落地前不假装更安全）。
 //!
@@ -60,7 +62,7 @@ fn today() -> String {
 // 与 05 §6.1 前端 can() 同源，这里是最后一道。读不设岗（viewer 也要能看队列与档案）。
 
 fn actor_with_roles(app: &AppHandle, roles: &[&str], what: &str) -> Result<AuthProfile, String> {
-    let actor = auth::current_actor(app).ok_or_else(|| "登录已失效，请重新登录后再继续作业".to_string())?;
+    let actor = auth::current_actor(app).ok_or_else(|| "登录已失效或已锁屏，请先解锁再继续作业".to_string())?;
     if actor.must_change_pwd {
         return Err("当前账号尚未完成首登改密，不能进行业务写入".into());
     }
@@ -1081,6 +1083,41 @@ fn id_card_fp(no: &str) -> Option<String> {
     Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
+/// 电话归一：存进去的形状就是比对的形状，与 0013 迁移里的
+/// `upper(replace(replace(trim(...), '-',''),' ',''))` 同口径。
+/// 空白与 `-` 都不算号码的一部分；归一后为空一律 `None`（存 NULL），
+/// 因为 NULL 不占 `uk_party_phone` 的唯一位——「没填电话」不该互相顶掉。
+fn phone_key(raw: Option<&String>) -> Option<String> {
+    let s: String = raw?
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect::<String>()
+        .to_uppercase();
+    (!s.is_empty()).then_some(s)
+}
+
+/// 该号码是否已被别的档案占用，返回占用方姓名。`except_id` = 编辑时排除自己。
+fn phone_holder(conn: &Connection, phone: &str, except_id: Option<i64>) -> Result<Option<String>, String> {
+    let taken = match except_id {
+        Some(id) => conn
+            .query_row(
+                "SELECT name FROM party WHERE phone_enc = ?1 AND id <> ?2 AND deleted_at IS NULL",
+                params![phone, id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional(),
+        None => conn
+            .query_row(
+                "SELECT name FROM party WHERE phone_enc = ?1 AND deleted_at IS NULL",
+                params![phone],
+                |r| r.get::<_, String>(0),
+            )
+            .optional(),
+    }
+    .map_err(|e| format!("检查手机号占用失败：{e}"))?;
+    Ok(taken)
+}
+
 pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput) -> Result<Party, String> {
     let ptype = input.party_type.clone();
     if let Some(t) = &ptype {
@@ -1094,6 +1131,7 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
         }
     }
     let fp = input.id_card_no.as_deref().and_then(id_card_fp);
+    let phone = phone_key(input.phone.as_ref());
 
     match input.id {
         Some(id) => {
@@ -1114,6 +1152,11 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
                     .map_err(|e| format!("检查证号占用失败：{e}"))?;
                 if let Some(name) = taken {
                     return Err(format!("该身份证号已是档案「{name}」，一人一档，请搜索后编辑原档案"));
+                }
+            }
+            if let Some(ph) = &phone {
+                if let Some(name) = phone_holder(conn, ph, Some(id))? {
+                    return Err(format!("该手机号已是档案「{name}」的号码，一人一号，请搜索后编辑原档案"));
                 }
             }
             if let Some(v) = &input.credit_limit_fen {
@@ -1139,8 +1182,8 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
                 push!("id_card_no_enc", v.to_uppercase());
                 push!("id_card_no_fp", input.id_card_no.as_deref().and_then(id_card_fp))
             }
-            if let Some(v) = input.phone.as_deref() {
-                push!("phone_enc", v.trim().to_string())
+            if input.phone.is_some() {
+                push!("phone_enc", phone.clone())
             }
             if let Some(v) = input.address.as_deref() {
                 push!("address", v.trim().to_string())
@@ -1204,6 +1247,11 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
                     return Err(format!("证号 {idc} 已建档（{prev}），请直接搜索该档案编辑"));
                 }
             }
+            if let Some(ph) = &phone {
+                if let Some(prev) = phone_holder(conn, ph, None)? {
+                    return Err(format!("手机号 {ph} 已建档（{prev}），请直接搜索该档案编辑"));
+                }
+            }
             conn.execute(
                 "INSERT INTO party (name, party_type, id_card_no_enc, id_card_no_fp, id_card_verified,
                         phone_enc, address, bank_name, bank_account_enc, credit_limit_fen,
@@ -1212,7 +1260,7 @@ pub fn save_party(conn: &Connection, actor: &AuthProfile, input: PartySaveInput)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'active', ?15, ?16)",
                 params![
                     name, ptype, idc, fp, input.id_card_verified.unwrap_or(0).clamp(0, 1),
-                    input.phone.unwrap_or_default(), input.address.unwrap_or_default(),
+                    phone, input.address.unwrap_or_default(),
                     input.bank_name, input.bank_account, input.credit_limit_fen.unwrap_or(0),
                     input.default_warehouse_id, input.default_vehicle_no, input.last_tare_01kg, input.remark,
                     now_iso(), actor.id,
@@ -2371,7 +2419,7 @@ pub async fn party_photo_set(app: AppHandle, input: PartyPhotoInput) -> Result<P
 /// （访问痕迹要记到人），再进锁里读文件。
 #[tauri::command]
 pub async fn party_photo(app: AppHandle, party_id: i64) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
-    let actor = auth::current_actor(&app).ok_or_else(|| "登录已失效，请重新登录后再继续作业".to_string())?;
+    let actor = auth::current_actor(&app).ok_or_else(|| "登录已失效或已锁屏，请先解锁再继续作业".to_string())?;
     let pool = pool_of(&app)?;
     let dir = app_data_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || locked(&pool, move |conn| party_photo_view(conn, &dir, &actor, party_id)))

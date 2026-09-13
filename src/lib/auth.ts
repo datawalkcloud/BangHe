@@ -27,8 +27,10 @@ export interface AuthSession {
   sessionId: string;
   issuedAt: string;
   lastSeenAt: string;
-  /** 空闲多久失效，由后端下发；界面提示"还剩几分钟"用它，不抄常量 */
+  /** 空闲多久锁屏（不是登出），由后端下发；界面提示"还剩几分钟"用它，不抄常量 */
   idleTtlSecs: number;
+  /** 锁屏中：会话仍有效，但业务命令在 Rust 侧一律被拒，直到 unlock 验密 */
+  locked: boolean;
 }
 
 export interface LoginOutcome {
@@ -84,8 +86,9 @@ async function demoSignIn(): Promise<LoginOutcome> {
       sessionId: "demo",
       issuedAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
-      // 演示模式没有服务端会话，自然也没有空闲失效
+      // 演示模式没有服务端会话，自然也没有空闲锁屏
       idleTtlSecs: 0,
+      locked: false,
     },
     needsPasswordSetup: false,
     attemptsLeft: null,
@@ -120,10 +123,16 @@ export async function signOut(): Promise<AuthCall<ActionOutcome>> {
   return invoke<ActionOutcome>("auth_logout");
 }
 
-/** 活动心跳。回 `data:false` 表示会话已过期，前端立刻回登录页 */
+/** 活动心跳。回 `data:false` 表示已锁屏（会话还在），前端弹锁屏浮层 */
 export async function beat(): Promise<AuthCall<boolean>> {
   if (!runningInTauri()) return { channel: "demo", data: true };
   return invoke<boolean>("auth_touch");
+}
+
+/** 锁屏解锁：只输当前登录人的密码，会话本身不变（审计链不断）。回执同登录（连错计数、锁定倒计时） */
+export async function unlock(password: string): Promise<AuthCall<LoginOutcome>> {
+  if (!runningInTauri()) return { channel: "demo", error: NO_CHANNEL };
+  return invoke<LoginOutcome>("auth_unlock", { password });
 }
 
 /** 首启设置密码与日常改密共用：`old` 在首启时就是装机初始密码 */

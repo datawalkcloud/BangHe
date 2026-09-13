@@ -228,6 +228,7 @@ export const DEVICE_KIND: Record<DeviceKind, string> = {
   idcard: "证卡阅读器",
   camera: "抓拍摄像机",
   printer: "打印机",
+  // 户外显示屏、钱箱、签名板：库里 CHECK 仍留着这三个值，但站点没装，设备页不再提供（见 DevicesPage 的 KIND_ORDER）
   led: "户外显示屏",
   cashbox: "钱箱",
   signpad: "电子签名板",

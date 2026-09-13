@@ -181,7 +181,7 @@ fn locations(app: &AppHandle) -> Result<Locations, String> {
 
 /// 当前登录人（不判岗位）。
 fn actor(app: &AppHandle) -> Result<AuthProfile, String> {
-    auth::current_actor(app).ok_or_else(|| "登录已失效，请重新登录后再继续".to_string())
+    auth::current_actor(app).ok_or_else(|| "登录已失效或已锁屏，请先解锁再继续".to_string())
 }
 
 /// 岗位闸门。抽成纯函数是因为命令层要 `AppHandle` 才拿得到会话，测试没法直接跑命令；
@@ -1756,6 +1756,29 @@ pub async fn backup_import(app: AppHandle, input: BackupImportInput) -> Result<B
     })
     .await
     .map_err(|e| format!("导入副本任务失败：{e}"))?
+}
+
+/// 把界面算好的 CSV 落到站长在系统"保存"对话框里挑的位置（05 §5 导出）。
+///
+/// 只补 BOM 与 `.csv` 后缀、建好父目录，不判岗位：`data.export` 闸门在导出按钮上，
+/// 而路径本来就是站长在原生对话框里亲手挑的，这里再判一次只会把"存进 U 盘"这条路堵死。
+/// BOM 由后端加：写进盘的文件必须与浏览器下载那份一样能被 Excel 双击直接出中文。
+#[tauri::command]
+pub async fn export_write(path: String, content: String) -> Result<String, String> {
+    let mut target = PathBuf::from(path.trim());
+    if !target.is_absolute() {
+        return Err("保存位置无效，请重新选择".into());
+    }
+    if target.extension().is_none() {
+        target.set_extension("csv");
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败（{}）：{e}", display(parent)))?;
+    }
+    std::fs::write(&target, format!("\u{feff}{content}"))
+        .map_err(|e| format!("写入文件失败（{}）：{e}", display(&target)))?;
+    Ok(display(&target))
 }
 
 /// 换库。仅站长，且 `confirm` 必须逐字等于 [`RESTORE_CONFIRM_TEXT`]。

@@ -22,6 +22,7 @@ import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
+import { detailColumn } from "@/components/business/quickDetail";
 import { StatCard } from "@/components/business/StatCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -148,6 +149,7 @@ export function SettlementsPage() {
       },
       { key: "settler", header: "结算人", cell: (s) => <span className="text-xs">{names(s.settler_id)}</span> },
       { key: "at", header: "结算时间", cell: (s) => <span className="tnum text-xs">{dateTime(s.settled_at)}</span>, sortValue: (s) => s.settled_at },
+      detailColumn("settlement", (s) => s.settle_no),
     ],
     [names, totals],
   );
@@ -263,7 +265,6 @@ export function SettlementsPage() {
             rowKey={(s) => s.settle_no}
             loading={isPending}
             rowHref={(s) => `/settlements/${s.settle_no}`}
-            onRowClick={(s) => void navigate({ to: "/settlements/$settleNo", params: { settleNo: s.settle_no } })}
             rowClassName={(s) => (s.status === "revoked" ? "text-muted-foreground line-through decoration-1" : undefined)}
             empty={
               <EmptyState

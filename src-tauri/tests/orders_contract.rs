@@ -650,6 +650,79 @@ fn party_id_card_fingerprint_merges_and_blocks_duplicates() {
     assert!(list_parties(&conn, "查无此人", None).unwrap().is_empty());
 }
 
+/// 一人一号（02 §F3.1）：建档与改档都要先查后写，报错点出既有档案姓名；
+/// 没填电话的两份档案不得互相顶掉（空号一律 NULL）。
+#[test]
+fn party_phone_is_unique_and_names_the_conflicting_archive() {
+    let conn = db();
+    let a = new_party(&conn, "孙大娘", "341221198203150011");
+    save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput { id: Some(a), phone: Some("138-0013 8000".into()), ..empty_party_input() },
+    )
+    .unwrap();
+    assert_eq!(get_party(&conn, a).unwrap().unwrap().party.phone, "13800138000", "入库前归一：去空白与 `-`");
+
+    // 建档撞上别人的号：报错带原档案姓名
+    let e = save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput {
+            name: Some("李二".into()),
+            party_type: Some("farmer".into()),
+            id_card_no: Some("341221198203150029".into()),
+            phone: Some("13800138000".into()),
+            ..empty_party_input()
+        },
+    )
+    .unwrap_err();
+    assert!(e.contains("孙大娘") && e.contains("13800138000"), "{e}");
+
+    // 改档撞上别人的号：同样拦，且这条档案没被写花
+    let b = new_party(&conn, "王三", "341221198203150030");
+    let e = save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput { id: Some(b), phone: Some("138 0013-8000".into()), ..empty_party_input() },
+    )
+    .unwrap_err();
+    assert!(e.contains("孙大娘"), "写法不同（带空格/横线）也要认出来：{e}");
+    assert_eq!(get_party(&conn, b).unwrap().unwrap().party.phone, "", "拦下来就不能留下一半结果");
+
+    // 自己的号原样再存一次（顺带改备注）不该误伤自己
+    save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput {
+            id: Some(a),
+            phone: Some("13800138000".into()),
+            remark: Some("常年供粮".into()),
+            ..empty_party_input()
+        },
+    )
+    .unwrap();
+
+    // 空号不占唯一位：清空电话＝没填电话，第二户照样建得出来
+    save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput { id: Some(b), phone: Some("".into()), ..empty_party_input() },
+    )
+    .unwrap();
+    let c = new_party(&conn, "赵四", "34122119820315004X");
+    save_party(
+        &conn,
+        &actor(1, "station_master"),
+        PartySaveInput { id: Some(c), phone: Some("  ".into()), ..empty_party_input() },
+    )
+    .unwrap();
+    let nulls: i64 = conn
+        .query_row("SELECT COUNT(*) FROM party WHERE phone_enc IS NULL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(nulls, 2, "空电话必须存 NULL，否则 `uk_party_phone` 会把第二户顶掉：{nulls}");
+}
+
 fn empty_party_input() -> PartySaveInput {
     PartySaveInput {
         id: None, name: None, party_type: None, id_card_no: None, phone: None, address: None, bank_name: None,

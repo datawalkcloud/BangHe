@@ -673,7 +673,7 @@ fn price_by_id(conn: &Connection, id: i64) -> Result<Price, String> {
 
 pub fn save_price(conn: &Connection, actor: &AuthProfile, input: PriceInput) -> Result<Price, String> {
     if input.price_fen_per_ton <= 0 {
-        return Err("单价必须大于 0 分/吨".into());
+        return Err("单价必须大于 0".into());
     }
     if input.effective_from > input.effective_to {
         return Err("生效起始日不能晚于截止日".into());

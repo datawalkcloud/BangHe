@@ -11,14 +11,17 @@ export function PageHeader({
   description,
   actions,
   tabs,
+  className,
 }: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   tabs?: ReactNode;
+  /** 嵌进抽屉等待别的浮层时用它让开自带控件（如右上角关闭按钮） */
+  className?: string;
 }) {
   return (
-    <div className="flex shrink-0 flex-col gap-1 border-b bg-background px-3">
+    <div className={cn("flex shrink-0 flex-col gap-1 border-b bg-background px-3", className)}>
       {/* 用 min-h 而不是 h：窄窗口下标题与操作按钮会 flex-wrap 换行，固定高度会让溢出部分压到下方内容上 */}
       <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 py-1">
         <div className="min-w-0">

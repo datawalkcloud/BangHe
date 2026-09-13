@@ -12,7 +12,6 @@
  * 记为「已核验」，手工录入的、以及读卡后又改动过证号的都是「未核验」，列表与详情据此亮牌。
  */
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ContactIcon, PlusIcon, ScanLineIcon, SearchIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -33,6 +32,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge } from "@/components/business/badges";
 import { WeightField } from "@/components/business/NumField";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
+import { detailColumn } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -149,7 +149,6 @@ function formOf(p: Party): PartyForm {
 }
 
 export function PartiesPage() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const cardError = useDeviceStore((s) => s.reader.idcard.error);
   const lastCard = useDeviceStore((s) => s.reader.idcard.last);
@@ -328,6 +327,12 @@ export function PartiesPage() {
   else if (!idOk) errors.push(isOrg ? "应为 18 位数字/大写字母" : "证号校验位不通过（GB 11643）");
   else if (all.some((p) => p.id_card_no.toUpperCase() === code && p.id !== form.id))
     errors.push("该证号已建档，请检索后修改原档案");
+  // 手机号同样一人一号（`uk_party_phone`）：比对形状与真库一致，去空白与 `-`
+  const phoneKey = form.phone.replace(/[\s-]/g, "");
+  if (phoneKey) {
+    const dup = all.find((p) => p.id !== form.id && p.phone.replace(/[\s-]/g, "") === phoneKey);
+    if (dup) errors.push(`该手机号已是档案「${dup.name}（${dup.code}）」的号码，一人一号，请检索后修改原档案`);
+  }
   if (form.creditYuan !== "" && !(Number(form.creditYuan) >= 0)) errors.push("挂账额度不能为负");
 
   const columns = useMemo<Column<Party>[]>(
@@ -377,6 +382,7 @@ export function PartiesPage() {
         sortValue: (p) => p.credit_limit_fen,
       },
       { key: "account", header: "结算账户", cell: (p) => <span className="tnum text-xs">{orDash(p.bank_account)}</span> },
+      detailColumn("party", (p) => p.id),
     ],
     [],
   );
@@ -455,7 +461,6 @@ export function PartiesPage() {
             rowKey={(p) => p.id}
             loading={isPending}
             rowHref={(p) => `/parties/${p.id}`}
-            onRowClick={(p) => void navigate({ to: "/parties/$id", params: { id: String(p.id) } })}
             rowClassName={(p) => (p.status === "disabled" ? "text-muted-foreground" : undefined)}
             empty={
               <EmptyState
@@ -474,7 +479,7 @@ export function PartiesPage() {
                 }
               />
             }
-            toolbar={<span className="text-xs text-muted-foreground">点行进档案详情；档案停用不影响历史磅单，只挡住新单。</span>}
+            toolbar={<span className="text-xs text-muted-foreground">末列「详情」在本页右侧弹出完整档案，Ctrl+点击行在新窗口并排对档；档案停用不影响历史磅单，只挡住新单。</span>}
           />
         </div>
       </div>

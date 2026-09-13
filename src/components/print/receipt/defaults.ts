@@ -45,7 +45,7 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
           },
           {
             id: uid(), kind: "kv", title: "金额",
-            fields: ["price_per_ton", "price_per_jin", "goods_amount", "deduction_fee", "payable_amount", "paid_amount", "payable_upper", "payment_status_label", "payment_method_label"],
+            fields: ["price_per_kg", "goods_amount", "deduction_fee", "payable_amount", "paid_amount", "payable_upper", "payment_status_label", "payment_method_label"],
           },
           { id: uid(), kind: "text", text: "备注：{{remark}}" },
           {

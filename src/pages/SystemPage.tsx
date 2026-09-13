@@ -23,7 +23,8 @@ import type { AuditLog, UserAccount, WeighOrder } from "@/mock/types";
 import type { Role } from "@/lib/constants";
 import { ROLE } from "@/lib/constants";
 import { dateTime, fileSize, maskIdCard, money, orDash, shiftDay, sinceText, todayISO, weight } from "@/lib/format";
-import { csvName, downloadCsv } from "@/lib/csv";
+import { csvName } from "@/lib/csv";
+import { exportCsvFile } from "@/lib/export-csv";
 import { runningInTauri } from "@/lib/native";
 import { RESTORE_CONFIRM_TEXT, systemApi, type AuditRow, type BackupFile, type HealthReport, type Preflight, type RestoreResult, type VerifyReport } from "@/lib/system-native";
 import { SETTLEMENT_SCAN_LIMIT } from "@/lib/reports-native";
@@ -31,7 +32,7 @@ import { useHotkey } from "@/hooks/useHotkey";
 import { actorId, PERMISSIONS, useActor, useSession } from "@/store/session";
 import { useStaff, useStation } from "@/hooks/useLookups";
 import { StatCard } from "@/components/business/StatCard";
-import { QuickDetailLink } from "@/components/business/QuickDetailSheet";
+import { detailColumn, QuickDetailLink } from "@/components/business/quickDetail";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
@@ -547,7 +548,7 @@ function AuditSection() {
     [],
   );
 
-  function doExport() {
+  async function doExport() {
     if (!exportGuard) {
       toast.error("当前岗位没有导出权限（需 data.export）");
       return;
@@ -556,12 +557,12 @@ function AuditSection() {
       toast.error("没有可导出的审计记录");
       return;
     }
-    const n = downloadCsv(
-      csvName(`操作审计_${todayISO()}`),
-      ["时间", "操作人", "动作码", "动作", "对象", "单据号", "事由", "授权人", "结果"],
-      rows.map((a) => [dateTime(a.at), a.actor_name, a.action, AUDIT_ACTION[a.action] ?? "", AUDIT_ENTITY[a.entity] ?? a.entity, a.entity_no ?? "", a.reason ?? "", a.authorized_by ?? "", AUDIT_RESULT[a.result].label]),
-    );
-    toast.success(`已导出 ${n} 条审计记录`);
+    await exportCsvFile({
+      filename: csvName(`操作审计_${todayISO()}`),
+      headers: ["时间", "操作人", "动作码", "动作", "对象", "单据号", "事由", "授权人", "结果"],
+      rows: rows.map((a) => [dateTime(a.at), a.actor_name, a.action, AUDIT_ACTION[a.action] ?? "", AUDIT_ENTITY[a.entity] ?? a.entity, a.entity_no ?? "", a.reason ?? "", a.authorized_by ?? "", AUDIT_RESULT[a.result].label]),
+      unit: "条审计记录",
+    });
   }
 
   useHotkey("ctrl+e", doExport, { allowInInput: true });
@@ -1024,11 +1025,7 @@ function ShiftSection() {
       {
         key: "no",
         header: "磅单号",
-        cell: (o) => (
-          <QuickDetailLink type="order" id={o.order_no} className="tnum font-medium text-primary">
-            {o.order_no}
-          </QuickDetailLink>
-        ),
+        cell: (o) => <span className="tnum font-medium">{o.order_no}</span>,
       },
       { key: "party", header: "售粮人", cell: (o) => o.party_name },
       { key: "var", header: "品种", cell: (o) => o.variety_name },
@@ -1036,6 +1033,7 @@ function ShiftSection() {
       { key: "net", header: "净重", align: "right", cell: (o) => <span className="tnum">{weight(o.net_weight_01kg)}</span> },
       { key: "payable", header: "应付", align: "right", cell: (o) => <span className="tnum">{money(o.payable_amount_fen)}</span> },
       { key: "证", header: "证号", cell: (o) => <span className="tnum text-xs text-muted-foreground">{maskIdCard(o.id_card_no)}</span> },
+      detailColumn("order", (o) => o.order_no),
     ],
     [],
   );
@@ -1095,7 +1093,7 @@ function ShiftSection() {
         rowKey={(o) => o.order_no}
         dense
         empty={<EmptyState title="没有在途单" description="今天的单都走完了。" />}
-        toolbar={<span className="text-xs text-muted-foreground">点单号直接进入该单，可在工作台继续未完成的操作。</span>}
+        toolbar={<span className="text-xs text-muted-foreground">末列「详情」在本页右侧弹出该单，可在工作台继续未完成的操作。</span>}
       />
 
       <section className="flex flex-col gap-2 border bg-card p-3">
