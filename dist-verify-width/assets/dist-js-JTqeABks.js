@@ -1,0 +1,1 @@
+import{t as e}from"./index-BTA9TwYP.js";async function t(t={}){return typeof t==`object`&&Object.freeze(t),await e(`plugin:dialog|open`,{options:t})}async function n(t={}){return typeof t==`object`&&Object.freeze(t),await e(`plugin:dialog|save`,{options:t})}export{t as open,n as save};

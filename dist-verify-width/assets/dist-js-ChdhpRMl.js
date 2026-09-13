@@ -1,0 +1,1 @@
+import{t as e}from"./index-BTA9TwYP.js";async function t(t,n){await e(`plugin:opener|open_path`,{path:t,with:n})}export{t as openPath};

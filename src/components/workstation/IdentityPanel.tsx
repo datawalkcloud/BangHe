@@ -134,6 +134,7 @@ export function IdentityPanel({
       toast.error(`档案「${hit.name}」已停用，不能制单；要续收粮请到农户档案重新启用`);
       // 姓名不进喇叭（07 H12 同一条合规线），但这一声必须出：不念出来人会以为卡没读到，反复重刷
       announce("这个人的档案已经停用，不能制单");
+      useDeviceStore.getState().reader.idcard.clear();
       return;
     }
     onDraft({ party: hit, vehicleNo: draft.vehicleNo || hit.default_vehicle_no || "" });
@@ -142,6 +143,9 @@ export function IdentityPanel({
     // 该带出的已经带出、该报的已经报完，这里才去补照片：档案还没有人像就把证件里这张写进去
     // （只补缺，已有照片不动）。异步 fire-and-forget——补得上补不上都不该拦住磅员取号（02 §F3.1）。
     void backfillPartyPhotoFromCard(lastCard, hit, qc);
+    // 这一刷到此为止。`last` 是跨页面共享的缓存，不清的话下次进工作台挂载会把旧卡当新读卡，
+    // 凭空替本单选中上一个人。没建过档的那条分支不能清——快捷登记弹窗还要拿它预填。
+    useDeviceStore.getState().reader.idcard.clear();
     // draft.vehicleNo 不入依赖，否则每次输入都会重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastCard]);

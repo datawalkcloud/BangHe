@@ -14,7 +14,7 @@ import { KeyboardIcon } from "lucide-react";
 import { PLATE_ALNUM, PLATE_PROVINCES } from "@/lib/constants";
 import { useSoftKeyboardVisible } from "@/hooks/useSoftKeyboard";
 import { Input } from "@/components/ui/input";
-import { Keypad, type KeypadKey } from "@/components/ui/keypad";
+import { Keypad, KeypadFloat, type KeypadKey } from "@/components/ui/keypad";
 import { cn } from "cn";
 
 /**
@@ -52,6 +52,8 @@ export function PlateField({
   "aria-label"?: string;
 }) {
   const [open, setOpen] = useState(false);
+  /** 键阵浮层的锚点：车牌这一格 */
+  const host = useRef<HTMLDivElement>(null);
   /** 全局「屏幕软键盘」偏好：关了连展开按钮都不摆，手输照旧 */
   const showPad = useSoftKeyboardVisible();
   const padOpen = open && showPad;
@@ -83,7 +85,7 @@ export function PlateField({
 
   return (
     <div className={cn("flex min-w-0 flex-col gap-1", className)}>
-      <div className="relative">
+      <div ref={host} className="relative">
         {label && (
           <span className="text-xs text-muted-foreground">{label}</span>
         )}
@@ -113,7 +115,7 @@ export function PlateField({
         )}
       </div>
       {padOpen && (
-        <div className="flex flex-col gap-1">
+        <KeypadFloat anchor={host} minWidth={380} onClose={() => setOpen(false)}>
           <Keypad
             aria-label="车牌省份简称"
             keys={PROVINCE_KEYS}
@@ -128,7 +130,7 @@ export function PlateField({
             onInsert={(c) => insert(c)}
             onAction={onAction}
           />
-        </div>
+        </KeypadFloat>
       )}
     </div>
   );

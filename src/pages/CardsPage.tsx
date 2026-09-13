@@ -24,6 +24,7 @@ import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
 import { IcScanDialog } from "@/components/business/IcScanDialog";
 import { ReasonChips } from "@/components/business/ReasonChips";
+import { QuickDetailLink } from "@/components/business/quickDetail";
 import { ToneBadge } from "@/components/business/badges";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
@@ -80,7 +81,18 @@ export function CardsPage() {
       { key: "card_no", header: "卡号", cell: (r) => <span className="tnum font-medium">{r.card_no}</span> },
       { key: "label", header: "贴签", cell: (r) => orDash(r.label) },
       { key: "status", header: "状态", cell: (r) => <ToneBadge tone={CARD_STATUS[r.status].tone}>{CARD_STATUS[r.status].label}</ToneBadge> },
-      { key: "order_no", header: "挂在单", cell: (r) => (r.order_no ? <span className="tnum">{r.order_no}</span> : <span className="text-muted-foreground">—</span>) },
+      {
+        key: "order_no",
+        header: "挂在单",
+        cell: (r) =>
+          r.order_no ? (
+            <QuickDetailLink type="order" id={r.order_no} className="tnum font-medium text-primary">
+              {r.order_no}
+            </QuickDetailLink>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
       { key: "issued_at", header: "发卡时间", cell: (r) => (r.issued_at ? dateTimeShort(r.issued_at) : "—") },
       { key: "issued_by", header: "领卡人", cell: (r) => orDash(r.issued_by_name) },
       {

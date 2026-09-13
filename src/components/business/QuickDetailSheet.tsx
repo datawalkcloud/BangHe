@@ -6,7 +6,8 @@
  * 状态与内联链接在 `quickDetail.tsx`，那个模块不引页面，这里的 import 图才不成环。
  *
  * 宽度按正文里最宽的那几块（磅单详情的 xl:grid-cols-2 + 称重轨迹 11 列）定的：
- * 1500 px 下两张卡片并排仍然立得住，再宽就把列表整块盖住了。
+ * 96vw（上限 1760 px）下两张卡片并排仍然立得住，再宽就把列表整块盖住了。
+ * 这条上限只在这里给：`ui/sheet.tsx` 里不要再放默认 max-w，它会盖掉调用方的宽度。
  */
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useQuickDetail, type QuickDetailType } from "@/components/business/quickDetail";
@@ -27,7 +28,7 @@ export function QuickDetailSheet() {
 
   return (
     <Sheet open={!!target} onOpenChange={(open) => !open && close()}>
-      <SheetContent side="right" className="w-[95vw] sm:max-w-[1500px] gap-0 overflow-hidden p-0" aria-label={target ? ARIA_LABEL[target.type] : undefined}>
+      <SheetContent side="right" className="w-[96vw] sm:max-w-[1760px] gap-0 overflow-hidden p-0" aria-label={target ? ARIA_LABEL[target.type] : undefined}>
         {target?.type === "order" && <OrderDetailBody orderNo={target.id} embedded />}
         {target?.type === "party" && <PartyDetailBody partyId={Number(target.id)} embedded />}
         {target?.type === "qc" && <QcDetailBody reportNo={target.id} embedded />}

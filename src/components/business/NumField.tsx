@@ -12,7 +12,7 @@ import { KeyboardIcon } from "lucide-react";
 import { fromKg, fromPercent, fromYuanPerKg, money, priceNumber, toKg, weight } from "@/lib/format";
 import { useSoftKeyboardVisible } from "@/hooks/useSoftKeyboard";
 import { Input } from "@/components/ui/input";
-import { Keypad, digitKeys } from "@/components/ui/keypad";
+import { Keypad, KeypadFloat, digitKeys } from "@/components/ui/keypad";
 import { cn } from "cn";
 
 export interface NumFieldProps {
@@ -84,13 +84,15 @@ export function NumField({
   /** 连点落在同一次渲染之前：只认闭包里的 `text` 会被后一下覆盖，所以本地也记一份 */
   const live = useRef(text);
   if (live.current !== text) live.current = text;
+  /** 键阵浮层的锚点：整格字段（含标题行上的展开按钮，点它才算收起） */
+  const host = useRef<HTMLDivElement>(null);
   const apply = (raw: string) => {
     const next = sanitize(raw, decimals);
     live.current = next;
     onText(next);
   };
   return (
-    <div className={cn("flex min-w-0 flex-col gap-1", className)}>
+    <div ref={host} className={cn("flex min-w-0 flex-col gap-1", className)}>
       <div className="flex items-baseline justify-between gap-1">
         <label htmlFor={id} className="text-xs text-muted-foreground">
           {label}
@@ -142,16 +144,18 @@ export function NumField({
         )}
       </div>
       {keypad && showPad && padOpen && (
-        <Keypad
-          aria-label={`${label}数字键盘`}
-          keys={padKeys}
-          onInsert={(c) => apply(live.current + c)}
-          onAction={(a) => {
-            if (a === "backspace") apply(live.current.slice(0, -1));
-            else if (a === "clear") apply("");
-            else setPadOpen(false);
-          }}
-        />
+        <KeypadFloat anchor={host} minWidth={200} onClose={() => setPadOpen(false)}>
+          <Keypad
+            aria-label={`${label}数字键盘`}
+            keys={padKeys}
+            onInsert={(c) => apply(live.current + c)}
+            onAction={(a) => {
+              if (a === "backspace") apply(live.current.slice(0, -1));
+              else if (a === "clear") apply("");
+              else setPadOpen(false);
+            }}
+          />
+        </KeypadFloat>
       )}
       {hint && (
         <p className={cn("text-xs", invalid ? "text-destructive" : "text-muted-foreground")}>{hint}</p>

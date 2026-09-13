@@ -167,7 +167,7 @@ export function PartiesPage() {
     queryKey: ["parties", kw, type],
     queryFn: () => api.listParties(kw, type === "all" ? undefined : type),
   });
-  const { data: all = [] } = useQuery({ queryKey: ["parties", ""], queryFn: () => api.listParties("") });
+  const { data: all = [], isPending: allPending } = useQuery({ queryKey: ["parties", ""], queryFn: () => api.listParties("") });
 
   const patch = (p: Partial<PartyForm>) => setForm((f) => ({ ...f, ...p }));
 
@@ -179,7 +179,8 @@ export function PartiesPage() {
    * 档案没有照片时就**当场补上**（判据与写入都收在 `lib/party-photo`，三处读卡入口同一份）。
    */
   useEffect(() => {
-    if (!lastCard) return;
+    // 档案列表还没到手就先别认人：此刻 find 必然落空，会把老档案当成新证号铺一张建档表单
+    if (!lastCard || allPending) return;
     const pending = photoFromCard(lastCard);
     const hit = all.find((p) => p.id_card_no === lastCard.id_card_no);
     if (hit) {
@@ -221,8 +222,13 @@ export function PartiesPage() {
       });
       setOpen(true);
     }
+    /**
+     * 带出/预填都已完成，这一刷就地清掉：`last` 是跨页面共享的读卡缓存，不清的话
+     * 关掉编辑框（没保存）再进本页，挂载时同一张旧卡会被当成刚读到的卡，凭空再弹一次。
+     */
+    useDeviceStore.getState().reader.idcard.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastCard]);
+  }, [lastCard, allPending]);
 
   /** 选一张本地图当人像：插件只给路径，格式与大小由后端导入时判（与备份导入同一口径）。 */
   async function pickPhoto() {

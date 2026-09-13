@@ -32,6 +32,8 @@ fn begin<D: Driver>(p: &mut Printer<D>) -> R<()> {
     p.bold(false)?;
     p.underline(UnderlineMode::None)?;
     p.reverse(false)?;
+    // 左对齐是整张票的恒定基准：文字行的对齐全靠空格补齐（见 `aligned`），
+    // 全文只有 `qr` 会临时改 justify，且它自己负责复位。
     p.justify(JustifyMode::LEFT)?;
     Ok(())
 }
@@ -129,6 +131,24 @@ fn wrap(text: &str, cols: usize) -> Vec<String> {
     out
 }
 
+/// 按 `align` 用**前导空格**把一行补到 `cols` 列。
+///
+/// 对齐不交给 `ESC a 1/2`：打印机的居中/右对齐按**它自己的可打宽度**算，而不是按我们
+/// 排版的列数。80 机（48 列）装 58 纸、按 32 列排版时，`ESC a 2` 会把行尾推到第 48 列，
+/// 整行右移 16 列 ≈ 24mm，直接掉到纸外——票面上就是"正文齐、金额和标题偏右"那种怪相。
+/// 空格补齐的落点只取决于传进来的 `cols`，与机型头宽无关（`kv`/`pair` 本来就这么排）。
+///
+/// 宽窄余数落在右边（居中取左半边）。
+fn aligned(text: &str, cols: usize, align: TextAlign) -> String {
+    let blank = cols.saturating_sub(display_width(text));
+    match align {
+        // 左对齐不补尾：免得往字节流里塞无意义空白
+        TextAlign::Left => text.to_string(),
+        TextAlign::Right => format!("{}{}", " ".repeat(blank), text),
+        TextAlign::Center => format!("{}{}", " ".repeat(blank / 2), text),
+    }
+}
+
 fn line<D: Driver>(p: &mut Printer<D>, s: &str) -> R<()> {
     put(p, s)?;
     p.feed()?;
@@ -137,12 +157,12 @@ fn line<D: Driver>(p: &mut Printer<D>, s: &str) -> R<()> {
 
 /// 整行右对齐。折行先做在 Rust 侧——不然打印机把一长串右对齐文本折成几段，
 /// 每段各贴右边，票面读不出是从哪儿连过来的。
+///
+/// 补齐走 `aligned` 的前导空格，不走 `ESC a 2`：理由见那里的注释。
 fn right<D: Driver>(p: &mut Printer<D>, s: &str, cols: usize) -> R<()> {
-    p.justify(JustifyMode::RIGHT)?;
     for seg in wrap(s, cols) {
-        line(p, &seg)?;
+        line(p, &aligned(&seg, cols, TextAlign::Right))?;
     }
-    p.justify(JustifyMode::LEFT)?;
     Ok(())
 }
 
@@ -212,9 +232,19 @@ pub fn pair<D: Driver>(
     line(p, &b)
 }
 
-fn center<D: Driver>(p: &mut Printer<D>, text: &str) -> R<()> {
+/// 整行居中。同 `right`：补齐在 Rust 侧算，不交给 `ESC a 1`。
+fn center<D: Driver>(p: &mut Printer<D>, text: &str, cols: usize) -> R<()> {
+    line(p, &aligned(text, cols, TextAlign::Center))
+}
+
+/// 二维码。栅格图补不了空格（`GS ( k` 从当前位置起打），居中只能交给 `ESC a 1`——
+/// 于是这是全文件唯一还按**机内可打宽度**对齐的地方：80 机（48 列）装 58 纸、票面按
+/// 32 列排版时，码会落在第 24 列正中而非第 16 列，整体偏右约 8 列 ≈ 12mm。
+/// 发完必须复位左对齐，否则这行 `ESC a 1` 会泄漏给后面的文字行。
+fn qr<D: Driver>(p: &mut Printer<D>, text: &str) -> R<()> {
     p.justify(JustifyMode::CENTER)?;
-    line(p, text)?;
+    p.qrcode(text)?;
+    p.feed()?;
     p.justify(JustifyMode::LEFT)?;
     Ok(())
 }
@@ -290,26 +320,29 @@ pub fn write_weigh_ticket<D: Driver>(p: &mut Printer<D>, t: &WeighTicket) -> R<(
 
     for _ in 0..t.copies_or_default() {
         begin(p)?;
-        p.justify(JustifyMode::CENTER)?;
         p.size(big.0, big.1)?;
-        put(p, if t.station_name.is_empty() {
-            "粮站过磅"
-        } else {
-            t.station_name.as_str()
-        })?;
-        p.feed()?;
+        line(
+            p,
+            &aligned(
+                if t.station_name.is_empty() {
+                    "粮站过磅"
+                } else {
+                    t.station_name.as_str()
+                },
+                (cols / big.0 as usize).max(1),
+                TextAlign::Center,
+            ),
+        )?;
         p.reset_size()?;
         p.size(1, 2)?;
-        put(p, "过磅码单")?;
-        p.feed()?;
+        center(p, "过磅码单", cols)?;
         p.reset_size()?;
-        p.justify(JustifyMode::LEFT)?;
 
         if t.is_reprint {
-            center(p, "【补打，已经站长授权】")?;
+            center(p, "【补打，已经站长授权】", cols)?;
         }
         if !t.copy_note.is_empty() {
-            center(p, &t.copy_note)?;
+            center(p, &t.copy_note, cols)?;
         }
         rule(p, cols)?;
 
@@ -353,15 +386,12 @@ pub fn write_weigh_ticket<D: Driver>(p: &mut Printer<D>, t: &WeighTicket) -> R<(
         kv(p, "金额", &format!("{} 元", fmt_money(t.amount)), cols)?;
         p.reset_size()?;
         if !t.amount_upper.is_empty() {
-            center(p, &format!("({})", t.amount_upper))?;
+            center(p, &format!("({})", t.amount_upper), cols)?;
         }
 
         if !t.qr_text.is_empty() {
             rule(p, cols)?;
-            p.justify(JustifyMode::CENTER)?;
-            p.qrcode(&t.qr_text)?;
-            p.feed()?;
-            p.justify(JustifyMode::LEFT)?;
+            qr(p, &t.qr_text)?;
         }
 
         rule(p, cols)?;
@@ -375,13 +405,10 @@ pub fn write_weigh_ticket<D: Driver>(p: &mut Printer<D>, t: &WeighTicket) -> R<(
             kv(p, "打印", &t.print_time, cols)?;
         }
         if !t.footer_note.is_empty() {
-            center(p, &t.footer_note)?;
+            center(p, &t.footer_note, cols)?;
         }
         if !t.station_code.is_empty() {
-            p.justify(JustifyMode::RIGHT)?;
-            put(p, &t.station_code)?;
-            p.feed()?;
-            p.justify(JustifyMode::LEFT)?;
+            line(p, &aligned(&t.station_code, cols, TextAlign::Right))?;
         }
 
         p.feeds(3)?;
@@ -398,12 +425,10 @@ pub fn write_weigh_ticket<D: Driver>(p: &mut Printer<D>, t: &WeighTicket) -> R<(
 pub fn write_self_test<D: Driver>(p: &mut Printer<D>, paper: Paper, device_label: &str) -> R<()> {
     let cols = paper.cols();
     begin(p)?;
-    p.justify(JustifyMode::CENTER)?;
     p.size(2, 2)?;
-    put(p, "粮站过磅系统")?;
-    p.feed()?;
+    line(p, &aligned("粮站过磅系统", cols / 2, TextAlign::Center))?;
     p.reset_size()?;
-    center(p, "小票机 ESC/POS 自检")?;
+    center(p, "小票机 ESC/POS 自检", cols)?;
     rule(p, cols)?;
 
     kv(p, "设备", device_label, cols)?;
@@ -445,7 +470,7 @@ pub fn write_self_test<D: Driver>(p: &mut Printer<D>, paper: Paper, device_label
         cols,
     )?;
     kv(p, "金额", &format!("{} 元", fmt_money(15464.02)), cols)?;
-    center(p, "壹万伍仟肆佰陆拾肆元零贰分")?;
+    center(p, "壹万伍仟肆佰陆拾肆元零贰分", cols)?;
 
     // 列宽自检：票面折行的头号原因是"声明的列数比实机大"。满格线和标尺一起看——
     // 哪一行折了、折在第几格，就是这台机器的真实列数，填回「小票机列数」即可。
@@ -456,10 +481,8 @@ pub fn write_self_test<D: Driver>(p: &mut Printer<D>, paper: Paper, device_label
     line(p, "把折行处的刻度数填进「小票机列数」")?;
 
     rule(p, cols)?;
-    p.justify(JustifyMode::CENTER)?;
-    p.qrcode("BANGHE-SELFTEST")?;
-    p.feed()?;
-    center(p, "若本页字清晰即通道可用")?;
+    qr(p, "BANGHE-SELFTEST")?;
+    center(p, "若本页字清晰即通道可用", cols)?;
     p.feeds(4)?;
     p.print_cut()?;
     Ok(())
@@ -510,11 +533,6 @@ pub fn write_lines<D: Driver>(
                     } else {
                         want.min((cols / total).clamp(1, 8) as u8)
                     };
-                    p.justify(match align {
-                        TextAlign::Left => JustifyMode::LEFT,
-                        TextAlign::Center => JustifyMode::CENTER,
-                        TextAlign::Right => JustifyMode::RIGHT,
-                    })?;
                     p.size(scale, (*tall).clamp(1, 8))?;
                     p.bold(*bold)?;
                     p.underline(if *underline {
@@ -524,16 +542,17 @@ pub fn write_lines<D: Driver>(
                     })?;
                     p.reverse(*reverse)?;
                     // 折行在 Rust 侧做：前端只给一段文字，能不能放下由纸宽说了算。
-                    for seg in wrap(&text, (cols / scale as usize).max(1)) {
-                        put(p, &seg)?;
-                        p.feed()?;
+                    // 对齐同样在 Rust 侧做：补齐预算按缩放后的列数算，一个补位空格
+                    // 和正文一样是倍宽，于是 `unit * scale` 恰好还是纸宽。
+                    let unit = (cols / scale as usize).max(1);
+                    for seg in wrap(&text, unit) {
+                        line(p, &aligned(&seg, unit, *align))?;
                     }
                     // 样式只作用于这一行：立刻复位，否则整票都会跟着变粗 / 变反白
                     p.reset_size()?;
                     p.bold(false)?;
                     p.underline(UnderlineMode::None)?;
                     p.reverse(false)?;
-                    p.justify(JustifyMode::LEFT)?;
                 }
                 PrintLine::Kv { label, value } => kv(p, label, value, cols)?,
                 PrintLine::Pair { l1, v1, l2, v2 } => pair(p, l1, v1, l2, v2, cols)?,
@@ -544,10 +563,7 @@ pub fn write_lines<D: Driver>(
                 }
                 PrintLine::Qr { text } => {
                     if !text.is_empty() {
-                        p.justify(JustifyMode::CENTER)?;
-                        p.qrcode(text)?;
-                        p.feed()?;
-                        p.justify(JustifyMode::LEFT)?;
+                        qr(p, text)?;
                     }
                 }
             }
@@ -826,7 +842,11 @@ mod tests {
             let value = "330184********4419";
             if display_width(label) + display_width(value) + 1 > cols {
                 assert!(rendered.iter().any(|(l, _)| l == label), "{tag} 长标签未单独成行");
-                assert!(rendered.iter().any(|(l, _)| l == value), "{tag} 长数值未单独成行");
+                // 数值行现在带前导补齐空格（右对齐在 Rust 侧算），比较时去掉空白
+                assert!(
+                    rendered.iter().any(|(l, _)| l.trim() == value),
+                    "{tag} 长数值未单独成行"
+                );
             } else {
                 assert!(
                     rendered.iter().any(|(l, _)| l.contains(label) && l.contains(value)),
@@ -834,6 +854,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 对齐回归（80 机装 58 纸）：居中/右对齐的落点必须按**票面列数**算。
+    /// 交给 `ESC a 1/2` 的话，打印机会按自己的头宽对齐（80 机 = 48 列），
+    /// 整行右移 16 列 ≈ 24mm 直接掉出 58 纸——票面上就是"正文齐、标题和金额偏右"。
+    #[test]
+    fn alignment_follows_the_layout_columns_not_the_head_width() {
+        let json = r#"[
+            {"kind":"text","text":"货款","align":"right"},
+            {"kind":"text","text":"存根联","align":"center"},
+            {"kind":"text","text":"滨河粮食收购站","align":"center","wide":2,"tall":2}
+        ]"#;
+        let lines: Vec<PrintLine> = serde_json::from_str(json).expect("前端行序列必须能反序列化");
+
+        // 实机 80（头宽 48 列），票面按 58 纸的 32 列排
+        let buf = Capture::default();
+        let mut p = new_printer(buf.clone(), Paper::P80);
+        write_lines(&mut p, 32, &lines, 1, false).expect("出票不应失败");
+        let bytes = buf.0.borrow();
+
+        // 文字行一律左对齐：整张票只允许 begin() 那一条 `ESC a 0`
+        //（0x1B 既不是 GBK 的首字节也不是尾字节，不会和正文撞出假阳性）
+        let delegated: Vec<u8> = bytes
+            .windows(3)
+            .filter(|w| w[0] == 0x1B && w[1] == 0x61 && w[2] != 0)
+            .map(|w| w[2])
+            .collect();
+        assert!(delegated.is_empty(), "对齐仍交给了打印机的 ESC a {delegated:?}");
+
+        let rendered = visible_lines(&bytes);
+        let right = rendered.iter().find(|(l, _)| l.trim() == "货款").expect("右对齐行没打出来");
+        assert_eq!(display_width(&right.0), 32, "右对齐应贴到票面第 32 列");
+
+        let mid = rendered.iter().find(|(l, _)| l.trim() == "存根联").expect("居中行没打出来");
+        assert_eq!(display_width(&mid.0), 6 + 13, "居中应补 13 列（余数落右边）");
+
+        let head = rendered
+            .iter()
+            .find(|(l, _)| l.trim() == "滨河粮食收购站")
+            .expect("倍宽站名没打出来");
+        assert_eq!(head.1, 2, "站名应仍是 2 倍宽");
+        // 补位空格和正文一样是倍宽：按缩放后的 16 列补 1 列 → 物理宽 15 × 2
+        assert_eq!(display_width(&head.0) * head.1, 30, "倍宽行的补齐要按缩放后的列数算");
     }
 
     /// 实测列数必须真的改变排版：同一个"身份证号"行在 48 列放得下、在 24 列放不下。
@@ -856,7 +919,7 @@ mod tests {
             .unwrap();
         let rendered = visible_lines(&buf.0.borrow());
         assert!(
-            rendered.iter().any(|(l, _)| l == label) && rendered.iter().any(|(l, _)| l == value),
+            rendered.iter().any(|(l, _)| l == label) && rendered.iter().any(|(l, _)| l.trim() == value),
             "24 列下应退化成两行式，实际 {rendered:?}"
         );
     }
