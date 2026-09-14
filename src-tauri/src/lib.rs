@@ -41,6 +41,18 @@ fn greet(name: &str) -> String {
 /// 也不能让磅房拿着一个结构对不上的库收粮。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 摄像头免授权（不弹"允许使用摄像头"）走 WebView2 的浏览器参数。这行**不能**改回
+    // `tauri.conf.json` 里主窗口的 `additionalBrowserArgs`：那个字段按窗口配，而 JS 侧
+    // （`src/lib/display-window.ts`）新建的对外大屏窗带不上同一份参数，于是两个 WebView2
+    // 拿着不同的环境参数去共用同一个用户数据目录——第二扇窗的 webview 永远起不来，
+    // 现象就是按 F2 只闪出一个空框、前端对它的所有调用一律报
+    // `failed to receive message from webview`。环境变量由 WebView2 加载器追加进本进程
+    // 每个环境的参数里，所有窗口拿到的参数因此始终一致。
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        // 四条都是原先写在主窗口 `additionalBrowserArgs` 里的，一条不能丢
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream",
+    );
     // 调试构建（tauri dev）放行连错锁定：反复试错不该把账号锁死没法自测，
     // 顺带能把此前已锁的账号直接登进去。release 装机仍按 02 §11 锁定；
     // 单元测试不跑这条启动路径，锁定契约照常由 tests/auth_contract.rs 守着。

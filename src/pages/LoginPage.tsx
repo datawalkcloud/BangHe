@@ -49,9 +49,6 @@ function useCountdown(iso: string | null): number {
   return left;
 }
 
-const DEV_LOGIN_USERNAME = "admin";
-const DEV_LOGIN_PASSWORD = "admin123";
-
 /** 本机记住上一次登录成功的人：磅房里天天登的都是同一两个名字 */
 const LAST_USER_KEY = "banghe.login.last-username";
 
@@ -67,8 +64,8 @@ function lastLoginUsername(): string | null {
 export function LoginPage() {
   const navigate = useNavigate();
   const session = useSession();
-  const [username, setUsername] = useState(() => (import.meta.env.DEV ? DEV_LOGIN_USERNAME : (lastLoginUsername() ?? "")));
-  const [password, setPassword] = useState(() => (import.meta.env.DEV ? DEV_LOGIN_PASSWORD : ""));
+  const [username, setUsername] = useState(() => lastLoginUsername() ?? "");
+  const [password, setPassword] = useState("");
   const [fresh, setFresh] = useState("");
   const [again, setAgain] = useState("");
   const [capsOn, setCapsOn] = useState(false);
@@ -94,10 +91,6 @@ export function LoginPage() {
   // 进入页面 / 切换模式时聚焦第一个字段（05 §10-2）。绝不能把 password、username 放进依赖：
   // 那样每敲一个字都会重新 focus 回 firstField（登录名框），把光标从密码框抢走。
   useEffect(() => {
-    if (import.meta.env.DEV && !username && !password) {
-      setUsername(DEV_LOGIN_USERNAME);
-      setPassword(DEV_LOGIN_PASSWORD);
-    }
     firstField.current?.focus();
     if (username.trim()) {
       // 登录名已经预填（记住了上次的人）：直接把光标放到密码栏，今天只输一次密码
