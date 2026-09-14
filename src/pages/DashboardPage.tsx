@@ -103,7 +103,7 @@ export function DashboardPage() {
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
           <StatCard label={`${p}车次`} value={data?.summary.orders ?? "—"} unit="车" hint={isPending ? "" : "含在途与已归档"} />
           <StatCard label={`${p}净重`} value={ton(data?.summary.net_01kg ?? 0)} hint={`结算重 ${ton(data?.summary.settle_01kg ?? 0)}`} />
-          <StatCard label={`${p}货款`} value={money(data?.summary.goods_fen ?? 0)} tone="info" />
+          <StatCard label={`${p}粮款`} value={money(data?.summary.goods_fen ?? 0)} tone="info" />
           <StatCard
             label={`${p}应付`}
             value={money(data?.summary.payable_fen ?? 0)}

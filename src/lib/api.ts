@@ -16,6 +16,8 @@
  *    `paymentsApi` 付款流水与口径分布
  *  - `systemApi` 审计留痕与备份/校验/体检/恢复、`prefsApi` 工作台布局偏好、
  *    `devicesApi` 设备台账、`searchApi` 全局搜索
+ *  - `outboundApi` 粮食出库单（02 §M11）与库存账：出库单据的增改过账作废红冲、
+ *    仓房 × 品种结存矩阵、出入库流水
  *
  * 两类**故意不进这条链**的旁路：本机外设命令（`lib/native.ts` 的读卡器与打印机，回参是
  * `{ available, data, error }` 而不是裸数据，因为"没有通道"是常态）和高频读数流
@@ -39,8 +41,9 @@ import { devicesApi } from "@/lib/devices-native";
 import { paymentsApi } from "@/lib/payments-native";
 import { searchApi } from "@/lib/search-native";
 import { cardsApi } from "@/lib/cards-native";
+import { outboundApi } from "@/lib/outbound-native";
 
-export const api = { ...mockApi, ...mastersApi, ...dashboardApi, ...ordersApi, ...ordersCenterApi, ...reportsApi, ...systemApi, ...settlementsApi, ...ledgerApi, ...prefsApi, ...qcApi, ...devicesApi, ...paymentsApi, ...searchApi, ...cardsApi };
+export const api = { ...mockApi, ...mastersApi, ...dashboardApi, ...ordersApi, ...ordersCenterApi, ...reportsApi, ...systemApi, ...settlementsApi, ...ledgerApi, ...prefsApi, ...qcApi, ...devicesApi, ...paymentsApi, ...searchApi, ...cardsApi, ...outboundApi };
 
 export type Api = typeof api;
 export type { OrderRow, PartyDetail } from "@/mock/api";

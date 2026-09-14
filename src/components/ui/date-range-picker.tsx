@@ -36,6 +36,8 @@ export interface DateRangePickerProps {
   presets?: boolean
   /** 允许清空区间（起止都可为空 = 不限），面板底部出现「清除」，供留痕等可留空筛选用 */
   allowClear?: boolean
+  /** 校验不通过：触发器红框，错误文案由调用方挂在字段上 */
+  invalid?: boolean
 }
 
 export function DateRangePicker({
@@ -46,6 +48,7 @@ export function DateRangePicker({
   disabled,
   presets = true,
   allowClear = false,
+  invalid,
   ...rest
 }: DateRangePickerProps) {
   const { from, to } = value
@@ -105,6 +108,7 @@ export function DateRangePicker({
         type="button"
         disabled={disabled}
         aria-label={rest["aria-label"]}
+        aria-invalid={invalid || undefined}
         className={cn(
           buttonVariants({ variant: "outline", size: "sm" }),
           // min-w-0 + overflow-hidden：让触发器像 native input 一样能在网格列内收缩，
@@ -112,6 +116,7 @@ export function DateRangePicker({
           "min-w-0 justify-start gap-2 overflow-hidden text-left font-normal tnum",
           // 未选区间时的占位文案跟输入框共用 --input-placeholder，不用 muted-foreground
           !filled && "text-input-placeholder",
+          invalid && "border-destructive ring-1 ring-destructive/40",
           className
         )}
       >

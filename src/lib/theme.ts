@@ -19,6 +19,7 @@
  *     它是出厂默认，而默认色板不注入样式，所以同一批值在 src/App.css 里还有一份镜像——改这里必须改那里。
  */
 import { ACCENT_THEMES, BASE_THEMES, type ThemePreset, type ThemeTokens } from "@/lib/theme-presets";
+import { setTitlebarSyncSuspended } from "@/lib/titlebar-native";
 
 /** light/dark/system，与 next-themes 的 themes 取值一致 */
 export type ThemeMode = "light" | "dark" | "system";
@@ -301,11 +302,15 @@ export function bootstrapTheme(): void {
 function guardPrintTheme(): void {
   let darkBeforePrint = false;
   window.addEventListener("beforeprint", () => {
+    // 出纸这几秒标题栏不参与：打印守卫摘 .dark 是给纸面用的，不是用户改了主题。
+    // 不挂起的话每打一张纸，原生标题栏就闪一次浅色（见 lib/titlebar-native.ts 的挂起闸门）
+    setTitlebarSyncSuspended(true);
     darkBeforePrint = document.documentElement.classList.contains("dark");
     if (darkBeforePrint) document.documentElement.classList.remove("dark");
   });
   window.addEventListener("afterprint", () => {
     if (darkBeforePrint) document.documentElement.classList.add("dark");
     darkBeforePrint = false;
+    setTitlebarSyncSuspended(false);
   });
 }

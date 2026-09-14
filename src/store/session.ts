@@ -34,6 +34,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "settle.create": ["station_master", "cashier"],
   "settle.revoke": ["station_master"],
   "pay.record": ["station_master", "cashier"],
+  /** 粮食出库（02 §M11）：值仓是主经办，站长兜底，磅员/登记员现场代做。
+   *  与 Rust `outbound.rs::OUTBOUND_ROLES` 同源；完成出库与制单同岗，共用这一条。 */
+  "outbound.create": ["station_master", "keeper", "registrar", "weigher"],
+  /** 作废与红冲要更重的岗：更正别人的账，不该由做这张单的人自己说了算
+   *  （与 Rust `outbound.rs::CLOSE_ROLES` 同源） */
+  "outbound.void": ["station_master", "keeper"],
+  "outbound.reverse": ["station_master", "keeper"],
   "print": ["station_master", "registrar", "weigher", "inspector", "keeper", "cashier"],
   "reprint": ["station_master"],
   "setting.write": ["station_master"],

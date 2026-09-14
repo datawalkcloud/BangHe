@@ -119,7 +119,7 @@ pub fn build_ledger(conn: &Connection, from: &str, to: &str) -> Result<Vec<Ledge
         .prepare(
             "SELECT o.business_date, o.order_no, p.name, p.party_type,
                     COALESCE(CAST(p.id_card_no_enc AS TEXT), ''), COALESCE(p.address, ''),
-                    v.name, o.grade, o.vehicle_no, w.name,
+                    COALESCE(v.name, '未定品种'), o.grade, o.vehicle_no, w.name,
                     o.gross_weight_01kg, o.tare_weight_01kg, o.net_weight_01kg,
                     o.deduct_total_01kg, o.settlement_weight_01kg,
                     mi.value_num, ii.value_num,
@@ -130,7 +130,8 @@ pub fn build_ledger(conn: &Connection, from: &str, to: &str) -> Result<Vec<Ledge
                     o.settled_at IS NOT NULL
              FROM weigh_order o
              JOIN party p ON p.id = o.party_id
-             JOIN grain_variety v ON v.id = o.variety_id
+             -- 品种自 0017 起可空：这里必须 LEFT JOIN，否则没定品种的单会从台账上整行消失
+             LEFT JOIN grain_variety v ON v.id = o.variety_id
              LEFT JOIN warehouse w ON w.id = o.warehouse_id
              LEFT JOIN qc_report q ON q.id = o.qc_report_id
              LEFT JOIN qc_indicator mi ON mi.report_id = q.id AND mi.code = 'moisture'
@@ -351,6 +352,7 @@ pub fn build_quality(conn: &Connection, from: &str, to: &str) -> Result<QualityR
             "SELECT o.variety_id, o.grade, COUNT(*)
              FROM weigh_order o
              WHERE o.business_date BETWEEN ?1 AND ?2 AND o.qc_report_id IS NOT NULL
+               AND o.variety_id IS NOT NULL
                AND o.grade IS NOT NULL
              GROUP BY o.variety_id, o.grade",
         )

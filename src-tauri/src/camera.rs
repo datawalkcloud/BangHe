@@ -582,7 +582,7 @@ fn grab(target: &SnapshotTarget, max_bytes: usize) -> Result<Vec<u8>, String> {
     let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
     let mut chunk = [0u8; 8 * 1024];
     // 整轮预算：单次 read 有 SNAPSHOT_TIMEOUT 秒超时，但慢速滴包（每次刚好回一点）永不触发单次超时；
-    // 且 orders::attach_weigh_photo 全程持有单连接 Mutex——一台半死的摄像机会把整个数据路径钉住。
+    // 且 orders::attach_weigh_photos 全程持有单连接 Mutex——一台半死的摄像机会把整个数据路径钉住。
     let deadline = Instant::now() + SNAPSHOT_TIMEOUT * 4;
     loop {
         if Instant::now() > deadline {
@@ -928,6 +928,76 @@ pub fn store_snapshot(
     )
 }
 
+// ----------------------------------------------------------- 过磅抓拍相机（多路，≤3）
+//
+// 04 §4：每次过磅（毛重一捕、皮重一捕）最多由 3 台相机各拍一张。哪几台参与，是设备中心
+// 相机台账里的 `config.captureOnWeigh` 勾选决定的（本机 USB 与内网 IP 机可混着勾），
+// 上限硬卡在 [`MAX_CAPTURE_CAMERAS`]——这是需求本身要的数，不是又一道擅自加的闸门。
+// 勾选与 `is_enabled` 是两个轴：停用（`is_enabled=0`）的相机即便勾了也不过磅，和读卡器
+// 「未登记就压根不开设备」同口径。
+
+/// 单次过磅最多几台相机抓拍（需求：「支持最多三个摄像头抓拍」）。
+pub const MAX_CAPTURE_CAMERAS: usize = 3;
+
+/// 一台参与过磅抓拍的相机（`device_config` 的一行裁剪，够拼端点与判通道/降级用）。
+#[derive(Debug, Clone)]
+pub struct CamRow {
+    pub id: i64,
+    pub code: String,
+    pub config_json: String,
+    pub secret_json: Option<String>,
+    pub is_mock: i64,
+}
+
+/// 这台相机的配置有没有勾「过磅抓拍」。驼峰 `captureOnWeigh` 与蛇形 `capture_on_weigh`
+/// 都认（与仓内其它 config 键一样容忍手输），非布尔真值一律当没勾。
+pub fn capture_on_weigh_enabled(config_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(config_json)
+        .ok()
+        .and_then(|v| {
+            ["captureOnWeigh", "capture_on_weigh"]
+                .iter()
+                .find_map(|k| v.get(*k))
+                .map(|x| matches!(x, serde_json::Value::Bool(true) | serde_json::Value::Number(_)))
+        })
+        .unwrap_or(false)
+}
+
+/// 本次过磅该由哪几台相机抓拍：`kind='camera' AND is_enabled=1` 且勾了 `captureOnWeigh`，
+/// 按 `is_default DESC, id` 排序、截到 [`MAX_CAPTURE_CAMERAS`]。没勾任何一台就是空表——
+/// 老站点靠迁移 0018 把原来那台默认相机勾上，不会静默丢掉抓拍。
+pub fn list_capture_cameras(conn: &Connection) -> Result<Vec<CamRow>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, code, config_json, secret_json, is_mock FROM device_config
+             WHERE kind = 'camera' AND is_enabled = 1
+             ORDER BY is_default DESC, id",
+        )
+        .map_err(|e| format!("读取摄像机配置失败：{e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(CamRow {
+                id: r.get(0)?,
+                code: r.get(1)?,
+                config_json: r.get(2)?,
+                secret_json: r.get(3)?,
+                is_mock: r.get(4)?,
+            })
+        })
+        .map_err(|e| format!("读取摄像机配置失败：{e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let cam = row.map_err(|e| format!("读取摄像机配置失败：{e}"))?;
+        if capture_on_weigh_enabled(&cam.config_json) {
+            out.push(cam);
+            if out.len() >= MAX_CAPTURE_CAMERAS {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// 本机 USB 摄像头的回传帧收口（04 §4 方案 A 的前端半边）：画面由工作台在 WebView2 里
 /// `getUserMedia` 打开，捕获毛/皮重时就地取一帧 JPEG、base64 回传；本函数只做
 /// 「解码 → 校验 → 落库 → 台账状态回写」，**不开任何设备**。
@@ -944,21 +1014,45 @@ pub fn store_provided_frame(
     ctx: &CaptureContext,
     photo_b64: &str,
 ) -> Result<Option<i64>, String> {
-    let row: Option<(i64, String, i64)> = conn
+    // 单台入口（旧调用方与契约测试走这条）：解析出「默认/启用」那台相机后交给逐台核心。
+    // 多路过磅抓拍的生产路径是 orders.rs 遍历 [`list_capture_cameras`] 逐台调 [`store_frame_for`]，
+    // 不再靠这里 LIMIT 1 猜那台。
+    let row: Option<CamRow> = conn
         .query_row(
-            "SELECT id, code, is_mock FROM device_config
+            "SELECT id, code, config_json, secret_json, is_mock FROM device_config
              WHERE kind = 'camera' AND is_enabled = 1
              ORDER BY is_default DESC, id LIMIT 1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| {
+                Ok(CamRow {
+                    id: r.get(0)?,
+                    code: r.get(1)?,
+                    config_json: r.get(2)?,
+                    secret_json: r.get(3)?,
+                    is_mock: r.get(4)?,
+                })
+            },
         )
         .optional()
         .map_err(|e| format!("读取摄像机配置失败：{e}"))?;
-    let Some((id, code, is_mock)) = row else {
+    let Some(cam) = row else {
         degrade("本机未启用抓拍摄像机（设备中心里加一台 kind=camera 并勾选启用）")?;
         return Ok(None);
     };
-    if is_mock == 1 {
+    store_frame_for(conn, app_dir, ctx, &cam, photo_b64)
+}
+
+/// 逐台本机摄像头回传帧落库的核心（[`store_provided_frame`] 的下半段，相机由调用方给）。
+/// 多路抓拍时 orders.rs 对每台勾了「过磅抓拍」的本机相机各调一次，各落一张 attachment。
+pub fn store_frame_for(
+    conn: &Connection,
+    app_dir: &Path,
+    ctx: &CaptureContext,
+    cam: &CamRow,
+    photo_b64: &str,
+) -> Result<Option<i64>, String> {
+    let (id, code) = (cam.id, cam.code.as_str());
+    if cam.is_mock == 1 {
         degrade(&format!("摄像机「{code}」当前为模拟模式，本轮不出真图"))?;
         return Ok(None);
     }
@@ -996,7 +1090,7 @@ pub fn store_provided_frame(
             weigh_record_id: ctx.weigh_record_id,
             operator_id: ctx.operator_id,
             device_id: Some(id),
-            device_code: code.clone(),
+            device_code: code.to_string(),
         },
     );
     match attached {
@@ -1074,46 +1168,70 @@ pub fn capture_snapshot(
     app_dir: &Path,
     ctx: &CaptureContext,
 ) -> Result<Option<i64>, String> {
-    let row: Option<(i64, String, String, Option<String>, i64, i64)> = conn
+    // 单台入口（旧调用方与契约测试走这条）：解析出「默认/启用」那台相机后交给逐台核心。
+    // 多路过磅抓拍的生产路径是 orders.rs 遍历 [`list_capture_cameras`] 逐台调 [`snapshot_for`]。
+    let row: Option<CamRow> = conn
         .query_row(
-            "SELECT id, code, config_json, secret_json, is_enabled, is_mock
-             FROM device_config
+            "SELECT id, code, config_json, secret_json, is_mock FROM device_config
              WHERE kind = 'camera' AND is_enabled = 1
              ORDER BY is_default DESC, id LIMIT 1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok(CamRow {
+                    id: r.get(0)?,
+                    code: r.get(1)?,
+                    config_json: r.get(2)?,
+                    secret_json: r.get(3)?,
+                    is_mock: r.get(4)?,
+                })
+            },
         )
         .optional()
         .map_err(|e| format!("读取摄像机配置失败：{e}"))?;
-
-    let Some((id, code, config_json, secret_json, _enabled, is_mock)) = row else {
+    let Some(cam) = row else {
         degrade("本机未启用抓拍摄像机（设备中心里加一台 kind=camera 并勾选启用）")?;
         return Ok(None);
     };
-    if is_mock == 1 {
-        degrade(&format!("摄像机「{code}」当前为模拟模式，本轮不出真图"))?;
-        return Ok(None);
-    }
+    snapshot_for(conn, app_dir, ctx, &cam)
+}
 
-    // 本机 USB 摄像头的正常取帧通道是「前端画面就地取一帧回传」（[`store_provided_frame`]，
-    // 04 §4 方案 A 的前端半边）。走到这里还没带帧＝预览此刻没开成/取帧失败：明确按无抓拍降级，
-    // 而不是掉进下面 target_from_config 的「未配置 host / 抓图路径」误报。
-    let is_local = serde_json::from_str::<serde_json::Value>(&config_json)
+/// 这台相机是不是本机 USB 摄像头（`config.transport === "local"`）。orders.rs 用它分叉：
+/// 本机走前端回传帧 [`store_frame_for`]，网络机走这里 HTTP 抓图 [`snapshot_for`]。
+pub fn is_local_camera(config_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(config_json)
         .ok()
         .and_then(|v| {
             v.get("transport")
                 .and_then(|t| t.as_str())
                 .map(|s| s.eq_ignore_ascii_case("local"))
         })
-        .unwrap_or(false);
-    if is_local {
+        .unwrap_or(false)
+}
+
+/// 逐台 HTTP 抓图的核心（[`capture_snapshot`] 的下半段，相机由调用方给）。
+pub fn snapshot_for(
+    conn: &Connection,
+    app_dir: &Path,
+    ctx: &CaptureContext,
+    cam: &CamRow,
+) -> Result<Option<i64>, String> {
+    let (id, code) = (cam.id, cam.code.as_str());
+    if cam.is_mock == 1 {
+        degrade(&format!("摄像机「{code}」当前为模拟模式，本轮不出真图"))?;
+        return Ok(None);
+    }
+
+    // 本机 USB 摄像头的正常取帧通道是「前端画面就地取一帧回传」（[`store_frame_for`]，
+    // 04 §4 方案 A 的前端半边）。走到这里还没带帧＝预览此刻没开成/取帧失败：明确按无抓拍降级，
+    // 而不是掉进下面 target_from_config 的「未配置 host / 抓图路径」误报。
+    if is_local_camera(&cam.config_json) {
         degrade(&format!(
             "摄像机「{code}」是本机 USB 摄像头，这一轮没拿到回传帧（工作台画面未打开或取帧失败）：按无抓拍处理"
         ))?;
         return Ok(None);
     }
 
-    let target = match target_from_config(id, &code, &config_json, secret_json.as_deref()) {
+    let target = match target_from_config(id, code, &cam.config_json, cam.secret_json.as_deref()) {
         Ok(t) => t,
         Err(reason) => {
             note_fail(conn, id, &reason);
@@ -1145,7 +1263,7 @@ pub fn capture_snapshot(
             weigh_record_id: ctx.weigh_record_id,
             operator_id: ctx.operator_id,
             device_id: Some(id),
-            device_code: code.clone(),
+            device_code: code.to_string(),
         },
     ) {
         Ok(att) => att,

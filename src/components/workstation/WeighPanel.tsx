@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { DeviceConfig, WeighOrder } from "@/mock/types";
-import { grabLocalCameraFrame, localCameraSpec } from "@/lib/local-camera";
+import { grabCaptureFrames } from "@/lib/local-camera";
 import { dateTime, fromKg, nowLocalISO, toKg, weight } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
@@ -39,17 +39,18 @@ export function WeighPanel({
   tolerancePct,
   scalePort,
   scaleDivision01kg,
-  cameraOnline,
-  camera,
+  anyCamOnline,
+  captureCams,
 }: {
   order: WeighOrder | null;
   mean01kg: number | null;
   tolerancePct: number;
   scalePort: string;
   scaleDivision01kg: number;
-  cameraOnline: boolean;
-  /** 台账里那台抓拍机（04 §4）：本机 USB 摄像头时捕获瞬间就地取一帧回传 */
-  camera: DeviceConfig | null;
+  /** 参与过磅抓拍的相机里有没有至少一台此刻可用（本机流能开 / IP 台账在线）——决定是否值得让服务端去等那 3 秒抓图 */
+  anyCamOnline: boolean;
+  /** 台账里勾了「过磅抓拍」的相机（04 §4：一次最多 3 台，本机与 IP 可混）：捕获瞬间逐台就地取帧回传 */
+  captureCams: DeviceConfig[];
 }) {
   const scale = useDeviceStore((s) => s.scale);
   const setCamera = useDeviceStore((s) => s.setCamera);
@@ -60,8 +61,8 @@ export function WeighPanel({
   const [manualTare, setManualTare] = useState<number | null>(null);
   const [manualGross, setManualGross] = useState<number | null>(null);
   const [flash, setFlash] = useState<"gross" | "tare" | null>(null);
-  /** 这一捕有没有真把本机摄像头的帧带出去（onSuccess 里决定时标与「无抓拍」口径） */
-  const frameOut = useRef(false);
+  /** 这一捕有没有真把本机摄像头的帧带出去（onSuccess 里决定时标与「无抓拍」口径），记成功取到的台数 */
+  const frameOut = useRef(0);
 
   /** 待捕项：缺哪项就优先提示哪项，两项都有则为复称 */
   const next: "gross" | "tare" | null = !order
@@ -76,9 +77,9 @@ export function WeighPanel({
     mutationFn: async (args: Pending & { weigh_type: "gross" | "tare"; warning?: string | null }) => {
       // 本机摄像头：先就地取帧再提交——面板画面流常开时只是 snap 一帧（毫秒级）；面板被
       // 收起时冷开也各封顶 2.5 s（开流+等帧，与 IP 机"事务外等 3 s 抓图"同量级），取不到就按无抓拍提交。
-      const isLocal = localCameraSpec(camera) != null;
-      const photoB64 = isLocal ? await grabLocalCameraFrame(camera) : null;
-      frameOut.current = photoB64 != null;
+      // 一次最多 3 台，逐台各取一帧（grabCaptureFrames 只处理本机 USB 相机，IP 机由服务端抓图）。
+      const frames = await grabCaptureFrames(captureCams);
+      frameOut.current = frames.length;
       return api.capture({
         order_no: order!.order_no,
         weigh_type: args.weigh_type,
@@ -90,8 +91,9 @@ export function WeighPanel({
             ? // 真机流的原帧是迎检时唯一能对回仪表报文的证据；只有模拟流才用合成句占位
               (scale.rawFrame ?? `=W${(args.weight_01kg / 10).toFixed(1)}kg ST`)
             : undefined,
-        has_photo: isLocal ? photoB64 != null : cameraOnline,
-        photo_b64: photoB64 ?? undefined,
+        // 台账在线的 IP 机值得服务端去抓（即便本机一台没取到帧）；本机取到帧也照样想落
+        has_photo: anyCamOnline,
+        frames,
         tare_warning: args.warning ?? null,
       });
     },
@@ -102,7 +104,7 @@ export function WeighPanel({
         return;
       }
       // 抓拍时间给下游用 dateTime 按字面切分展示，存 UTC 串会让时标少 8 小时
-      if (cameraOnline || frameOut.current) setCamera({ lastCaptureAt: nowLocalISO() });
+      if (anyCamOnline || frameOut.current > 0) setCamera({ lastCaptureAt: nowLocalISO() });
       setFlash(args.weigh_type);
       window.setTimeout(() => setFlash(null), 700);
       const manualTag = args.source === "manual" ? "（手录）" : "";
@@ -200,7 +202,7 @@ export function WeighPanel({
         <CardTitle className="text-xs font-semibold">称重区</CardTitle>
         <CardAction className="flex items-center gap-1.5 self-center text-xs text-muted-foreground">
           分度 {weight(scaleDivision01kg, false)} · {scalePort}
-          {!cameraOnline && <ToneBadge tone="danger">无抓拍</ToneBadge>}
+          {!anyCamOnline && <ToneBadge tone="danger">无抓拍</ToneBadge>}
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 p-2">

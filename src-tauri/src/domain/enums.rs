@@ -170,6 +170,31 @@ crate::db_enum! {
 }
 
 crate::db_enum! {
+    /// 出库性质（§9.27 `outbound_order.kind`）
+    ///
+    /// 只有两档，刻意不做多：`sale` 有领出方与单价、产生货款；`record` 是
+    /// 领用/自用/损耗这类「粮出了仓但不产生钱」的登记出库。二者的单据结构、
+    /// 状态机、库存扣减完全同一条路，差别只在要不要单价与应收。
+    /// 转仓（transfer）属 M11 后半段，本期不提供录入入口。
+    OutboundKind {
+        Sale => "sale",
+        Record => "record",
+    }
+}
+
+crate::db_enum! {
+    /// 出库单状态（§9.27）。刻意不复用磅单那 13 态：出库链没有化验、没有二次称重强制序，
+    /// 最短路径就是「制单 → 完成出库」，加两个终态兜住冲销。
+    /// `reversed` 是已完成单的红冲（补一条对称入库流水，原流水不删），见 §4.3 不变式。
+    OutboundStatus {
+        Draft => "draft",
+        Done => "done",
+        Voided => "voided",
+        Reversed => "reversed",
+    }
+}
+
+crate::db_enum! {
     /// 仓房类型（§9.9）
     WarehouseKind {
         House => "house",
@@ -351,5 +376,9 @@ pub const ENUM_SPECS: &[EnumSpec] = &[
     EnumSpec { rust: "DeviceStatus", values: DeviceStatus::VALUES, table: Some("device_config"), column: "last_status", ts: Some("DeviceStatus"), ts_strict: true },
     EnumSpec { rust: "AuditResult", values: AuditResult::VALUES, table: Some("audit_log"), column: "result", ts: None, ts_strict: false },
     EnumSpec { rust: "StockMoveKind", values: StockMoveKind::VALUES, table: Some("stock_movement"), column: "kind", ts: None, ts_strict: false },
+    EnumSpec { rust: "OutboundKind", values: OutboundKind::VALUES, table: Some("outbound_order"), column: "kind", ts: Some("OutboundKind"), ts_strict: true },
+    EnumSpec { rust: "OutboundStatus", values: OutboundStatus::VALUES, table: Some("outbound_order"), column: "status", ts: Some("OutboundStatus"), ts_strict: true },
+    EnumSpec { rust: "WeightSource", values: WeightSource::VALUES, table: Some("outbound_order"), column: "weight_source", ts: Some("WeightSource"), ts_strict: true },
+    EnumSpec { rust: "OrderPaymentStatus", values: OrderPaymentStatus::VALUES, table: Some("outbound_order"), column: "payment_status", ts: Some("PaymentStatus"), ts_strict: true },
     EnumSpec { rust: "SettingValueType", values: SettingValueType::VALUES, table: Some("app_setting"), column: "value_type", ts: None, ts_strict: false },
 ];

@@ -11,10 +11,12 @@
 import {
   BarChart3Icon,
   BookOpenIcon,
+  BoxesIcon,
   ClipboardListIcon,
   CreditCardIcon,
   FlaskConicalIcon,
   LayoutDashboardIcon,
+  PackageOpenIcon,
   PlugZapIcon,
   ScaleIcon,
   ScanLineIcon,
@@ -52,6 +54,7 @@ export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
       item("首页看板", "/", LayoutDashboardIcon, "今日收购概览与告警"),
       item("磅房工作台", "/workstation", ScaleIcon, "读卡 · 过磅 · 化验 · 打印"),
       item("磅单中心", "/orders", ClipboardListIcon, "全部过磅单查询与打印"),
+      item("出库单", "/outbound", PackageOpenIcon, "销售出库与登记出库、扣库存"),
     ],
   },
   {
@@ -72,6 +75,7 @@ export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
       item("设备中心", "/devices", PlugZapIcon, "地磅、读卡、抓拍、打印"),
       item("系统与审计", "/system/audit", Settings2Icon, "操作留痕、备份、人员权限"),
       item("流转卡", "/cards", CreditCardIcon, "卡池登记、注销、空闲预警"),
+      item("库存账", "/stock", BoxesIcon, "仓房 × 品种结存与出入库流水"),
     ],
   },
 ];

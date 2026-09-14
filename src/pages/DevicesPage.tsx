@@ -462,6 +462,19 @@ export function DevicesPage() {
   const cameraOptions = useMemo(() => (cameraScan ?? []).map((d) => ({ value: d.deviceId, label: d.name || d.deviceId })), [cameraScan]);
   const currentCameraKey = cameraScan?.some((d) => d.deviceId === form.cfg.deviceId) ? (form.cfg.deviceId ?? "") : "";
 
+  // 过磅抓拍勾选上限（04 §4）：一次过磅最多 3 台相机各拍一张，与真库
+  // `camera::MAX_CAPTURE_CAMERAS` 同数。这里只数「已启用且已勾 captureOnWeigh」的相机，
+  // 编辑当前这台时把它自己排除在外（它勾没勾由表单即时决定），勾第 4 台时挡住并说明。
+  const captureOnWeighCount = useMemo(
+    () =>
+      devices.filter(
+        (d) => d.kind === "camera" && d.is_enabled === 1 && d.config?.captureOnWeigh === true && d.code !== form.code,
+      ).length,
+    [devices, form.code],
+  );
+  const captureCheckedThis = form.cfg.captureOnWeigh === "true";
+  const captureQuotaReached = captureCheckedThis && captureOnWeighCount >= 3;
+
   // 打开登记表单并选到打印机 / 读卡器 / 摄像头时各自动扫一次；换开表单或换类型（复位 idle）会重扫，现场可能刚插线
   useEffect(() => {
     if (!addOpen) return;
@@ -527,26 +540,32 @@ export function DevicesPage() {
   }, [printScan, form.driver, form.cfg]);
 
   const addFields = fieldsFor(form.kind, form.driver);
-  const addErrors: string[] = [];
+  // 校验错误按字段归位：红框 + 紧贴控件的红字标在出错的表单项上，不在抽屉底部聚合清单
   const trimmedCode = form.code.trim();
-  if (!form.name.trim()) addErrors.push("名称必填");
+  const nameErr = !form.name.trim() ? "名称必填" : "";
   // 编码留空＝交给后端按类型补号（见 devices.rs 的 next_code）；
   // 编辑时编码锁定（台账主键），不再校验其格式/唯一性
-  if (!isEdit && trimmedCode) {
-    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmedCode)) addErrors.push("编码需字母开头，仅含字母/数字/下划线/连字符");
-    else if (devices.some((d) => d.code === trimmedCode)) addErrors.push(`编码 ${trimmedCode} 已存在`);
-  }
+  const codeErr = !isEdit && trimmedCode
+    ? !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmedCode)
+      ? "编码需字母开头，仅含字母/数字/下划线/连字符"
+      : devices.some((d) => d.code === trimmedCode)
+        ? `编码 ${trimmedCode} 已存在`
+        : ""
+    : "";
+  /** 动态参数（addFields）逐项的必填错误，按 f.key 挂到对应控件上 */
+  const dynErr = new Map<string, string>();
   for (const f of addFields) {
-    if (f.required && !fieldValue(f)) addErrors.push(`${f.label}必填`);
+    if (f.required && !fieldValue(f)) dynErr.set(f.key, `${f.label}必填`);
   }
   // 串口类设备的 port 由扫描区/手动输入维护，不在 addFields 里
-  if (SERIAL_KINDS.includes(form.kind) && !(form.cfg.port ?? "").trim()) {
-    addErrors.push("串口必填");
-  }
+  const portErr = SERIAL_KINDS.includes(form.kind) && !(form.cfg.port ?? "").trim() ? "串口必填" : "";
+  // 过磅抓拍一次最多 3 台：勾第 4 台就拦下，逼现场先取消一台再保存（04 §4）——挂在「过磅抓拍」开关下
+  const quotaErr = form.kind === "camera" && captureQuotaReached ? "每次过磅最多 3 台相机抓拍：已有 3 台勾了「过磅抓拍」，请先取消其中一台" : "";
+  const addHasErr = !!(nameErr || codeErr || portErr || quotaErr || dynErr.size > 0);
 
   /** 表单 → config：字段值 + 扫描/手填的寻址参数（这些键不在 addFields 里） */
-  function buildSubmitConfig(): Record<string, string> {
-    const config: Record<string, string> = {};
+  function buildSubmitConfig(): Record<string, string | number | boolean> {
+    const config: Record<string, string | number | boolean> = {};
     for (const f of addFields) {
       const v = fieldValue(f);
       if (v) config[f.key] = v;
@@ -564,6 +583,9 @@ export function DevicesPage() {
         const v = (form.cfg[k] ?? "").trim();
         if (v) config[k] = v;
       }
+      // 「过磅抓拍」以布尔落库（与迁移 0019、真库 `camera::capture_on_weigh_enabled` 同形）：
+      // 勾了写 true，没勾就不写这个键——config 整体替换，取消勾选即从库里消失。
+      if (form.cfg.captureOnWeigh === "true") config.captureOnWeigh = true;
     }
     // 串口类设备：port 由扫描区/手动输入维护，不在 addFields 里
     if (SERIAL_KINDS.includes(form.kind)) {
@@ -856,8 +878,10 @@ export function DevicesPage() {
                 value={form.name}
                 onChange={(e) => patchDeviceForm({ name: e.target.value })}
                 placeholder="如：3 号地磅（耀华 XK3190-A9）"
+                aria-invalid={nameErr ? true : undefined}
                 className="text-sm"
               />
+              {!!nameErr && <span className="text-destructive">{nameErr}</span>}
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               设备编码 {isEdit ? "（不可改）" : "（选填）"}
@@ -866,8 +890,10 @@ export function DevicesPage() {
                 onChange={(e) => patchDeviceForm({ code: e.target.value })}
                 placeholder={`留空自动生成，如 ${nextCode(form.kind)}`}
                 disabled={isEdit}
+                aria-invalid={codeErr ? true : undefined}
                 className="tnum text-sm font-mono"
               />
+              {!!codeErr && <span className="text-destructive">{codeErr}</span>}
             </Label>
 
             {form.kind === "printer" && (
@@ -945,8 +971,26 @@ export function DevicesPage() {
                 )}
                 <p className="text-xs text-muted-foreground">
                   选中本机摄像机会把驱动定为 <span className="font-mono">local_uvc</span> 并记 <span className="font-mono">deviceId</span>；
-                  要登记内网 IP 摄像机，选上面「手动填」项后在下方填地址与登录用户。注意：本机 USB 摄像头的抓拍通道本轮尚未接入过磅链路（抓拍当前只走内网 IP 摄像机），先入台账、抓拍后续接入。
+                  要登记内网 IP 摄像机，选上面「手动填」项后在下方填地址与登录用户。
                 </p>
+                {/* 过磅抓拍：这台相机要不要在每次过磅（毛/皮各一捕）时拍一张。本机 USB 与内网 IP 可混着勾，一次最多 3 台。 */}
+                <div className="flex flex-col gap-1 border-t pt-1.5">
+                  <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Switch
+                      checked={form.cfg.captureOnWeigh === "true"}
+                      disabled={captureOnWeighCount >= 3 && form.cfg.captureOnWeigh !== "true"}
+                      onCheckedChange={(v) => patchCfg("captureOnWeigh", v ? "true" : "false")}
+                      aria-label="过磅抓拍"
+                    />
+                    过磅时抓拍这台（每次过磅最多 3 台）
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    {captureOnWeighCount >= 3 && form.cfg.captureOnWeigh !== "true"
+                      ? `已有 3 台勾了「过磅抓拍」，达上限——要先取消其中一台才能勾这台`
+                      : `已勾选 ${captureOnWeighCount}${form.cfg.captureOnWeigh === "true" ? " +1" : ""}/3 台参与过磅抓拍`}
+                  </p>
+                  {!!quotaErr && <p className="text-[11px] text-destructive">{quotaErr}</p>}
+                </div>
               </div>
             )}
 
@@ -984,8 +1028,10 @@ export function DevicesPage() {
                   value={form.cfg.port ?? ""}
                   onChange={(e) => patchCfg("port", e.target.value)}
                   placeholder="COM3"
+                  aria-invalid={portErr ? true : undefined}
                   className="tnum text-sm font-mono"
                 />
+                {!!portErr && <span className="text-destructive">{portErr}</span>}
               </Label>
             )}
 
@@ -996,6 +1042,7 @@ export function DevicesPage() {
                 {f.options ? (
                   <Choose
                     aria-label={f.label}
+                    invalid={!!dynErr.get(f.key)}
                     value={fieldValue(f)}
                     onChange={(v) => patchCfg(f.key, v)}
                     options={f.options.map((o) => ({ value: o, label: o }))}
@@ -1005,9 +1052,11 @@ export function DevicesPage() {
                     value={form.cfg[f.key] ?? ""}
                     onChange={(e) => patchCfg(f.key, e.target.value)}
                     placeholder={f.placeholder}
+                    aria-invalid={dynErr.get(f.key) ? true : undefined}
                     className="tnum text-sm font-mono"
                   />
                 )}
+                {!!dynErr.get(f.key) && <span className="text-destructive">{dynErr.get(f.key)}</span>}
               </Label>
             ))}
 
@@ -1022,16 +1071,6 @@ export function DevicesPage() {
               </Label>
             )}
           </div>
-
-          {addErrors.length > 0 && (
-            <CallOut tone="warning" title="还不能保存">
-              <ul className="list-disc pl-4">
-                {addErrors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </CallOut>
-          )}
 
           <DialogFooter className="gap-2 sm:justify-between">
             {isEdit ? (
@@ -1051,7 +1090,7 @@ export function DevicesPage() {
               <Button variant="ghost" onClick={() => setAddOpen(false)}>
                 取消
               </Button>
-              <Button onClick={submitDevice} disabled={addErrors.length > 0 || deviceSaving}>
+              <Button onClick={submitDevice} disabled={addHasErr || deviceSaving}>
                 {isEdit ? <CheckIcon /> : <PlusIcon />}
                 {deviceSaving ? (isEdit ? "保存中…" : "登记中…") : isEdit ? "保存修改" : "登记设备"}
               </Button>
@@ -1144,6 +1183,7 @@ function DeviceCard({
       <span className="flex flex-wrap items-center gap-1 text-xs">
         <ToneBadge tone={st.tone}>{st.label}</ToneBadge>
         {d.is_default === 1 && <ToneBadge tone="info">默认</ToneBadge>}
+        {d.kind === "camera" && d.config?.captureOnWeigh === true && <ToneBadge tone="success">过磅抓拍</ToneBadge>}
         {d.is_mock === 1 && <ToneBadge tone="warning">Mock</ToneBadge>}
         {d.is_enabled === 0 && <ToneBadge tone="neutral">已停用</ToneBadge>}
         {d.err_count > 0 && <span className="text-destructive">错误 {d.err_count} 次</span>}

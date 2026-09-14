@@ -11,7 +11,7 @@
 import type { ReactNode } from "react";
 import type { QcReport, Settlement, Station, WeighOrder } from "@/mock/types";
 import { GRADES, INDICATORS, ORDER_STATUS, PAYMENT_METHOD } from "@/lib/constants";
-import { dateTime, maskIdCard, money, percent, price, rmbUpper, ton, weight } from "@/lib/format";
+import { dateTime, maskIdCard, money, percent, price, rmbUpper, ton, weight, varietyLabel } from "@/lib/format";
 
 const SONG = { fontFamily: '"SimSun", "宋体", "NSimSun", serif' };
 
@@ -130,7 +130,7 @@ export function WeighOrderSheet({
       />
       <Cells
         items={[
-          { k: "品种", v: order.variety_name },
+          { k: "品种", v: varietyLabel(order.variety_name) },
           { k: "等级", v: order.grade ?? (qc?.grade ?? "未定级") },
           { k: "水分", v: moisture != null ? percent(moisture) : "—" },
           { k: "杂质", v: impurity != null ? percent(impurity) : "—" },
@@ -164,7 +164,7 @@ export function WeighOrderSheet({
       <div className="mt-2 grid grid-cols-2 gap-2">
         <div className="border border-black">
           <Line label="单价" v={p} />
-          <Line label="货款" v={money(order.goods_amount_fen)} />
+          <Line label="粮款" v={money(order.goods_amount_fen)} />
           <Line label="扣款" v={money(order.deduction_fee_fen)} />
           <Line label="应付" v={money(order.payable_amount_fen)} />
         </div>
@@ -343,7 +343,7 @@ export function SettlementVoucherSheet({
       </table>
       <div className="mt-2 grid grid-cols-2 gap-2">
         <div className="border border-black">
-          <Line label="货款" v={money(settlement.total_goods_fen)} />
+          <Line label="粮款" v={money(settlement.total_goods_fen)} />
           <Line label="扣款" v={money(settlement.total_deduction_fen)} />
           <Line label="应付" v={money(settlement.payable_fen)} />
           <Line label="已付" v={money(settlement.paid_fen)} />

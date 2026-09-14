@@ -13,7 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CreditCardIcon, FileTextIcon, UsersIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { ORDER_STATUS } from "@/lib/constants";
-import { money, ton } from "@/lib/format";
+import { money, ton, varietyLabel } from "@/lib/format";
 import {
   Dialog,
   DialogContent,
@@ -68,7 +68,7 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
         group: "磅单",
         icon: FileTextIcon,
         title: o.order_no,
-        desc: `${o.party_name} · ${o.variety_name} · ${o.business_date}`,
+        desc: `${o.party_name} · ${varietyLabel(o.variety_name)} · ${o.business_date}`,
         trailing: o.settlement_weight_01kg != null ? ton(o.settlement_weight_01kg) : undefined,
         to: "/orders/$orderNo",
         params: { orderNo: o.order_no },

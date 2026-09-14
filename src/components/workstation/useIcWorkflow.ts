@@ -30,7 +30,7 @@ import { api } from "@/lib/api";
 import { autoRegisterCard, autoRegisterOn } from "@/lib/card-auto-register";
 import { announce } from "@/lib/voice-prompt";
 import type { DeviceConfig, WeighOrder } from "@/mock/types";
-import { grabLocalCameraFrame } from "@/lib/local-camera";
+import { grabCaptureFrames } from "@/lib/local-camera";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
 import { runningInTauri } from "@/lib/native";
@@ -72,7 +72,8 @@ const WATCH_RETRY_MAX_MS = 15_000;
 
 export function useIcWorkflow({
   paused,
-  camera,
+  captureCams,
+  anyCamOnline,
   onRequestSettle,
   onWeighed,
   onRequestRegister,
@@ -80,8 +81,10 @@ export function useIcWorkflow({
 }: {
   /** 弹窗开着 / 结算框开着时为真，本 hook 让出设备锁不监听（`card_flow_mode=off` 在内部同样按不监听处理） */
   paused: boolean;
-  /** 台账里那台启用的抓拍机（04 §4）：本机 USB 摄像头时，刷卡通行的捕获也顺手就地取帧回传 */
-  camera: DeviceConfig | null;
+  /** 勾了「过磅抓拍」的相机（04 §4：一次最多 3 台）：本机 USB 摄像头时，刷卡通行的捕获也逐台就地取帧回传 */
+  captureCams: DeviceConfig[];
+  /** 这些相机里有没有至少一台此刻可用（决定要不要让服务端去等 IP 抓图那 3 秒） */
+  anyCamOnline: boolean;
   /** 第三刷：把这张单交给页面的结算框（复用 SettleForm） */
   onRequestSettle: (orderNo: string) => void;
   /** 皮重捕获成功（算完净重）后回调，页面据此自动出码单 */
@@ -122,11 +125,11 @@ export function useIcWorkflow({
    * 页面传进来的两个回调每次渲染都是新的箭头函数。直接进 `useCallback` 依赖，
    * `handle` 就跟着每帧换身份，底下那条监听 effect 每帧 stopWatch + 重起——
    * 真机上正压着卡的那一轮 read 会被 epoch 判废、这一刷凭空丢掉。收成 ref，effect 只依赖稳定量。
-   * `camera` 同理：它来自 devices 查询，每次刷新都是新对象，只能进 ref，绝不能进依赖。
+   * `captureCams`/`anyCamOnline` 同理：它们来自 devices 查询，每次刷新都是新值，只能进 ref，绝不能进依赖。
    */
-  const cbs = useRef({ onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, camera });
+  const cbs = useRef({ onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, captureCams, anyCamOnline });
   useEffect(() => {
-    cbs.current = { onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, camera };
+    cbs.current = { onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, captureCams, anyCamOnline };
   });
 
   const refresh = useCallback((orderNo: string, partyId: number) => {
@@ -196,8 +199,8 @@ export function useIcWorkflow({
       }
       // 皮重超容差不在这里拦：一刷照样捕获，服务端复算后把警示记在磅单上（成功提示后补一条警告）
       try {
-        // 本机 USB 摄像头：与手点那条路同一就地取帧（IP 机的抓图仍在服务端，IC 通行不额外拉网）
-        const photoB64 = await grabLocalCameraFrame(cbs.current.camera);
+        // 与手点那条路同一口径：逐台就地取本机帧（IP 机的抓图仍在服务端，按 anyCamOnline 放行）
+        const frames = await grabCaptureFrames(cbs.current.captureCams);
         const updated = await api.capture({
           order_no: o.order_no,
           weigh_type: step,
@@ -205,8 +208,8 @@ export function useIcWorkflow({
           source: "scale",
           operator_id: actorId(),
           raw_frame: scale.rawFrame ?? undefined,
-          has_photo: photoB64 != null,
-          photo_b64: photoB64 ?? undefined,
+          has_photo: cbs.current.anyCamOnline,
+          frames,
         });
         if (!updated) {
           toast.error("捕获失败：磅单不存在或已被他人修改", sticky(`ic-capture:${o.order_no}`));

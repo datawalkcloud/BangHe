@@ -21,6 +21,7 @@ export function Choose<T extends string>({
   className,
   size = "default",
   disabled,
+  invalid,
   "aria-label": ariaLabel,
   id,
 }: {
@@ -31,6 +32,8 @@ export function Choose<T extends string>({
   className?: string;
   size?: "sm" | "default";
   disabled?: boolean;
+  /** 校验不通过：红框标在控件本身（NativeSelect 自带 aria-invalid 样式） */
+  invalid?: boolean;
   "aria-label"?: string;
   id?: string;
 }) {
@@ -39,6 +42,7 @@ export function Choose<T extends string>({
       id={id}
       size={size}
       aria-label={ariaLabel}
+      aria-invalid={invalid || undefined}
       className={className}
       disabled={disabled}
       value={value}

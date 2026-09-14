@@ -18,11 +18,16 @@ export function VoidReasonField({
   value,
   onChange,
   id,
+  invalid,
+  error,
 }: {
   value: string;
   onChange: (next: string) => void;
   /** 弹窗里有两个同类字段时用来区分（无障碍标签） */
   id?: string;
+  /** 校验不通过：文本框红框（错误文案由调用方给，直接挂在字段上） */
+  invalid?: boolean;
+  error?: string;
 }) {
   const { options } = useQuickOptions("void");
   return (
@@ -38,8 +43,10 @@ export function VoidReasonField({
         presets={options}
         value={value}
         onChange={onChange}
+        invalid={invalid}
         placeholder="选一条常用的，或直接写清楚为什么废…"
       />
+      {error && <span className="text-xs text-destructive">{error}</span>}
     </div>
   );
 }

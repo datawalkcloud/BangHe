@@ -11,6 +11,8 @@
  */
 import type {
   AuditLog,
+  CapturePhoto,
+  DeviceConfig,
   PaymentRecord,
   PrintLog,
   QcIndicatorRow,
@@ -43,6 +45,7 @@ import {
   userName,
   varietySpec,
   warehouses,
+  devices,
 } from "./masters";
 import { addDays, alignDiv, amountFen, atMinute, dateKey, makePlate, roundHalfUp } from "./rng";
 
@@ -605,7 +608,7 @@ export function buildTimeline(o: WeighOrder): TimelineEvent[] {
   const add = (at: string | null | undefined, action: string, label: string, actor: string, tone: Tone, detail?: string | null) => {
     if (at) ev.push({ at, action, label, actor, tone, detail: detail ?? undefined });
   };
-  add(o.registered_at, "order.create", "取号登记", userName(o.registered_by), "neutral", `${o.party_name} · ${o.variety_name}`);
+  add(o.registered_at, "order.create", "取号登记", userName(o.registered_by), "neutral", `${o.party_name} · ${o.variety_name ?? "未定品种"}`);
   const q = qcOf(o.qc_report_id);
   if (q) {
     add(q.inspected_at, "qc.save", `化验 ${q.report_no}${q.is_recheck ? "（复检）" : ""}`, userName(q.inspector_id),
@@ -631,16 +634,50 @@ export function buildTimeline(o: WeighOrder): TimelineEvent[] {
   return ev.sort((a, b) => (a.at > b.at ? 1 : -1));
 }
 
-/** 附件墙：毛重/皮重抓拍，缺失即标注"无抓拍"（05 §6.5 不弹窗阻塞） */
+/** 勾了「过磅抓拍」且启用的相机（04 §4）：每次过磅由它们各拍一张，最多 3 台。
+ *  与真库 `camera::list_capture_cameras` 同口径（is_default 优先、按 id、截三台）。 */
+export function captureCameras(): DeviceConfig[] {
+  return devices
+    .filter((d) => d.kind === "camera" && d.is_enabled === 1 && d.config?.captureOnWeigh === true)
+    .sort((a, b) => (b.is_default - a.is_default) || (a.id - b.id))
+    .slice(0, 3);
+}
+
+/**
+ * 附件墙：一次称重（毛重一捕 / 皮重一捕）最多 3 台相机各一张，逐张列并标出是哪台拍的。
+ * 一条被采纳的轨迹 `has_photo` 为真就按参与抓拍的相机铺多张，一张都没有才补一格「无抓拍」
+ * （05 §6.5 不弹窗阻塞）。合成附件 id 用 `记录 id * 100 + 序号`，与真库的 attachment.id 一样
+ * 只作读图寻址；缺图占位格用 `-记录 id`（负数，与正数附件 id 不撞号，前端 missing 时也不会去读）。
+ */
 export function photosOf(o: WeighOrder) {
-  return (o.records ?? [])
-    .filter((r) => r.is_adopted === 1)
-    .map((r) => ({
-      id: r.id,
-      biz_type: "scale_capture" as const,
-      label: r.weigh_type === "gross" ? "毛重抓拍" : "皮重抓拍",
-      tone: (r.has_photo ? "info" : "danger") as Tone,
-      captured_at: r.captured_at,
-      missing: !r.has_photo,
-    }));
+  const cams = captureCameras();
+  const out: CapturePhoto[] = [];
+  for (const r of o.records ?? []) {
+    if (r.is_adopted !== 1) continue;
+    const label = r.weigh_type === "gross" ? "毛重抓拍" : "皮重抓拍";
+    if (r.has_photo && cams.length > 0) {
+      cams.forEach((c, i) =>
+        out.push({
+          id: r.id * 100 + (i + 1),
+          biz_type: "scale_capture" as const,
+          label,
+          device_label: c.name,
+          tone: "info" as Tone,
+          captured_at: r.captured_at,
+          missing: false,
+        }),
+      );
+    } else {
+      out.push({
+        id: -r.id,
+        biz_type: "scale_capture" as const,
+        label,
+        device_label: null,
+        tone: "danger" as Tone,
+        captured_at: r.captured_at,
+        missing: true,
+      });
+    }
+  }
+  return out;
 }

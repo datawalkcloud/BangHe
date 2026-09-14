@@ -77,7 +77,7 @@ fn new_order(conn: &Connection, party: i64, no_hint: &str) -> String {
         &actor(2, "weigher"),
         CreateOrderInput {
             party_id: party,
-            variety_id: 1,
+            variety_id: Some(1),
             vehicle_no: Some("豫A12345".into()),
             warehouse_id: None,
             slot_id: None,
@@ -105,7 +105,7 @@ fn capture_gross(conn: &Connection, no: &str, w: i64) {
             has_photo: None,
             tare_override: None,
             tare_warning: None,
-            photo_b64: None,
+            frames: Vec::new(),
         },
     )
     .unwrap()
@@ -126,7 +126,7 @@ fn capture_tare(conn: &Connection, no: &str, w: i64) {
             has_photo: None,
             tare_override: None,
             tare_warning: None,
-            photo_b64: None,
+            frames: Vec::new(),
         },
     )
     .unwrap()

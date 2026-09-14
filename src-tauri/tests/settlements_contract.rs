@@ -90,7 +90,7 @@ fn settle_credit(conn: &Connection, party: i64, variety: i64) -> String {
         &actor(1, "weigher"),
         CreateOrderInput {
             party_id: party,
-            variety_id: variety,
+            variety_id: Some(variety),
             vehicle_no: Some("豫A12345".into()),
             warehouse_id: None,
             slot_id: None,
@@ -116,7 +116,7 @@ fn settle_credit(conn: &Connection, party: i64, variety: i64) -> String {
                 has_photo: Some(false),
                 tare_override: None,
                 tare_warning: None,
-                photo_b64: None,
+                frames: Vec::new(),
             },
         )
         .unwrap()
@@ -187,7 +187,7 @@ fn settle_to_create(conn: &Connection, party: i64, variety: i64) -> String {
         &actor(1, "weigher"),
         CreateOrderInput {
             party_id: party,
-            variety_id: variety,
+            variety_id: Some(variety),
             vehicle_no: None,
             warehouse_id: None,
             slot_id: None,
@@ -213,7 +213,7 @@ fn settle_to_create(conn: &Connection, party: i64, variety: i64) -> String {
                 has_photo: Some(false),
                 tare_override: None,
                 tare_warning: None,
-                photo_b64: None,
+                frames: Vec::new(),
             },
         )
         .unwrap()

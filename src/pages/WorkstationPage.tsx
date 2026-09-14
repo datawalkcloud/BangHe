@@ -31,7 +31,7 @@ import { scanRejectNote, settleGateOf } from "@/lib/settle-gate";
 import { announce } from "@/lib/voice-prompt";
 import { useDeviceStore } from "@/store/device";
 import { useSession } from "@/store/session";
-import { date, weight } from "@/lib/format";
+import { date, weight, varietyLabel } from "@/lib/format";
 import { IdentityPanel, TarePanel, draftFromOrder, emptyDraft, type OrderDraft } from "@/components/workstation/IdentityPanel";
 import { WeighPanel } from "@/components/workstation/WeighPanel";
 import { QcPanel } from "@/components/workstation/QcPanel";
@@ -49,6 +49,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { useQuickDetail } from "@/components/business/quickDetail";
+import { DeviceStatusStrip } from "@/components/business/DeviceStatusBar";
 import { Kbd, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -127,12 +128,23 @@ export function WorkstationPage() {
   const panelHolding = useDeviceStore((s) => s.panelHolding);
   // 抓拍机（04 §4）：本机 USB 摄像头的可用性＝WebView2 能不能开那条流，不由台账的探活状态决定；
   // IP 摄像机仍认 last_status。必须在 useIcWorkflow 之前算出来——捕获瞬间的取帧回传归它管。
+  // 参与过磅抓拍的是台账里勾了 `config.captureOnWeigh` 的相机，最多 3 台（默认优先、按 id 序，
+  // 与真库 `camera::list_capture_cameras` 同口径）；CameraPanel 的画面墙仍按全部启用相机显示。
   const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
-  const cameraDevice = cameras.find((c) => c.is_default === 1) ?? cameras[0] ?? null;
-  const cameraOnline = localCameraSpec(cameraDevice) != null || cameraDevice?.last_status === "online";
+  const captureCams = useMemo(
+    () =>
+      cameras
+        .filter((c) => c.config?.captureOnWeigh === true)
+        .slice()
+        .sort((a, b) => (b.is_default - a.is_default) || (a.id - b.id))
+        .slice(0, 3),
+    [cameras],
+  );
+  const anyCamOnline = captureCams.some((c) => localCameraSpec(c) != null || c.last_status === "online");
   useIcWorkflow({
     paused: regOpen || settleNo != null || regHolding || panelHolding,
-    camera: cameraDevice,
+    captureCams,
+    anyCamOnline,
     onRequestSettle: (no) => {
       goOrder(no);
       setSettleNo(no);
@@ -349,12 +361,12 @@ export function WorkstationPage() {
       ),
     tare: <TarePanel recent={tareRecent.slice(0, 5)} last01kg={partyDetail?.last_tare_01kg ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} currentTare01kg={currentTare01kg} alert={tareAlert} partyId={partyId} />,
     camera: <CameraPanel cameras={cameras} order={order ?? null} photos={photos} />,
-    weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} cameraOnline={cameraOnline} camera={cameraDevice} />,
+    weigh: <WeighPanel order={order ?? null} mean01kg={tareMean01kg} tolerancePct={tolerancePct} scalePort={String(scaleDevice?.config?.port ?? "COM1")} scaleDivision01kg={division01kg} anyCamOnline={anyCamOnline} captureCams={captureCams} />,
     qc: <QcPanel order={order ?? null} variety={variety} />,
   };
 
   const openOrdersHint = order
-    ? `${order.variety_name}${order.grade ? ` · ${order.grade}` : ""}`
+    ? `${varietyLabel(order.variety_name)}${order.grade ? ` · ${order.grade}` : ""}`
     : draft.party
       ? `${draft.party.name} · 未制单`
       : "未制单";
@@ -475,6 +487,9 @@ export function WorkstationPage() {
       </div>
 
       {!focusMode && <OpenOrdersBar activeNo={orderNo} onPick={(no) => goOrder(no)} />}
+      {/* 专注层是 fixed inset-0，会把 AppShell 那条常驻设备状态条整个盖住；设备故障是现场最高频问题，
+          抬头就得看见，所以覆盖层底部补挂一份纯展示的（闸门与读卡探测仍只有被盖住的那份在跑） */}
+      {focusMode && <DeviceStatusStrip />}
 
       {/* 制单弹窗（身份与制单，05 §4.0） */}
       <RegistrationDialog

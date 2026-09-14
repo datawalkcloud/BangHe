@@ -140,6 +140,21 @@ pub struct Warehouse {
     /// 类型与容量保留 NULL：后端替它编 `house` / `0` 会让档案页把"没填"演成"填了"
     pub kind: Option<String>,
     pub capacity_ton: Option<i64>,
+    // -------------------------------------------------- 库存那一格（§9.23 / 0022 派生）
+    // 全部读自 `stock::warehouse_totals`，判据不在这里重写一遍：结存与出库可用量共用同一份，
+    // 两处各算一次就是「档案页说还有 300 吨、出库说无货」这种最难归因的错账。
+    /// 期初建账量（0.1kg）。NULL＝从没申报过；`Some(0)` 是一句明确的「空仓起账」
+    pub opening_01kg: Option<i64>,
+    /// 期初登记到哪个品种（`grain_variety.id`）。NULL＝期初没细分品种：仓房总量照计，
+    /// 但按品种的出库账面看不见它（界面上要显出来，别让站长以为已经细分过）
+    pub opening_variety_id: Option<i64>,
+    /// 账面结存（0.1kg）＝ Σ入 − Σ出，含期初
+    pub balance_01kg: i64,
+    /// 已上磅但还没结算入账的部分：不计入 `balance_01kg`，但真实占容积
+    pub pending_in_01kg: i64,
+    /// 剩余容量（0.1kg）＝ 核定容量 − 结存 − 待入账。核定容量没填则为 NULL（不替它猜）。
+    /// **负数不是错误**：那是一句「这间仓已经超容」的提示，本系统一律不因此拦单
+    pub remain_01kg: Option<i64>,
     pub is_active: i64,
     pub slots: Vec<Slot>,
 }
@@ -219,6 +234,22 @@ pub struct DeleteVarietyInput {
     pub operator_id: i64,
 }
 
+/// 删除仓房入参。与 [`DeleteVarietyInput`] 同形：`operator_id` 前端透传、后端以会话为准忽略。
+#[derive(Debug, Deserialize)]
+pub struct DeleteWarehouseInput {
+    pub id: i64,
+    #[serde(default)]
+    pub operator_id: i64,
+}
+
+/// 删除货位入参，同上。
+#[derive(Debug, Deserialize)]
+pub struct DeleteSlotInput {
+    pub id: i64,
+    #[serde(default)]
+    pub operator_id: i64,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct WarehouseInput {
     pub id: Option<i64>,
@@ -228,6 +259,14 @@ pub struct WarehouseInput {
     /// 空着就是没核定，落 NULL；`0` 吨是一条明确的"不允许存粮"
     #[serde(default)]
     pub capacity_ton: Option<i64>,
+    /// 期初建账（0.1kg；界面按吨录入，换算只在边界发生一次）。**不落 warehouse 表的列**，
+    /// 而是落成 §9.23 那笔 `is_opening = 1` 的入库流水（0022）——库存账只有一个账本。
+    /// NULL＝从没申报过（不建流水行）；`Some(0)` 是一句明确的「空仓起账」。
+    #[serde(default)]
+    pub opening_01kg: Option<i64>,
+    /// 期初登记到哪个品种（可空＝不细分：仓房总量照计，按品种的出库账面看不见它）
+    #[serde(default)]
+    pub opening_variety_id: Option<i64>,
     #[serde(default = "enabled")]
     pub is_active: i64,
 }
@@ -500,16 +539,32 @@ pub fn list_warehouses(conn: &Connection) -> Result<Vec<Warehouse>, String> {
         .map_err(|e| format!("读取仓房失败：{e}"))?;
     // 货位一共几十条，一次取完再挂到各仓房下，省掉 N+1
     let slots = list_slots(conn)?;
+    // 库存那一格同理一次取完。判据不在这里重写——结存与出库可用量共用 `stock.rs` 那一份，
+    // 两处各算一次就是「档案页说还有 300 吨、出库说无货」这种最难归因的错账。
+    let totals = crate::stock::warehouse_totals(conn)?;
     Ok(heads
         .into_iter()
-        .map(|(id, code, name, kind, capacity_ton, is_active)| Warehouse {
-            slots: slots.iter().filter(|s| s.warehouse_id == id).cloned().collect(),
-            id,
-            code,
-            name,
-            kind,
-            capacity_ton,
-            is_active,
+        .map(|(id, code, name, kind, capacity_ton, is_active)| {
+            let t = totals.iter().find(|t| t.warehouse_id == id);
+            let (balance_01kg, pending_in_01kg) = (
+                t.map(|t| t.balance_01kg).unwrap_or(0),
+                t.map(|t| t.pending_in_01kg).unwrap_or(0),
+            );
+            Warehouse {
+                slots: slots.iter().filter(|s| s.warehouse_id == id).cloned().collect(),
+                opening_01kg: t.and_then(|t| t.opening_01kg),
+                opening_variety_id: t.and_then(|t| t.opening_variety_id),
+                balance_01kg,
+                pending_in_01kg,
+                // 1 吨 = 10000 个 0.1kg；容量没核定就留 NULL，不替站长猜一个"能装多少"
+                remain_01kg: capacity_ton.map(|c| c * 10_000 - balance_01kg - pending_in_01kg),
+                id,
+                code,
+                name,
+                kind,
+                capacity_ton,
+                is_active,
+            }
         })
         .collect())
 }
@@ -552,30 +607,85 @@ pub fn save_warehouse(conn: &Connection, actor: &AuthProfile, input: WarehouseIn
         return Err(format!("仓房编码「{code}」已存在，换一个"));
     }
 
-    match input.id {
+    // 一次保存动两张表（warehouse + stock_movement）＋审计，必须一起成或一起滚：
+    // 档案存上、库存账没记上，系统就会指着一间压着 1200 吨的库房说它是空的。
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("仓房保存失败：{e}"))?;
+
+    let id = match input.id {
         Some(id) => {
-            conn.execute(
+            tx.execute(
                 "UPDATE warehouse SET code = ?1, name = ?2, kind = ?3, capacity_ton = ?4,
                         is_active = ?5, updated_at = ?6
                  WHERE id = ?7 AND deleted_at IS NULL",
                 params![code, name, input.kind, input.capacity_ton, input.is_active, now_iso(), id],
             )
             .map_err(|e| format!("仓房保存失败：{e}"))?;
-            let row = warehouse_by_id(conn, id)?;
-            audit(conn, actor, "warehouse.update", "warehouse", &code, None);
-            Ok(row)
+            id
         }
         None => {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO warehouse (code, name, kind, capacity_ton, is_active, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![code, name, input.kind, input.capacity_ton, input.is_active, now_iso()],
             )
             .map_err(|e| format!("仓房保存失败：{e}"))?;
-            let row = warehouse_by_id(conn, conn.last_insert_rowid())?;
-            audit(conn, actor, "warehouse.create", "warehouse", &code, None);
-            Ok(row)
+            tx.last_insert_rowid()
         }
+    };
+
+    // 期初：写进库存账本（§9.23 的那笔建账流水），不占 warehouse 表的列。
+    if let Some(vid) = input.opening_variety_id.filter(|v| *v > 0) {
+        let variety: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL",
+                params![vid],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("检查品种失败：{e}"))?;
+        if variety == 0 {
+            return Err("所选品种不存在或已删除".into());
+        }
+    }
+    let before = crate::stock::opening_01kg(&tx, id)?;
+    let mut reason = None;
+    if input.opening_01kg != before {
+        crate::stock::set_opening(
+            &tx,
+            actor,
+            id,
+            input.opening_variety_id.filter(|v| *v > 0),
+            input.opening_01kg,
+        )?;
+        // 基线被改过必须留痕：结存对不上时第一个被问的就是「期初到底填了多少」。
+        // 挂在本次保存那一条审计的 reason 上，不另开一行——档案写入「一次操作一条审计」
+        // 是 masters_contract 钉住的纪律，多一条就把那条断言改成了测试迁就实现。
+        reason = Some(format!(
+            "期初建账 {} → {}",
+            opening_label(before),
+            opening_label(input.opening_01kg)
+        ));
+    }
+    // 回读排在期初之后：档案页与制单下拉拿到的结存/剩余容量必须是这次的最终值
+    let row = warehouse_by_id(&tx, id)?;
+    audit(
+        &tx,
+        actor,
+        if input.id.is_some() { "warehouse.update" } else { "warehouse.create" },
+        "warehouse",
+        &code,
+        reason.as_deref(),
+    );
+    tx.commit().map_err(|e| format!("仓房保存提交失败：{e}"))?;
+    Ok(row)
+}
+
+/// 审计里那句人话：`None` 与 `Some(0)` 必须能区分开（一个是"从没申报过"，一个是"空仓起账"）
+fn opening_label(v01kg: Option<i64>) -> String {
+    match v01kg {
+        None => "未申报".to_string(),
+        Some(v) => format!("{:.2} 吨", v as f64 / 10_000.0),
     }
 }
 
@@ -642,6 +752,105 @@ pub fn save_slot(conn: &Connection, actor: &AuthProfile, input: SlotInput) -> Re
         )),
         Err(e) => Err(format!("货位保存失败：{e}")),
     }
+}
+
+/// 删除仓房（§3.4 档案表软删除：置 `deleted_at`，历史磅单的去向照旧能读回仓房名）。
+///
+/// 先查引用：仓房一旦被磅单、出入库流水或往来单位「常用去向」挂过就不能删——删掉会让
+/// 历史台账找不到去向来源，那种只能「停用」（`is_active = 0`）。引用统计把「本仓房下的
+/// 货位」一并算进来（磅单可能只登记到货位、没填仓房），任一命中即拒删。全部为 0 时，
+/// 连带硬删这些没有历史的货位子行（`storage_slot.warehouse_id` 非空外键，留孤儿货位既
+/// 不会被档案页显示、又可能在别处冒出来），再把仓房软删。与品种、设备同一套纪律。
+pub fn delete_warehouse(conn: &Connection, actor: &AuthProfile, id: i64) -> Result<Warehouse, String> {
+    let row = warehouse_by_id(conn, id)?;
+    let refs = |sql: &str| -> Result<i64, String> {
+        conn.query_row(sql, params![id], |r| r.get(0))
+            .map_err(|e| format!("检查仓房引用失败：{e}"))
+    };
+    // 「本仓房下的货位」子查询：仓房级与货位级引用一次算全
+    const OWN_SLOTS: &str = "(SELECT id FROM storage_slot WHERE warehouse_id = ?1)";
+    let in_order = refs(&format!(
+        "SELECT COUNT(*) FROM weigh_order WHERE warehouse_id = ?1 OR slot_id IN {OWN_SLOTS}"
+    ))?;
+    // 期初行**不算**外部引用：它是这间仓房自己的建账基线，不是别人挂上来的单据。
+    // 不排掉的话，站长只要填过期初就再也删不掉这间仓（只能停用），而「先清空期初再删」
+    // 又是平白多绕一步——所以这里排除、下面连带撤掉。
+    let in_move = refs(&format!(
+        "SELECT COUNT(*) FROM stock_movement
+         WHERE is_opening = 0
+            AND (from_warehouse_id = ?1 OR to_warehouse_id = ?1
+                 OR from_slot_id IN {OWN_SLOTS} OR to_slot_id IN {OWN_SLOTS})"
+    ))?;
+    let in_party = refs("SELECT COUNT(*) FROM party WHERE default_warehouse_id = ?1 AND deleted_at IS NULL")?;
+    if in_order > 0 || in_move > 0 || in_party > 0 {
+        let mut parts: Vec<String> = Vec::new();
+        if in_order > 0 {
+            parts.push(format!("磅单 {in_order} 张"));
+        }
+        if in_move > 0 {
+            parts.push(format!("出入库流水 {in_move} 条"));
+        }
+        if in_party > 0 {
+            parts.push(format!("往来单位常用去向 {in_party} 处"));
+        }
+        let reason = format!(
+            "仓房「{}」仍被{}引用，不能删除；如不再使用请改为「停用」",
+            row.name,
+            parts.join("、")
+        );
+        audit(conn, actor, "warehouse.delete", "warehouse", &row.code, Some(&reason));
+        return Err(reason);
+    }
+    conn.execute("DELETE FROM storage_slot WHERE warehouse_id = ?1", params![id])
+        .map_err(|e| format!("仓房删除失败：{e}"))?;
+    // 期初行随仓房一起撤掉（留着一行指向已删仓房的流水，结存矩阵里会冒出一格没有主人的货）
+    conn.execute(
+        "DELETE FROM stock_movement WHERE is_opening = 1 AND to_warehouse_id = ?1",
+        params![id],
+    )
+    .map_err(|e| format!("仓房删除失败：{e}"))?;
+    conn.execute(
+        "UPDATE warehouse SET deleted_at = ?1, is_active = 0, updated_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        params![now_iso(), id],
+    )
+    .map_err(|e| format!("仓房删除失败：{e}"))?;
+    audit(conn, actor, "warehouse.delete", "warehouse", &row.code, None);
+    Ok(row)
+}
+
+/// 删除货位。`storage_slot` 没有 `deleted_at` 列（§9.9 停用即 `is_active = 0`），
+/// 因此这里走硬删，与设备删除同一取舍：先查引用，被历史单据挂过的拒删、只允许「停用」，
+/// 干净的错录才真删。货位是叶子、无子表，删了不留悬空引用。
+pub fn delete_slot(conn: &Connection, actor: &AuthProfile, id: i64) -> Result<Slot, String> {
+    let row = slot_by_id(conn, id)?;
+    let refs = |sql: &str| -> Result<i64, String> {
+        conn.query_row(sql, params![id], |r| r.get(0))
+            .map_err(|e| format!("检查货位引用失败：{e}"))
+    };
+    let in_order = refs("SELECT COUNT(*) FROM weigh_order WHERE slot_id = ?1")?;
+    let in_move =
+        refs("SELECT COUNT(*) FROM stock_movement WHERE from_slot_id = ?1 OR to_slot_id = ?1")?;
+    if in_order > 0 || in_move > 0 {
+        let mut parts: Vec<String> = Vec::new();
+        if in_order > 0 {
+            parts.push(format!("磅单 {in_order} 张"));
+        }
+        if in_move > 0 {
+            parts.push(format!("出入库流水 {in_move} 条"));
+        }
+        let reason = format!(
+            "货位「{}」仍被{}引用，不能删除；如不再使用请改为「停用」",
+            row.label,
+            parts.join("、")
+        );
+        audit(conn, actor, "slot.delete", "storage_slot", &row.code, Some(&reason));
+        return Err(reason);
+    }
+    conn.execute("DELETE FROM storage_slot WHERE id = ?1", params![id])
+        .map_err(|e| format!("货位删除失败：{e}"))?;
+    audit(conn, actor, "slot.delete", "storage_slot", &row.code, None);
+    Ok(row)
 }
 
 const PRICE_COLS: &str = "id, variety_id, grade, price_fen_per_ton, effective_from,
@@ -1173,6 +1382,24 @@ pub async fn master_save_slot(app: AppHandle, input: SlotInput) -> Result<Slot, 
     tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| save_slot(conn, &actor, input)))
         .await
         .map_err(|e| format!("货位保存任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn master_delete_warehouse(app: AppHandle, input: DeleteWarehouseInput) -> Result<Warehouse, String> {
+    let pool = pool_of(&app)?;
+    let actor = operator(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| delete_warehouse(conn, &actor, input.id)))
+        .await
+        .map_err(|e| format!("仓房删除任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn master_delete_slot(app: AppHandle, input: DeleteSlotInput) -> Result<Slot, String> {
+    let pool = pool_of(&app)?;
+    let actor = operator(&app)?;
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| delete_slot(conn, &actor, input.id)))
+        .await
+        .map_err(|e| format!("货位删除任务失败：{e}"))?
 }
 
 #[tauri::command]

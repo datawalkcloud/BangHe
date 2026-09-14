@@ -52,7 +52,7 @@ fn new_order(conn: &Connection, party_id: i64, no_hint: &str) -> (i64, String) {
         conn,
         &actor(2, "weigher"),
         CreateOrderInput {
-            party_id, variety_id: first_variety_id(conn), vehicle_no: Some(no_hint.into()),
+            party_id, variety_id: Some(first_variety_id(conn)), vehicle_no: Some(no_hint.into()),
             warehouse_id: None, slot_id: None, remark: None, card_no: None, registered_by: None, weight_source: "scale".into(),
         },
     )

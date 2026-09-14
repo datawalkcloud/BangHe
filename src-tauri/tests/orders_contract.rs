@@ -24,7 +24,7 @@ use banghe_lib::cards::{pool_register, pool_retire, RegisterInput, RetireInput};
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::orders::{
     capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, void_order, assign_destination,
-    party_photo_view, capture_photo_view, set_party_photo, update_meta, CaptureInput, CreateOrderInput, OrderFilters, PartyPhotoInput, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VoidOrderInput, AssignDestinationInput, UpdateOrderInput,
+    party_photo_view, capture_photo_view, set_party_photo, update_meta, set_variety, CaptureInput, CreateOrderInput, OrderFilters, PartyPhotoInput, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VarietyAdjustInput, VoidOrderInput, AssignDestinationInput, UpdateOrderInput,
 };
 
 fn db() -> Connection {
@@ -116,7 +116,7 @@ fn create(conn: &Connection, party: i64, variety: i64) -> String {
         &actor(1, "weigher"),
         CreateOrderInput {
             party_id: party,
-            variety_id: variety,
+            variety_id: Some(variety),
             vehicle_no: Some("豫A12345".into()),
             warehouse_id: None,
             slot_id: None,
@@ -144,7 +144,7 @@ fn capture_gross(conn: &Connection, no: &str, w: i64) {
             has_photo: Some(true),
             tare_override: None,
             tare_warning: None,
-            photo_b64: None,
+            frames: Vec::new(),
         },
     )
     .unwrap()
@@ -165,39 +165,42 @@ fn capture_tare(conn: &Connection, no: &str, w: i64, warning: Option<&str>) {
             has_photo: Some(false),
             tare_override: None,
             tare_warning: warning.map(str::to_string),
-            photo_b64: None,
+            frames: Vec::new(),
         },
     )
     .unwrap()
     .expect("单应存在");
 }
 
+fn qc_input(no: &str) -> SaveQcInput {
+    SaveQcInput {
+        order_no: no.into(),
+        grade: Some("一等".into()),
+        decision: "accept".into(),
+        test_method: "nir".into(),
+        indicators: vec![QcIndicatorInput {
+            code: "moisture".into(),
+            name: "水分".into(),
+            value_num: Some(1400),
+            value_text: None,
+            unit: "0.01pct".into(),
+            std_value: Some(1400),
+            over_std: 0,
+        }],
+        moisture_deduct_01kg: 0,
+        impurity_deduct_01kg: 0,
+        inspector_id: None,
+        reject_reason: None,
+    }
+}
+
 fn accept_qc(conn: &Connection, no: &str) -> banghe_lib::orders::QcReport {
-    save_qc(
-        conn,
-        &actor(3, "inspector"),
-        SaveQcInput {
-            order_no: no.into(),
-            grade: Some("一等".into()),
-            decision: "accept".into(),
-            test_method: "nir".into(),
-            indicators: vec![QcIndicatorInput {
-                code: "moisture".into(),
-                name: "水分".into(),
-                value_num: Some(1400),
-                value_text: None,
-                unit: "0.01pct".into(),
-                std_value: Some(1400),
-                over_std: 0,
-            }],
-            moisture_deduct_01kg: 0,
-            impurity_deduct_01kg: 0,
-            inspector_id: None,
-            reject_reason: None,
-        },
-    )
-    .unwrap()
-    .expect("单应存在")
+    save_qc(conn, &actor(3, "inspector"), qc_input(no)).unwrap().expect("单应存在")
+}
+
+/// 直接拿 Result 的那一条：断言"化验该被闸门拦下"时用（`accept_qc` 会 panic）
+fn try_qc(conn: &Connection, no: &str) -> Result<Option<banghe_lib::orders::QcReport>, String> {
+    save_qc(conn, &actor(3, "inspector"), qc_input(no))
 }
 
 fn latest_price(conn: &Connection) -> i64 {
@@ -255,7 +258,7 @@ fn create_order_binds_a_free_card_or_refuses_the_number() {
             &actor(1, "weigher"),
             CreateOrderInput {
                 party_id: party,
-                variety_id: xm,
+                variety_id: Some(xm),
                 vehicle_no: None,
                 warehouse_id: None,
                 slot_id: None,
@@ -355,7 +358,7 @@ fn create_order_numbers_by_spec_and_snapshots_party() {
     let o = load_order_full(&conn, &a).unwrap().unwrap();
     assert_eq!(o.status, "registered");
     assert_eq!(o.party_name, "张三");
-    assert_eq!(o.variety_name, "小麦");
+    assert_eq!(o.variety_name.as_deref(), Some("小麦"));
     assert_eq!(o.id_card_no, "341204199301272015");
     assert_eq!(o.business_date, Local::now().format("%Y-%m-%d").to_string());
     assert!(o.records.as_ref().unwrap().is_empty());
@@ -397,7 +400,7 @@ fn weigh_flow_drives_status_and_party_tare() {
     let e = capture(
         &conn,
         &actor(2, "weigher"),
-        CaptureInput { order_no: no.clone(), weigh_type: "gross".into(), weight_01kg: 1, source: "scale".into(), operator_id: None, raw_frame: None, has_photo: None, tare_override: None, tare_warning: None, photo_b64: None },
+        CaptureInput { order_no: no.clone(), weigh_type: "gross".into(), weight_01kg: 1, source: "scale".into(), operator_id: None, raw_frame: None, has_photo: None, tare_override: None, tare_warning: None, frames: Vec::new() },
     )
     .unwrap_err();
     assert!(e.contains("不能再称重"), "拒绝原因要回人话：{e}");
@@ -979,7 +982,7 @@ fn cap(
             has_photo: Some(false),
             tare_override: None,
             tare_warning: warning.map(str::to_string),
-            photo_b64: None,
+            frames: Vec::new(),
         },
     )
 }
@@ -1504,7 +1507,7 @@ fn card_photo_lands_on_the_party_and_reads_back_as_a_data_url() {
 }
 
 #[test]
-fn a_scale_capture_reads_back_by_record_and_absent_is_not_an_error() {
+fn a_scale_capture_reads_back_by_attachment_and_absent_is_not_an_error() {
     use banghe_lib::camera::{store_snapshot, AttachmentMeta};
     let conn = db();
     let dir = PhotoDir::new("cap-read");
@@ -1519,40 +1522,43 @@ fn a_scale_capture_reads_back_by_record_and_absent_is_not_an_error() {
         )
         .unwrap();
 
-    // 没抓拍时读图：回 Ok(None) 不是错误（详情页据此显示"无抓拍"），且绝不虚记一次 PII 访问
-    assert!(capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), record_id).unwrap().is_none());
+    // 读通道现在按 attachment.id 取（一次过磅最多 3 张、墙上逐张列）：
+    // 不存在的附件 id 回 Ok(None) 不是错误（多半是到期清理掉了），且绝不虚记一次 PII 访问
+    assert!(capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), 999_999).unwrap().is_none());
     assert_eq!(audits(&conn, "pii.read"), 0, "没读到图就不该记一次'看过'");
 
-    // 落一张 scale_capture 附件并挂到这条轨迹（模拟 attach_weigh_photo 的产物）
-    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
-    jpeg.extend_from_slice(b"JFIF-scale-capture");
-    jpeg.extend_from_slice(&[0xFF, 0xD9]);
-    let att = store_snapshot(
-        &conn,
-        &dir.path,
-        &jpeg,
-        &AttachmentMeta { order_id, weigh_record_id: record_id, operator_id: 2, device_id: None, device_code: "cam1".into() },
-    )
-    .unwrap();
-    conn.execute("UPDATE weigh_record SET photo_attachment_id = ?1 WHERE id = ?2", params![att, record_id]).unwrap();
-
-    let img = capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), record_id)
+    // 落两张 scale_capture 附件挂到同一条轨迹（模拟两台相机各拍一张、attach_weigh_photos 的产物）
+    let put = |tag: &str| -> i64 {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        jpeg.extend_from_slice(tag.as_bytes());
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        store_snapshot(
+            &conn,
+            &dir.path,
+            &jpeg,
+            &AttachmentMeta { order_id, weigh_record_id: record_id, operator_id: 2, device_id: None, device_code: tag.into() },
+        )
         .unwrap()
-        .expect("挂了附件就该读得回来");
-    assert!(img.data_url.starts_with("data:image/jpeg;base64,"), "回的是 data URL：{}", &img.data_url[..24]);
-    assert_eq!(audits(&conn, "pii.read"), 1, "看过磅抓拍是一次 PII 访问，必须留痕");
+    };
+    let first = put("JFIF-scale-capture-A");
+    let second = put("JFIF-scale-capture-B");
+    conn.execute("UPDATE weigh_record SET photo_attachment_id = ?1 WHERE id = ?2", params![first, record_id]).unwrap();
+
+    for att in [first, second] {
+        let img = capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), att)
+            .unwrap()
+            .expect("挂了附件就该读得回来");
+        assert!(img.data_url.starts_with("data:image/jpeg;base64,"), "回的是 data URL：{}", &img.data_url[..24]);
+    }
+    assert_eq!(audits(&conn, "pii.read"), 2, "两台相机各看一次＝两次 PII 访问，都要留痕");
     let accessed_by: Option<i64> = conn
-        .query_row("SELECT accessed_by FROM attachment WHERE id = ?1", params![att], |r| r.get(0))
+        .query_row("SELECT accessed_by FROM attachment WHERE id = ?1", params![second], |r| r.get(0))
         .unwrap();
     assert_eq!(accessed_by, Some(1), "读图要记到人");
     let audit_no: Option<String> = conn
         .query_row("SELECT entity_no FROM audit_log WHERE action = 'pii.read' AND entity = 'weigh_order' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
         .unwrap();
     assert_eq!(audit_no.as_deref(), Some(no.as_str()), "pii.read 审计要挂到这张磅单，不是别的单据");
-
-    // 记录不存在：回人话 Err（那是"没这张记录"，与"这张没抓拍"的 Ok(None) 分得清）
-    let e = capture_photo_view(&conn, &dir.path, &actor(1, "station_master"), 999_999).unwrap_err();
-    assert!(is_chinese(&e), "要中文短句：{e}");
 }
 
 #[test]
@@ -1749,4 +1755,197 @@ fn meta_edit_is_not_blocked_by_settlement_state() {
     let o = update_meta_no(&conn, &no, Some("豫B00001"), Some("复检留样")).unwrap();
     assert_eq!(o.vehicle_no.as_deref(), Some("豫B00001"));
     assert_eq!(o.remark.as_deref(), Some("复检留样"));
+}
+
+// ------------------------------------------------ 品种后置（迁移 0017 · 两刷零按键制单）
+
+/// 造一张**没定品种**的单：02 §F1.1 之后 IC 卡 + 售粮人就够取号，品种留到化验/结算前再补
+fn create_no_variety(conn: &Connection, party: i64) -> String {
+    create_order(
+        conn,
+        &actor(1, "weigher"),
+        CreateOrderInput {
+            party_id: party,
+            variety_id: None,
+            vehicle_no: Some("豫A12345".into()),
+            warehouse_id: None,
+            slot_id: None,
+            remark: None,
+            card_no: Some(free_card(conn)),
+            registered_by: None,
+            weight_source: "scale".into(),
+        },
+    )
+    .expect("没定品种也该制得下这张单（两刷零按键）")
+    .order_no
+}
+
+/// 一个停用品种：验"给了品种仍要在册且启用"这条闸——停用档案只许存量单读出来，不许再挂新单
+fn seed_inactive_variety(conn: &Connection, code: &str) -> i64 {
+    conn.execute(
+        "INSERT INTO grain_variety (code, name, category, enabled_indicators_json, sort_order, is_active, created_at)
+         VALUES (?1, ?2, '主粮', '[\"moisture\"]', 90, 0, '2026-09-01T08:00:00.000')",
+        params![code, "淘汰杂粮"],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+/// 结算框/化验区那个品种下拉提交的最小 payload：事由留空，审计里落「未填写」
+fn variety_adjust(no: &str, v: Option<i64>) -> VarietyAdjustInput {
+    VarietyAdjustInput { order_no: no.into(), variety_id: v, reason: String::new(), operator_id: None }
+}
+
+fn variety_audit(conn: &Connection, no: &str) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("SELECT reason FROM audit_log WHERE action='order.variety' AND entity_no=?1 ORDER BY id")
+        .unwrap();
+    stmt.query_map(params![no], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+/// 被闸门拦下的化验不许落库：报个错就把报告写进去，等于凭空多一张化验单
+fn qc_count(conn: &Connection, no: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM qc_report WHERE order_id = (SELECT id FROM weigh_order WHERE order_no = ?1)",
+        params![no],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_order_without_variety_still_reads_back_on_every_path() {
+    let conn = db();
+    ensure_users(&conn);
+    let party = new_party(&conn, "先到站后报品种", "341204199301272111");
+    let no = create_no_variety(&conn, party);
+
+    let o = load_order_full(&conn, &no).unwrap().expect("详情读得回来");
+    assert_eq!(o.variety_id, None, "品种列就是 NULL，不是某个默认品种");
+    assert_eq!(o.variety_name, None);
+    // 时间轴与审计里那一格必须写「未定品种」——打出 "null" 的磅单没人敢签
+    let timeline = o.timeline.clone().unwrap_or_default();
+    assert!(
+        timeline.iter().any(|e| e.action == "order.create" && e.detail.as_deref().is_some_and(|d| d.contains("未定品种"))),
+        "时间轴要写「未定品种」，实际：{:?}",
+        timeline.iter().map(|e| (&e.action, &e.detail)).collect::<Vec<_>>()
+    );
+    let audited: String = conn
+        .query_row("SELECT reason FROM audit_log WHERE action='order.create' AND entity_no = ?1", params![&no], |r| r.get(0))
+        .unwrap();
+    assert!(audited.contains("未定品种"), "审计 detail 同样不许打 null，实际：{audited}");
+
+    // 在途看板读的是 v_open_order：那支视图没换成 LEFT JOIN，这张单就从看板上凭空消失——
+    // 车就在磅上、看板说没车，这是最坏的一种丢单，所以单独钉一条。
+    let in_view: i64 = conn
+        .query_row("SELECT COUNT(*) FROM v_open_order WHERE order_no = ?1", params![&no], |r| r.get(0))
+        .unwrap();
+    assert_eq!(in_view, 1, "没品种的在途单必须还在看板视图里");
+    assert!(open_orders(&conn).unwrap().iter().any(|x| x.order_no == no), "open_orders 也要含这张单");
+
+    // 列表：能查得到、汇总也带上它（净重为零所以金额不变），按品种筛又确实筛得掉
+    let listed = list_orders(&conn, &filters()).unwrap();
+    assert!(listed.rows.iter().any(|r| r.order_no == no), "磅单列表不许漏掉没品种的单");
+    let mut f_variety = filters();
+    f_variety.variety_id = Some(serde_json::json!(xm_id(&conn)));
+    let by_variety = list_orders(&conn, &f_variety).unwrap();
+    assert!(!by_variety.rows.iter().any(|r| r.order_no == no), "按具体品种筛时这张单该被筛掉");
+}
+
+#[test]
+fn variety_is_a_hard_gate_before_qc_and_settlement() {
+    let conn = db();
+    ensure_users(&conn);
+    let xm = xm_id(&conn);
+    seed_price(&conn, xm);
+    let no = create_no_variety(&conn, new_party(&conn, "卸完货才报品种", "341204199301272112"));
+    capture_gross(&conn, &no, 52000);
+    capture_tare(&conn, &no, 12000, None);
+
+    // 化验的指标集、限值与扣量基准全部来自品种：没品种的化验单它的 grade 无从判定
+    let e = try_qc(&conn, &no).unwrap_err();
+    assert!(e.contains("还没有定收购品种"), "化验该拦下并说清缺什么，实际：{e}");
+    assert_eq!(qc_count(&conn, &no), 0, "被拦下的化验不许落库");
+
+    // 单价由前端送、服务端只判它 >0：品种是唯一能对回价目表的锚，这道闸必须在服务端
+    let e = settle_full(&conn, &no, |_| {}).unwrap_err();
+    assert!(e.contains("还没有定收购品种"), "结算该拦下并说清缺什么，实际：{e}");
+
+    // 补定品种（结算框与化验区那个下拉走的就是这一条命令）→ 化验、结算一路走通
+    let after = set_variety(&conn, &actor(3, "inspector"), variety_adjust(&no, Some(xm))).unwrap().expect("单应存在");
+    assert_eq!(after.variety_id, Some(xm));
+    assert_eq!(after.variety_name.as_deref(), Some("小麦"));
+    accept_qc(&conn, &no);
+    let r = settle_now(&conn, &no, 240000, true);
+    assert_eq!(r.settlement.payable_fen, (40000 * 240000) / 10_000, "补上品种后金额与原口径一致");
+}
+
+/// `order_set_variety` 的四条：合法改判留痕、停用品种拒、已结算拒、值未变既不写库也不留痕
+#[test]
+fn set_variety_gates_and_stays_silent_when_nothing_changed() {
+    let conn = db();
+    ensure_users(&conn);
+    let xm = xm_id(&conn);
+    let ym = conn.query_row("SELECT id FROM grain_variety WHERE code='YM'", [], |r| r.get::<_, i64>(0)).unwrap();
+    let dead = seed_inactive_variety(&conn, "ZZ");
+    let no = create_no_variety(&conn, new_party(&conn, "改品种留痕", "341204199301272113"));
+
+    // 清成"仍然没定"＝值没变：库里这行不该被 touch，审计表里更不该有"改了个寂寞"
+    set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, None)).unwrap().expect("单应存在");
+    assert_eq!(variety_audit(&conn, &no), Vec::<String>::new(), "没变出一道痕迹就是噪音");
+
+    // 停用的品种档案只许存量单读出来，不许再挂新单
+    let e = set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(dead))).unwrap_err();
+    assert!(e.contains("不存在或已停用"), "实际：{e}");
+
+    set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(xm))).unwrap().expect("定品种应成功");
+    let a = variety_audit(&conn, &no);
+    assert_eq!(a.len(), 1, "定一次品种只留一条痕");
+    assert!(a[0].contains("未定品种 → 小麦"), "审计要写得清旧→新，实际：{a:?}");
+    set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(xm))).unwrap().expect("重复提交同一值不该报错");
+    assert_eq!(variety_audit(&conn, &no).len(), 1, "值没变就不该再记一条");
+
+    set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(ym))).unwrap().expect("换成另一个品种应成功");
+    let a = variety_audit(&conn, &no);
+    assert_eq!(a.len(), 2, "两次改判两条痕");
+    assert!(a.last().unwrap().contains("小麦 → 玉米"), "改判痕要写清新旧，实际：{a:?}");
+
+    // 已结算：钱的凭据已经按这个品种印出去了，要改只能由站长红冲重录
+    seed_price(&conn, ym);
+    let paid = create(&conn, new_party(&conn, "已结算改品种", "341204199301272114"), xm);
+    capture_gross(&conn, &paid, 52000);
+    capture_tare(&conn, &paid, 12000, None);
+    settle_now(&conn, &paid, 240000, true);
+    let e = set_variety(&conn, &actor(1, "station_master"), variety_adjust(&paid, Some(ym))).unwrap_err();
+    assert!(e.contains("已结算") && e.contains("红冲"), "要说清去走红冲，实际：{e}");
+    assert_eq!(variety_audit(&conn, &paid), Vec::<String>::new(), "被拦下的改判不留痕");
+}
+
+#[test]
+fn creating_with_an_inactive_variety_is_still_refused() {
+    // 可空的是"可以不填"，不是"填什么都行"：给了品种就照样过在册 + 启用那道闸（02 §F6.1）
+    let conn = db();
+    ensure_users(&conn);
+    let dead = seed_inactive_variety(&conn, "ZZ");
+    let e = create_order(
+        &conn,
+        &actor(1, "weigher"),
+        CreateOrderInput {
+            party_id: new_party(&conn, "选了停用品种", "341204199301272115"),
+            variety_id: Some(dead),
+            vehicle_no: None,
+            warehouse_id: None,
+            slot_id: None,
+            remark: None,
+            card_no: Some(free_card(&conn)),
+            registered_by: None,
+            weight_source: "scale".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(e.contains("停用") || e.contains("不存在"), "实际：{e}");
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM weigh_order", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "闸门不过不许留半张单");
 }

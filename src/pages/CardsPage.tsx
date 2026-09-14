@@ -191,15 +191,19 @@ export function CardsPage() {
             <DialogTitle className="text-sm font-semibold">注销流转卡 {retire?.card_no}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-            <span>注销原因（不少于 4 字，迎检可追溯）</span>
+            <span>注销原因（不少于 {REASON_MIN} 字，迎检可追溯）</span>
             <ComboBox
               aria-label="注销原因"
               presets={retireOptions}
               value={retireReason}
               onChange={setRetireReason}
+              invalid={retireReason.trim().length > 0 && retireReason.trim().length < REASON_MIN}
               placeholder="选一条常用的，或写清楚这张卡为什么注销…"
               className="text-xs"
             />
+            {retireReason.trim().length > 0 && retireReason.trim().length < REASON_MIN && (
+              <span className="text-destructive">注销原因写全一点（不少于 {REASON_MIN} 字），这张卡为什么退场要留得明白</span>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">注销只影响卡池，不动任何磅单与金额；挂在途单上的卡需先退卡或走补发换卡。</p>
           <DialogFooter>
@@ -218,10 +222,10 @@ export function CardsPage() {
         onOpenChange={setScanOpen}
         validate={({ card_no }) =>
           !card_no.trim()
-            ? ["未检测到 IC 卡号：请贴卡或手输后再提交"]
+            ? { card_no: "未检测到 IC 卡号：请贴卡或手输后再提交" }
             : register.isError
-              ? [register.error instanceof Error ? register.error.message : "登记失败，请稍后再试"]
-              : []
+              ? { card_no: register.error instanceof Error ? register.error.message : "登记失败，请稍后再试" }
+              : {}
         }
         onRegister={async ({ card_no, label }) => {
           await register.mutateAsync({ card_no, label });

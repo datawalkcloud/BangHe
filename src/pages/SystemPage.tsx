@@ -22,7 +22,7 @@ import { api } from "@/lib/api";
 import type { AuditLog, UserAccount, WeighOrder } from "@/mock/types";
 import type { Role } from "@/lib/constants";
 import { ROLE } from "@/lib/constants";
-import { dateTime, fileSize, maskIdCard, money, orDash, shiftDay, sinceText, todayISO, weight } from "@/lib/format";
+import { dateTime, fileSize, maskIdCard, money, orDash, shiftDay, sinceText, todayISO, weight, varietyLabel } from "@/lib/format";
 import { csvName } from "@/lib/csv";
 import { exportCsvFile } from "@/lib/export-csv";
 import { runningInTauri } from "@/lib/native";
@@ -365,7 +365,13 @@ function StaffSection() {
           <div className="grid gap-3">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               姓名 *
-              <Input value={form.display_name} onChange={(e) => patch({ display_name: e.target.value })} className="text-sm" />
+              <Input
+                value={form.display_name}
+                onChange={(e) => patch({ display_name: e.target.value })}
+                aria-invalid={!form.display_name.trim() ? true : undefined}
+                className="text-sm"
+              />
+              {!form.display_name.trim() && <span className="text-destructive">姓名必填：留痕与台账上显示的就是这几个字</span>}
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               登录名（选填）
@@ -1085,7 +1091,7 @@ function ShiftSection() {
         cell: (o) => <span className="tnum font-medium">{o.order_no}</span>,
       },
       { key: "party", header: "售粮人", cell: (o) => o.party_name },
-      { key: "var", header: "品种", cell: (o) => o.variety_name },
+      { key: "var", header: "品种", cell: (o) => varietyLabel(o.variety_name) },
       { key: "status", header: "状态", cell: (o) => <OrderStatusBadge status={o.status} /> },
       { key: "net", header: "净重", align: "right", cell: (o) => <span className="tnum">{weight(o.net_weight_01kg)}</span> },
       { key: "payable", header: "应付", align: "right", cell: (o) => <span className="tnum">{money(o.payable_amount_fen)}</span> },
@@ -1168,7 +1174,7 @@ function ShiftSection() {
           未付清结算单 {due.length} 张 · {money(unpaidFen)}
         </SectionTitle>
         {due.length === 0 ? (
-          <p className="text-sm text-muted-foreground">今日货款已全部付清。</p>
+          <p className="text-sm text-muted-foreground">今日粮款已全部付清。</p>
         ) : (
           <ul className="flex flex-col gap-1.5 text-sm">
             {due.map((s) => (

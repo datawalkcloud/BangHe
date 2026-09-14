@@ -12,6 +12,8 @@ import type {
   DeviceStatus,
   Grade,
   OrderStatus,
+  OutboundKind,
+  OutboundStatus,
   PartyType,
   PaymentMethod,
   PaymentStatus,
@@ -94,6 +96,19 @@ export interface Warehouse {
   /** 类型与容量都可为 NULL（历史/手工建行），界面显示"—"，合计按 0 计 */
   kind: "house" | "barn" | "shed" | "silo" | null;
   capacity_ton: number | null;
+  // ------------------------------------------------ 库存那一格（读自流水，不是 warehouse 列）
+  // 判据与 `masters.rs::Warehouse` / `stock::warehouse_totals` 逐字对齐：期初是 §9.23 那笔
+  // `is_opening` 入库流水，结存含期初，待入账不并进结存但真实占容积。
+  /** 期初建账量（0.1kg）。null＝从没申报过；0 是一句明确的「空仓起账」 */
+  opening_01kg: number | null;
+  /** 期初登记到哪个品种；null＝没细分（仓房总量照计，按品种的出库账面看不见它） */
+  opening_variety_id: number | null;
+  /** 账面结存（0.1kg）＝ Σ入 − Σ出，含期初 */
+  balance_01kg: number;
+  /** 已上磅未结算入账的部分：不计入 balance_01kg */
+  pending_in_01kg: number;
+  /** 剩余容量（0.1kg）＝ 核定容量 − 结存 − 待入账；容量未核定为 null。负数只是「超容」提示，不拦单 */
+  remain_01kg: number | null;
   is_active: 0 | 1;
   slots: StorageSlot[];
 }
@@ -199,9 +214,10 @@ export interface WeighOrder {
   party_name: string;
   party_type: PartyType;
   id_card_no: string;
-  variety_id: ID;
-  variety_code: string;
-  variety_name: string;
+  /** 收购品种：制单可空（迁移 0017），结算与录化验前必填。空值界面一律显「未定品种」 */
+  variety_id: ID | null;
+  variety_code: string | null;
+  variety_name: string | null;
   grade: Grade | null;
   warehouse_id: ID | null;
   warehouse_name: string | null;
@@ -293,9 +309,12 @@ export interface CardLocateResult {
 }
 
 export interface CapturePhoto {
+  /** 有图＝attachment.id（读原图按它取）；缺图占位格＝ -称重记录 id（负数，与真实附件 id 不撞号） */
   id: ID;
   biz_type: "scale_capture" | "id_card_photo" | "signature" | "sample_photo";
   label: string;
+  /** 这张是哪台相机拍的（相机台账名）；缺图占位格为 null */
+  device_label: string | null;
   /** mock 用占位渐变，真实为 attachment.file_path */
   tone: Tone;
   captured_at: string;
@@ -419,7 +438,8 @@ export interface AppSetting {
   value: string;
   label: string;
   group: "doc" | "weigh" | "settle" | "print" | "retain" | "session" | "other";
-  kind: "text" | "number" | "bool" | "select";
+  /** 纯展示层控件类型（与库里 value_type 是两回事）；warehouse＝候选取自仓房档案，参数页现取现列 */
+  kind: "text" | "number" | "bool" | "select" | "warehouse";
   options?: { value: string; label: string }[];
   hint?: string;
 }
@@ -621,4 +641,162 @@ export interface LedgerRow {
   weigher_name: string;
   inspector_name: string;
   settled: boolean;
+}
+
+/* =============================================================== 粮食出库（02 §M11） */
+
+/** 出库单行。字段与 `src-tauri/src/outbound.rs::OutboundOrder` 逐字一致。 */
+export interface OutboundOrder {
+  id: number;
+  order_no: string;
+  business_date: string;
+  kind: OutboundKind;
+  status: OutboundStatus;
+  party_id: number | null;
+  party_name: string | null;
+  /** 非档案领出方（部门/用途对象），登记出库可只填这一栏 */
+  counterparty_label: string | null;
+  variety_id: number | null;
+  variety_name: string | null;
+  grade: Grade | null;
+  warehouse_id: number;
+  warehouse_name: string;
+  slot_id: number | null;
+  slot_label: string | null;
+  vehicle_no: string | null;
+  net_weight_01kg: number | null;
+  /** 本期恒 manual；接秤后由捕获路径写 scale */
+  weight_source: WeightSource;
+  price_fen_per_ton: number | null;
+  goods_amount_fen: number | null;
+  payment_status: PaymentStatus;
+  /** 超库存出库时服务端复算后自动写入的那句警示；null＝账面够用 */
+  stock_warning: string | null;
+  void_reason: string | null;
+  remark: string | null;
+  created_at: string;
+  created_by: number;
+  created_name: string;
+  completed_at: string | null;
+  completed_by: number | null;
+  completed_name: string | null;
+  /** 最后一次改动时间；作废单的时间轴节点取它（表里没有单独的作废时间列） */
+  updated_at: string | null;
+}
+
+/** 一条库存流水。字段与 `src-tauri/src/stock.rs::MovementRow` 逐字一致。 */
+export interface StockMovementRow {
+  id: number;
+  kind: "in" | "out" | "transfer" | "loss" | "adjust";
+  /** 带符号变动量（0.1kg）：入库为正、出库为负 */
+  signed_01kg: number;
+  weight_01kg: number;
+  order_id: number | null;
+  order_no: string | null;
+  outbound_id: number | null;
+  outbound_no: string | null;
+  party_id: number | null;
+  party_name: string | null;
+  variety_id: number | null;
+  variety_name: string | null;
+  grade: string | null;
+  warehouse_id: number | null;
+  warehouse_name: string | null;
+  from_warehouse_id: number | null;
+  from_warehouse_name: string | null;
+  to_warehouse_id: number | null;
+  to_warehouse_name: string | null;
+  amount_fen: number | null;
+  business_date: string;
+  operated_at: string;
+  operator_name: string;
+  /** 红冲的对称入库行指回被它冲掉的那条出库行 */
+  reversal_of_id: number | null;
+  remark: string | null;
+}
+
+/** 出库单详情：单据本身 + 它在库存账上留下的流水。 */
+export interface OutboundDetail extends OutboundOrder {
+  movements: StockMovementRow[];
+}
+
+/** 结存矩阵一行（仓房 × 品种）。与 `stock.rs::BalanceRow` 逐字一致。 */
+export interface StockBalanceRow {
+  warehouse_id: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  variety_id: number | null;
+  variety_code: string | null;
+  variety_name: string | null;
+  /** 账面结存（0.1kg）= Σ入 − Σ出 */
+  balance_01kg: number;
+  in_01kg: number;
+  out_01kg: number;
+  /** 已称完但还没结算入账、去向定到本仓房的部分（不计入 balance_01kg） */
+  pending_in_01kg: number;
+  last_move_at: string | null;
+}
+
+/** 制单/改单入参。order_no 空＝新建，带单号＝改草稿。 */
+export interface OutboundSaveInput {
+  order_no?: string | null;
+  kind: OutboundKind;
+  business_date?: string | null;
+  party_id?: number | null;
+  counterparty_label?: string | null;
+  variety_id?: number | null;
+  grade?: string | null;
+  warehouse_id: number;
+  slot_id?: number | null;
+  vehicle_no?: string | null;
+  net_weight_01kg?: number | null;
+  price_fen_per_ton?: number | null;
+  remark?: string | null;
+  operator_id: number;
+}
+
+/** 完成出库入参（净重已在制单/改单时填好）。 */
+export interface OutboundCompleteInput {
+  order_no: string;
+  operator_id: number;
+}
+
+/** 作废 / 红冲入参，reason ≥6 字。 */
+export interface OutboundCloseInput {
+  order_no: string;
+  reason: string;
+  operator_id: number;
+}
+
+export interface OutboundFilters {
+  date_from?: string;
+  date_to?: string;
+  status?: OutboundStatus | "all";
+  kind?: OutboundKind | "all";
+  warehouse_id?: number | null;
+  variety_id?: number | null;
+  keyword?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface OutboundPage {
+  rows: OutboundOrder[];
+  total: number;
+  summary: { count: number; net_01kg: number; goods_fen: number };
+}
+
+export interface MovementFilters {
+  warehouse_id?: number | null;
+  variety_id?: number | null;
+  kind?: StockMovementRow["kind"] | "all";
+  date_from?: string;
+  date_to?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface MovementPage {
+  rows: StockMovementRow[];
+  total: number;
 }

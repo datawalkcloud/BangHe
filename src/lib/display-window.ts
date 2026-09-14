@@ -25,21 +25,41 @@ export async function toggleDisplayWindow(): Promise<void> {
   }
 
   const target = await pickTarget();
-  const display = new WebviewWindow(DISPLAY_WINDOW_LABEL, {
-    url: new URL("/?display=1", window.location.origin).toString(),
-    title: "磅禾对外大屏",
-    focus: false,
-    // 单屏时留标题栏：操作员要能把它拖开或点 X 关掉，全屏无边框就没这个把手了
-    decorations: !target.external,
-    resizable: true,
-    // 先藏起来挪到位再显，否则会在操作员的主屏上闪一下
-    visible: false,
-  });
+  // 构造与监听必须在同一个同步段内完成；否则创建事件可能已经发出，后续定位/显示就会永远等下去。
+  const display = await new Promise<WebviewWindow>((resolve, reject) => {
+    let created: WebviewWindow;
+    try {
+      created = new WebviewWindow(DISPLAY_WINDOW_LABEL, {
+        url: new URL("/?display=1", window.location.origin).toString(),
+        title: "磅禾对外大屏",
+        focus: false,
+        // 单屏时留标题栏：操作员要能把它拖开或点 X 关掉，全屏无边框就没这个把手了
+        decorations: !target.external,
+        resizable: true,
+        // 先藏起来挪到位再显，否则会在操作员的主屏上闪一下
+        visible: false,
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
 
-  // 构造函数只发出 create 命令，窗口注册要等 tauri://created；提前操作会拿到 window not found
-  await new Promise<void>((resolve, reject) => {
-    void display.once("tauri://created", () => resolve());
-    void display.once("tauri://error", (event) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("等待对外大屏创建超时"));
+    }, 5_000);
+    void created.once("tauri://created", () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(created);
+    });
+    void created.once("tauri://error", (event) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
       console.error("对外大屏创建失败", event);
       reject(new Error(String(event.payload)));
     });

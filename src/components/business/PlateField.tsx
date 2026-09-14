@@ -39,6 +39,7 @@ export function PlateField({
   placeholder = "如 豫A12345，农用车可留空",
   className,
   inputClassName,
+  invalid,
   "aria-label": ariaLabel,
 }: {
   value: string;
@@ -49,6 +50,8 @@ export function PlateField({
   placeholder?: string;
   className?: string;
   inputClassName?: string;
+  /** 校验不通过：红框标在输入框本身 */
+  invalid?: boolean;
   "aria-label"?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -92,6 +95,7 @@ export function PlateField({
         <Input
           id={id}
           aria-label={ariaLabel ?? label}
+          aria-invalid={invalid || undefined}
           value={value}
           autoComplete="off"
           placeholder={placeholder}

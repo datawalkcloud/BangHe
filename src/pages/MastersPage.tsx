@@ -268,9 +268,10 @@ function VarietiesSection() {
     },
   ];
 
-  const errors: string[] = [];
-  if (!form.name.trim()) errors.push("名称必填");
-  if (form.indicators.length === 0) errors.push("至少勾选一个检测项目");
+  // 校验错误按字段归位：红框+红字直接标在出错的表单项上（不再在弹窗底部聚合成清单）
+  const nameErr = !form.name.trim() ? "名称必填" : "";
+  const indicatorsErr = form.indicators.length === 0 ? "至少勾选一个检测项目" : "";
+  const hasErr = !!(nameErr || indicatorsErr);
 
   return (
     <div className="flex flex-col gap-3">
@@ -301,8 +302,8 @@ function VarietiesSection() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="品种名称 *">
-              <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} className="text-sm" />
+            <Field label="品种名称 *" error={nameErr || undefined}>
+              <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} aria-invalid={nameErr ? true : undefined} className="text-sm" />
             </Field>
             <Field label="品种编码（选填）">
               <Input value={form.code} onChange={(e) => patch({ code: e.target.value })} placeholder="留空自动生成" className="tnum text-sm" />
@@ -328,6 +329,7 @@ function VarietiesSection() {
                     <Checkbox
                       checked={form.indicators.includes(m.code)}
                       aria-label={m.name}
+                      aria-invalid={indicatorsErr ? true : undefined}
                       onCheckedChange={(c) =>
                         patch({
                           indicators:
@@ -339,26 +341,18 @@ function VarietiesSection() {
                   </Label>
                 ))}
               </div>
+              {indicatorsErr && <span className="text-xs text-destructive">{indicatorsErr}</span>}
             </div>
             <Label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
               <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="启用品种" />
               启用（停用后不可再用此品种制单）
             </Label>
           </div>
-          {errors.length > 0 && (
-            <CallOut tone="warning" title="还不能保存">
-              <ul className="list-disc pl-4">
-                {errors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </CallOut>
-          )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>
               取消
             </Button>
-            <Button disabled={errors.length > 0 || save.isPending} onClick={() => save.mutate()}>
+            <Button disabled={hasErr || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? "保存中…" : "保存"}
             </Button>
           </DialogFooter>
@@ -442,6 +436,14 @@ function WarehousesSection() {
   const [form, setForm] = useState<WarehouseForm | null>(null);
   const [slotOpen, setSlotOpen] = useState(false);
   const [slotForm, setSlotForm] = useState<SlotForm | null>(null);
+  // 删除确认待办：仓房整行、货位从编辑弹窗里发起，各带一个确认框
+  const [pendingDeleteW, setPendingDeleteW] = useState<Warehouse | null>(null);
+  const [pendingDeleteSlot, setPendingDeleteSlot] = useState<{
+    id: number;
+    label: string;
+    code: string;
+    warehouseName: string;
+  } | null>(null);
 
   /** 仓房/货位两张表被工作台的去向下拉、库存占用一起读，保存后要一并失效 */
   const refresh = () => {
@@ -488,6 +490,26 @@ function WarehousesSection() {
     onError: (e: Error) => toast.error(`保存失败：${e.message}`),
   });
 
+  const delW = useMutation({
+    mutationFn: (id: number) => api.deleteWarehouse({ id, operator_id: actorId() }),
+    onSuccess: (w) => {
+      toast.success(`已删除仓房「${w.name}」`);
+      setPendingDeleteW(null);
+      refresh();
+    },
+    onError: (e: Error) => toast.error(`删除失败：${e.message}`),
+  });
+
+  const delSlot = useMutation({
+    mutationFn: (id: number) => api.deleteSlot({ id, operator_id: actorId() }),
+    onSuccess: (s) => {
+      toast.success(`已删除货位「${s.label || s.code}」`);
+      setPendingDeleteSlot(null);
+      refresh();
+    },
+    onError: (e: Error) => toast.error(`删除失败：${e.message}`),
+  });
+
   const columns: Column<Warehouse>[] = [
     { key: "code", header: "编码", cell: (w) => <span className="tnum font-medium">{w.code}</span>, sortValue: (w) => w.code },
     {
@@ -525,7 +547,7 @@ function WarehousesSection() {
                 variant="outline"
                 size="xs"
                 disabled={!editable}
-                title={editable ? "点击改名或停用" : undefined}
+                title={editable ? "点击改名、停用或删除" : undefined}
                 className={
                   s.is_active === 1
                     ? "h-auto rounded-none bg-muted/40 px-1.5 py-0.5 text-xs hover:bg-muted"
@@ -586,13 +608,25 @@ function WarehousesSection() {
           >
             加货位
           </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="text-destructive hover:text-destructive"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setPendingDeleteW(w);
+            }}
+          >
+            <Trash2Icon /> 删除
+          </Button>
         </span>
       ),
     },
   ];
 
-  const whErrors: string[] = [];
-  if (form && !form.name.trim()) whErrors.push("名称必填");
+  // 校验错误直接标在出错字段上，不在弹窗底部聚合
+  const whNameErr = form && !form.name.trim() ? "名称必填" : "";
 
   return (
     <div className="flex flex-col gap-3">
@@ -646,8 +680,8 @@ function WarehousesSection() {
           </DialogHeader>
           {form && (
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="仓房名称 *">
-                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="text-sm" />
+              <Field label="仓房名称 *" error={whNameErr || undefined}>
+                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} aria-invalid={whNameErr ? true : undefined} className="text-sm" />
               </Field>
               <Field label="仓房编码（选填）">
                 <Input
@@ -672,20 +706,11 @@ function WarehousesSection() {
               </Label>
             </div>
           )}
-          {whErrors.length > 0 && (
-            <CallOut tone="warning" title="还不能保存">
-              <ul className="list-disc pl-4">
-                {whErrors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </CallOut>
-          )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>
               取消
             </Button>
-            <Button disabled={whErrors.length > 0 || saveWarehouse.isPending} onClick={() => saveWarehouse.mutate()}>
+            <Button disabled={!!whNameErr || saveWarehouse.isPending} onClick={() => saveWarehouse.mutate()}>
               {saveWarehouse.isPending ? "保存中…" : "保存"}
             </Button>
           </DialogFooter>
@@ -734,11 +759,94 @@ function WarehousesSection() {
             </div>
           )}
           <DialogFooter>
+            {slotForm?.id != null && (
+              <Button
+                variant="destructive"
+                className="mr-auto"
+                disabled={!editable}
+                onClick={() => {
+                  setPendingDeleteSlot({
+                    id: slotForm.id as number,
+                    label: slotForm.label,
+                    code: slotForm.code,
+                    warehouseName: slotForm.warehouseName,
+                  });
+                  setSlotOpen(false);
+                }}
+              >
+                <Trash2Icon /> 删除货位
+              </Button>
+            )}
             <Button variant="ghost" onClick={() => setSlotOpen(false)}>
               取消
             </Button>
             <Button disabled={saveSlot.isPending} onClick={() => saveSlot.mutate()}>
               {saveSlot.isPending ? "保存中…" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingDeleteW !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingDeleteW(null);
+        }}
+      >
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">删除仓房</DialogTitle>
+            <DialogDescription className="text-xs">
+              将移除
+              {pendingDeleteW ? <span className="font-medium"> {pendingDeleteW.name} · {pendingDeleteW.code}</span> : null}
+              及其名下货位。已被磅单、出入库流水或往来单位「常用去向」引用过的仓房不可删除，只能「停用」（在编辑里关掉启用，留档保追溯）。此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDeleteW(null)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={delW.isPending}
+              onClick={() => pendingDeleteW && delW.mutate(pendingDeleteW.id)}
+            >
+              {delW.isPending ? "删除中…" : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingDeleteSlot !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingDeleteSlot(null);
+        }}
+      >
+        <DialogContent className="max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">删除货位</DialogTitle>
+            <DialogDescription className="text-xs">
+              将移除货位
+              {pendingDeleteSlot ? (
+                <span className="font-medium">
+                  {" "}
+                  {pendingDeleteSlot.label || pendingDeleteSlot.code} · {pendingDeleteSlot.warehouseName}
+                </span>
+              ) : null}
+              。已被磅单或出入库流水引用过的货位不可删除，只能「停用」。此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDeleteSlot(null)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={delSlot.isPending}
+              onClick={() => pendingDeleteSlot && delSlot.mutate(pendingDeleteSlot.id)}
+            >
+              {delSlot.isPending ? "删除中…" : "确认删除"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -813,10 +921,11 @@ function PricesSection() {
     onError: (e: Error) => toast.error(`保存失败：${e.message}`),
   });
 
-  const errors: string[] = [];
-  if (!form.varietyId) errors.push("请选择品种");
-  if (!(Number(form.yuanPerKg) > 0)) errors.push("单价必须是大于 0 的元/公斤");
-  if (form.from > form.to) errors.push("生效起始日不能晚于截止日");
+  // 校验错误按字段归位，红框+红字直接标在品种/单价/有效期上
+  const varietyErr = !form.varietyId ? "请选择品种" : "";
+  const priceErr = !(Number(form.yuanPerKg) > 0) ? "单价必须是大于 0 的元/公斤" : "";
+  const dateErr = form.from > form.to ? "生效起始日不能晚于截止日" : "";
+  const hasErr = !!(varietyErr || priceErr || dateErr);
 
   const columns: Column<PriceList>[] = [
     {
@@ -911,15 +1020,15 @@ function PricesSection() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              品种 *
+            <Field label="品种 *" error={varietyErr || undefined}>
               <Choose
                 aria-label="品种"
+                invalid={!!varietyErr}
                 value={form.varietyId}
                 onChange={(v) => patch({ varietyId: v })}
                 options={[{ value: "", label: "请选择…" }, ...varieties.map((v) => ({ value: String(v.id), label: `${v.name}（${v.code}）` }))]}
               />
-            </Label>
+            </Field>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               等级
               <Choose
@@ -929,35 +1038,26 @@ function PricesSection() {
                 options={GRADES.map((g) => ({ value: g, label: g }))}
               />
             </Label>
-            <DecimalField label="单价（元/公斤）*" decimal maxLength={10} value={form.yuanPerKg} onChange={(v) => patch({ yuanPerKg: v })} placeholder="如 2.680" />
-            <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
-              有效期
+            <DecimalField label="单价（元/公斤）*" decimal maxLength={10} value={form.yuanPerKg} onChange={(v) => patch({ yuanPerKg: v })} placeholder="如 2.680" error={priceErr || undefined} />
+            <Field label="有效期" error={dateErr || undefined} className="sm:col-span-2">
               <DateRangePicker
                 value={{ from: form.from, to: form.to }}
                 onChange={(f, t) => patch({ from: f, to: t })}
                 presets={false}
+                invalid={!!dateErr}
                 className="w-full tnum"
               />
-            </Label>
+            </Field>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               备注
               <Input value={form.remark} onChange={(e) => patch({ remark: e.target.value })} className="text-sm" />
             </Label>
           </div>
-          {errors.length > 0 && (
-            <CallOut tone="warning" title="还不能保存">
-              <ul className="list-disc pl-4">
-                {errors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </CallOut>
-          )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>
               取消
             </Button>
-            <Button disabled={errors.length > 0 || save.isPending} onClick={() => save.mutate()}>
+            <Button disabled={hasErr || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? "保存中…" : "发布"}
             </Button>
           </DialogFooter>
@@ -1090,9 +1190,9 @@ function QuickOptionsSection() {
     },
   ];
 
-  const errors: string[] = [];
-  if (form && !form.label.trim()) errors.push("简称必填：下拉清单上就显示这几个字");
-  if (form && !form.value.trim()) errors.push("完整内容必填：点一下要填进文本框的就是这句话");
+  // 校验错误按字段归位，红框+红字直接标在简称/完整内容上
+  const qoLabelErr = form && !form.label.trim() ? "简称必填：下拉清单上就显示这几个字" : "";
+  const qoValueErr = form && !form.value.trim() ? "完整内容必填：点一下要填进文本框的就是这句话" : "";
 
   /** 分组顺序按 QUICK_OPTION_KINDS（不按字母序、不按库里的 kind 字典序），与字段用侧的话术一致 */
   return (
@@ -1162,11 +1262,11 @@ function QuickOptionsSection() {
                 />
               </Field>
               <DecimalField label="排序号" value={form.sortOrder} onChange={(v) => patch({ sortOrder: v })} placeholder="留空排到末尾" />
-              <Field label="简称 *">
-                <Input value={form.label} onChange={(e) => patch({ label: e.target.value })} className="text-sm" />
+              <Field label="简称 *" error={qoLabelErr || undefined}>
+                <Input value={form.label} onChange={(e) => patch({ label: e.target.value })} aria-invalid={qoLabelErr ? true : undefined} className="text-sm" />
               </Field>
-              <Field label="完整内容 *">
-                <Input value={form.value} onChange={(e) => patch({ value: e.target.value })} className="text-sm" />
+              <Field label="完整内容 *" error={qoValueErr || undefined}>
+                <Input value={form.value} onChange={(e) => patch({ value: e.target.value })} aria-invalid={qoValueErr ? true : undefined} className="text-sm" />
               </Field>
               <Label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
                 <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="启用常用语" />
@@ -1174,20 +1274,11 @@ function QuickOptionsSection() {
               </Label>
             </div>
           )}
-          {errors.length > 0 && (
-            <CallOut tone="warning" title="还不能保存">
-              <ul className="list-disc pl-4">
-                {errors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </CallOut>
-          )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setForm(null)}>
               取消
             </Button>
-            <Button disabled={errors.length > 0 || save.isPending} onClick={() => save.mutate()}>
+            <Button disabled={!!(qoLabelErr || qoValueErr) || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? "保存中…" : "保存"}
             </Button>
           </DialogFooter>
@@ -1312,6 +1403,8 @@ function SettingRow({ s, onSave, busy }: { s: AppSetting; onSave: (value: string
               onSave(next);
             }}
           />
+        ) : s.kind === "warehouse" ? (
+          <WarehouseSettingChoose label={s.label} value={draft} busy={busy} onPick={(v) => { setDraft(v); onSave(v); }} />
         ) : s.kind === "select" && s.options ? (
           <Choose
             aria-label={s.label}
@@ -1362,11 +1455,51 @@ function SettingRow({ s, onSave, busy }: { s: AppSetting; onSave: (value: string
 
 /* ---------------------------------------------------------------- 公共壳 */
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * 「制单默认仓房」的下拉（迁移 0018）。
+ *
+ * 目录里其它 select 的候选是写死的话术，这一项的候选是仓房档案本身——站长在
+ * 「仓房与货位」里增删改，这里就得跟着变，所以按 kind="warehouse" 现取现列。
+ * 库里存的 id 若已停用/删除，补一条写破原因的占位项：下拉静默吞掉真值、显示回
+ * 「不预设」，会让人以为参数被谁改了。
+ */
+function WarehouseSettingChoose({
+  label,
+  value,
+  busy,
+  onPick,
+}: {
+  label: string;
+  value: string;
+  busy: boolean;
+  onPick: (v: string) => void;
+}) {
+  const { data: warehouses = [] } = useWarehouses();
+  const options = warehouses
+    .filter((w) => w.is_active !== 0)
+    .map((w) => ({ value: String(w.id), label: w.name }));
+  if (value && !options.some((o) => o.value === value)) {
+    options.unshift({ value, label: `仓房 #${value}（已停用或删除）` });
+  }
   return (
-    <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+    <Choose
+      aria-label={label}
+      className="w-44"
+      value={value}
+      disabled={busy}
+      onChange={onPick}
+      options={[{ value: "", label: "不预设（制单留未定）" }, ...options]}
+    />
+  );
+}
+
+/** 档案表单的通用字段格：标题 + 控件 +（校验失败时）贴在控件正下方的红字提示 */
+function Field({ label, error, className, children }: { label: string; error?: string; className?: string; children: ReactNode }) {
+  return (
+    <Label className={`flex flex-col gap-1 text-xs text-muted-foreground${className ? ` ${className}` : ""}`}>
       {label}
       {children}
+      {error && <span className="text-destructive">{error}</span>}
     </Label>
   );
 }
@@ -1384,6 +1517,7 @@ function DecimalField({
   decimal = false,
   maxLength = 8,
   placeholder,
+  error,
 }: {
   label: string;
   value: string;
@@ -1392,12 +1526,15 @@ function DecimalField({
   decimal?: boolean;
   maxLength?: number;
   placeholder?: string;
+  /** 校验失败：数字框红框 + 紧贴其下的红字提示 */
+  error?: string;
 }) {
   return (
     <div className="flex flex-col gap-1 text-xs text-muted-foreground">
       <span>{label}</span>
       <KeypadInput
         aria-label={label}
+        aria-invalid={error ? true : undefined}
         value={value}
         onChangeValue={onChange}
         keys={digitKeys({ decimalPoint: decimal })}
@@ -1409,6 +1546,7 @@ function DecimalField({
         placeholder={placeholder}
         inputClassName="tnum text-sm"
       />
+      {error && <span className="text-destructive">{error}</span>}
     </div>
   );
 }

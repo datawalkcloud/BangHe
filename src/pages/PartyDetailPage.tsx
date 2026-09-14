@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { OrderRow } from "@/mock/api";
 import { PARTY_TYPE, WEIGHT_SOURCE } from "@/lib/constants";
-import { maskIdCard, money, orDash, shiftDay, todayISO, weight } from "@/lib/format";
+import { maskIdCard, money, orDash, shiftDay, todayISO, weight, varietyLabel } from "@/lib/format";
 import { useSetting } from "@/hooks/useLookups";
 import { useDeviceStore } from "@/store/device";
 import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
@@ -150,7 +150,7 @@ export function PartyDetailBody({
   const recentCols: Column<OrderRow>[] = [
     { key: "order_no", header: "磅单号", cell: (r) => <span className="tnum font-medium">{r.order_no}</span> },
     { key: "date", header: "业务日期", cell: (r) => <span className="tnum">{r.business_date}</span>, sortValue: (r) => r.business_date },
-    { key: "variety", header: "品种/等级", cell: (r) => `${r.variety_name}${r.grade ? ` ${r.grade}` : ""}` },
+    { key: "variety", header: "品种/等级", cell: (r) => `${varietyLabel(r.variety_name)}${r.grade ? ` ${r.grade}` : ""}` },
     { key: "vehicle", header: "车牌", cell: (r) => <span className="tnum">{orDash(r.vehicle_no)}</span> },
     { key: "net", header: "净重", align: "right", cell: (r) => <span className="tnum">{weight(r.net_weight_01kg)}</span>, sortValue: (r) => r.net_weight_01kg },
     { key: "settle", header: "结算重量", align: "right", cell: (r) => <span className="tnum">{weight(r.settlement_weight_01kg)}</span> },

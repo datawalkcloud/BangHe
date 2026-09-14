@@ -7,6 +7,7 @@
  *   售粮人档案（listParties / getParty / saveParty）
  *   磅单（listOrders / getOrder / openOrders / createOrder / capture）
  *   化验（listQc / saveQc）  结算（settle）  打印留痕（logPrint）
+ *   事后改写磅单的定级与定种（setOrderGrade / setOrderVariety，0017 之后品种可空、结算前补定）
  * 桌面端从此「建档 → 制单 → 称重 → 化验 → 结算 → 打印 → 看板/台账」整条链
  * 读写同一颗 SQLite；单号按 §3.5 走 seq_counter（BD01+年月+6 位流水）。
  *
@@ -55,7 +56,7 @@ const ARGS_MAP: Record<string, string[]> = {
   party_list: ["keyword", "partyType"],
   party_get: ["id"],
   party_photo: ["partyId"],
-  capture_photo: ["recordId"],
+  capture_photo: ["attachmentId"],
   qc_list: ["opts"],
 };
 function a2args(cmd: string, a: unknown[]): Record<string, unknown> {
@@ -75,6 +76,7 @@ export type CaptureInput = Parameters<typeof mock.capture>[0];
 export type SaveQcInput = Parameters<typeof mock.saveQc>[0];
 export type SettleInput = Parameters<typeof mock.settle>[0];
 export type GradeAdjustInput = Parameters<typeof mock.setOrderGrade>[0];
+export type VarietyAdjustInput = Parameters<typeof mock.setOrderVariety>[0];
 export type PrintLogInput = Parameters<typeof mock.logPrint>[0];
 
 export const ordersApi = {
@@ -84,8 +86,8 @@ export const ordersApi = {
   saveParty: routeSave<Party, PartySaveInput>("party_save", (i) => mock.saveParty(i)),
   /** 档案人像的读通道：真库回附件字节的 data URL，浏览器预览回演示头像 */
   partyPhoto: route1<[partyId: number], PartyPhotoImage | null>("party_photo", (id) => mock.partyPhoto(id)),
-  /** 过磅抓拍图的读通道（04 §4.3）：键是称重记录 id，真库回附件 JPEG 的 data URL 并记 pii.read，浏览器预览回演示抓拍 */
-  capturePhoto: route1<[recordId: number], PartyPhotoImage | null>("capture_photo", (id) => mock.capturePhoto(id)),
+  /** 过磅抓拍图的读通道（04 §4.3）：键是 attachment.id（一次过磅最多 3 张，逐张列），真库回附件 JPEG 的 data URL 并记 pii.read，浏览器预览回演示抓拍 */
+  capturePhoto: route1<[attachmentId: number], PartyPhotoImage | null>("capture_photo", (id) => mock.capturePhoto(id)),
   /** 换/清档案人像（`source_path` 空串＝清除）。与 saveParty 分开一条：照片写不进去不该回滚已成立的建档 */
   setPartyPhoto: routeSave<Party, PartyPhotoInput>("party_photo_set", (i) => mock.setPartyPhoto(i)),
 
@@ -106,6 +108,9 @@ export const ordersApi = {
   settle: routeSave<{ order: WeighOrder; settlement: Settlement } | null, SettleInput>("order_settle", (i) => mock.settle(i)),
   /** 调整等级：只改磅单的业务定级，化验单判定不动（Rust 侧与 settle 同在 orders.rs） */
   setOrderGrade: routeSave<WeighOrder | null, GradeAdjustInput>("order_set_grade", (i) => mock.setOrderGrade(i)),
+  /** 调整收购品种：0017 之后品种不再挡制单，制单格 / 化验区 / 结算框三处都改磅单这一列，
+   *  化验单上当初判定所用的品种快照不动（Rust 侧与 set_grade 同骨架、同 VOIDABLE 闸） */
+  setOrderVariety: routeSave<WeighOrder | null, VarietyAdjustInput>("order_set_variety", (i) => mock.setOrderVariety(i)),
 
   /* ------------------------------------------------------------ 打印留痕 */
   logPrint: (input: PrintLogInput): Promise<void> =>

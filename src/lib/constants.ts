@@ -37,7 +37,7 @@ export const ORDER_STATUS: Record<
   reweigh: { label: "复称中", tone: "warning", desc: "净重已定但正在复称调整" },
   to_settle: { label: "待结算", tone: "info", desc: "净重与结算重量确定，待结算" },
   settled: { label: "已结算", tone: "info", desc: "已生成结算单，未必付清" },
-  paid: { label: "已付清", tone: "success", desc: "货款全部付清" },
+  paid: { label: "已付清", tone: "success", desc: "粮款全部付清" },
   archived: { label: "已归档", tone: "neutral", desc: "日结后终态" },
   voided: { label: "已作废", tone: "danger", desc: "作业中途作废，保留留痕" },
   reversed: { label: "已红冲", tone: "danger", desc: "被红冲单抵消的原单" },
@@ -63,6 +63,33 @@ export const STAT_STATUSES: OrderStatus[] = [
   "archived",
   "reversed",
 ];
+
+/* ---------------------------------------------------------------- 粮食出库单 */
+
+/**
+ * 出库性质。与 `domain/enums.rs::OutboundKind` 逐字同源。
+ * `sale`＝销售出库（有领出方与单价、产生货款）；`record`＝登记出库
+ * （领用/自用/损耗，粮出仓但不产生钱）。
+ */
+export type OutboundKind = "sale" | "record";
+
+export const OUTBOUND_KIND: Record<OutboundKind, { label: string; desc: string }> = {
+  sale: { label: "销售出库", desc: "卖给下游买家，过磅后按单价计粮款、挂应收" },
+  record: { label: "登记出库", desc: "领用、自用、损耗等，只出仓不计价不收款" },
+};
+
+/** 出库单状态。与 `domain/enums.rs::OutboundStatus` 逐字同源。 */
+export type OutboundStatus = "draft" | "done" | "voided" | "reversed";
+
+export const OUTBOUND_STATUS: Record<
+  OutboundStatus,
+  { label: string; tone: Tone; desc: string }
+> = {
+  draft: { label: "草稿", tone: "neutral", desc: "已制单未过账，可改可废" },
+  done: { label: "已出库", tone: "success", desc: "已扣库存，销售单已挂应收" },
+  voided: { label: "已作废", tone: "danger", desc: "过账前作废，不动库存" },
+  reversed: { label: "已红冲", tone: "warning", desc: "过账后红冲，补一条对称入库流水" },
+};
 
 /* -------------------------------------------------------------- 磅单作废事由 */
 

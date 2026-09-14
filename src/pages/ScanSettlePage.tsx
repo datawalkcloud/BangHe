@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { PARTY_TYPE } from "@/lib/constants";
 import type { Settlement, WeighOrder } from "@/mock/types";
-import { dateTime, money, weight } from "@/lib/format";
+import { dateTime, money, weight, varietyLabel } from "@/lib/format";
 import { useSetting, usePrices, useStaffNames, useStation, useVarieties } from "@/hooks/useLookups";
 import { useScannerCapture } from "@/hooks/useScannerCapture";
 import { useSession } from "@/store/session";
@@ -405,7 +405,7 @@ function OrderCard({
           items={[
             { label: "售粮人", value: `${order.party_name} · ${PARTY_TYPE[order.party_type]}` },
             { label: "车牌", value: order.vehicle_no ?? "—" },
-            { label: "品种 / 等级", value: `${order.variety_name}${order.grade ? ` · ${order.grade}` : " · 未定级"}` },
+            { label: "品种 / 等级", value: `${varietyLabel(order.variety_name)}${order.grade ? ` · ${order.grade}` : " · 未定级"}` },
             { label: "净重", value: weight(order.net_weight_01kg) },
             { label: "仓房 / 货位", value: `${order.warehouse_name ?? "未登记"}${order.slot_label ? ` / ${order.slot_label}` : ""}` },
             { label: "称重方式", value: order.weight_source === "scale" ? "地磅读数" : "人工手录" },
@@ -465,7 +465,7 @@ function PoolCard({ pool, activeNo, onPick }: { pool: Awaited<ReturnType<typeof 
                     >
                       <span className="tnum min-w-0 truncate">{o.order_no}</span>
                       <span className="shrink-0 text-muted-foreground">
-                        {o.variety_name} {weight(o.net_weight_01kg)}
+                        {varietyLabel(o.variety_name)} {weight(o.net_weight_01kg)}
                       </span>
                     </button>
                   ))}

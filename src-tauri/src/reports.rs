@@ -19,6 +19,8 @@
 //!     差异（刻意）：品种全集跟着 `grain_variety` 档案走，品种名是档案当前值——
 //!     mock 的 `varietySpec(code).name` 同源；单据上的品种走 `variety_id` 外键，
 //!     不再读 mock 那种 `variety_code` 反规范快照。
+//!     0017 起品种可空：没定品种的单**自成一行「未定品种」**，不这么处理它会从分行里
+//!     静默丢掉而 `total` 仍然含着它（见第 7 条「总分相符」）。
 //!  3. **`avg_moisture_001pct`** = mock 先 `qcOf(o.qc_report_id)` 再
 //!     `filter(q => q.is_effective === 1)`、取 `indicators.find(code==='moisture').value_num`、
 //!     `Math.round(平均)`，无样本为 `null`。→ 本表的 `moisture` 子查询：
@@ -273,13 +275,13 @@ pub fn build_daily(conn: &Connection, date: Option<&str>) -> Result<DailyReport,
     // 把 round 放进 SQL 会踩 INTEGER 除法与 ROUND 的半偶舍入两套差异。
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT v.code, v.name,
+            "SELECT COALESCE(v.code, '—'), COALESCE(v.name, '未定品种'),
                     g.orders, g.parties, g.gross, g.tare, g.net, g.deduct, g.settle,
                     g.goods, g.fee, g.payable, g.paid, g.manual,
                     COALESCE(m.samples, 0), COALESCE(m.moist_sum, 0),
                     (SELECT COUNT(*) FROM weigh_order r
                       WHERE r.business_date = g.business_date
-                        AND r.variety_id = g.variety_id
+                        AND r.variety_id IS g.variety_id
                         AND r.status = 'rejected') AS rejects
              FROM (
                  SELECT variety_id, business_date,
@@ -299,7 +301,9 @@ pub fn build_daily(conn: &Connection, date: Option<&str>) -> Result<DailyReport,
                  WHERE business_date = ?1 AND {STAT_WHERE}
                  GROUP BY variety_id
              ) g
-             JOIN grain_variety v ON v.id = g.variety_id
+             -- 品种自 0017 起可空：这一组必须是 LEFT JOIN + COALESCE，否则没品种的单据
+             -- 会从分品种行里静默消失，而合计行仍然含着它——日报上下对不上是最坏的结果。
+             LEFT JOIN grain_variety v ON v.id = g.variety_id
              LEFT JOIN (
                  SELECT o.variety_id,
                         COUNT(*) AS samples,
@@ -310,8 +314,9 @@ pub fn build_daily(conn: &Connection, date: Option<&str>) -> Result<DailyReport,
                       AND i.code = 'moisture' AND i.value_num IS NOT NULL
                  WHERE o.business_date = ?1 AND {STAT_WHERE}
                  GROUP BY o.variety_id
-             ) m ON m.variety_id = g.variety_id
-             ORDER BY g.net DESC, v.code"
+             ) m ON m.variety_id IS g.variety_id
+             -- 未定品种排在末位：它不是一个真品种，混进按净重排序的队列里会被当成某个小品种
+             ORDER BY (g.variety_id IS NULL), g.net DESC, v.code"
         ))
         .map_err(|e| format!("读取日报分组失败：{e}"))?;
     let rows: Vec<DailyVarietyRow> = stmt

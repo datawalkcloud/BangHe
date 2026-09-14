@@ -53,6 +53,9 @@ function routeSave<T, I>(cmd: string, demo: (input: I) => Promise<T>) {
 
 export type VarietyInput = Parameters<typeof mock.saveVariety>[0];
 export type DeleteVarietyInput = { id: number; operator_id: number };
+/** 仓房 / 货位删除入参：与 `DeleteVarietyInput` 同形，`operator_id` 桌面端忽略、以会话为准 */
+export type DeleteWarehouseInput = { id: number; operator_id: number };
+export type DeleteSlotInput = { id: number; operator_id: number };
 export type PriceInput = Parameters<typeof mock.savePrice>[0];
 export type StaffInput = Parameters<typeof mock.saveStaff>[0];
 /** 仓房/货位的写入接口 mock 层从来没有（那个分区一直标着"只读"），签名按 Rust 的 Input 定 */
@@ -112,6 +115,15 @@ export const mastersApi = {
     runningInTauri()
       ? call<StorageSlot>("master_save_slot", { input })
       : Promise.reject(new Error("浏览器预览不落库：仓房与货位的维护请在桌面端做")),
+  /** 仓房软删、货位硬删，均先过引用闸门；浏览器预览与 saveWarehouse 一样不落库 */
+  deleteWarehouse: (input: DeleteWarehouseInput) =>
+    runningInTauri()
+      ? call<Warehouse>("master_delete_warehouse", { input })
+      : Promise.reject(new Error("浏览器预览不落库：仓房与货位的删除请在桌面端做")),
+  deleteSlot: (input: DeleteSlotInput) =>
+    runningInTauri()
+      ? call<StorageSlot>("master_delete_slot", { input })
+      : Promise.reject(new Error("浏览器预览不落库：仓房与货位的删除请在桌面端做")),
 
   /** 签名与 `mock.saveSetting` 逐字一致，页面察觉不到差别：`operator_id` 桌面端忽略，以会话为准 */
   saveSetting: async (

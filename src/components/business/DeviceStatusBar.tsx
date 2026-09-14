@@ -1,15 +1,19 @@
 /**
- * 底部设备状态条（05 §2）：常驻、不可隐藏。
+ * 底部设备状态条（05 §2）：常驻、不可隐藏，右侧带本机系统时钟。
  *
  * 设备故障是磅房现场最高频的问题，任何页面都必须一眼看到，
  * 因此它不随侧栏折叠、不随路由切换卸载，也不因离线弹模态（05 §6.5）。
+ * 工作台的「全屏专注」是一层 `fixed inset-0` 覆盖层，会把挂在 AppShell 里的这条盖掉，
+ * 所以拆成两层：`useDeviceStatusGate`（台账判据 + 探一次真机，全局只该跑一份）与
+ * `DeviceStatusStrip`（纯展示）。专注态在覆盖层底部再挂一份 `DeviceStatusStrip`，
+ * 盖在下面的那一份仍在跑闸门与探测，不会出现两个实例抢读卡器。
  *
  * 状态同时用图形符号 + 中文文字表达，不依赖颜色（色弱、黑白打印、远程截图）。
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { KeyboardIcon } from "lucide-react";
+import { ClockIcon, KeyboardIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDeviceStore } from "@/store/device";
 import { useActor } from "@/store/session";
@@ -20,6 +24,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dot } from "@/components/business/badges";
 import { operatorLabel } from "@/components/business/OperatorSwitch";
 import { cn } from "cn";
+import type { DeviceConfig } from "@/mock/types";
 import type { DeviceStatus } from "@/lib/constants";
 
 function toneOf(s: DeviceStatus) {
@@ -62,38 +67,37 @@ function Chip({
   );
 }
 
-export function DeviceStatusBar() {
-  const scale = useDeviceStore((s) => s.scale);
-  const reader = useDeviceStore((s) => s.reader);
-  const probeReader = useDeviceStore((s) => s.reader.probe);
-  const setReaderMocked = useDeviceStore((s) => s.reader.setMocked);
-  const camera = useDeviceStore((s) => s.camera);
-  const printer = useDeviceStore((s) => s.printer);
-  const actor = useActor();
-
-  const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices() });
-  const cfg = (code: string) => devices.find((d) => d.code === code);
-
-  const scaleCfg = cfg("scale1");
-  const camCfg = cfg("cam1");
-  const prtCfg = devices.find((d) => d.kind === "printer" && d.is_default === 1) ?? cfg("prt1");
-
-  // 读卡器的台账判据按「kind + 启用态」整体算，不写死设备码：登记新设备的编码是自动生成的，
-  // 认死 idcard1 会让"根本没登记"与"登记成别的码"两种情况都静默走真机——那正是这次的漏洞。
-  // 判据：有真机用真机；只剩 Mock 才算 mocked；一台没有 = 闸门关。
+/**
+ * 读卡器的台账判据按「kind + 启用态」整体算，不写死设备码：登记新设备的编码是自动生成的，
+ * 认死 idcard1 会让"根本没登记"与"登记成别的码"两种情况都静默走真机——那正是这次的漏洞。
+ * 判据：有真机用真机；只剩 Mock 才算 mocked；一台没有 = 闸门关。
+ */
+function readerGateOf(devices: DeviceConfig[]) {
   const readers = devices.filter((d) => d.kind === "idcard" && d.is_enabled === 1);
   const realReaders = readers.filter((d) => d.is_mock === 0);
-  const readerRegistered = readers.length > 0;
-  const readerMocked = readerRegistered && realReaders.length === 0;
-  // 底栏提示的"生效设备码"与通道路由同一判据：有真机时报真机那台，别在混装台账下指错行
-  const readerDev =
-    (realReaders.find((d) => d.is_default === 1) ?? realReaders[0]) ??
-    (readers.find((d) => d.is_default === 1) ?? readers[0]) ??
-    null;
+  return {
+    readerRegistered: readers.length > 0,
+    readerMocked: readers.length > 0 && realReaders.length === 0,
+    // 底栏提示的"生效设备码"与通道路由同一判据：有真机时报真机那台，别在混装台账下指错行
+    readerDev:
+      (realReaders.find((d) => d.is_default === 1) ?? realReaders[0]) ??
+      (readers.find((d) => d.is_default === 1) ?? readers[0]) ??
+      null,
+  };
+}
 
-  // 台账的 Mock 标记与"有没有启用的读卡器"决定读卡走真机、演示卡还是拒开设备。底栏常驻、
-  // 且已经加载了设备清单，就由它把这两个结论同步进 store，工作台和档案页不必各判一遍。
+/**
+ * 闸门与探测：台账的 Mock 标记与"有没有启用的读卡器"决定读卡走真机、演示卡还是拒开设备，
+ * 由底栏这一份把结论同步进 store，工作台和档案页不必各判一遍。
+ * 只允许全局跑一份（AppShell 那条常驻底栏），专注态补挂的展示条不碰它，免得两个实例抢读卡器。
+ */
+function useDeviceStatusGate() {
+  const probeReader = useDeviceStore((s) => s.reader.probe);
+  const setReaderMocked = useDeviceStore((s) => s.reader.setMocked);
   const setReaderRegistered = useDeviceStore((s) => s.reader.setRegistered);
+  const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices() });
+  const { readerRegistered, readerMocked } = readerGateOf(devices);
+
   useEffect(() => {
     setReaderMocked(readerMocked);
   }, [readerMocked, setReaderMocked]);
@@ -106,6 +110,59 @@ export function DeviceStatusBar() {
   useEffect(() => {
     void probeReader();
   }, [probeReader, readerRegistered, readerMocked]);
+}
+
+const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+/**
+ * 本机系统时钟：磅房里操作员手上是票据、眼睛在车上，抬头看一眼时间比点开任何页面都快。
+ * 取的是操作系统本地时间（与 `nowLocalISO()` 同源，不做时区换算），
+ * 定时器对齐到整秒边界，避免出现"14:32:05 停一秒半才跳"或同一秒念两遍。
+ */
+function Clock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    let timer = 0;
+    const tick = () => {
+      setNow(new Date());
+      timer = window.setTimeout(tick, 1000 - (Date.now() % 1000) || 1000);
+    };
+    timer = window.setTimeout(tick, 1000 - (Date.now() % 1000) || 1000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const text = `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${WEEKDAYS[now.getDay()]} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex" />}>
+        <span className="tnum flex items-center gap-1.5 text-xs text-muted-foreground">
+          <ClockIcon className="size-3.5" />
+          {text}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <p className="font-medium">本机系统时间</p>
+        <p className="text-muted-foreground">{`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${WEEKDAYS[now.getDay()]} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** 纯展示的那一条：不跑闸门与探测，专注模式覆盖层底部复用的就是它 */
+export function DeviceStatusStrip() {
+  const scale = useDeviceStore((s) => s.scale);
+  const reader = useDeviceStore((s) => s.reader);
+  const camera = useDeviceStore((s) => s.camera);
+  const printer = useDeviceStore((s) => s.printer);
+  const actor = useActor();
+
+  const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices() });
+  const cfg = (code: string) => devices.find((d) => d.code === code);
+
+  const scaleCfg = cfg("scale1");
+  const camCfg = cfg("cam1");
+  const prtCfg = devices.find((d) => d.kind === "printer" && d.is_default === 1) ?? cfg("prt1");
+  const { readerDev } = readerGateOf(devices);
 
   const scaleDetail = scale.connected
     ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg)} · ${scale.stable ? "稳" : "不稳"}`
@@ -162,6 +219,7 @@ export function DeviceStatusBar() {
       </div>
 
       <span className="ml-auto flex shrink-0 items-center gap-3">
+        <Clock />
         <Separator orientation="vertical" className="h-4" />
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
@@ -181,4 +239,10 @@ export function DeviceStatusBar() {
       </span>
     </footer>
   );
+}
+
+/** AppShell 常驻的那一条：闸门 effect 全局只跑这份，展示部分交给 `DeviceStatusStrip` */
+export function DeviceStatusBar() {
+  useDeviceStatusGate();
+  return <DeviceStatusStrip />;
 }

@@ -17,7 +17,16 @@ import type {
   DeviceConfig,
   GrainVariety,
   LedgerRow,
+  MovementFilters,
+  MovementPage,
   OrderFilters,
+  OutboundCloseInput,
+  OutboundCompleteInput,
+  OutboundDetail,
+  OutboundFilters,
+  OutboundOrder,
+  OutboundPage,
+  OutboundSaveInput,
   PageResult,
   Party,
   PaymentRecord,
@@ -29,6 +38,7 @@ import type {
   Settlement,
   StaffLoadRow,
   Station,
+  StockBalanceRow,
   PartyRankRow,
   UserAccount,
   Warehouse,
@@ -65,6 +75,17 @@ import {
   settlements,
   settlementOfOrder,
 } from "./orders";
+import {
+  completeOutbound,
+  getOutbound,
+  listOutbound,
+  reverseOutbound,
+  saveOutbound,
+  stockBalance,
+  stockMovements,
+  voidOutbound,
+  warehouseTotals,
+} from "./outbound";
 import {
   buildDaily,
   buildDashboard,
@@ -288,20 +309,21 @@ export const api = {
   },
 
   /**
-   * 过磅抓拍图的读通道，对应真库 `capture_photo`（键是称重记录 id，不是附件 id）。
-   * mock 没有文件系统，按记录 `has_photo` 回一张演示抓拍（含车牌/时标占位），无图回 null——
+   * 过磅抓拍图的读通道，对应真库 `capture_photo`（键是 **attachment.id**，不是记录 id——
+   * 一次过磅最多 3 台相机各一张，墙上逐张列）。mock 没有文件系统：拿附件 id 回查它属于哪张
+   * 单的哪一捕，按记录 `has_photo` 回一张演示抓拍（含车牌/时标占位），缺图占位格回 null——
    * 界面这一侧与真库完全不区分两者，形状必须与 `PartyPhotoImage` 一致。
    */
-  async capturePhoto(recordId: number): Promise<PartyPhotoImage | null> {
+  async capturePhoto(attachmentId: number): Promise<PartyPhotoImage | null> {
     await sleep();
     for (const o of orders) {
-      const rec = (o.records ?? []).find((r) => r.id === recordId);
-      if (!rec) continue;
-      if (!rec.has_photo) return null;
+      const tile = photosOf(o).find((p) => p.id === attachmentId);
+      if (!tile) continue;
+      if (tile.missing) return null;
       return {
-        dataUrl: demoCapture(rec.weigh_type === "gross" ? "毛重抓拍" : "皮重抓拍", o.vehicle_no ?? "", rec.captured_at),
+        dataUrl: demoCapture(tile.label, o.vehicle_no ?? "", tile.captured_at),
         size: 4096,
-        capturedAt: rec.captured_at,
+        capturedAt: tile.captured_at,
       };
     }
     return null;
@@ -409,9 +431,25 @@ export const api = {
     return varieties;
   },
 
+  /**
+   * 仓房档案 + 库存那一格。种子只带档案态（含期初），结存/待入账每次现算——
+   * 与桌面端 `masters::list_warehouses` 同一形状：档案页与制单去向下拉都只发这一个请求。
+   */
   async warehouses(): Promise<Warehouse[]> {
     await sleep(0);
-    return warehouses;
+    const totals = warehouseTotals();
+    return warehouses.map((w) => {
+      const t = totals.get(w.id);
+      const balance = t?.balance_01kg ?? 0;
+      const pending = t?.pending_in_01kg ?? 0;
+      return {
+        ...w,
+        balance_01kg: balance,
+        pending_in_01kg: pending,
+        // 1 吨 = 10000 个 0.1kg；容量没核定就留 NULL，不替站长猜一个"能装多少"
+        remain_01kg: w.capacity_ton == null ? null : Math.round(w.capacity_ton * 10_000) - balance - pending,
+      };
+    });
   },
 
   async prices(): Promise<PriceList[]> {
@@ -949,7 +987,8 @@ export const api = {
 
   async createOrder(input: {
     party_id: number;
-    variety_id: number;
+    /** 收购品种：可空（0017）。制单只认「卡 + 售粮人」，品种留到结算/化验前再定 */
+    variety_id: number | null;
     vehicle_no: string | null;
     warehouse_id: number | null;
     slot_id: number | null;
@@ -961,7 +1000,8 @@ export const api = {
   }): Promise<WeighOrder> {
     await sleep(120);
     const p = parties.find((x) => x.id === input.party_id)!;
-    const v = varieties.find((x) => x.id === input.variety_id)!;
+    const v = input.variety_id == null ? undefined : varieties.find((x) => x.id === input.variety_id);
+    if (input.variety_id != null && !v) throw new Error("所选品种不存在或已停用，请重新选择");
     // 「制单必须绑卡」+ 这张卡能不能占（与 Rust cards::check_card_for_create 同一套闸）
     const settingOf = (key: string, fallback: string) => settings.find((s) => s.key === key)?.value ?? fallback;
     const requireCard =
@@ -990,9 +1030,9 @@ export const api = {
       party_name: p.name,
       party_type: p.party_type,
       id_card_no: p.id_card_no,
-      variety_id: v.id,
-      variety_code: v.code,
-      variety_name: v.name,
+      variety_id: v?.id ?? null,
+      variety_code: v?.code ?? null,
+      variety_name: v?.name ?? null,
       grade: null,
       warehouse_id: input.warehouse_id,
       warehouse_name: warehouses.find((w) => w.id === input.warehouse_id)?.name ?? null,
@@ -1073,9 +1113,10 @@ export const api = {
     has_photo: boolean;
     /** 皮重偏差超容差的警示文案（称重面板判出后附上）；捕获照常有效，只随单留醒目提醒 */
     tare_warning?: string | null;
-    /** 本机 USB 摄像头就地取帧回传的 base64(JPEG)，与 Rust `CaptureInput::photo_b64` 逐字对齐；
-     *  mock 模式没有附件可落，只照 Rust 的闸门口径把"带了帧"并进 has_photo 显示 */
-    photo_b64?: string | null;
+    /** 本机 USB 摄像头就地取帧回传的帧（04 §4：一次最多 3 台，每台一条）。与 Rust
+     *  `CaptureInput::frames` 逐字对齐；mock 模式没有附件可落，只照 Rust 的闸门口径把
+     *  "带了帧"并进 has_photo 显示，具体几张由 mock/orders.ts 的抓拍相机列表决定 */
+    frames?: { device_id: number; b64: string }[];
   }): Promise<WeighOrder | null> {
     await sleep(80);
     const o = orderOf(input.order_no);
@@ -1096,7 +1137,7 @@ export const api = {
       stable: 1,
       captured_at: at,
       operator_id: input.operator_id,
-      has_photo: input.has_photo || input.photo_b64 != null,
+      has_photo: input.has_photo || (input.frames?.length ?? 0) > 0,
     });
     if (input.weigh_type === "gross") {
       o.gross_weight_01kg = input.weight_01kg;
@@ -1139,6 +1180,11 @@ export const api = {
     await sleep(120);
     const o = orderOf(input.order_no);
     if (!o) return null;
+    // 化验的指标集与扣量基准全部来自品种档案，没品种这一单根本无从判定，
+    // 所以 `qc_report.variety_id` 保持 NOT NULL（与 Rust `orders.rs::save_qc` 同一道闸）
+    if (o.variety_id == null) {
+      throw new Error("本单还没有定收购品种，请先在化验区选定品种再录化验");
+    }
     const now = localIso(new Date());
     const report: QcReport = {
       id: qcReports.length + 1,
@@ -1219,6 +1265,11 @@ export const api = {
     }
     if (settlements.some((s) => s.orders.some((r) => r.order_id === o.id))) {
       throw new Error(`磅单 ${o.order_no} 已生成过结算单，不能重复结算（不变式 6）`);
+    }
+    // 0017 之后品种不再挡制单，但它是这一单唯一能对回价目表的锚：没品种，价格偏离了
+    // 价目表这件事在库里没有任何一处能发现。与 Rust `orders.rs::settle` 同一道闸。
+    if (o.variety_id == null) {
+      throw new Error("本单还没有定收购品种，请先选定品种再结算");
     }
     const now = localIso(new Date());
     const deduct = input.package_deduct_01kg + input.moisture_deduct_01kg + input.impurity_deduct_01kg + input.other_deduct_01kg;
@@ -1367,6 +1418,55 @@ export const api = {
       entity: "weigh_order",
       entity_no: o.order_no,
       reason: `等级 ${before} → ${next ?? "未定级"}：${reason}`,
+      authorized_by: null,
+      result: "ok",
+    });
+    return o;
+  },
+
+  /**
+   * 调整收购品种：制单可以不带品种（0017「卡 + 售粮人」即取号），品种后置到化验/结算前再定，
+   * 定它、改它都走这一条命令。与 Rust `orders.rs::set_variety` 同口径：
+   * 品种必须存在且未停用；作废/拒收/已结算等终态一律拦下（改已结算是红冲的事，不是改品种的事）；
+   * 值没变就直接回读，既不写库也不在审计表里留"改了个寂寞"的噪音。
+   * 单价由界面按 `variety_id` 重查价目表，所以这里只换品种、不动任何价格快照。
+   */
+  async setOrderVariety(input: {
+    order_no: string;
+    /** 目标品种，null / 0 ＝ 清除品种（回到「未定品种」） */
+    variety_id: number | null;
+    /** 改判事由，可选（留空时审计记「未填写」） */
+    reason: string;
+    operator_id: number;
+  }): Promise<WeighOrder | null> {
+    await sleep(120);
+    const target = input.variety_id ?? null;
+    const v = target == null ? undefined : varieties.find((x) => x.id === target && x.is_active !== 0);
+    if (target != null && !v) throw new Error("所选品种不存在或已停用，请重新选择");
+    const o = orderOf(input.order_no);
+    if (!o) return null;
+    if (["voided", "rejected"].includes(o.status)) {
+      throw new Error(`本单已${o.status === "voided" ? "作废" : "化验拒收"}，不能再调整品种`);
+    }
+    if (["settled", "paid", "archived", "reversed"].includes(o.status)) {
+      throw new Error(`本单当前为「${o.status}」，已结算的单改品种请先由站长红冲`);
+    }
+    if (o.variety_id === target) return o;
+    const now = localIso(new Date());
+    const before = o.variety_name ?? "未定品种";
+    o.variety_id = target;
+    o.variety_code = v?.code ?? null;
+    o.variety_name = v?.name ?? null;
+    o.updated_at = now;
+    auditLogs.unshift({
+      id: o.id,
+      at: now,
+      actor_id: input.operator_id,
+      actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
+      action: "order.variety",
+      entity: "weigh_order",
+      entity_no: o.order_no,
+      reason: `品种 ${before} → ${v?.name ?? "未定品种"}：${input.reason.trim() || "未填写"}`,
       authorized_by: null,
       result: "ok",
     });
@@ -1682,6 +1782,42 @@ export const api = {
       }
     }
     throw new Error("退卡需给出卡号或单号");
+  },
+
+  /* ------------------------------------------------------ 粮食出库（02 §M11） */
+  async listOutbound(f: OutboundFilters): Promise<OutboundPage> {
+    await sleep(0);
+    return listOutbound(f);
+  },
+  async getOutbound(no: string): Promise<OutboundDetail | null> {
+    await sleep(0);
+    return getOutbound(no);
+  },
+  async saveOutbound(i: OutboundSaveInput): Promise<OutboundOrder> {
+    await sleep(0);
+    return saveOutbound(i);
+  },
+  async completeOutbound(i: OutboundCompleteInput): Promise<OutboundOrder> {
+    await sleep(0);
+    return completeOutbound(i);
+  },
+  async voidOutbound(i: OutboundCloseInput): Promise<OutboundOrder> {
+    await sleep(0);
+    return voidOutbound(i);
+  },
+  async reverseOutbound(i: OutboundCloseInput): Promise<OutboundOrder> {
+    await sleep(0);
+    return reverseOutbound(i);
+  },
+
+  /* ------------------------------------------------------------ 库存账 */
+  async stockBalance(): Promise<StockBalanceRow[]> {
+    await sleep(0);
+    return stockBalance();
+  },
+  async stockMovements(f: MovementFilters): Promise<MovementPage> {
+    await sleep(0);
+    return stockMovements(f);
   },
 };
 

@@ -524,7 +524,7 @@ function DailyReportView() {
               value={money(total.credit_fen, false)}
               unit="元"
               tone={total.credit_fen > 0 ? "danger" : "success"}
-              hint={total.credit_fen > 0 ? "日结前应催清或说明原因" : "当天货款已全部付清"}
+              hint={total.credit_fen > 0 ? "日结前应催清或说明原因" : "当天粮款已全部付清"}
             />
           </div>
 
@@ -854,7 +854,7 @@ function PartyRankReport() {
         empty={
           <EmptyState
             title={onlyCredit ? "没有未付清的售粮人" : "该期间没有售粮记录"}
-            description={onlyCredit ? "说明这段期间的货款都已当场结清。" : "换一段日期试试。"}
+            description={onlyCredit ? "说明这段期间的粮款都已当场结清。" : "换一段日期试试。"}
           />
         }
         toolbar={<span className="text-xs text-muted-foreground">排行按净重倒序（默认）；点姓名进入该售粮人履历，可核对历次皮重是否稳定。</span>}

@@ -16,7 +16,7 @@ import { api } from "@/lib/api";
 import type { QcReport, WeighOrder } from "@/mock/types";
 import type { QcDecision } from "@/lib/constants";
 import { QC_DECISION, TEST_METHOD } from "@/lib/constants";
-import { dateTime, orDash, percent, sinceMinutes, sinceText, weight } from "@/lib/format";
+import { dateTime, orDash, percent, sinceMinutes, sinceText, weight, varietyLabel } from "@/lib/format";
 import { useStaffNames, useVarieties } from "@/hooks/useLookups";
 import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/business/DataTable";
@@ -147,7 +147,7 @@ export function QcPage() {
     () => [
       { key: "order_no", header: "磅单号", cell: (o) => <span className="tnum font-medium">{o.order_no}</span> },
       { key: "party", header: "售粮人", cell: (o) => o.party_name },
-      { key: "variety", header: "品种", cell: (o) => `${o.variety_name}${o.grade ? ` ${o.grade}` : ""}` },
+      { key: "variety", header: "品种", cell: (o) => `${varietyLabel(o.variety_name)}${o.grade ? ` ${o.grade}` : ""}` },
       { key: "vehicle", header: "车牌", cell: (o) => <span className="tnum">{orDash(o.vehicle_no)}</span> },
       { key: "at", header: "登记时间", cell: (o) => <span className="tnum text-xs">{dateTime(o.registered_at)}</span> },
       {

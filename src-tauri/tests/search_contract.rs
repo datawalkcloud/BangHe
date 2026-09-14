@@ -92,7 +92,7 @@ fn weighed_order(conn: &Connection, party_id: i64, variety: i64, vehicle_no: Opt
         &actor(1, "weigher"),
         CreateOrderInput {
             party_id,
-            variety_id: variety,
+            variety_id: Some(variety),
             vehicle_no: vehicle_no.map(str::to_string),
             warehouse_id: None,
             slot_id: None,
@@ -118,7 +118,7 @@ fn weighed_order(conn: &Connection, party_id: i64, variety: i64, vehicle_no: Opt
                 has_photo: Some(false),
                 tare_override: None,
                 tare_warning: None,
-                photo_b64: None,
+                frames: Vec::new(),
             },
         )
         .unwrap()

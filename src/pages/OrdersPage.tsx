@@ -18,7 +18,7 @@ import type { OrderRow } from "@/mock/api";
 import type { OrderFilters } from "@/mock/types";
 import type { OrderStatus, PaymentStatus, WeightSource } from "@/lib/constants";
 import { ORDER_STATUS, PARTY_TYPE, PAYMENT_STATUS, WEIGHT_SOURCE } from "@/lib/constants";
-import { maskIdCard, money, orDash, priceNumber, shiftDay, toKg, toYuanPerKg, todayISO, weight } from "@/lib/format";
+import { maskIdCard, money, orDash, priceNumber, shiftDay, toKg, toYuanPerKg, todayISO, weight, varietyLabel } from "@/lib/format";
 import { csvName } from "@/lib/csv";
 import { exportCsvFile } from "@/lib/export-csv";
 import { useStaffNames, useVarieties } from "@/hooks/useLookups";
@@ -101,7 +101,7 @@ export function OrdersPage() {
       { col: { key: "party_name", header: "售粮人", cell: (r) => <span className="font-medium">{r.party_name}</span>, sortValue: (r) => r.party_name } },
       { opt: "party_type", col: { key: "party_type", header: "身份", cell: (r) => PARTY_TYPE[r.party_type] } },
       { opt: "id_card", col: { key: "id_card", header: "证号", cell: (r) => <span className="tnum text-muted-foreground">{maskIdCard(r.id_card_no)}</span> } },
-      { col: { key: "variety_name", header: "品种", cell: (r) => r.variety_name, sortValue: (r) => r.variety_name } },
+      { col: { key: "variety_name", header: "品种", cell: (r) => varietyLabel(r.variety_name), sortValue: (r) => varietyLabel(r.variety_name) } },
       { opt: "grade", col: { key: "grade", header: "等级", cell: (r) => orDash(r.grade) } },
       { col: { key: "vehicle_no", header: "车牌", cell: (r) => <span className="tnum">{orDash(r.vehicle_no)}</span> } },
       {
@@ -161,7 +161,7 @@ export function OrdersPage() {
         opt: "goods",
         col: {
           key: "goods",
-          header: "货款",
+          header: "粮款",
           align: "right",
           cell: (r) => <span className="tnum">{r.goods_amount_fen == null ? "—" : money(r.goods_amount_fen)}</span>,
           sortValue: (r) => r.goods_amount_fen,
@@ -189,13 +189,13 @@ export function OrdersPage() {
       toast.error("当前筛选结果为空，没有可导出的行");
       return;
     }
-    const headers = ["磅单号", "业务日期", "售粮人", "证号", "品种", "等级", "车牌", "仓房/货位", "毛重kg", "皮重kg", "净重kg", "扣重kg", "结算重量kg", "单价元/公斤", "货款元", "扣款元", "应付元", "已付元", "状态", "付款状态", "称重来源", "磅员", "制单时间"];
+    const headers = ["磅单号", "业务日期", "售粮人", "证号", "品种", "等级", "车牌", "仓房/货位", "毛重kg", "皮重kg", "净重kg", "扣重kg", "结算重量kg", "单价元/公斤", "粮款元", "扣款元", "应付元", "已付元", "状态", "付款状态", "称重来源", "磅员", "制单时间"];
     const data = rows.map((r) => [
       r.order_no,
       r.business_date,
       r.party_name,
       maskIdCard(r.id_card_no),
-      r.variety_name,
+      varietyLabel(r.variety_name),
       r.grade ?? "",
       r.vehicle_no ?? "",
       `${r.warehouse_name ?? ""}${r.slot_label ? `/${r.slot_label}` : ""}`,
@@ -441,5 +441,5 @@ const OPTIONAL_LABEL: Record<OptionalCol, string> = {
   gross: "毛重",
   tare: "皮重",
   deduct: "扣重合计",
-  goods: "货款",
+  goods: "粮款",
 };

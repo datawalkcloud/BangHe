@@ -178,6 +178,8 @@ export function WeightField({
   onChange: (v: number | null) => void;
   disabled?: boolean;
   hint?: string;
+  /** 校验不通过：红框 + hint 转红（NumField 范式，透传给 NumField） */
+  invalid?: boolean;
   className?: string;
   id?: string;
   size?: "sm" | "default";
@@ -222,6 +224,8 @@ export function MoneyField({
   onChange: (v: number) => void;
   disabled?: boolean;
   hint?: string;
+  /** 校验不通过：红框 + hint 转红（NumField 范式，透传给 NumField） */
+  invalid?: boolean;
   className?: string;
   id?: string;
   size?: "sm" | "default";
@@ -266,6 +270,8 @@ export function PriceField({
   onChange: (v: number | null) => void;
   hint?: string;
   disabled?: boolean;
+  /** 校验不通过：红框 + hint 转红（NumField 范式，透传给 NumField） */
+  invalid?: boolean;
   className?: string;
   id?: string;
   size?: "sm" | "default";
@@ -310,6 +316,8 @@ export function PercentField({
   onChange: (v: number | null) => void;
   disabled?: boolean;
   hint?: string;
+  /** 校验不通过：红框 + hint 转红（NumField 范式，透传给 NumField） */
+  invalid?: boolean;
   className?: string;
   id?: string;
   size?: "sm" | "default";

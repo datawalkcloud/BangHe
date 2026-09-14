@@ -15,7 +15,7 @@
  * 统一社会信用代码，那是另一套校验，要走档案页完整表单，不在这里塞进快捷框。
  * 开户行、挂账额度、参考皮重同理——不挡制单，都留给档案页补全。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ContactIcon, SearchIcon } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -98,16 +98,14 @@ export function QuickPartyDialog({
   const phoneKey = form.phone.replace(/[\s-]/g, "");
   const phoneTaken = phoneKey ? parties.find((p) => p.phone.replace(/[\s-]/g, "") === phoneKey) : undefined;
 
-  const errors = useMemo(() => {
-    const out: string[] = [];
-    if (!form.name.trim()) out.push("姓名必填");
-    // 证号与电话至少填一个（02 §F3.1）：没带卡的临时户，留个电话也建得下来
-    if (!code && !phoneKey) out.push("身份证号与手机号至少填一个（证号读卡带入，或手工录入 18 位）");
-    else if (code && !idOk) out.push("证号校验位不通过（GB 11643），请核对卡面");
-    else if (taken) out.push(`该证号已建档（${taken.name}），请改用「搜档案」选人`);
-    if (phoneTaken) out.push(`该手机号已属于档案「${phoneTaken.name}」，一人一号，请改用「搜档案」选人`);
-    return out;
-  }, [form.name, code, idOk, taken, phoneTaken]);
+  // 校验错误按字段归位：红框 + 紧贴控件的红字标在出错字段上，不在弹窗底部聚合清单
+  const nameErr = !form.name.trim() ? "姓名必填" : "";
+  // 证号与电话至少填一个（02 §F3.1）：没带卡的临时户，留个电话也建得下来
+  const pairErr = !code && !phoneKey ? "身份证号与手机号至少填一个（证号读卡带入，或手工录入 18 位）" : "";
+  const idBad = !!code && !idOk;
+  const idTakenErr = code && idOk && taken ? `该证号已建档（${taken.name}），请改用「搜档案」选人` : "";
+  const phoneErr = phoneTaken ? `该手机号已属于档案「${phoneTaken.name}」，一人一号，请改用「搜档案」选人` : "";
+  const hasErr = !!(nameErr || pairErr || idBad || idTakenErr || phoneErr);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -177,7 +175,8 @@ export function QuickPartyDialog({
         <div className="grid gap-3 sm:grid-cols-2">
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
             姓名 *
-            <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} className="text-sm" />
+            <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} aria-invalid={nameErr ? true : undefined} className="text-sm" />
+            {nameErr && <span className="text-destructive">{nameErr}</span>}
           </Label>
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
             身份类型
@@ -192,6 +191,7 @@ export function QuickPartyDialog({
             <span>身份证号（与手机号至少填一个）</span>
             <KeypadInput
               aria-label="身份证号"
+              aria-invalid={idBad || !!idTakenErr || (!!pairErr && !code) ? true : undefined}
               value={form.id_card_no}
               onChangeValue={(v) => patch({ id_card_no: v.toUpperCase() })}
               keys={digitKeys({ extra: ["X"] })}
@@ -206,7 +206,9 @@ export function QuickPartyDialog({
             <span className={code === "" ? "hidden" : idOk ? "text-xs text-success" : "text-xs text-destructive"}>
               {idOk ? "格式正确" : "校验位不通过，请核对"}
             </span>
-            {code !== "" && idOk && (
+            {!!idTakenErr && <span className="text-xs text-destructive">{idTakenErr}</span>}
+            {!code && !!pairErr && <span className="text-xs text-destructive">{pairErr}</span>}
+            {code !== "" && idOk && !idTakenErr && (
               <span className="text-xs text-muted-foreground">
                 {verified
                   ? "证号读卡带入 · 保存后标记「已核验」"
@@ -218,6 +220,7 @@ export function QuickPartyDialog({
             <span>联系电话</span>
             <KeypadInput
               aria-label="联系电话"
+              aria-invalid={!!phoneErr || (!!pairErr && !code) ? true : undefined}
               value={form.phone}
               onChangeValue={(v) => patch({ phone: v.replace(/[^\d\s-]/g, "") })}
               keys={digitKeys()}
@@ -229,20 +232,14 @@ export function QuickPartyDialog({
               placeholder="读卡读不出来，可不填"
               inputClassName="tnum text-sm"
             />
+            {!!phoneErr && <span className="text-xs text-destructive">{phoneErr}</span>}
+            {!code && !!pairErr && <span className="text-xs text-destructive">{pairErr}</span>}
           </div>
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
             住址（写入磅单与台账，迎检必填）
             <Input value={form.address} onChange={(e) => patch({ address: e.target.value })} className="text-sm" />
           </Label>
         </div>
-
-        {errors.length > 0 && (
-          <ul className="list-disc pl-4 text-xs text-warning">
-            {errors.map((e) => (
-              <li key={e}>{e}</li>
-            ))}
-          </ul>
-        )}
 
         <DialogFooter className="sm:justify-between">
           <div className="flex gap-2">
@@ -263,7 +260,7 @@ export function QuickPartyDialog({
               先不建
             </Button>
           </div>
-          <Button size="sm" onClick={() => save.mutate()} disabled={errors.length > 0 || save.isPending}>
+          <Button size="sm" onClick={() => save.mutate()} disabled={hasErr || save.isPending}>
             <ContactIcon />
             {save.isPending ? "建档中…" : "建档并用于本单"}
           </Button>

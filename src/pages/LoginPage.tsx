@@ -146,7 +146,7 @@ export function LoginPage() {
     e?.preventDefault();
     if (busy) return;
     if (fresh !== again) {
-      setResult({ ok: false, error: "两次输入的密码不一致", session: null, needsPasswordSetup: true, attemptsLeft: null, lockedUntil: null });
+      // 不一致不弹顶部红框：再输入那一格下面已经实时标了红字，这里只把提交掐掉
       return;
     }
     setBusy(true);
@@ -322,9 +322,13 @@ export function LoginPage() {
                   type="password"
                   className="text-base"
                   value={fresh}
+                  aria-invalid={fresh.length > 0 && fresh.length < PWD_MIN_LEN ? true : undefined}
                   autoComplete="new-password"
                   onChange={(e) => setFresh(e.target.value)}
                 />
+                {fresh.length > 0 && fresh.length < PWD_MIN_LEN && (
+                  <span className="text-destructive">密码太短，至少 {PWD_MIN_LEN} 位</span>
+                )}
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 再输入一次
@@ -333,9 +337,11 @@ export function LoginPage() {
                   type="password"
                   className="text-base"
                   value={again}
+                  aria-invalid={again !== "" && fresh !== again ? true : undefined}
                   autoComplete="new-password"
                   onChange={(e) => setAgain(e.target.value)}
                 />
+                {again !== "" && fresh !== again && <span className="text-destructive">两次输入的密码不一致</span>}
               </Label>
               {capsOn && <p className="text-xs text-warning">大写锁定已开启，密码很可能输错了。</p>}
               <Button type="submit" disabled={!setupReady} className="mt-1 w-full">

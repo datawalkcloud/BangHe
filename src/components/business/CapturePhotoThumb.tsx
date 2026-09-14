@@ -56,7 +56,10 @@ export function CapturePhotoThumb({ photo }: { photo: CapturePhoto }) {
           <img src={data.dataUrl} alt={`${photo.label}`} className="size-full object-cover" />
         </button>
       )}
-      <span className="truncate text-xs">{photo.label}</span>
+      <span className="truncate text-xs">
+        {photo.label}
+        {photo.device_label ? <span className="text-muted-foreground"> · {photo.device_label}</span> : null}
+      </span>
       <span className="tnum text-[11px] text-muted-foreground">
         {photo.missing ? "无抓拍" : dateTime(photo.captured_at)}
       </span>
@@ -65,7 +68,9 @@ export function CapturePhotoThumb({ photo }: { photo: CapturePhoto }) {
         <DialogContent className="max-w-[900px]">
           <div className="flex flex-col gap-2">
             <span className="text-sm font-semibold">
-              {photo.label} · <span className="tnum font-normal text-muted-foreground">{dateTime(photo.captured_at)}</span>
+              {photo.label}
+              {photo.device_label ? <span className="text-muted-foreground"> · {photo.device_label}</span> : null} ·{" "}
+              <span className="tnum font-normal text-muted-foreground">{dateTime(photo.captured_at)}</span>
             </span>
             {data && <img src={data.dataUrl} alt={photo.label} className="max-h-[70vh] w-full border object-contain" />}
             <span className="text-xs text-muted-foreground">

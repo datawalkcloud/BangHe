@@ -509,7 +509,8 @@ fn every_migration_file_is_registered() {
     }
 }
 
-/// §9 的 27 张表 ⇄ 实际建出来的 27 张表，一张都不许多/少
+/// §9 的 28 张表 ⇄ 实际建出来的 28 张表，一张都不许多/少
+/// （第 28 张是 0020 的 `outbound_order` 粮食出库单，02 §M11）
 #[test]
 fn doc_section9_table_set_matches_database() {
     let doc = parse_doc();
@@ -521,7 +522,7 @@ fn doc_section9_table_set_matches_database() {
         declared, actual,
         "§9 声明的表与实际库不一致（左=文档 右=实际）。schema_migration 已由执行器建，不参与比对"
     );
-    assert_eq!(declared.len(), 27, "§9 应当是 27 张表");
+    assert_eq!(declared.len(), 28, "§9 应当是 28 张表");
 }
 
 /// 剥掉部分索引写法带来的 `WHERE ...` 尾巴：`UNIQUE WHERE NOT NULL` 描述的是
@@ -1037,6 +1038,111 @@ fn migration_0013_dedupes_party_phones_before_the_unique_index() {
         .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_party_phone'", [], |r| r.get(0))
         .unwrap();
     assert_eq!(dup_idx, 0, "唯一索引顶掉普通索引后，同一列上不该留两个索引");
+}
+
+/// 0017 磅单品种改可空。这条迁移的写法是 `DROP COLUMN` + `ADD COLUMN`（重建表要把
+/// `weigh_order` 上 9 条外键关系全拖进文本改写），而 **`DROP COLUMN` 连数据一起消失**——
+/// 老站升完级历史单的品种全变成空，是那种"升级当天没人发现、月底对账才炸"的错。
+/// 所以这里按行断言存量品种保号，顺带钉住三个配套的收尾：列真的可空、
+/// `v_open_order` 已换 LEFT JOIN（否则没品种的在途单从看板上凭空消失）、索引建回。
+#[test]
+fn migration_0017_keeps_legacy_varieties_and_lets_new_rows_be_null() {
+    // 按名字定位，别写 len()-1：以后再往末尾补 0018、0019 时这条测试不必跟着改
+    let idx = MIGRATIONS
+        .iter()
+        .position(|m| m.name == "0017_order_variety_nullable.sql")
+        .expect("0017 必须还在迁移清单里");
+    let before: &'static [Migration] = &MIGRATIONS[..idx];
+    let mut conn = in_memory_migrated("0.1.0-test", before).expect("0017 之前的脚本应能独立跑完");
+
+    let xm: i64 = conn
+        .query_row("SELECT id FROM grain_variety WHERE code = 'XM'", [], |r| r.get(0))
+        .unwrap();
+    // 第二行故意挂**另一个**品种：备份/还原那条相关子查询要是写错了关联条件，
+    // 最典型的翻车是整表被盖成同一个品种——只有一行有品种照样查不出来。
+    let ym: i64 = conn
+        .query_row("SELECT id FROM grain_variety WHERE code = 'YM'", [], |r| r.get(0))
+        .unwrap();
+    conn.execute(
+        "INSERT INTO party (name, party_type, created_at, created_by) VALUES ('存量户', 'farmer', '2026-09-01T08:00:00.000', 1)",
+        [],
+    )
+    .unwrap();
+    let party = conn.last_insert_rowid();
+    let ins = |no: &str, variety: Option<i64>| {
+        conn.execute(
+            "INSERT INTO weigh_order (order_no, station_id, business_date, status, party_id, variety_id,
+                 deduct_total_01kg, weight_source, registered_by, registered_at, created_at, created_by)
+             VALUES (?1, 1, '2026-09-01', 'registered', ?2, ?3, 0, 'scale', 1, '2026-09-01T08:00:00.000', '2026-09-01T08:00:00.000', 1)",
+            rusqlite::params![no, party, variety],
+        )
+        .unwrap();
+    };
+    // 迁移前这一列还是 NOT NULL，所以存量行只能带着品种来——这正是 0017 要放开的那道闸
+    ins("BD01202609000001", Some(xm));
+    ins("BD01202609000002", Some(ym));
+
+    // 补跑 0017：走生产同一执行器（校验和、逐脚本事务、记账都真）
+    let through_0017: &'static [Migration] = &MIGRATIONS[..idx + 1];
+    let r = migrate::apply_with(&mut conn, "0.1.0-test", None, None, through_0017).expect("0017 应当补齐并成功");
+    assert_eq!(r.applied, vec!["0017_order_variety_nullable.sql".to_string()]);
+
+    let kept: Option<i64> = conn
+        .query_row("SELECT variety_id FROM weigh_order WHERE order_no = 'BD01202609000001'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kept, Some(xm), "存量单的品种必须逐行还原，不许被 DROP COLUMN 带走");
+    let kept2: Option<i64> = conn
+        .query_row("SELECT variety_id FROM weigh_order WHERE order_no = 'BD01202609000002'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kept2, Some(ym), "第二行还原成它自己的品种——整表盖成同一个也是「升级当天没人发现」的错");
+
+    // 列确实可空了：新单不写品种也落得下去
+    conn.execute(
+        "INSERT INTO weigh_order (order_no, station_id, business_date, status, party_id,
+             deduct_total_01kg, weight_source, registered_by, registered_at, created_at, created_by)
+         VALUES ('BD01202609000003', 1, '2026-09-01', 'registered', ?1, 0, 'scale', 1, '2026-09-01T08:00:00.000', '2026-09-01T08:00:00.000', 1)",
+        rusqlite::params![party],
+    )
+    .expect("制单不带品种必须能落库（02 §F1.1 两刷零按键）");
+
+    // 视图换成 LEFT JOIN 的真正目的：没品种的在途单还得出现在看板与在途条上
+    let open: Vec<(String, Option<String>)> = {
+        let mut st = conn
+            .prepare("SELECT order_no, variety_name FROM v_open_order WHERE station_id = 1 ORDER BY order_no")
+            .unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(open.len(), 3, "三张在途单都要看得见，实际：{open:?}");
+    assert_eq!(open[0].1.as_deref(), Some("小麦"), "有品种的仍带出品种名");
+    assert_eq!(open[1].1.as_deref(), Some("玉米"), "第二行带出自己的品种，视图不许串行串到别人身上");
+    assert_eq!(open[2].1, None, "没品种的那张视图里是 NULL，不是整行消失");
+
+    // 索引建回（日报按品种+日期分组走它）；DROP COLUMN 会连带删掉引用它的索引
+    let idx_back: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_order_variety_date'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(idx_back, 1, "idx_order_variety_date 必须原样建回");
+
+    // 新列带着 REFERENCES 加回来：坏品种号照样顶不动，且整库外键体检归零
+    let e = conn
+        .execute(
+            "UPDATE weigh_order SET variety_id = 99999 WHERE order_no = 'BD01202609000003'",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("FOREIGN KEY"), "新列的外键约束要真生效，实际：{e}");
+    let fk_bad: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_foreign_key_check('weigh_order')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fk_bad, 0, "迁移后的外键体检必须干净");
 }
 
 /// 覆盖安装端到端：走生产同一条 `open_and_migrate`，记号是临时目录里**真的**

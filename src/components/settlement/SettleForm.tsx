@@ -7,9 +7,13 @@
  * 会出现"同一张单算出两个应付"，而那正是红冲要处理的现场事故。
  *
  * 前端的数只用于即时反馈，落库一律以 `api.settle()` 返回为准（Rust 同口径重算一遍）。
+ *
+ * **品种也在这一环补上**（迁移 0017「制单只认卡 + 人」）：价目表的价只有"品种 + 等级"两个锚，
+ * 没有品种就没有现价可言，所以结算框顶部多了一行「收购品种」——就地定/改都走 `order_set_variety`，
+ * 换完按新品种重带单价与袋重。服务端在 `settle` 里同样拦一道（前端的闸门只是让人少跑一步）。
  */
 import { useEffect, useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CircleCheckIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -21,7 +25,7 @@ import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
 import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
-import { useQuickOptions } from "@/hooks/useLookups";
+import { useQuickOptions, useVarieties } from "@/hooks/useLookups";
 import { Choose } from "@/components/business/Choose";
 import { ComboBox } from "@/components/business/ComboBox";
 import { MoneyField, MoneyLine, PriceField, WeightField } from "@/components/business/NumField";
@@ -36,8 +40,14 @@ export interface SettleOutcome {
   settlement: Settlement;
 }
 
-/** 从价目表取现行价：先按品种+等级精确命中，命不中退回同品种最近生效的一条 */
-export function lookupPrice(prices: PriceList[], varietyId: number, grade: string | null, date: string): PriceList | null {
+/**
+ * 从价目表取现行价：先按品种+等级精确命中，命不中退回同品种最近生效的一条。
+ *
+ * 品种为 `null` 一律回 `null`：制单可以不带品种（迁移 0017），而价目表唯一的锚就是品种——
+ * 没有品种就没有"现价"可言，界面据此走「价目表无现行价」那一支，绝不拿别的品种的价凑数。
+ */
+export function lookupPrice(prices: PriceList[], varietyId: number | null, grade: string | null, date: string): PriceList | null {
+  if (varietyId == null) return null;
   const live = prices.filter((p) => p.variety_id === varietyId && p.effective_from <= date && p.effective_to >= date);
   if (live.length === 0) return null;
   if (grade) {
@@ -70,6 +80,8 @@ export function SettleForm({
   submitHotkey?: string | null;
 }) {
   const can = useSession((s) => s.can);
+  const queryClient = useQueryClient();
+  const { data: allVarieties = [] } = useVarieties();
 
   const [grade, setGrade] = useState<string>("");
   const [priceFenPerTon, setPrice] = useState<number | null>(null);
@@ -189,28 +201,75 @@ export function SettleForm({
     },
   });
 
-  /** 不放行的原因，null = 可以提交。顺序即"卡在哪儿"的优先级，同一份文案也写在按钮旁边 */
-  const blocked =
-    order.net_weight_01kg == null
-      ? "本单净重未确定，还没完成过磅"
-      : !can("settle.create")
-        ? "当前岗位无权结算，需出纳或站长"
-        : preview.blocked
-          ? preview.blocked
-          : priceFenPerTon == null
-            ? "请填写单价，或点「从价目带出」"
-            : // 改价事由已降为选填：不拦提交，只在 submit 里软提示一次（迎检必查 → 建议填写）
-              payNow
+  /**
+   * 就地定/改本单品种（迁移 0017 之后制单可以不带品种，结算前必须补上——这里就是那个补口）。
+   *
+   * 换完立刻按新品种重带单价与袋重：原来那个价是"上一个品种的现价"，那个袋重是"上一个品种的
+   * 默认扣量"，留着不动等于把两种粮的钱算在一张单上。这会冲掉手填过的价，所以必须出声说一句
+   * "单价已按新品种重新带出"（05 §6.5：改数的动作要能追溯到那一下操作）。
+   */
+  const setVariety = useMutation({
+    mutationFn: (variety_id: number | null) =>
+      api.setOrderVariety({ order_no: order.order_no, variety_id, reason: "", operator_id: actorId() }),
+    onSuccess: (o) => {
+      if (!o) {
+        toast.error("这张单已经不在系统里了，请刷新后再看");
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["order", o.order_no] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["open-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["audits"] });
+      const next = allVarieties.find((v) => v.id === o.variety_id) ?? null;
+      const l = lookupPrice(prices, o.variety_id, grade || null, o.business_date);
+      setPrice(l?.price_fen_per_ton ?? null);
+      setPkg(o.package_deduct_01kg ?? next?.default_package_deduct_01kg ?? 0);
+      toast.success(
+        `品种已改为「${o.variety_name ?? "未定品种"}」，${
+          l ? `单价按价目表重带为 ${fmtPrice(l.price_fen_per_ton)}` : "该品种当前没有生效价，单价已清空、请手工填价"
+        }`,
+      );
+      announce("品种改了，单价已按新品种重新带出", `settle-variety:${o.order_no}`);
+    },
+    // 真库闸门回的是人话（"已结算的单改品种请先由站长红冲"），原样送到眼前
+    onError: (e: Error) => toast.error(`品种没改成：${e.message || "请重试"}`),
+  });
+
+  /**
+   * 下拉里的品种：停用只挡新建（与制单下拉同一条口径），但本单已经定下的那个即便事后被停用
+   * 也要露出来——不然一张定过品种的单会在界面上显示成"没定品种"，那是把数据显示错了。
+   */
+  const varietyPool = allVarieties.filter((v) => v.is_active !== 0 || v.id === order.variety_id);
+
+  /**
+   * 不放行的原因，null = 可以提交。顺序即"卡在哪儿"的优先级，同一份文案也用在提交提示语音里。
+   * `field` 标出这条原因卡在哪个表单项：有归属的错误直接红框+红字标在控件上，不在按钮下方重复。
+   */
+  const gate: { msg: string; field?: "variety" | "price" | "payAmount" } | null =
+    order.variety_id == null
+      ? { msg: "本单还没有定收购品种：请先在上面的「收购品种」里选定，才有价可依", field: "variety" }
+      : order.net_weight_01kg == null
+        ? { msg: "本单净重未确定，还没完成过磅" }
+        : !can("settle.create")
+          ? { msg: "当前岗位无权结算，需出纳或站长" }
+          : preview.blocked
+            ? { msg: preview.blocked }
+            : priceFenPerTon == null
+              ? { msg: "请填写单价，或点「从价目带出」", field: "price" }
+              : // 改价事由已降为选填：不拦提交，只在 submit 里软提示一次（迎检必查 → 建议填写）
+                payNow
                 ? !can("pay.record")
-                  ? "当场付款需要出纳或站长登记，当前操作员只能挂账"
+                  ? { msg: "当场付款需要出纳或站长登记，当前操作员只能挂账" }
                   : preview.payableAmountFen != null && payAmountFen > preview.payableAmountFen
-                    ? "本次实付大于应付，付款不能超过应付金额"
+                    ? { msg: "本次实付大于应付，付款不能超过应付金额", field: "payAmount" }
                     : preview.payableAmountFen != null && preview.payableAmountFen > 0 && payAmountFen <= 0
-                      ? "本次实付必须大于 0；一分钱都不付就取消「当场已付」改走挂账"
+                      ? { msg: "本次实付必须大于 0；一分钱都不付就取消「当场已付」改走挂账", field: "payAmount" }
                       : null
                 : !allowCredit
-                  ? "站点参数已关闭「允许挂账」，只能当场付清"
+                  ? { msg: "站点参数已关闭「允许挂账」，只能当场付清" }
                   : null;
+  /** 不放行的文案（提交闸门与语音共用）；字段级的还会长在对应控件上 */
+  const blocked = gate?.msg ?? null;
 
   // 偏离价目/手工定价且没写够事由——不再是提交闸门，只作为一次软提醒
   const missingReason = needsReason && overrideReason.trim().length < REASON_MIN;
@@ -272,6 +331,28 @@ export function SettleForm({
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-col gap-0.5">
         <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          收购品种（本单按此品种计价）
+          <Choose
+            aria-label="收购品种"
+            invalid={gate?.field === "variety"}
+            value={String(order.variety_id ?? "")}
+            onChange={(v) => setVariety.mutate(v ? Number(v) : null)}
+            options={[
+              { value: "", label: "未定 · 定了才能结算" },
+              ...varietyPool.map((v) => ({ value: String(v.id), label: v.name })),
+            ]}
+          />
+        </Label>
+        {/* 品种是价目表唯一的锚：没定品种时不说清"为什么带不出价"，磅员会以为是价目表没维护 */}
+        {order.variety_id == null && (
+          <p className="text-xs text-destructive">
+            这张单制单时没定品种。单价、袋重、化验指标都跟着品种走，先在这里选定才能结算。
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-0.5">
+        <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
           等级（本单按此等级计价）
           <Choose
             aria-label="等级"
@@ -293,7 +374,16 @@ export function SettleForm({
           keypad
           valueFenPerTon={priceFenPerTon}
           onChange={setPrice}
-          hint={deviates ? "已偏离价目表现行价" : listed == null && priceFenPerTon != null ? "无生效价目，手工定价" : undefined}
+          invalid={gate?.field === "price"}
+          hint={
+            gate?.field === "price"
+              ? gate.msg
+              : deviates
+                ? "已偏离价目表现行价"
+                : listed == null && priceFenPerTon != null
+                  ? "无生效价目，手工定价"
+                  : undefined
+          }
         />
         <div className="flex items-center justify-between gap-1">
           <span className="text-[11px] text-muted-foreground truncate">
@@ -345,7 +435,7 @@ export function SettleForm({
             <span className="ml-1 text-xs font-normal text-muted-foreground">（{ton(preview.settlementWeight01kg)}）</span>
           </span>
         </div>
-        <MoneyLine label="货款" valueFen={preview.goodsAmountFen} />
+        <MoneyLine label="粮款" valueFen={preview.goodsAmountFen} />
         <MoneyLine label="扣款" valueFen={feeFen} />
         <MoneyLine label="应付" emphasis valueFen={preview.payableAmountFen} hint={rmbUpper(preview.payableAmountFen)} />
       </div>
@@ -378,7 +468,14 @@ export function SettleForm({
         {!payNow && !allowCredit && <p className="text-xs text-warning">站点参数已关闭挂账，本单必须当场付清。</p>}
         {canPartPay && preview.payableAmountFen != null && preview.payableAmountFen > 0 && (
           <div className="flex flex-col gap-0.5">
-            <MoneyField label="本次实付（改小即为部分付款）" keypad valueFen={payAmountFen} onChange={setPaidFen} />
+            <MoneyField
+              label="本次实付（改小即为部分付款）"
+              keypad
+              valueFen={payAmountFen}
+              onChange={setPaidFen}
+              invalid={gate?.field === "payAmount"}
+              hint={gate?.field === "payAmount" ? gate.msg : undefined}
+            />
             <div className="flex items-center justify-between gap-1 text-[11px]">
               <span className="text-muted-foreground">
                 应付 <span className="tnum">{money(preview.payableAmountFen)}</span>，默认一次付清
@@ -413,7 +510,8 @@ export function SettleForm({
           <CircleCheckIcon />
           {settle.isPending ? "结算中…" : submitLabel}
         </Button>
-        {blocked && <p className="text-xs text-warning">{blocked}</p>}
+        {/* 字段级的卡点（品种/单价/实付）已红框+红字长在控件上，这里只说不属于任何一格的原因 */}
+        {blocked && gate?.field == null && <p className="text-xs text-warning">{blocked}</p>}
         {!payNow && allowCredit && <ToneBadge tone="warning">本单将全额挂账，之后凭结算凭证核销</ToneBadge>}
         {payNow && creditFen != null && creditFen > 0 && (
           <ToneBadge tone="warning">

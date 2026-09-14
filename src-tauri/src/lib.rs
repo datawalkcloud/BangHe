@@ -15,6 +15,7 @@ pub mod domain;
 pub mod ledger;
 pub mod masters;
 pub mod orders;
+pub mod outbound;
 pub mod payments;
 pub mod prefs;
 pub mod qc;
@@ -23,7 +24,9 @@ pub mod scale;
 pub mod search;
 pub mod serial;
 pub mod settlements;
+pub mod stock;
 pub mod system;
+pub mod titlebar;
 pub mod window;
 
 use tauri::Manager;
@@ -122,6 +125,8 @@ pub fn run() {
             masters::master_delete_variety,
             masters::master_save_warehouse,
             masters::master_save_slot,
+            masters::master_delete_warehouse,
+            masters::master_delete_slot,
             masters::master_save_price,
             masters::master_save_staff,
             masters::master_settings,
@@ -145,6 +150,7 @@ pub fn run() {
             orders::qc_list,
             orders::order_settle,
             orders::order_set_grade,
+            orders::order_set_variety,
             orders::order_update,
             orders::print_log_add,
             orders::order_void,
@@ -166,6 +172,14 @@ pub fn run() {
             settlements::settlement_pending,
             settlements::settlement_credits,
             settlements::payment_add,
+            outbound::outbound_list,
+            outbound::outbound_get,
+            outbound::outbound_save,
+            outbound::outbound_complete,
+            outbound::outbound_void,
+            outbound::outbound_reverse,
+            stock::stock_balance,
+            stock::stock_movements,
             idcard::idcard_status,
             idcard::idcard_read,
             idcard::ic_read,
@@ -183,6 +197,7 @@ pub fn run() {
             system::app_exit,
             prefs::prefs_read,
             prefs::prefs_write,
+            titlebar::titlebar_set_dark,
             qc::qc_get,
             qc::qc_queue_list,
             devices::device_list,

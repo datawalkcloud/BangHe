@@ -77,7 +77,7 @@ export function buildDashboard(from: string, to: string): Dashboard {
       order_no: o.order_no,
       party_name: o.party_name,
       status: o.status,
-      variety_name: o.variety_name,
+      variety_name: o.variety_name ?? "未定品种",
       since_minutes: minutesSince(o.registered_at),
       overdue: minutesSince(o.registered_at) > alertMinutes,
     }))
@@ -192,15 +192,22 @@ function varietySpecAll() {
 }
 
 export function buildDaily(date: string): DailyReport {
-  const rows: DailyReport["rows"] = [];
-  for (const v of varietySpecAll()) {
-    const list = orders.filter((o) => o.business_date === date && o.variety_code === v.code).filter(stat2);
-    if (!list.length) continue;
+  /**
+   * 一组订单出一行明细。抽成函数是为了"未定品种"那一组走**同一套算法**，不是抄一遍再少算几列。
+   * 与 Rust `reports.rs` 同一口径：制单没带品种的单（0017 之后允许）必须自己占一行，
+   * 否则日报总额里有它、明细里没有它——那是最要命的"数字对不上"。
+   */
+  const rowOf = (
+    variety_name: string,
+    variety_code: string,
+    list: WeighOrder[],
+    rejectCount: number,
+  ): DailyReport["rows"][number] => {
     const qcMoist = list.map((o) => qcOf(o.qc_report_id)).filter((q) => q != null && q.is_effective === 1);
     const mo = qcMoist.map((q) => q!.indicators.find((i) => i.code === "moisture")?.value_num ?? null).filter((x): x is number => x != null);
-    rows.push({
-      variety_name: v.name,
-      variety_code: v.code,
+    return {
+      variety_name,
+      variety_code,
       orders: list.length,
       parties: new Set(list.map((o) => o.party_id)).size,
       gross_01kg: list.reduce((t, o) => t + (o.gross_weight_01kg ?? 0), 0),
@@ -215,10 +222,28 @@ export function buildDaily(date: string): DailyReport {
       credit_fen: list.reduce((t, o) => t + ((o.payable_amount_fen ?? 0) - o.paid_amount_fen), 0),
       avg_moisture_001pct: mo.length ? Math.round(mo.reduce((a, b) => a + b, 0) / mo.length) : null,
       manual_count: list.filter((o) => o.weight_source === "manual").length,
-      reject_count: orders.filter((o) => o.business_date === date && o.variety_code === v.code && o.status === "rejected").length,
-    });
+      reject_count: rejectCount,
+    };
+  };
+  const rows: DailyReport["rows"] = [];
+  for (const v of varietySpecAll()) {
+    const list = orders.filter((o) => o.business_date === date && o.variety_code === v.code).filter(stat2);
+    if (!list.length) continue;
+    rows.push(
+      rowOf(
+        v.name,
+        v.code,
+        list,
+        orders.filter((o) => o.business_date === date && o.variety_code === v.code && o.status === "rejected").length,
+      ),
+    );
   }
-  rows.sort((a, b) => b.net_01kg - a.net_01kg);
+  const noVar = orders.filter((o) => o.business_date === date && o.variety_code == null);
+  if (noVar.some(stat2)) {
+    rows.push(rowOf("未定品种", "—", noVar.filter(stat2), noVar.filter((o) => o.status === "rejected").length));
+  }
+  // 未定品种恒排末位（它不是一种粮，混在产量榜里会被读成"本站收了这个品种"），组内仍按净重倒序
+  rows.sort((a, b) => (a.variety_code === "—" ? 1 : 0) - (b.variety_code === "—" ? 1 : 0) || b.net_01kg - a.net_01kg);
   const all = orders.filter((o) => o.business_date === date).filter(stat2);
   return {
     date,
@@ -253,7 +278,7 @@ export function buildLedger(from: string, to: string): LedgerRow[] {
       party_type: o.party_type,
       id_card_no: o.id_card_no,
       address: partyOf(o.party_id).address,
-      variety_name: o.variety_name,
+      variety_name: o.variety_name ?? "未定品种",
       grade: o.grade,
       vehicle_no: o.vehicle_no,
       warehouse_name: o.warehouse_name,

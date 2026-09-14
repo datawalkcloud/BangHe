@@ -18,13 +18,12 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CctvIcon, ClockIcon, FilterIcon, Maximize2Icon } from "lucide-react";
+import { CctvIcon, FilterIcon, Maximize2Icon } from "lucide-react";
 import type { CapturePhoto, DeviceConfig, WeighOrder } from "@/mock/types";
 import { api } from "@/lib/api";
-import { dateTime, nowLocalISO } from "@/lib/format";
+import { dateTime } from "@/lib/format";
 import { localCameraSpec } from "@/lib/local-camera";
 import { LocalCameraLive } from "@/components/business/LocalCameraLive";
-import { useDeviceStore } from "@/store/device";
 import { useSession } from "@/store/session";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,8 +39,6 @@ import {
 import { DeviceStatusLight, ToneBadge } from "@/components/business/badges";
 import { cn } from "cn";
 
-/** 抓图刷新节拍：真实实现是 GET snapshotUrl，这里只用来驱动「刷新于」时间戳 */
-const FRAME_TICK_MS = 5_000;
 /** 每路画面在够宽时的最小占位宽——低于这个宽度宁可换行竖排，也不压成一条横带 */
 const TILE_MIN_WIDTH = 220;
 /** 隐藏相机集合的偏好键（服务端 `user_preference`，键名走 `prefs.rs::check_key` 允许字符集） */
@@ -56,13 +53,11 @@ export function CameraPanel({
   order: WeighOrder | null;
   photos: CapturePhoto[];
 }) {
-  const lastCaptureAt = useDeviceStore((s) => s.camera.lastCaptureAt);
   const actorId = useSession((s) => s.session?.actor.id ?? null);
   const [compact, setCompact] = useState(false);
   /** 放大弹窗的目标相机；null = 只从「本单抓拍」入口打开（弹窗只给照片网格 + 说明） */
   const [zoomId, setZoomId] = useState<number | null>(null);
   const [showPhotosOnly, setShowPhotosOnly] = useState(false);
-  const [frameAt, setFrameAt] = useState(() => nowLocalISO());
 
   // 隐藏的相机按人存偏好：跟工作台布局同一张 `user_preference` 表、同一次登录一份，
   // 换账号 / 换工位不串味；写失败静默——重开面板还会回到上次那份，作业本身不受影响。
@@ -96,12 +91,6 @@ export function CameraPanel({
   const visible = useMemo(() => cameras.filter((c) => !hidden.includes(c.id)), [cameras, hidden]);
   const zoomCam = zoomId == null ? null : cameras.find((c) => c.id === zoomId) ?? null;
   const zoomOpen = showPhotosOnly || zoomCam != null;
-
-  // 画面定时刷新（真实环境是重新 GET 一张 snapshot，浏览器预览阶段只走时标）
-  useEffect(() => {
-    const id = window.setInterval(() => setFrameAt(nowLocalISO()), FRAME_TICK_MS);
-    return () => window.clearInterval(id);
-  }, []);
 
   return (
     <Card size="sm" className="min-w-0 py-0 gap-0">
@@ -186,8 +175,6 @@ export function CameraPanel({
                 cam={c}
                 order={order}
                 compact={compact}
-                frameAt={frameAt}
-                lastCaptureAt={lastCaptureAt}
                 onZoom={() => {
                   setShowPhotosOnly(false);
                   setZoomId(c.id);
@@ -211,7 +198,7 @@ export function CameraPanel({
                 }}
                 className="min-w-0"
               >
-                <span className="truncate">{p.missing ? `${p.label}缺失` : p.label}</span>
+                <span className="truncate">{p.missing ? `${p.label}缺失` : p.device_label ? `${p.label} · ${p.device_label}` : p.label}</span>
               </Button>
             ))}
           </div>
@@ -270,20 +257,16 @@ export function CameraPanel({
   );
 }
 
-/** 单路画面：占位框 + 左上设备/车牌/时标覆盖层，右上角「放大」图标按钮 */
+/** 单路画面：占位框 + 左上设备/车牌覆盖层，右上角「放大」图标按钮 */
 function CameraTile({
   cam,
   order,
   compact,
-  frameAt,
-  lastCaptureAt,
   onZoom,
 }: {
   cam: DeviceConfig;
   order: WeighOrder | null;
   compact: boolean;
-  frameAt: string;
-  lastCaptureAt: string | null;
   onZoom: () => void;
 }) {
   // 本机 USB 摄像头：画面直接开在这块里（getUserMedia）；IP 机在桌面端才由原生通道回帧。
@@ -337,11 +320,6 @@ function CameraTile({
           {order.vehicle_no}
         </span>
       )}
-      <span className="absolute bottom-1 right-1 flex items-center gap-0.5 bg-background/85 px-1 py-0.5 text-[10px] leading-none tnum text-foreground">
-        <ClockIcon className="size-2.5" />
-        {dateTime(frameAt).slice(5)}
-        {lastCaptureAt ? ` · 抓拍 ${lastCaptureAt.slice(11, 19)}` : ""}
-      </span>
     </div>
   );
 }

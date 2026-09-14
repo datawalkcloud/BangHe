@@ -26,6 +26,7 @@ import {
   price,
   rmbUpper,
   ton,
+  varietyLabel,
   weight,
 } from "@/lib/format";
 import { encodeDocCode } from "@/lib/ticket-code";
@@ -294,7 +295,7 @@ const WEIGH_FIELDS: FieldDef[] = [
   // 皮重偏差超容差的醒目提醒：捕获不被拦下，但票面必须印得出来（迎检与事后核对都看这一栏）
   mk("tare_warning", "皮重警示", "重量明细", "text"),
   mk("price_per_kg", "单价(元/公斤)", "金额", "money"),
-  mk("goods_amount", "货款", "金额", "money"),
+  mk("goods_amount", "粮款", "金额", "money"),
   mk("deduction_fee", "扣款", "金额", "money"),
   mk("advance_fee", "预付款", "金额", "money"),
   mk("payable_amount", "应付", "金额", "money"),
@@ -360,7 +361,7 @@ const SETTLE_FIELDS: FieldDef[] = [
   mk("order_count", "磅单数", "基本信息", "enum"),
   mk("status_label", "状态", "基本信息", "enum"),
   mk("settle_code", "凭单二维码载荷", "基本信息", "text"),
-  mk("total_goods", "货款合计", "金额", "money"),
+  mk("total_goods", "粮款合计", "金额", "money"),
   mk("total_deduction", "扣款合计", "金额", "money"),
   mk("payable", "应付合计", "金额", "money"),
   mk("paid", "已付合计", "金额", "money"),
@@ -482,7 +483,7 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "party_type_label": return PARTY_TYPE[o.party_type];
       case "vehicle_no": return o.vehicle_no ?? "—";
       case "driver_name": return o.driver_name ?? "—";
-      case "variety_name": return o.variety_name;
+      case "variety_name": return varietyLabel(o.variety_name);
       case "grade": return o.grade ?? "未定级";
       case "grade_from_qc": return qc?.grade ?? "未化验";
       case "moisture_pct": return percent(indicatorValue(qc, "moisture"));

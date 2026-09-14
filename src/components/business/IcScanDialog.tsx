@@ -42,8 +42,8 @@ interface IcScanDialogProps {
   onOpenChange: (open: boolean) => void;
   /** scanning 阶段到点自动收工；ready 与 submitting 阶段不算时长 */
   timeoutSeconds?: number;
-  /** 提交前的字段校验；返回人类可读错误信息，空数组 = 通过 */
-  validate?: (input: { card_no: string; label: string }) => string[];
+  /** 提交前的字段校验：按字段返回人类可读错误（红框+红字直接标在该输入框上），全部缺省 = 通过 */
+  validate?: (input: { card_no: string; label: string }) => Partial<Record<"card_no" | "label", string>>;
   /** 真正登记的实现：弹窗只 await 一次；抛错时弹窗里 toast.error 并留在 ready 阶段 */
   onRegister: (input: { card_no: string; label: string }) => Promise<void>;
   /** 登记成功后才回调（弹窗已关上），通常用来 invalidate 列表 */
@@ -59,6 +59,9 @@ const RING_C = 2 * Math.PI * RING_R;
  * 正在念的半句（那一瞬操作员正看着卡号出来，再念一遍纯属抢话）。
  */
 const VOICE_ALOUD = "请将流转卡平放在读卡器感应区";
+
+/** 字段级校验错误的空态（红框+红字按字段挂，不再在表单下方聚合清单） */
+const NO_ERRORS: { card_no: string; label: string } = { card_no: "", label: "" };
 
 /**
  * 扫描态的画面：感应区圆环 + 倒计时 progress；中央 IC 卡示意，三层感应弧由内向外依次亮，
@@ -123,7 +126,7 @@ export function IcScanDialog({
   const [left, setLeft] = useState(timeoutSeconds);
   /** 监听被设备故障打断（不是读到卡、也不是倒计时走完）：弹窗留着说清原因 */
   const [halted, setHalted] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
+  const [errors, setErrors] = useState(NO_ERRORS);
 
   // 关弹窗的动作来自定时器、watch 回调、提交成功，不该因为这些回调重跑监听 effect
   const closeRef = useRef(onOpenChange);
@@ -146,7 +149,7 @@ export function IcScanDialog({
     setCardNo("");
     setLabel("");
     setHalted(false);
-    setErrors([]);
+    setErrors(NO_ERRORS);
     setLeft(timeoutSeconds);
     let mounted = true;
     void useDeviceStore
@@ -191,7 +194,7 @@ export function IcScanDialog({
 
   /** ready 阶段「再刷一张」回 scanning：清空卡号重新起 watch */
   function scanAgain() {
-    setErrors([]);
+    setErrors(NO_ERRORS);
     setCardNo("");
     setLabel("");
     setHalted(false);
@@ -224,20 +227,20 @@ export function IcScanDialog({
     setCardNo("");
     setLabel("");
     setHalted(false);
-    setErrors([]);
+    setErrors(NO_ERRORS);
   }
 
   async function submit() {
     const card_no = cardNo.trim().toUpperCase();
     if (validateRef.current) {
       const errs = validateRef.current({ card_no, label });
-      if (errs.length > 0) {
-        setErrors(errs);
+      if (errs.card_no || errs.label) {
+        setErrors({ card_no: errs.card_no ?? "", label: errs.label ?? "" });
         announce("这张卡的登记信息还没填完整");
         return;
       }
     }
-    setErrors([]);
+    setErrors(NO_ERRORS);
     setPhase("submitting");
     try {
       await onRegisterRef.current({ card_no, label: label.trim() });
@@ -322,6 +325,7 @@ export function IcScanDialog({
                 <ScanLineIcon className="size-3.5 shrink-0 text-primary" />
                 <KeypadInput
                   aria-label="卡号"
+                  aria-invalid={errors.card_no ? true : undefined}
                   value={cardNo}
                   onChangeValue={(v) => setCardNo(v.toUpperCase())}
                   keys={alnumKeys({ extra: ["-"] })}
@@ -336,11 +340,13 @@ export function IcScanDialog({
                   <span className="shrink-0 text-[11px] text-muted-foreground">（存根 {maskSn(cardNo)}）</span>
                 )}
               </div>
+              {errors.card_no && <span className="text-xs text-destructive">{errors.card_no}</span>}
             </div>
             <div className="flex flex-col gap-1 text-xs text-muted-foreground">
               <span>贴签编号（选填，便于现场辨认，不填也能登记）</span>
               <KeypadInput
                 aria-label="贴签编号"
+                aria-invalid={errors.label ? true : undefined}
                 value={label}
                 onChangeValue={(v) => setLabel(v.toUpperCase())}
                 keys={alnumKeys({ extra: ["-"] })}
@@ -351,14 +357,8 @@ export function IcScanDialog({
                 placeholder="如 CARD-013"
                 inputClassName="h-8 text-xs tnum"
               />
+              {errors.label && <span className="text-xs text-destructive">{errors.label}</span>}
             </div>
-            {errors.length > 0 && (
-              <ul className="list-disc pl-4 text-xs text-destructive">
-                {errors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            )}
             {/* hint 上一次 store.last 只是兜底：弹窗自己命中后 cardNo 就盖过它了 */}
             {lastFromStore && !cardNo && (
               <p className="text-xs text-muted-foreground">

@@ -9,7 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangleIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { ORDER_STATUS } from "@/lib/constants";
-import { dateTimeShort, durationText, sinceMinutes } from "@/lib/format";
+import { dateTimeShort, durationText, sinceMinutes, varietyLabel } from "@/lib/format";
 import { useSetting } from "@/hooks/useLookups";
 import { OrderStatusBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
@@ -55,7 +55,7 @@ export function OpenOrdersBar({
               size="xs"
               aria-pressed={active}
               onClick={() => onPick(o.order_no)}
-              title={`${o.party_name} · ${o.variety_name} · ${ORDER_STATUS[o.status].desc}`}
+              title={`${o.party_name} · ${varietyLabel(o.variety_name)} · ${ORDER_STATUS[o.status].desc}`}
               className={cn(
                 "h-auto shrink-0 gap-2 rounded-none bg-background px-2 py-1 text-left text-xs font-normal hover:bg-background",
                 active ? "border-foreground" : "border-border hover:border-foreground/40",

@@ -150,19 +150,31 @@ export const varietySpec = (id: number): VarietySpec => VARIETY_SPECS[id - 1];
 /* ------------------------------------------------------------ 仓房与货位 */
 
 const WAREHOUSE_SEED = [
-  { code: "C01", name: "1号仓库", kind: "house" as const, capacity: 3000, slots: 6 },
-  { code: "C02", name: "2号仓库", kind: "house" as const, capacity: 2500, slots: 5 },
-  { code: "B01", name: "露天囤", kind: "barn" as const, capacity: 1200, slots: 4 },
-  { code: "J01", name: "接收工作塔", kind: "silo" as const, capacity: 5000, slots: 3 },
+  // 期初是"建库那一刻手里已有的实存"。四行刻意铺成三种状态：细分到品种 / 申报 0（空仓起账）
+  // / 从没申报，界面上「没填」与「填了 0」必须长得不一样，否则站长分不清哪间仓建过账。
+  { code: "C01", name: "1号仓库", kind: "house" as const, capacity: 3000, opening: 800, openingVariety: 1, slots: 6 },
+  { code: "C02", name: "2号仓库", kind: "house" as const, capacity: 2500, opening: 0, openingVariety: null, slots: 5 },
+  { code: "B01", name: "露天囤", kind: "barn" as const, capacity: 1200, opening: null, openingVariety: null, slots: 4 },
+  { code: "J01", name: "接收工作塔", kind: "silo" as const, capacity: 5000, opening: null, openingVariety: null, slots: 3 },
 ];
 
+/**
+ * 仓房种子的形状：只有**档案态**字段（期初也算——它是站长建库时填的那一格）。
+ * 结存 / 待入账 / 剩余容量是库存账算出来的，由 `mock/outbound.ts` 现算、`api.warehouses()`
+ * 挂上：种子手抄一份结存就成了会过期的假账，与真库「期初本身就是 §9.23 一笔流水」不同构。
+ */
+export type WarehouseSeed = Omit<Warehouse, "balance_01kg" | "pending_in_01kg" | "remain_01kg">;
+
 let slotSeq = 0;
-export const warehouses: Warehouse[] = WAREHOUSE_SEED.map((w, wi) => ({
+export const warehouses: WarehouseSeed[] = WAREHOUSE_SEED.map((w, wi) => ({
   id: wi + 1,
   code: w.code,
   name: w.name,
   kind: w.kind,
   capacity_ton: w.capacity,
+  // 吨 → 0.1kg 只在这一处换算一次（1 吨 = 10000 个 0.1kg），界面与账上都不再出现第二种单位
+  opening_01kg: w.opening == null ? null : Math.round(w.opening * 10_000),
+  opening_variety_id: w.openingVariety,
   is_active: 1,
   slots: Array.from({ length: w.slots }, (_, si) => ({
     id: ++slotSeq,
@@ -304,7 +316,9 @@ export const devices: DeviceConfig[] = [
   },
   {
     id: 4, code: "cam1", name: "磅区抓拍（海康 ISAPI）", kind: "camera", driver: "hikvision_isapi",
-    config: { host: "192.168.1.64", user: "weigh", snapshotUrl: "/ISAPI/Streaming/channels/101/picture", triggerOn: "capture" },
+    // captureOnWeigh：这台勾了「过磅抓拍」——每次过磅（毛/皮各一捕）由它拍一张（04 §4）。
+    // 与升级迁移 0019 对老库的处理一致：只把原来那台默认相机自动勾上，其余相机默认不勾。
+    config: { host: "192.168.1.64", user: "weigh", snapshotUrl: "/ISAPI/Streaming/channels/101/picture", captureOnWeigh: true },
     is_enabled: 1, is_mock: 0, is_default: 1, last_status: "online", last_ok_at: "1 分钟前", last_error: null, err_count: 0,
   },
   {

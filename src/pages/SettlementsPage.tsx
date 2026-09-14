@@ -104,7 +104,7 @@ export function SettlementsPage() {
       },
       {
         key: "goods",
-        header: "货款",
+        header: "粮款",
         align: "right",
         cell: (s) => <span className="tnum">{money(s.total_goods_fen)}</span>,
         footer: (list) => <span className="tnum">{money(list.reduce((n, s) => n + s.total_goods_fen, 0))}</span>,

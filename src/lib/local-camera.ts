@@ -1,11 +1,11 @@
 /**
  * 本机 USB 摄像头通道（04 §4 方案 A 的"画面在前端"半边）。
  *
- * 分工口径：台账里 `config.transport === "local"` 的抓拍机（设备中心「扫描本机摄像头」登记的）
- * 由 **WebView2 开流上屏**——工作台面板实时画面 + 捕获毛/皮重瞬间就地取一帧 JPEG，
- * base64 随 `order_capture` 的 `photo_b64` 回传，Rust 侧只做解码/校验/落库
- * （`src-tauri/src/camera.rs::store_provided_frame`）。Rust 不自己开设备：MF 符号链接
- * 与 Chromium 的 deviceId 是两套体系，只有 webview 里能按名字对上机器。
+ * 分工口径：台账里 `config.transport === "local"` 且勾了 `config.captureOnWeigh` 的抓拍机（设备中心
+ * 「扫描本机摄像头」登记的）由 **WebView2 开流上屏**——工作台面板实时画面 + 捕获毛/皮重瞬间对每台
+ * 各就地取一帧 JPEG，base64 随 `order_capture` 的 `frames`（每台一条 `{device_id, b64}`）回传，
+ * Rust 侧只做解码/校验/落库（`src-tauri/src/camera.rs::store_frame_for`）。Rust 不自己开设备：MF 符号链接
+ * 与 Chromium 的 deviceId 是两套体系，只有 webview 里能按名字对上机器。一次过磅最多 3 台相机各拍一张。
  *
  * 三条边界：
  *  1. **一条流多处用**：面板小窗、放大弹窗与抓拍取帧共享同一条 MediaStream（引用计数），
@@ -241,6 +241,31 @@ export async function grabLocalCameraFrame(cam: DeviceConfig | null | undefined)
   } finally {
     handle?.stop();
   }
+}
+
+/** 一台本机摄像头就地取到的一帧（随 `order_capture` 的 `frames` 回传，与 Rust `CaptureFrame` 对齐）。 */
+export interface GrabbedFrame {
+  /** `device_config.id`——服务端按它对号入座到勾了「过磅抓拍」的那台相机，对不上就丢弃 */
+  device_id: number;
+  /** dataURL 形态的 JPEG，base64 部分由 Rust 解码/校验/落库 */
+  b64: string;
+}
+
+/**
+ * 捕获瞬间对**一组**参与过磅抓拍的相机各取一帧（04 §4：一次最多 3 台）。
+ *
+ * - 只处理本机 USB 摄像头（`transport=local`）；内网 IP 摄像机由服务端自己 HTTP 抓图，这里跳过。
+ * - 逐台独立：某台开流/取帧失败只是它这一帧为 null，不影响其它台——与"取帧绝不拦过磅"同口径。
+ * - **永不抛错**，返回的是"成功取到帧的那几台"，缺的就按无抓拍继续。
+ */
+export async function grabCaptureFrames(cams: (DeviceConfig | null | undefined)[]): Promise<GrabbedFrame[]> {
+  const out: GrabbedFrame[] = [];
+  for (const cam of cams) {
+    if (!cam || localCameraSpec(cam) == null) continue;
+    const b64 = await grabLocalCameraFrame(cam);
+    if (b64 != null) out.push({ device_id: cam.id, b64 });
+  }
+  return out;
 }
 
 /** 一次本机摄像头自检的结论，形状对齐设备中心 TestPanel 的测试结果（ok/message/elapsedMs）。 */

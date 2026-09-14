@@ -41,6 +41,9 @@ import { MastersPage, type MastersSection } from "@/pages/MastersPage";
 import { ReportsPage, type ReportKind } from "@/pages/ReportsPage";
 import { DevicesPage } from "@/pages/DevicesPage";
 import { CardsPage } from "@/pages/CardsPage";
+import { OutboundPage } from "@/pages/OutboundPage";
+import { OutboundDetailPage } from "@/pages/OutboundDetailPage";
+import { StockPage } from "@/pages/StockPage";
 import { SystemPage, type SystemSection } from "@/pages/SystemPage";
 import { useSession } from "@/store/session";
 
@@ -110,6 +113,15 @@ const orderDetailRoute = createRoute({
   path: "/orders/$orderNo",
   component: OrderDetailPage,
 });
+
+const outboundRoute = createRoute({ getParentRoute: () => rootRoute, path: "/outbound", component: OutboundPage });
+const outboundDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/outbound/$no",
+  component: OutboundDetailPage,
+});
+// 库存账：结存矩阵与出入库流水同页两屏（结存的一格下钻就是流水，拆两页只会各留一套筛选）
+const stockRoute = createRoute({ getParentRoute: () => rootRoute, path: "/stock", component: StockPage });
 
 const partiesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/parties", component: PartiesPage });
 const partyDetailRoute = createRoute({
@@ -193,7 +205,7 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
-const routeTree = rootRoute.addChildren([loginRoute, indexRoute, workstationRoute, ordersRoute, orderDetailRoute, partiesRoute, partyDetailRoute, qcRoute, qcDetailRoute, settlementsRoute, settlementDetailRoute, scanSettleRoute, paymentsRoute, mastersRoute, reportsRoute, devicesRoute, cardsRoute, systemRoute]);
+const routeTree = rootRoute.addChildren([loginRoute, indexRoute, workstationRoute, ordersRoute, orderDetailRoute, outboundRoute, outboundDetailRoute, stockRoute, partiesRoute, partyDetailRoute, qcRoute, qcDetailRoute, settlementsRoute, settlementDetailRoute, scanSettleRoute, paymentsRoute, mastersRoute, reportsRoute, devicesRoute, cardsRoute, systemRoute]);
 
 export const router = createRouter({
   routeTree,

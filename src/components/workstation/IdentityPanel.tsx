@@ -10,6 +10,20 @@
  * **流转卡不是可选的**（06 §4.0）：站点参数「制单必须绑卡」默认开着，点「取号并制单」
  * 先弹刷卡框，读到一张可用的空闲卡才取号——读不到卡这张单就制不成。关掉该参数
  * （或本站压根不用流转卡）才回到"无卡制单、事后靠后台监听发卡"。
+ *
+ * **两刷一条流，中间那一下点击是多余的**（06 §4.0）：农户一手拿证一手拿卡站在窗口前，
+ * 机器两次都读到了，缺的只是人最后去按那个按钮。所以卡一就位而售粮人还没定，本面板
+ * 自己开始听身份证（`IdCardWatchHint` 行内那 15 秒，不再弹框），读到即往下走：
+ *  1. 证号命中档案 → 带出售粮人，随即自动取号制单（停用档案照旧挡在门外）；
+ *  2. 查无此证、且档案里也没有"同名 + 证号为空"的老档案 → **静默按卡面建档**（电话留空，
+ *     得空去档案页补），建好直接用于本单（02 §F1.1）；
+ *  3. 有同名且证号为空的老档案 → 弹「是否是同一人」：认下来就给那张老档案补证号
+ *     （历史磅单照旧跟着它），不是本人就另建一张。这一个岔口机器不替人猜——
+ *     同一个人建两张档案，对账时就是两个余额（`party_save` 的"一人一档"闸门同一条理由）。
+ * 三条出路最终都回到同一句 `autoCreate`：卡与人都就位，号就取掉。
+ *
+ * **品种不挡制单**（迁移 0017）：制单只认「卡 + 售粮人」，品种可以空着取号，
+ * 结算与录化验前再定（那两处各自有硬闸门，见 `orders.rs` 的 settle / save_qc）。
  */
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -21,7 +35,8 @@ import type { GrainVariety, Party, StorageSlot, Warehouse, WeighOrder } from "@/
 import { PARTY_TYPE, ROLE } from "@/lib/constants";
 import { maskIdCard, ton, weight } from "@/lib/format";
 import { backfillPartyPhotoFromCard } from "@/lib/party-photo";
-import { useDeviceStore } from "@/store/device";
+import { enrollFromIdCard } from "@/lib/party-auto-register";
+import { useDeviceStore, type IdCardResult } from "@/store/device";
 import { useQuickOptions, useSetting } from "@/hooks/useLookups";
 import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
@@ -31,7 +46,9 @@ import { CardScanDialog } from "@/components/business/CardScanDialog";
 import { QuickDetailLink } from "@/components/business/quickDetail";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
 import { CardBindDialog } from "@/components/workstation/CardBindDialog";
+import { IdCardWatchHint } from "@/components/workstation/IdCardWatchHint";
 import { QuickPartyDialog } from "@/components/workstation/QuickPartyDialog";
+import { SamePartyDialog } from "@/components/workstation/SamePartyDialog";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -101,22 +118,43 @@ export function IdentityPanel({
   const [enrollOpen, setEnrollOpen] = useState(false);
   /** 「制单请放流转卡」弹窗：点「取号并制单」时卡还没就位就弹它（06 §4.0） */
   const [bindOpen, setBindOpen] = useState(false);
+  /** 行内那 15 秒身份证监听的窗口是否开着（`IdCardWatchHint` 挂载即开、收工即关） */
+  const [idWatching, setIdWatching] = useState(false);
+  /** 「是否是同一人」确认框：读到没档案的证号、但档案里有同名且证号为空的老档案时才开 */
+  const [mergeOpen, setMergeOpen] = useState(false);
+  /**
+   * 这一轮那张证的快照：`lastCard` 是跨页面共享的缓存，处理完必须立刻 `clear()`，
+   * 而确认框／快捷登记框开着期间还要拿它预填与写库，所以开框前先把这张卡留一份。
+   */
+  const [pendingCard, setPendingCard] = useState<IdCardResult | null>(null);
   /** 这次制单要绑的卡（刷到才非空）。绑卡与取号同一次事务，所以它只在号取成之前存在 */
   const [cardNo, setCardNo] = useState<string | null>(presetCardNo);
+  /**
+   * `cardNo` 的镜像：读卡那一路的副作用只依赖 `lastCard`，闭包里的 `cardNo` 可能是旧的。
+   * 自动制单要以"此刻这张卡在不在位"为准，所以从 ref 读，不从闭包读。
+   */
+  const cardNoRef = useRef<string | null>(presetCardNo);
+  cardNoRef.current = cardNo;
+  /**
+   * 同一次「卡 + 人」只自动发一个号：读卡回写、草稿重跑都可能把同一对组合再送进来一次，
+   * 而取号是不可逆的（`order_no` 一天一个序列）。制单成功或失败即复位，换卡/换人自然算新一轮。
+   */
+  const autoFired = useRef<string | null>(null);
   // 卡已经贴在感应区上、由刷卡推进带进来：本框挂载即就位（换卡/失败清空后不回弹，见 create.onError）
   useEffect(() => {
     if (presetCardNo) setCardNo(presetCardNo);
   }, [presetCardNo]);
   /**
-   * 本面板自己弹的读卡框 / 绑卡框要用那台共用读卡器（06 §1.2：一台读卡器一次只解一种介质）。
+   * 本面板自己弹的读卡框 / 绑卡框、以及**行内那 15 秒身份证监听**都要用那台共用读卡器
+   * （06 §1.2：一台读卡器一次只解一种介质）。
    * 常驻在网格里的这一份没有 `regHolding` 兜底（复用它会连带把开框的面板自己卸载成占位卡），
    * 所以由面板自己挂 `panelHolding` 让工作台的后台 IC 常听让出设备锁。
-   * 拆成两个效果：设值只看两框的开合，复位只在卸载那一次跑——避免依赖变化时上一轮 cleanup
+   * 拆成两个效果：设值只看这几处的开合，复位只在卸载那一次跑——避免依赖变化时上一轮 cleanup
    * 抢先把标记打回 false、让 watch 抖一下，把正压在感应区上那一轮 `read` 判废。
    */
   useEffect(() => {
-    setPanelHolding(scanOpen || bindOpen);
-  }, [scanOpen, bindOpen, setPanelHolding]);
+    setPanelHolding(scanOpen || bindOpen || idWatching || mergeOpen);
+  }, [scanOpen, bindOpen, idWatching, mergeOpen, setPanelHolding]);
   useEffect(() => () => setPanelHolding(false), [setPanelHolding]);
   /** 去向默认折起来：多数站点制单时不登记仓房/货位，不该占住磅员的主视线 */
   const [destOpen, setDestOpen] = useState(false);
@@ -125,20 +163,57 @@ export function IdentityPanel({
   // 本站制单是否必须先刷一张流转卡。库里没这个键时按"强制"走，与 create_order 的默认值同一口径
   const flowOn = (useSetting("card_flow_mode").raw ?? "auto") !== "off";
   const requireCard = flowOn && useSetting("card_required_on_create").raw !== "false";
+  /** 多仓站的制单默认仓房（迁移 0018 的站点参数）；空/非法值＝不预设 */
+  const defaultWarehouseId = Number(useSetting("default_warehouse_id").raw ?? "");
 
-  // 读卡结果回填：命中档案就带出姓名/证号/默认车牌，未命中就地开快捷登记框
+  /**
+   * IC 卡已就位而售粮人还没定 → 面板自己起那一轮 15 秒身份证监听（06 §4.0 两刷一条流）。
+   * 两条入口都算：后台常听刷到空闲卡带进来的 `presetCardNo`、「制单请放流转卡」框读到的卡。
+   * 依赖只留这两个，是为了让"这一轮监听"只由**卡或人的变化**发起：监听自己收工（`onEnd`）
+   * 不会把它重开，人按了「取消」也就此回到等下一张卡，不会在原地反复出声。
+   */
+  useEffect(() => {
+    // 人一定下来这一轮监听就没有意义了：再让它读到一张证，会把磅员刚选好的人悄悄换成下一个人
+    if (draft.party) setIdWatching(false);
+    else if (cardNo) setIdWatching(true);
+    // draft.party 只取其有无，不需要整个对象
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardNo, draft.party]);
+
+  /**
+   * 读到身份证后的**唯一**处置点，三条出路都收敛到"定人 →（卡已在位就）自动取号"：
+   *  1. 证号命中档案 → 带出这个人；
+   *  2. 查无此证、且没有"同名 + 证号为空"的老档案 → 照卡面静默建档；
+   *  3. 有那样的老档案 → 交「是否是同一人」由人认，机器不猜。
+   */
   useEffect(() => {
     if (!lastCard) return;
+    const card = lastCard;
     // 一律以证号为准：party_id 只是真机回查档案的附带结果，演示卡那个是 mock 序号，
     // 拿到真库档案里按 id 兜底会命中另一个无关的人
     const hit =
-      parties.find((x) => x.id_card_no.trim().toUpperCase() === lastCard.id_card_no) ??
-      (lastCard.real ? parties.find((x) => x.id === lastCard.party_id) : undefined);
+      parties.find((x) => x.id_card_no.trim().toUpperCase() === card.id_card_no) ??
+      (card.real ? parties.find((x) => x.id === card.party_id) : undefined);
     if (!hit) {
-      // 只报一条 toast 等于把人赶回档案页：农户还站在读卡器前，姓名/证号/住址其实已经读到了。
-      // 弹窗里补个电话就能建档，建好直接选为本单售粮人（02 §F1.1「无档案时不出现两次以上的手工输入」）
-      setEnrollOpen(true);
-      announce("没有这个人的档案，请补个电话先建个档");
+      /**
+       * 同名**且证号那一格为空**才需要人来认（02 §F3.1 一人一档）：早年手工建档、
+       * 或办证后改过号的农户就是这个样子。这时静默新建等于给同一个人开出两张档案、
+       * 两份余额，对账时才是要命的事；但也不许把人家已填了证号的老档案卷进来——
+       * 那要么是该去档案页改那一格，要么本来就是两个人。
+       */
+      const twins = parties.filter(
+        (p) => p.status === "active" && p.id_card_no.trim() === "" && p.name.trim() === card.name.trim(),
+      );
+      if (twins.length > 0) {
+        setPendingCard(card); // 先快照，再清共享缓存：确认框开着期间还要拿这张卡写库
+        setMergeOpen(true);
+        announce("系统里有同名档案，请在屏幕上确认是否是同一个人");
+        useDeviceStore.getState().reader.idcard.clear();
+        return;
+      }
+      // 连可比的名字都没有：农户还站在读卡器前，就地按卡面建一张，不把磅员赶回档案页（02 §F1.1）
+      void enrollFromCard(card);
+      useDeviceStore.getState().reader.idcard.clear();
       return;
     }
     // 读卡不能成为绕过停用的后门：停用档案只挡新单，历史磅单照旧可查
@@ -149,30 +224,37 @@ export function IdentityPanel({
       useDeviceStore.getState().reader.idcard.clear();
       return;
     }
-    onDraft({ party: hit, vehicleNo: draft.vehicleNo || hit.default_vehicle_no || "" });
+    chooseParty(hit);
     toast.success(`读卡命中档案：${hit.name}`);
     announce("读卡成功");
     // 该带出的已经带出、该报的已经报完，这里才去补照片：档案还没有人像就把证件里这张写进去
     // （只补缺，已有照片不动）。异步 fire-and-forget——补得上补不上都不该拦住磅员取号（02 §F3.1）。
-    void backfillPartyPhotoFromCard(lastCard, hit, qc);
+    void backfillPartyPhotoFromCard(card, hit, qc);
+    // 卡已经贴在感应区上等着了：这一刷读到的就是那单要卖粮的人，号顺手取掉，不再要人点一下
+    autoCreate(hit);
     // 这一刷到此为止。`last` 是跨页面共享的缓存，不清的话下次进工作台挂载会把旧卡当新读卡，
-    // 凭空替本单选中上一个人。没建过档的那条分支不能清——快捷登记弹窗还要拿它预填。
+    // 凭空替本单选中上一个人。
     useDeviceStore.getState().reader.idcard.clear();
     // draft.vehicleNo 不入依赖，否则每次输入都会重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastCard]);
 
   const create = useMutation({
-    // 卡号走 mutation 变量：刷卡弹窗的回调里 setCardNo 还没生效，闭包会拿到上一张
-    mutationFn: (card: string | null) =>
+    /**
+     * 卡号与售粮人都走 mutation 变量：刷卡弹窗的回调里 `setCardNo` 还没生效、读卡那一路
+     * 更是刚把档案挑出来，两种场合从闭包读 `draft.party` 都会拿到上一个人——取号不可逆，
+     * 把上一个人的名字做成这一单，比制不出单严重得多。
+     */
+    mutationFn: (input: { card: string | null; party: Party }) =>
       api.createOrder({
-        party_id: draft.party!.id,
-        variety_id: draft.varietyId!,
+        party_id: input.party.id,
+        // 品种可空（迁移 0017）：制单只认「卡 + 售粮人」，结算与录化验前再定
+        variety_id: draft.varietyId,
         vehicle_no: draft.vehicleNo.trim() || null,
         warehouse_id: draft.warehouseId,
         slot_id: draft.slotId,
         remark: draft.remark.trim() || null,
-        card_no: card,
+        card_no: input.card,
         registered_by: actorId(),
         weight_source: "scale",
       }),
@@ -180,6 +262,8 @@ export function IdentityPanel({
       toast.success(o.card_no ? `已取号 ${o.order_no} · 已绑卡 ${o.card_no}` : `已取号 ${o.order_no}`);
       announce("制单成功，请开车上磅");
       setCardNo(null);
+      setIdWatching(false);
+      autoFired.current = null; // 这一轮到此为止：换下一张卡重新算一次"要不要自动发号"
       qc.invalidateQueries({ queryKey: ["orders"] });
       qc.invalidateQueries({ queryKey: ["open-orders"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -189,23 +273,60 @@ export function IdentityPanel({
     // 真库闸门回的是人话（"该售粮人档案不存在或已删除，请先建档"），要原样送到磅员眼前
     onError: (e: Error) => {
       setCardNo(null); // 被服务端拦下的卡不许原地重试，重新刷一张（并发下它可能刚被别人发走）
+      setIdWatching(false); // 同理，人也没定下来：监听窗口一起收，回到"等下一张卡"
+      autoFired.current = null;
       toast.error(`取号失败：${e.message || "请检查档案与品种是否齐全"}`);
       // 服务端原因带条款，念出来没人听得懂；只念"没取到号"+ 卡要重新刷这一条现场动作
       announce("这张单没能取到号，卡要重新刷一张");
     },
   });
 
-  // 档案证号的 GB 11643 校验位**不是制单闸门**：老档案里手录错的证号不该把农户整个人挡在磅外，
-  // 建档/编辑时的校验提示（档案页、快捷登记框）仍在那两处把关
+  /** 定为本单售粮人：带出档案里的默认车牌（磅员已经手打过的不覆盖） */
+  const chooseParty = (p: Party) =>
+    onDraft({ party: p, vehicleNo: draft.vehicleNo || p.default_vehicle_no || "" });
+
+  /**
+   * 卡与人都就位 → 把这单制掉，零点击（06 §4.0 两刷一条流）。
+   * **卡不在位一律不动**：没刷到流转卡就自动出号，等于绕过本站的绑卡闸门；
+   * 那种场合仍由人点「取号并制单」（或走后台发卡），本面板不替磅员决定。
+   */
+  const autoCreate = (p: Party) => {
+    const card = cardNoRef.current;
+    if (!card) return;
+    const key = `${card}:${p.id}`;
+    if (autoFired.current === key) return; // 同一张卡反复压在读卡器上不该再吃一个号
+    autoFired.current = key;
+    create.mutate({ card, party: p });
+  };
+
+  /** 查无此证时的默认出路：照卡面静默建档，建好直接用于本单；**建不成**才回落到手工登记框 */
+  const enrollFromCard = async (card: IdCardResult) => {
+    const r = await enrollFromIdCard(qc, card);
+    if (!r.ok) {
+      // 岗位无权 / 证号撞车 / 库锁都是"这一刻建不下来"，把人接回原来那条手工路，别把这一刷白废
+      setPendingCard(card);
+      setEnrollOpen(true);
+      announce("没能自动建档，请在弹窗里手工登记");
+      return;
+    }
+    chooseParty(r.party);
+    autoCreate(r.party);
+  };
+
+  /**
+   * 制单闸门只剩**岗位权限**一道：品种可空（迁移 0017）、售粮人由那一轮自动监听去拿，
+   * 这两样都不该把按钮按死——按死了 F7 就变成"点了没反应的灰按钮"，只剩彻底静默失败。
+   * 所以「还没选人」时按钮照常可点，点了是把身份证监听起起来（见 `submit`）。
+   */
   const blocked = !can("order.create")
     ? `当前岗位「${actor ? ROLE[actor.role] : "—"}」无权制单，需磅员、登记员或站长`
-    : !draft.party
-      ? "尚未确定售粮人（读卡、搜档案或手工登记三选一）"
-      : !draft.varietyId
-        ? "请选择收购品种"
-        : null;
+    : null;
 
-  /** 「取号并制单」：本站要求绑卡而卡还没就位时先弹刷卡框，读到可用的卡由弹窗直接落这一单（06 §4.0） */
+  /**
+   * 「取号并制单」缺什么补什么，顺序就是农户手上的先后：先要卡（本站强制绑卡而卡还没就位 →
+   * 弹刷卡框），再要人（人还没定 → 起那一轮 15 秒行内监听，听不到才退回人工读卡/搜档案），
+   * 两样都在就把这单制掉（06 §4.0）。
+   */
   const submit = () => {
     if (blocked) {
       // 走到这儿多半是按了 F7：按钮是灰的、点了没反应，不念一句就是彻底的静默失败
@@ -216,7 +337,12 @@ export function IdentityPanel({
       setBindOpen(true);
       return;
     }
-    create.mutate(cardNo);
+    if (!draft.party) {
+      useDeviceStore.getState().reader.idcard.clear(); // 别把上一轮读到的旧卡当这一轮的证件
+      setIdWatching(true);
+      return;
+    }
+    create.mutate({ card: cardNo, party: draft.party });
   };
 
   /** 停用只挡住新单：制单下拉一律排除 is_active = 0 的档案，历史磅单上仍按当时快照显示 */
@@ -232,6 +358,45 @@ export function IdentityPanel({
     activeWarehouses.find((w) => w.id === chosenSlot?.warehouse_id) ??
     null;
   const destination = [chosenWarehouse?.name, chosenSlot?.label].filter(Boolean).join(" / ");
+
+  /**
+   * 制单自动选仓房（迁移 0018）：站里只有一处启用仓房 → 没有选择题，直接选中它；
+   * 有多处 → 认站长在「站点参数」里预设的 `default_warehouse_id`，留空或预设仓房
+   * 已停用/删除就仍留「未定」，与升级前行为一致。
+   * 自动带出只是**草稿的初始值**：磅员手动动过仓房下拉（含选回「未定」）后，这一单
+   * 不再回填；售粮人从有到无＝开了一张新草稿，重新起算。
+   */
+  const warehouseHandled = useRef(false);
+  const prevPartyId = useRef<number | null>(null);
+  useEffect(() => {
+    const pid = draft.party?.id ?? null;
+    if (prevPartyId.current != null && pid === null) warehouseHandled.current = false;
+    prevPartyId.current = pid;
+  }, [draft.party]);
+  const autoWarehouseId =
+    activeWarehouses.length === 1
+      ? (activeWarehouses[0]?.id ?? null)
+      : (activeWarehouses.find((w) => w.id === defaultWarehouseId)?.id ?? null);
+  useEffect(() => {
+    if (warehouseHandled.current || draft.warehouseId != null || autoWarehouseId == null) return;
+    warehouseHandled.current = true;
+    onDraft({ warehouseId: autoWarehouseId });
+    // onDraft 只是父层 setState 的补丁；弹窗那份每渲染换身份，进依赖会自激重跑，故不进
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.warehouseId, autoWarehouseId]);
+
+  /**
+   * 「是否是同一人」的候选：与读卡那一路的判据同一条（同名 + 证号为空 + 在册），
+   * 从 `pendingCard` 现算而不是把 effect 里筛好的数组存进 state——`parties` 会被
+   * 建档/补录翻新，框开着的时候列表应当跟着最新的档案走，不留一份会过期的快照。
+   */
+  const twinCandidates = pendingCard
+    ? parties
+        .filter(
+          (p) => p.status === "active" && p.id_card_no.trim() === "" && p.name.trim() === pendingCard.name.trim(),
+        )
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    : [];
 
   if (order) {
     const orderDestination = [order.warehouse_name, order.slot_label].filter(Boolean).join(" / ");
@@ -254,7 +419,10 @@ export function IdentityPanel({
               <span className="text-muted-foreground">{PARTY_TYPE[order.party_type]}</span>
             </p>
             <p className="text-muted-foreground">
-              品种 <span className="text-foreground">{order.variety_name}</span>
+              品种{" "}
+              <span className={order.variety_name ? "text-foreground" : undefined}>
+                {order.variety_name ?? "未定品种"}
+              </span>
               {order.grade ? <span className="text-foreground">{order.grade}</span> : null}
             </p>
             <p className="text-muted-foreground">
@@ -306,6 +474,9 @@ export function IdentityPanel({
               // 清掉上一轮读卡在 store 里的残留（last/error 都长存不清）：
               // 不清的话弹窗一挂载就会把旧卡当"刚读到"回填、把旧错误当新故障重放
               useDeviceStore.getState().reader.idcard.clear();
+              // 行内监听先收工再开框：一台读卡器容不下两条 watch，后开的那条会当场退让、
+              // 于是格子里冒出一句"监听了 15 秒还没读到证件"的假超时
+              setIdWatching(false);
               setScanOpen(true);
             }}
             disabled={reading || !can("order.create")}
@@ -325,6 +496,8 @@ export function IdentityPanel({
             variant="outline"
             onClick={() => {
               useDeviceStore.getState().reader.idcard.clear();
+              setIdWatching(false);
+              setPendingCard(null); // 手工新建不带卡片，别把上一轮那张证的姓名住址预填进来
               setEnrollOpen(true);
             }}
             disabled={!can("order.create")}
@@ -351,20 +524,22 @@ export function IdentityPanel({
               </span>
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">尚未确定售粮人（支持读卡或搜档案）</p>
+            <p className="text-xs text-muted-foreground">
+              尚未确定售粮人{idWatching ? "：请把身份证放到感应区" : "（支持读卡或搜档案）"}
+            </p>
           )}
         </div>
 
         <div className="grid gap-1">
           <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-            收购品种
+            收购品种（选填，结算与化验前必填）
             <Choose
               aria-label="收购品种"
               id="ws-variety"
               value={String(draft.varietyId ?? "")}
               onChange={(v) => onDraft({ varietyId: v ? Number(v) : null })}
               options={[
-                { value: "", label: "请选择…" },
+                { value: "", label: "未定（结算前再选）" },
                 ...activeVarieties.map((v) => ({ value: String(v.id), label: v.name })),
               ]}
             />
@@ -406,7 +581,10 @@ export function IdentityPanel({
                     <Choose
                       aria-label="仓房"
                       value={String(draft.warehouseId ?? "")}
-                      onChange={(v) => onDraft({ warehouseId: v ? Number(v) : null, slotId: null })}
+                      onChange={(v) => {
+                        warehouseHandled.current = true; // 人已动手（含选回「未定」），这一单不再自动回填
+                        onDraft({ warehouseId: v ? Number(v) : null, slotId: null });
+                      }}
                       options={[
                         { value: "", label: "未定" },
                         ...activeWarehouses.map((w) => ({ value: String(w.id), label: w.name })),
@@ -467,6 +645,9 @@ export function IdentityPanel({
               想顺手把卡也发了？刷一张 IC 卡（选填）
             </button>
           )}
+          {/* 卡就位而人还没定 → 那一轮 15 秒监听就挂在这一格里：不弹窗、不挡过磅，
+              读完/超时/取消都由它自己收工，面板回到等下一张卡（06 §4.0 两刷一条流） */}
+          {idWatching && <IdCardWatchHint onEnd={() => setIdWatching(false)} />}
           <Button size="sm" onClick={submit} disabled={!!blocked || create.isPending} className="h-7 text-xs">
             取号并制单（F7）
           </Button>
@@ -485,7 +666,9 @@ export function IdentityPanel({
         onManualEntry={() => setPickerOpen(true)}
       />
 
-      {/* 制单绑卡（06 §4.0）：读到一张在册、空闲、没挂着未完成单的卡才算就位，随即取号写单 */}
+      {/* 制单绑卡（06 §4.0）：读到一张在册、空闲、没挂着未完成单的卡才算就位。
+          售粮人已经定了 → 卡一就位就把这单制掉；还没定 → 只把卡留下，由上面那条 effect
+          接着起那一轮 15 秒身份证监听，等第二刷（两刷一条流，中间不再要人点击） */}
       <CardBindDialog
         open={bindOpen}
         onOpenChange={setBindOpen}
@@ -494,7 +677,7 @@ export function IdentityPanel({
           setBindOpen(false);
           setCardNo(sn);
           // 强制绑卡的站点：卡一就位就把这单制掉，省一次点击（弹窗文案就是这么说的）
-          if (requireCard) create.mutate(sn);
+          if (requireCard && draft.party) create.mutate({ card: sn, party: draft.party });
         }}
         onSkip={() => {
           setBindOpen(false);
@@ -502,18 +685,41 @@ export function IdentityPanel({
         }}
       />
 
-      {/* 读到没建过档的证号：就地快捷登记，建好直接选为本单售粮人（02 §F1.1）。
-          关框即清掉这张卡：不清的话下次点「制单」会拿这张旧卡再弹一遍，等于替上一个人建档 */}
+      {/* 自动建档走不通时才到这里：手工快捷登记，建好直接选为本单售粮人（02 §F1.1）。
+          卡片取 `pendingCard` 快照——`last` 在处理完那一刻就被清了（不清会把旧卡当新读卡重放）。
+          关框即丢掉这份快照：不丢的话下次点「新档案」会拿上一个人的姓名住址预填 */}
       <QuickPartyDialog
         open={enrollOpen}
         onOpenChange={(v) => {
           setEnrollOpen(v);
-          if (!v) useDeviceStore.getState().reader.idcard.clear();
+          if (!v) {
+            setPendingCard(null);
+            useDeviceStore.getState().reader.idcard.clear();
+          }
         }}
-        card={lastCard}
+        card={pendingCard}
         parties={parties}
-        onEnrolled={(p) => onDraft({ party: p, vehicleNo: draft.vehicleNo || p.default_vehicle_no || "" })}
+        onEnrolled={(p) => {
+          chooseParty(p);
+          autoCreate(p); // 卡早就贴在感应区上了：人一定下来就没必要再等那一下点击
+        }}
         onSearchParty={() => setPickerOpen(true)}
+      />
+
+      {/* 读到没档案的证号、系统里却有同名且证号为空的老档案：认人这一步只能由人来点（02 §F3.1
+          一人一档）。认下来给老档案补证号、沿用它的历史；不是本人就另建一张，两条都直接用于本单 */}
+      <SamePartyDialog
+        open={mergeOpen}
+        onOpenChange={setMergeOpen}
+        card={pendingCard}
+        candidates={twinCandidates}
+        onPick={(p) => {
+          setPendingCard(null);
+          chooseParty(p);
+          autoCreate(p);
+        }}
+        // 新建这条路被闸门挡住（岗位无权 / 证号撞车 / 库锁）：快照留着，交回手工登记框接着办
+        onNeedManual={() => setEnrollOpen(true)}
       />
     </Card>
   );
@@ -653,11 +859,11 @@ const ORDER_HINT: Record<WeighOrder["status"], string> = {
   reweigh: "复称中，净重可能调整。",
   to_settle: "净重已定，请到右侧结算。",
   settled: "已结算，可打印码单；付款走结算中心。",
-  paid: "货款已付清。",
+  paid: "粮款已付清。",
   archived: "已归档，只读。",
   voided: "本单已作废，仅作留痕。",
   reversed: "本单已被红冲，请查红冲单。",
-  rejected: "拒收退粮，不产生货款。",
+  rejected: "拒收退粮，不产生粮款。",
 };
 
 /**

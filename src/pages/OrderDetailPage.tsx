@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
 import { INDICATORS, GRADES, ORDER_STATUS, PARTY_TYPE, PAYMENT_METHOD, TEST_METHOD, VOID_REASON_MIN } from "@/lib/constants";
-import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight } from "@/lib/format";
+import { dateTime, maskIdCard, money, orDash, percent, price as fmtPrice, density, weight, varietyLabel } from "@/lib/format";
 import { useQuickOptions, useStaffNames, useStation, useWarehouses, useSlots } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -348,7 +348,7 @@ export function OrderDetailBody({
             <PaymentStatusBadge status={order.payment_status} />
           </span>
         }
-        description={`${order.business_date} · ${order.party_name}（${PARTY_TYPE[order.party_type]}）· ${order.variety_name}${order.grade ? ` ${order.grade}` : ""} · ${statusDesc}`}
+        description={`${order.business_date} · ${order.party_name}（${PARTY_TYPE[order.party_type]}）· ${varietyLabel(order.variety_name)}${order.grade ? ` ${order.grade}` : ""} · ${statusDesc}`}
         actions={
           <>
             {headerExtra}
@@ -459,7 +459,7 @@ export function OrderDetailBody({
                         : "未登记（只能现金或当场扫码）",
                       span: 2,
                     },
-                    { label: "品种", value: `${order.variety_name}（${order.variety_code}）` },
+                    { label: "品种", value: order.variety_id == null ? varietyLabel(null) : `${varietyLabel(order.variety_name)}（${order.variety_code}）` },
                     { label: "等级", value: orDash(order.grade) },
                     { label: "车牌", value: <span className="tnum">{orDash(order.vehicle_no)}</span> },
                     { label: "驾驶员", value: orDash(order.driver_name) },
@@ -648,7 +648,7 @@ export function OrderDetailBody({
                       ]}
                     />
                     <div className="flex flex-col gap-1.5 border-t pt-3">
-                      <MoneyLine label="货款金额" valueFen={order.goods_amount_fen} />
+                      <MoneyLine label="粮款金额" valueFen={order.goods_amount_fen} />
                       <MoneyLine label="各项扣款" valueFen={-order.deduction_fee_fen} hint="装卸费、代储费等" />
                       <MoneyLine label="预付款冲抵" valueFen={-order.advance_fee_fen} />
                       <MoneyLine label="应付金额" valueFen={order.payable_amount_fen} emphasis />
@@ -905,7 +905,16 @@ export function OrderDetailBody({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex flex-col gap-3">
-            <VoidReasonField value={voidReason} onChange={setVoidReason} />
+            <VoidReasonField
+              value={voidReason}
+              onChange={setVoidReason}
+              invalid={voidReason.trim().length > 0 && voidReason.trim().length < VOID_REASON_MIN}
+              error={
+                voidReason.trim().length > 0 && voidReason.trim().length < VOID_REASON_MIN
+                  ? `事由写全一点（不少于 ${VOID_REASON_MIN} 字），迎检要看得懂这句为什么废单`
+                  : undefined
+              }
+            />
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel className="text-sm">取消</AlertDialogCancel>

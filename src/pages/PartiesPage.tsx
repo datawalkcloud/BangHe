@@ -329,20 +329,24 @@ export function PartiesPage() {
   const idOk = code === "" ? false : isOrg ? /^[0-9A-Z]{18}$/.test(code) : validateIdCard(code);
   /** 提示用：按当前表单状态，保存后这张档案会不会是「已核验」 */
   const verifiedByCard = cardVerified(form) === 1;
-  const errors: string[] = [];
+  // 校验错误按字段归位：红框 + 紧贴控件的红字直接标在出错的表单项上，不在弹窗底部聚合清单
   // 手机号一人一号（`uk_party_phone`）：比对形状与真库一致，去空白与 `-`
   const phoneKey = form.phone.replace(/[\s-]/g, "");
-  if (!form.name.trim()) errors.push("姓名必填");
+  const nameErr = !form.name.trim() ? "姓名必填" : "";
   // 证号与电话至少填一个：只留电话也建得了档（02 §F3.1），两样都空的档案事后认不出是谁
-  if (!code && !phoneKey) errors.push(isOrg ? "统一社会信用代码与手机号至少填一个" : "身份证号与手机号至少填一个");
-  else if (code && !idOk) errors.push(isOrg ? "应为 18 位数字/大写字母" : "证号校验位不通过（GB 11643）");
-  else if (code && all.some((p) => p.id_card_no.toUpperCase() === code && p.id !== form.id))
-    errors.push("该证号已建档，请检索后修改原档案");
-  if (phoneKey) {
+  const pairErr = !code && !phoneKey ? (isOrg ? "统一社会信用代码与手机号至少填一个" : "身份证号与手机号至少填一个") : "";
+  const idFormatErr = code && !idOk ? (isOrg ? "应为 18 位数字/大写字母" : "校验位不通过，请核对") : "";
+  const idDupErr =
+    code && idOk && all.some((p) => p.id_card_no.toUpperCase() === code && p.id !== form.id)
+      ? "该证号已建档，请检索后修改原档案"
+      : "";
+  const phoneDupErr = (() => {
+    if (!phoneKey) return "";
     const dup = all.find((p) => p.id !== form.id && p.phone.replace(/[\s-]/g, "") === phoneKey);
-    if (dup) errors.push(`该手机号已是档案「${dup.name}（${dup.code}）」的号码，一人一号，请检索后修改原档案`);
-  }
-  if (form.creditYuan !== "" && !(Number(form.creditYuan) >= 0)) errors.push("挂账额度不能为负");
+    return dup ? `该手机号已是档案「${dup.name}（${dup.code}）」的号码，一人一号，请检索后修改原档案` : "";
+  })();
+  const creditErr = form.creditYuan !== "" && !(Number(form.creditYuan) >= 0) ? "挂账额度不能为负" : "";
+  const hasErr = !!(nameErr || pairErr || idFormatErr || idDupErr || phoneDupErr || creditErr);
 
   const columns = useMemo<Column<Party>[]>(
     () => [
@@ -551,7 +555,8 @@ export function PartiesPage() {
             </div>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               姓名 / 单位名称 *
-              <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} className="text-sm" />
+              <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} aria-invalid={nameErr ? true : undefined} className="text-sm" />
+              {nameErr && <span className="text-destructive">{nameErr}</span>}
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               身份类型
@@ -566,6 +571,7 @@ export function PartiesPage() {
               <span>{isOrg ? "统一社会信用代码" : "身份证号"}</span>
               <KeypadInput
                 aria-label={isOrg ? "统一社会信用代码" : "身份证号"}
+                aria-invalid={idFormatErr || idDupErr || (code === "" && pairErr) ? true : undefined}
                 value={form.id_card_no}
                 onChangeValue={(v) => patch({ id_card_no: v.toUpperCase() })}
                 keys={isOrg ? alnumKeys() : digitKeys({ extra: ["X"] })}
@@ -579,10 +585,12 @@ export function PartiesPage() {
               />
               {code !== "" && (
                 <span className={idOk ? "text-xs text-success" : "text-xs text-destructive"}>
-                  {idOk ? "格式正确" : isOrg ? "应为 18 位数字/大写字母" : "校验位不通过，请核对"}
+                  {idOk ? "格式正确" : idFormatErr}
                 </span>
               )}
-              {code !== "" && idOk && (
+              {code !== "" && idOk && idDupErr && <span className="text-xs text-destructive">{idDupErr}</span>}
+              {code === "" && pairErr && <span className="text-xs text-destructive">{pairErr}</span>}
+              {code !== "" && idOk && !idDupErr && (
                 <span className="text-xs text-muted-foreground">
                   {verifiedByCard
                     ? "证号读卡带入 · 保存后标记「已核验」"
@@ -594,6 +602,7 @@ export function PartiesPage() {
               <span>联系电话（与证件号至少填一个）</span>
               <KeypadInput
                 aria-label="联系电话"
+                aria-invalid={phoneDupErr || (code === "" && pairErr) ? true : undefined}
                 value={form.phone}
                 onChangeValue={(v) => patch({ phone: v.replace(/[^\d\s-]/g, "") })}
                 keys={digitKeys()}
@@ -604,6 +613,8 @@ export function PartiesPage() {
                 autoComplete="off"
                 inputClassName="tnum text-sm"
               />
+              {phoneDupErr && <span className="text-xs text-destructive">{phoneDupErr}</span>}
+              {code === "" && pairErr && <span className="text-xs text-destructive">{pairErr}</span>}
             </div>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
               住址（写入磅单与台账，迎检必填）
@@ -632,6 +643,7 @@ export function PartiesPage() {
               <span>挂账额度（元）</span>
               <KeypadInput
                 aria-label="挂账额度"
+                aria-invalid={creditErr ? true : undefined}
                 value={form.creditYuan}
                 onChangeValue={(v) => patch({ creditYuan: v })}
                 keys={digitKeys({ decimalPoint: true })}
@@ -643,6 +655,7 @@ export function PartiesPage() {
                 placeholder="0 表示不允许挂账"
                 inputClassName="tnum text-sm"
               />
+              {creditErr && <span className="text-xs text-destructive">{creditErr}</span>}
             </div>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               默认进仓房
@@ -679,23 +692,13 @@ export function PartiesPage() {
             </Label>
           </div>
 
-          {errors.length > 0 && (
-            <CallOut tone="warning" title="还不能保存">
-              <ul className="list-disc pl-4">
-                {errors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </CallOut>
-          )}
-
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>
               取消
             </Button>
             <Button
               onClick={() => save.mutate()}
-              disabled={errors.length > 0 || save.isPending}
+              disabled={hasErr || save.isPending}
             >
               <ContactIcon />
               {save.isPending ? "保存中…" : form.id == null ? "建档" : "保存修改"}

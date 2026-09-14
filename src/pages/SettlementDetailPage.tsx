@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { PaymentMethod } from "@/lib/constants";
 import { PAYMENT_METHOD, PAYMENT_STATUS } from "@/lib/constants";
-import { dateTime, money, orDash, priceNumber, rmbUpper, weight } from "@/lib/format";
+import { dateTime, money, orDash, priceNumber, rmbUpper, weight, varietyLabel } from "@/lib/format";
 import { useStaffNames, useStation } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { DataTable, type Column } from "@/components/business/DataTable";
@@ -95,11 +95,17 @@ export function SettlementDetailBody({
   });
 
   const amountFen = Math.round((Number(amountYuan) || 0) * 100);
-  const payErrors: string[] = [];
-  if (amountYuan.trim() === "") payErrors.push("请填写本次付款金额");
-  else if (!Number.isFinite(amountFen) || amountFen <= 0) payErrors.push("金额必须是大于 0 的数字");
-  else if (amountFen > unpaidFen) payErrors.push(`超出未付余额 ${money(unpaidFen)}`);
-  if (method !== "cash" && tradeNo.trim() === "") payErrors.push("非现金付款请填交易流水号，便于对账");
+  // 校验错误按字段归位：红框 + 紧贴控件的红字标在金额/流水号上，不在表单下方聚合清单
+  const amountErr =
+    amountYuan.trim() === ""
+      ? "请填写本次付款金额"
+      : !Number.isFinite(amountFen) || amountFen <= 0
+        ? "金额必须是大于 0 的数字"
+        : amountFen > unpaidFen
+          ? `超出未付余额 ${money(unpaidFen)}`
+          : "";
+  const tradeErr = method !== "cash" && tradeNo.trim() === "" ? "非现金付款请填交易流水号，便于对账" : "";
+  const payHasErr = !!(amountErr || tradeErr);
 
   if (isLoading) {
     return (
@@ -137,7 +143,7 @@ export function SettlementDetailBody({
   const orderCols: Column<(typeof orders)[number]>[] = [
     { key: "order_no", header: "磅单号", cell: (o) => <span className="tnum font-medium">{o.order_no}</span> },
     { key: "date", header: "业务日期", cell: (o) => <span className="tnum">{o.business_date}</span> },
-    { key: "variety", header: "品种/等级", cell: (o) => `${o.variety_name}${o.grade ? ` ${o.grade}` : ""}` },
+    { key: "variety", header: "品种/等级", cell: (o) => `${varietyLabel(o.variety_name)}${o.grade ? ` ${o.grade}` : ""}` },
     { key: "settle", header: "结算重量", align: "right", cell: (o) => <span className="tnum">{weight(o.settlement_weight_01kg)}</span> },
     {
       key: "price",
@@ -147,7 +153,7 @@ export function SettlementDetailBody({
     },
     {
       key: "goods",
-      header: "货款",
+      header: "粮款",
       align: "right",
       cell: (o) => <span className="tnum">{money(o.goods_amount_fen)}</span>,
       sortValue: (o) => o.goods_amount_fen ?? 0,
@@ -281,7 +287,7 @@ export function SettlementDetailBody({
                     <span className="text-sm text-muted-foreground">净重合计</span>
                     <span className="tnum text-sm">{weight(s.total_net_01kg)}</span>
                   </div>
-                  <MoneyLine label="货款金额" valueFen={s.total_goods_fen} />
+                  <MoneyLine label="粮款金额" valueFen={s.total_goods_fen} />
                   <MoneyLine label="各项扣款" valueFen={-s.total_deduction_fen} />
                   <MoneyLine label="预付款冲抵" valueFen={-s.total_advance_fen} />
                   <MoneyLine label="应付金额" valueFen={s.payable_fen} emphasis hint={rmbUpper(s.payable_fen)} />
@@ -297,6 +303,7 @@ export function SettlementDetailBody({
                     <span>本次金额（元）</span>
                     <KeypadInput
                       aria-label="本次付款金额"
+                      aria-invalid={amountErr ? true : undefined}
                       value={amountYuan}
                       onChangeValue={setAmountYuan}
                       keys={digitKeys({ decimalPoint: true })}
@@ -308,6 +315,7 @@ export function SettlementDetailBody({
                       placeholder={unpaidFen ? String(unpaidFen / 100) : "0"}
                       inputClassName="tnum text-base"
                     />
+                    {!!amountErr && <span className="text-destructive">{amountErr}</span>}
                     {unpaidFen > 0 && (
                       <Button
                         type="button"
@@ -337,6 +345,7 @@ export function SettlementDetailBody({
                     <span>交易流水号 / 凭证号</span>
                     <KeypadInput
                       aria-label="交易流水号"
+                      aria-invalid={tradeErr ? true : undefined}
                       value={tradeNo}
                       onChangeValue={setTradeNo}
                       keys={alnumKeys()}
@@ -347,17 +356,11 @@ export function SettlementDetailBody({
                       placeholder="现金可不填"
                       inputClassName="tnum text-sm"
                     />
+                    {!!tradeErr && <span className="text-destructive">{tradeErr}</span>}
                   </div>
-                  {payErrors.length > 0 && (
-                    <ul className="list-disc pl-4 text-xs text-warning">
-                      {payErrors.map((e) => (
-                        <li key={e}>{e}</li>
-                      ))}
-                    </ul>
-                  )}
                   <Button
                     size="sm"
-                    disabled={payErrors.length > 0 || pay.isPending || unpaidFen === 0}
+                    disabled={payHasErr || pay.isPending || unpaidFen === 0}
                     onClick={() => pay.mutate()}
                   >
                     <BanknoteIcon />

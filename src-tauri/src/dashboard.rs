@@ -295,7 +295,7 @@ pub fn build_dashboard(conn: &Connection, from: &str, to: &str) -> Result<Dashbo
     // stuck_minutes 直接取视图列（0005 起基准已修正，不再本地重算第二套）。
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT order_no, party_name, status, variety_name, stuck_minutes
+            "SELECT order_no, party_name, status, COALESCE(variety_name, '未定品种'), stuck_minutes
              FROM v_open_order
              WHERE status IN ({OPEN_STATUSES})
              ORDER BY stuck_minutes DESC",
@@ -374,6 +374,11 @@ pub fn build_dashboard(conn: &Connection, from: &str, to: &str) -> Result<Dashbo
     // 品种全集来自档案（LEFT JOIN 聚合），没收粮的品种也占一行 0。区间内无收量的品种
     // 仍留在图例里（柱子不缺），与 mock 的差别：mock 写死四个品种，这里跟着
     // grain_variety 走——档案页加了品种，看板就有柱子。
+    //
+    // 已知口径差（0017 品种可空）：还没定品种的单不进任何柱子，但它的净重进顶部总额，
+    // 于是图上各柱之和可能小于 KPI。刻意不为它补一行「未定品种」：这一格是"今天收了些什么"
+    // 的形状图，而没品种的单只会存在于"上磅到结算"这一段窗口里（结算服务端硬拦没品种，
+    // 见 orders.rs settle），日报那张钱据表才有未定品种行（reports.rs 分品种必须与合计对得上）。
     let mut stmt = conn
         .prepare(&format!(
             "SELECT v.code, v.name, COALESCE(s.net, 0), COALESCE(s.goods, 0)

@@ -17,9 +17,10 @@ use rusqlite::{params, Connection};
 use banghe_lib::auth::{self, authenticate, Kind, PWD_UNSET};
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::masters::{
-    get_station, list_prices, list_settings, list_staff, list_varieties, list_warehouses,
-    save_price, save_setting, save_slot, save_staff, save_variety, save_warehouse,
-    PriceInput, Setting, SettingInput, SlotInput, StaffInput, VarietyInput, WarehouseInput,
+    delete_slot, delete_warehouse, get_station, list_prices, list_settings, list_staff,
+    list_varieties, list_warehouses, save_price, save_setting, save_slot, save_staff, save_variety,
+    save_warehouse, PriceInput, Setting, SettingInput, SlotInput, StaffInput, VarietyInput,
+    WarehouseInput,
 };
 
 
@@ -265,6 +266,131 @@ fn a_slot_pointing_at_a_missing_warehouse_is_refused() {
     let message = err_of(save_slot(&conn, &actor(), slot_input(9999, "SX")));
     assert!(message.contains("仓房"), "应指向仓房而不是外键原文：{message}");
     assert!(!message.contains("FOREIGN KEY"), "{message}");
+}
+
+// -------------------------------------------------------- 删除：仓房（软删）/ 货位（硬删）
+
+/// 建一个往来单位，可把它「常用去向」挂到某仓房（§9.6：created_by 指向种子 admin）
+fn seed_party(conn: &Connection, name: &str, default_wh: Option<i64>) -> i64 {
+    conn.execute(
+        "INSERT INTO party (name, party_type, default_warehouse_id, created_at, created_by)
+         VALUES (?1, 'farmer', ?2, '2026-09-01T10:00:00.000+08:00', 1)",
+        params![name, default_wh],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+/// 直接落一张最小磅单，按需把 warehouse_id / slot_id 挂上，用来造「已被引用」的场景
+fn seed_order_ref(conn: &Connection, order_no: &str, warehouse_id: Option<i64>, slot_id: Option<i64>) {
+    let station_id: i64 = conn
+        .query_row("SELECT id FROM station LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    let variety_id = seed_variety_id(conn, "YM");
+    let party_id = seed_party(conn, &format!("农户{order_no}"), None);
+    conn.execute(
+        "INSERT INTO weigh_order
+            (order_no, station_id, business_date, status, party_id, variety_id, warehouse_id, slot_id, registered_by, registered_at, created_at, created_by)
+         VALUES (?1, ?2, '2026-09-01', 'registered', ?3, ?4, ?5, ?6, 1, '2026-09-01T10:00:00.000+08:00', '2026-09-01T10:00:00.000+08:00', 1)",
+        params![order_no, station_id, party_id, variety_id, warehouse_id, slot_id],
+    )
+    .unwrap();
+}
+
+fn slot_count(conn: &Connection, wh_id: i64) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM storage_slot WHERE warehouse_id = ?1",
+        params![wh_id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn deleting_a_clean_warehouse_soft_deletes_it_and_removes_its_slots() {
+    let conn = db();
+    let a = actor();
+    let wh = save_warehouse(&conn, &a, warehouse_input("CW70")).unwrap();
+    save_slot(&conn, &a, slot_input(wh.id, "CW70-01")).unwrap();
+    save_slot(&conn, &a, slot_input(wh.id, "CW70-02")).unwrap();
+    assert_eq!(slot_count(&conn, wh.id), 2);
+
+    let deleted = delete_warehouse(&conn, &a, wh.id).unwrap();
+    assert_eq!(deleted.code, "CW70");
+
+    assert!(
+        !list_warehouses(&conn).unwrap().iter().any(|w| w.id == wh.id),
+        "软删的仓房还在档案页可见"
+    );
+    assert_eq!(slot_count(&conn, wh.id), 0, "删仓房要连带清掉名下没有历史的货位，别留孤儿");
+    // 软删而非硬删：行仍留在库里、deleted_at 有值，历史单据此旧能读回去向
+    let still: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM warehouse WHERE id = ?1 AND deleted_at IS NOT NULL",
+            params![wh.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(still, 1, "仓房走的是软删，行不该物理消失");
+    assert_eq!(audit_count(&conn, "warehouse.delete", "CW70"), 1);
+}
+
+#[test]
+fn a_warehouse_reachable_only_through_its_slots_is_not_deletable() {
+    let conn = db();
+    let a = actor();
+    let wh = save_warehouse(&conn, &a, warehouse_input("CW71")).unwrap();
+    let slot = save_slot(&conn, &a, slot_input(wh.id, "CW71-01")).unwrap();
+    // 磅单只登记到货位、没填仓房：仓房级引用计数必须把这条一并算进来
+    seed_order_ref(&conn, "BD-CW71", None, Some(slot.id));
+
+    let message = err_of(delete_warehouse(&conn, &a, wh.id));
+    assert!(message.contains("磅单"), "应说明被磅单引用：{message}");
+    assert!(message.contains("停用"), "应给出下一步（改停用）：{message}");
+    assert!(!message.contains("FOREIGN KEY"), "{message}");
+    assert!(
+        list_warehouses(&conn).unwrap().iter().any(|w| w.id == wh.id),
+        "被引用的仓房不该被删掉"
+    );
+    assert_eq!(slot_count(&conn, wh.id), 1, "拒删时名下货位一根手指都不能动");
+}
+
+#[test]
+fn a_warehouse_used_as_a_party_default_destination_is_not_deletable() {
+    let conn = db();
+    let a = actor();
+    let wh = save_warehouse(&conn, &a, warehouse_input("CW72")).unwrap();
+    seed_party(&conn, "张农户", Some(wh.id));
+
+    let message = err_of(delete_warehouse(&conn, &a, wh.id));
+    assert!(message.contains("往来单位") && message.contains("常用去向"), "{message}");
+    assert!(list_warehouses(&conn).unwrap().iter().any(|w| w.id == wh.id));
+}
+
+#[test]
+fn a_clean_slot_hard_deletes_but_a_referenced_one_only_stops() {
+    let conn = db();
+    let a = actor();
+    let wh = save_warehouse(&conn, &a, warehouse_input("CW73")).unwrap();
+    let junk = save_slot(&conn, &a, slot_input(wh.id, "CW73-01")).unwrap();
+    let used = save_slot(&conn, &a, slot_input(wh.id, "CW73-02")).unwrap();
+    seed_order_ref(&conn, "BD-CW73", Some(wh.id), Some(used.id));
+
+    // 没有历史的错录货位：storage_slot 无 deleted_at，就地硬删
+    assert_eq!(delete_slot(&conn, &a, junk.id).unwrap().code, "CW73-01");
+    let gone: i64 = conn
+        .query_row("SELECT COUNT(*) FROM storage_slot WHERE id = ?1", params![junk.id], |r| r.get(0))
+        .unwrap();
+    assert_eq!(gone, 0, "干净货位应被物理删除");
+
+    // 被磅单挂过的货位：拒删、引导停用
+    let message = err_of(delete_slot(&conn, &a, used.id));
+    assert!(message.contains("磅单") && message.contains("停用"), "{message}");
+    let still: i64 = conn
+        .query_row("SELECT COUNT(*) FROM storage_slot WHERE id = ?1", params![used.id], |r| r.get(0))
+        .unwrap();
+    assert_eq!(still, 1, "被引用的货位不能消失");
+    assert_eq!(audit_count(&conn, "slot.delete", "CW73-01"), 1);
 }
 
 // --------------------------------------------------- 编码选填：留空由系统补号

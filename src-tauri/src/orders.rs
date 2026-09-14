@@ -40,6 +40,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::auth::{self, AuthProfile};
+use crate::camera;
 use crate::db::{locked, Db};
 
 type Pool = Arc<Mutex<Connection>>;
@@ -86,9 +87,13 @@ pub(crate) const SETTLE_ROLES: &[&str] = &["station_master", "cashier"];
 const KEEPER_ROLES: &[&str] = &["station_master", "keeper"];
 /// 调整等级：化验员定级、出纳结算时改判、站长兜底（02 §11；结算常按实际议价改判）
 const GRADE_ROLES: &[&str] = &["station_master", "inspector", "cashier"];
+/// 调整收购品种：三个入口都改了同一列——磅员/登记员在制单格里定、化验员在化验区选（选完才有指标集）、
+/// 出纳在结算框改（改完单价重带），站长兜底。闸门取并集，细的收口靠各自的界面。
+const VARIETY_ROLES: &[&str] = &["station_master", "registrar", "weigher", "inspector", "cashier"];
 
 /// 等级值域。与 `src/lib/constants.ts::GRADES` 逐字同源（`ledger.rs` 里那份是给报表图例排的）。
-const GRADES: &[&str] = &["一等", "二等", "三等", "四等", "等外"];
+/// 出库单（`crate::outbound`）复用同一份，两边不许各写一套字面量。
+pub(crate) const GRADES: &[&str] = &["一等", "二等", "三等", "四等", "等外"];
 
 // ------------------------------------------------------------------------- 审计
 // audit_log（§9.21）动作名与 mock 层逐字一致（order.create / order.destination /
@@ -207,9 +212,10 @@ pub struct WeighOrder {
     pub party_name: String,
     pub party_type: String,
     pub id_card_no: String,
-    pub variety_id: i64,
-    pub variety_code: String,
-    pub variety_name: String,
+    /// 收购品种：制单可空（06 §4.0 两刷一条流），结算与录化验前必填（0017）
+    pub variety_id: Option<i64>,
+    pub variety_code: Option<String>,
+    pub variety_name: Option<String>,
     pub grade: Option<String>,
     pub warehouse_id: Option<i64>,
     pub warehouse_name: Option<String>,
@@ -292,9 +298,13 @@ pub struct WeighRecord {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CapturePhoto {
+    /// 有图时是 `attachment.id`（读原图按它取）；缺图占位格用 `-称重记录 id`（负数，与
+    /// 真实附件 id 永不撞号，前端 `missing` 为真时也不会拿它去读图）。
     pub id: i64,
     pub biz_type: String,
     pub label: String,
+    /// 这张是谁拍的（相机台账名）；缺图占位格没有来源相机，为 `None`
+    pub device_label: Option<String>,
     pub tone: String,
     pub captured_at: String,
     pub missing: bool,
@@ -472,8 +482,11 @@ pub struct Summary {
 
 // ------------------------------------------------------------------ 磅单行读取
 
-/// 列表/详情的公共列。party / variety 走 INNER JOIN（外键保证恒在），
-/// 仓房货位 LEFT JOIN；证号从过渡明文 BLOB 里 CAST 出来。
+/// 列表/详情的公共列。party 走 INNER JOIN（外键保证恒在），variety 走 LEFT JOIN——
+/// 品种自 0017 起可空（制单时还没定也成立一张单），用 INNER JOIN 会让没品种的磅单
+/// 从列表、详情、在途看板与全局搜索里整条凭空消失。仓房货位 LEFT JOIN；
+/// 证号从过渡明文 BLOB 里 CAST 出来。
+/// 此常量同时喂 order_get / order_list / open_orders / search / settlements，改一处全线生效。
 pub(crate) const ORDER_SELECT: &str = "SELECT o.id, o.order_no, o.business_date, o.status,
          o.party_id, p.name, p.party_type, COALESCE(CAST(p.id_card_no_enc AS TEXT), ''),
          o.variety_id, v.code, v.name, o.grade, o.warehouse_id, w.name, o.slot_id, COALESCE(sl.label, sl.code),
@@ -488,7 +501,7 @@ pub(crate) const ORDER_SELECT: &str = "SELECT o.id, o.order_no, o.business_date,
          o.card_no
   FROM weigh_order o
   JOIN party p ON p.id = o.party_id
-  JOIN grain_variety v ON v.id = o.variety_id
+  LEFT JOIN grain_variety v ON v.id = o.variety_id
   LEFT JOIN warehouse w ON w.id = o.warehouse_id
   LEFT JOIN storage_slot sl ON sl.id = o.slot_id";
 
@@ -812,7 +825,7 @@ fn build_timeline(
             ev.push(TimelineEvent { at: at.clone(), action: action.into(), label, actor, tone: tone.into(), detail });
         }
     };
-    add(Some(&o.registered_at), "order.create", "取号登记".into(), user_name(conn, Some(o.registered_by)), "neutral", Some(format!("{} · {}", o.party_name, o.variety_name)));
+    add(Some(&o.registered_at), "order.create", "取号登记".into(), user_name(conn, Some(o.registered_by)), "neutral", Some(format!("{} · {}", o.party_name, o.variety_name.as_deref().unwrap_or("未定品种"))));
     if let Some(q) = qc {
         add(
             Some(&q.inspected_at),
@@ -902,24 +915,81 @@ pub fn load_order_full(conn: &Connection, by_no: &str) -> Result<Option<WeighOrd
     let records = load_records(conn, o.id)?;
     let qc = o.qc_report_id.and_then(|id| load_qc(conn, id).ok().flatten());
     let settlement = load_settlement_of(conn, o.id)?;
-    o.photos = Some(
-        records
-            .iter()
-            .filter(|rec| rec.is_adopted == 1)
-            .map(|rec| CapturePhoto {
-                id: rec.id,
-                biz_type: "scale_capture".into(),
-                label: if rec.weigh_type == "gross" { "毛重抓拍" } else { "皮重抓拍" }.into(),
-                tone: if rec.has_photo { "info" } else { "danger" }.into(),
-                captured_at: rec.captured_at.clone(),
-                missing: !rec.has_photo,
-            })
-            .collect(),
-    );
+    o.photos = Some(build_capture_wall(conn, &records)?);
     o.timeline = Some(build_timeline(conn, &o, &records, qc.as_ref(), settlement.as_ref()));
     o.prints = Some(load_prints(conn, &o.order_no)?);
     o.records = Some(records);
     Ok(Some(o))
+}
+
+/// 抓拍墙：一次称重（毛重一捕 / 皮重一捕）最多 3 台相机各一张，逐张列，附上是哪台拍的。
+/// 判据是 `attachment`（`biz_type='scale_capture'`、`biz_id=称重记录 id`）——一条记录挂了几张
+/// 就出几格；一条被采纳的记录一张都没有，才补一格「无抓拍」占位（`missing`）。已被复称替换的
+/// 轨迹（`is_adopted=0`）不进墙。
+fn build_capture_wall(conn: &Connection, records: &[WeighRecord]) -> Result<Vec<CapturePhoto>, String> {
+    let adopted: Vec<&WeighRecord> = records.iter().filter(|r| r.is_adopted == 1).collect();
+    if adopted.is_empty() {
+        return Ok(Vec::new());
+    }
+    // 一次把本单所有抓拍附件按记录归堆（带来源相机名），再逐条 adopted 记录铺格
+    let mut by_record: std::collections::HashMap<i64, Vec<(i64, Option<String>, String)>> =
+        std::collections::HashMap::new();
+    let ids: Vec<i64> = adopted.iter().map(|r| r.id).collect();
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT a.biz_id, a.id, COALESCE(d.name, NULLIF(d.code, ''), ''), a.captured_at
+         FROM attachment a LEFT JOIN device_config d ON d.id = a.source_device_id
+         WHERE a.biz_type = 'scale_capture' AND a.biz_id IN ({placeholders})
+         ORDER BY a.biz_id, a.id"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("读取抓拍墙失败：{e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+            let biz_id: i64 = r.get(0)?;
+            let att_id: i64 = r.get(1)?;
+            let dev: String = r.get(2)?;
+            let at: String = r.get(3)?;
+            Ok((biz_id, att_id, Some(dev).filter(|s| !s.is_empty()), at))
+        })
+        .map_err(|e| format!("读取抓拍墙失败：{e}"))?;
+    for row in rows {
+        let (biz_id, att_id, dev, at) = row.map_err(|e| format!("读取抓拍墙失败：{e}"))?;
+        by_record.entry(biz_id).or_default().push((att_id, dev, at));
+    }
+    let mut out = Vec::new();
+    for rec in &adopted {
+        let head = if rec.weigh_type == "gross" { "毛重抓拍" } else { "皮重抓拍" };
+        match by_record.get(&rec.id) {
+            Some(atts) if !atts.is_empty() => {
+                for (att_id, dev, at) in atts {
+                    out.push(CapturePhoto {
+                        id: *att_id,
+                        biz_type: "scale_capture".into(),
+                        label: head.into(),
+                        device_label: dev.clone(),
+                        tone: "info".into(),
+                        captured_at: at.clone(),
+                        missing: false,
+                    });
+                }
+            }
+            // 被采纳却一张没落上：设备离线/手工跳过的诚实留痕（05 §6.5 只标文字）
+            _ => {
+                out.push(CapturePhoto {
+                    id: -rec.id,
+                    biz_type: "scale_capture".into(),
+                    label: head.into(),
+                    device_label: None,
+                    tone: "danger".into(),
+                    captured_at: rec.captured_at.clone(),
+                    missing: true,
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ------------------------------------------------------------------- 售粮人档案
@@ -1427,27 +1497,30 @@ pub fn party_photo_view(
 /// `attachment.id` 和本机路径；顺带挡住"枚举附件 id 去拖别人的单证"——记录不挂在磅单上就读不到。
 /// 没抓拍（设备离线降级）回 `Ok(None)`，那是"无抓拍"的正常状态不是错误。
 /// 与档案人像一样不设岗位闸门：viewer 也要能在详情页核对现场，管住它的是每次查看都留痕。
+/// 过磅抓拍图的读通道：按**附件 id** 取一张（一次称重最多 3 台相机各一张，墙上是逐张列的，
+/// 点哪张就按哪张的 attachment.id 读）。仍回查它挂在哪条称重记录、哪张磅单，只为把
+/// `pii.read` 审计记到对的单号上。附件不存在（多半是到期清理掉了）回 `Ok(None)`，界面按
+/// 「无画面」处理，不炸页面。
 pub fn capture_photo_view(
     conn: &Connection,
     app_dir: &Path,
     actor: &AuthProfile,
-    record_id: i64,
+    attachment_id: i64,
 ) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
-    let row: Option<(Option<i64>, String)> = conn
+    let row: Option<(i64, String)> = conn
         .query_row(
-            "SELECT wr.photo_attachment_id, wo.order_no
-             FROM weigh_record wr JOIN weigh_order wo ON wo.id = wr.order_id
-             WHERE wr.id = ?1",
-            params![record_id],
+            "SELECT wr.order_id, wo.order_no
+             FROM attachment a
+             JOIN weigh_record wr ON wr.id = a.biz_id
+             JOIN weigh_order wo ON wo.id = wr.order_id
+             WHERE a.id = ?1 AND a.biz_type = 'scale_capture'",
+            params![attachment_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| format!("读取抓拍记录失败：{e}"))?;
-    let Some((att, order_no)) = row else {
-        return Err("称重记录不存在，读不到它名下的抓拍".into());
-    };
-    let Some(att) = att else { return Ok(None) };
-    let img = crate::attachment::read_for_display(conn, app_dir, att, actor.id)?;
+    let Some((_order_id, order_no)) = row else { return Ok(None) };
+    let img = crate::attachment::read_for_display(conn, app_dir, attachment_id, actor.id)?;
     audit(conn, actor, "pii.read", "weigh_order", &order_no, Some("查看过磅抓拍画面"), None);
     Ok(Some(img))
 }
@@ -1467,7 +1540,7 @@ pub struct Destination {
 
 impl Destination {
     /// 审计与提示用的一行字（"1号平房仓 / C01-03"）
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         let parts = [self.warehouse_name.as_deref(), self.slot_label.as_deref()];
         let joined = parts.into_iter().flatten().collect::<Vec<_>>().join(" / ");
         if joined.is_empty() {
@@ -1478,7 +1551,9 @@ impl Destination {
     }
 }
 
-fn resolve_destination(conn: &Connection, warehouse_id: Option<i64>, slot_id: Option<i64>) -> Result<Destination, String> {
+/// 校验并归一一组仓房/货位。出库侧（`crate::outbound`）复用同一份，
+/// 两边对「停用仓房不能选、货位必须属于所选仓房」的判据必须一模一样。
+pub(crate) fn resolve_destination(conn: &Connection, warehouse_id: Option<i64>, slot_id: Option<i64>) -> Result<Destination, String> {
     let mut out = Destination::default();
     if let Some(id) = warehouse_id {
         let name: Option<String> = conn
@@ -1526,7 +1601,9 @@ fn resolve_destination(conn: &Connection, warehouse_id: Option<i64>, slot_id: Op
 #[derive(Debug, Deserialize)]
 pub struct CreateOrderInput {
     pub party_id: i64,
-    pub variety_id: i64,
+    /// 收购品种：可空。制单只认「卡 + 售粮人」（06 §4.0），品种留到结算/化验前再定（0017）。
+    /// 填了就必须是启用中的品种，没填则不校验——空着不是错误，是这一步的正常状态。
+    pub variety_id: Option<i64>,
     pub vehicle_no: Option<String>,
     pub warehouse_id: Option<i64>,
     pub slot_id: Option<i64>,
@@ -1565,15 +1642,20 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
         // 合作社/企业要税号或证号才允许挂账出票——首版一律用证号占位检查
         return Err("企业/合作社档案尚未登记身份证号，请到农户档案补齐后再制单".into());
     }
-    let variety: Option<(String, String)> = conn
-        .query_row(
-            "SELECT code, name FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
-            params![input.variety_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(|e| format!("检查品种失败：{e}"))?;
-    let variety = variety.ok_or_else(|| "所选品种不存在或已停用，请重新选择".to_string())?;
+    let variety: Option<(String, String)> = match input.variety_id {
+        // 没定品种＝这一张单先挂着，结算与化验前有各自的服务端闸门兜着
+        None => None,
+        Some(vid) => Some(
+            conn.query_row(
+                "SELECT code, name FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
+                params![vid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("检查品种失败：{e}"))?
+            .ok_or_else(|| "所选品种不存在或已停用，请重新选择".to_string())?,
+        ),
+    };
     let dest = resolve_destination(conn, input.warehouse_id, input.slot_id)?;
 
     // 制单必须先刷到一张流转卡（06 §4.0）：判定全部放在取号之前——闸不过时既不该吃掉流水号，
@@ -1611,7 +1693,7 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
     .map_err(|e| format!("制单失败：{e}"))?;
     // 必须紧跟 INSERT：下面的 audit 自己插一行，last_insert_rowid() 就被改写走了
     let order_id = conn.last_insert_rowid();
-    audit(conn, actor, "order.create", "weigh_order", &order_no, Some(&format!("{} · {}", party.1, variety.1)), None);
+    audit(conn, actor, "order.create", "weigh_order", &order_no, Some(&format!("{} · {}", party.1, variety.as_ref().map(|v| v.1.as_str()).unwrap_or("未定品种"))), None);
     // 绑卡与制单同一事务：卡未登记、已注销、还挂着别的未完成单，整笔回滚，不留已取号的孤单
     if let Some(card) = card_no.as_deref() {
         crate::cards::bind_on_create(conn, actor, order_id, &order_no, card)?;
@@ -1641,10 +1723,19 @@ pub struct CaptureInput {
     /// 客户端（称重面板 / IC 刷皮重）判出偏差超容差时附上的人话文案；是否记录以服务端复算为准
     #[serde(default)]
     pub tare_warning: Option<String>,
-    /// 本机 USB 摄像头的抓拍帧：面板从 WebView2 实时画面就地取一帧、base64(JPEG) 回传
-    /// （04 §4 方案 A 前端半边）。IP 摄像机忽略此字段（自带 HTTP 抓图通道）；空串按没带处理。
+    /// 本机 USB 摄像头的抓拍帧（04 §4 方案 A 前端半边）：面板从 WebView2 实时画面就地取帧、
+    /// base64(JPEG) 回传。一次过磅最多 3 台相机，故这是一个**数组**，每台一条、按 `device_id`
+    /// 对号入座；内网 IP 相机不在此列（服务端自己 HTTP 抓图）。空数组/缺省按没带处理。
     #[serde(default)]
-    pub photo_b64: Option<String>,
+    pub frames: Vec<CaptureFrame>,
+}
+
+/// 一台本机摄像头在捕获瞬间回传的一帧。`device_id` 指 `device_config.id`，服务端据此把帧
+/// 对到勾了「过磅抓拍」的那台相机上；对不上（那台没勾/已停用）就丢弃这帧，绝不张冠李戴。
+#[derive(Debug, Clone, Deserialize)]
+pub struct CaptureFrame {
+    pub device_id: i64,
+    pub b64: String,
 }
 
 /// 警示文案入库前的长度上限（票面一栏、日志一行，够写清偏差就够了）
@@ -1855,7 +1946,7 @@ pub fn save_qc(conn: &Connection, actor: &AuthProfile, input: SaveQcInput) -> Re
             return Err(format!("指标「{}」单位「{}」不在值域内", x.name, x.unit));
         }
     }
-    let head: Option<(i64, String, i64, String, Option<i64>)> = conn
+    let head: Option<(i64, String, Option<i64>, String, Option<i64>)> = conn
         .query_row(
             "SELECT id, status, variety_id, party_name_from, qc_report_id FROM (
                 SELECT o.id, o.status, o.variety_id, p.name AS party_name_from, o.qc_report_id
@@ -1869,6 +1960,10 @@ pub fn save_qc(conn: &Connection, actor: &AuthProfile, input: SaveQcInput) -> Re
     if matches!(status.as_str(), "voided" | "settled" | "paid" | "archived" | "reversed") {
         return Err(format!("本单当前为「{status}」，不能再录入化验"));
     }
+    // 化验的指标集、限值与扣量基准全部来自品种档案，`qc_report.variety_id` 因此保持 NOT NULL：
+    // 没有品种的化验单，它的 grade/decision 根本无从判定（0017 只放开了磅单那一列）。
+    // 现场不必换屏——工作台化验区就有品种下拉，选完直接录。
+    let variety_id = variety_id.ok_or_else(|| "本单还没有定收购品种，请先在化验区选定品种再录化验".to_string())?;
     let variety_active: i64 = conn
         .query_row("SELECT COUNT(*) FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL", params![variety_id], |r| r.get(0))
         .map_err(|e| format!("检查品种失败：{e}"))?;
@@ -2081,18 +2176,18 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
     }
     // 改价事由已从「必填」降为「选填」：偏离价目表或手工定价时不填也能结算，
     // 只在写入时留痕（有值即 trim 入库，无值落 NULL），追溯压力转到前端软提示与票面留痕。
-    type SettleTarget = (i64, String, i64, String, String, Option<i64>, Option<i64>, Option<i64>, String, i64, Option<String>);
+    type SettleTarget = (i64, String, i64, String, String, Option<i64>, Option<i64>, Option<i64>, String, i64, Option<String>, Option<i64>);
     let head: Option<SettleTarget> = conn
         .query_row(
             "SELECT o.id, o.order_no, o.party_id, p.name, o.business_date, o.net_weight_01kg, o.gross_weight_01kg, o.tare_weight_01kg, o.status,
-                    COALESCE((SELECT COUNT(*) FROM settlement_order WHERE order_id = o.id), 0), o.grade
+                    COALESCE((SELECT COUNT(*) FROM settlement_order WHERE order_id = o.id), 0), o.grade, o.variety_id
              FROM weigh_order o JOIN party p ON p.id = o.party_id WHERE o.order_no = ?1",
             params![input.order_no],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?)),
         )
         .optional()
         .map_err(|e| format!("读取磅单失败：{e}"))?;
-    let Some((order_id, order_no, party_id, party_name, business_date, net, gross, tare, status, settled_cnt, old_grade)) = head else {
+    let Some((order_id, order_no, party_id, party_name, business_date, net, gross, tare, status, settled_cnt, old_grade, old_variety)) = head else {
         return Ok(None);
     };
     if settled_cnt > 0 {
@@ -2100,6 +2195,11 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
     }
     if matches!(status.as_str(), "voided" | "rejected" | "settled" | "paid" | "archived" | "reversed") {
         return Err(format!("本单当前为「{status}」，不能结算"));
+    }
+    // 品种是这一单唯一能对回价目表的锚：单价由前端送上来、服务端只判它大于 0，
+    // 没有品种，价格偏离了价目表这件事在库里没有任何一处能发现。所以这道闸必须在服务端。
+    if old_variety.is_none() {
+        return Err("本单还没有定收购品种，请先选定品种再结算".into());
     }
     let Some(net) = net else { return Ok(None) };
     let deduct = input
@@ -2257,6 +2357,10 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
             None,
         );
     }
+    // 库存账入库侧的另一条腿：结算重量到这一刻才存在（`stock::IN_QUALIFIED` 只认结算量），
+    // 所以「已登记去向 → 此刻入仓」和「先结算 → 事后补录去向」两条先后顺序都由
+    // 这同一个同步负责，谁后到谁把那一行落进 stock_movement。同事务，不可分开提交。
+    crate::stock::sync_in_movement(conn, order_id)?;
     // 结算即终态：同事务释放该单绑的流转卡（受 card_release_on_terminal 控制，06 §6.3）
     crate::cards::release_for_order(conn, order_id);
     let order = load_order_full(conn, &order_no)?.ok_or_else(|| "结算后读取磅单失败".to_string())?;
@@ -2526,13 +2630,14 @@ pub async fn party_photo(app: AppHandle, party_id: i64) -> Result<Option<crate::
 }
 
 /// 过磅抓拍图的读通道命令。与 `party_photo` 同一口径：先取会话身份（访问痕迹要记到人），
-/// 再进锁按称重记录 id 读附件；`read_for_display` 内部已刷 `attachment.accessed_*`，这里再落一条 `pii.read`。
+/// 再进锁按**附件 id** 读那张图（一次过磅最多 3 张，墙上逐张列，点哪张读哪张）；
+/// `read_for_display` 内部已刷 `attachment.accessed_*`，这里再落一条 `pii.read`。
 #[tauri::command]
-pub async fn capture_photo(app: AppHandle, record_id: i64) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
+pub async fn capture_photo(app: AppHandle, attachment_id: i64) -> Result<Option<crate::attachment::ImageForDisplay>, String> {
     let actor = auth::current_actor(&app).ok_or_else(|| "登录已失效或已锁屏，请先解锁再继续作业".to_string())?;
     let pool = pool_of(&app)?;
     let dir = app_data_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || locked(&pool, move |conn| capture_photo_view(conn, &dir, &actor, record_id)))
+    tauri::async_runtime::spawn_blocking(move || locked(&pool, move |conn| capture_photo_view(conn, &dir, &actor, attachment_id)))
         .await
         .map_err(|e| format!("抓拍读取任务失败：{e}"))?
 }
@@ -2562,28 +2667,34 @@ pub async fn order_create(app: AppHandle, input: CreateOrderInput) -> Result<Wei
 pub async fn order_capture(app: AppHandle, mut input: CaptureInput) -> Result<Option<WeighOrder>, String> {
     // 前端的 has_photo 只是"当时摄像头在线"的自我声明，拿来当门闩：离线时连这三秒的网络都不去堵。
     let want_photo = input.has_photo.unwrap_or(false);
-    // 本机摄像头的帧是前端就地取的：带了帧就想落，不必再等 has_photo 那声自我声明（空串按没带处理）
-    let local_frame = input.photo_b64.take().filter(|s| !s.trim().is_empty());
+    // 本机摄像头的帧是前端就地取的：带了帧就想落，不必再等 has_photo 那声自我声明（空串逐条丢弃）
+    let frames: Vec<CaptureFrame> = std::mem::take(&mut input.frames)
+        .into_iter()
+        .filter(|f| !f.b64.trim().is_empty())
+        .collect();
     let order = write_tx(&app, move |conn, actor| capture(conn, actor, input), FLOOR_ROLES, "称重").await?;
-    if want_photo || local_frame.is_some() {
+    if want_photo || !frames.is_empty() {
         if let Some(weighed) = order.as_ref() {
-            attach_weigh_photo(&app, weighed, local_frame).await;
+            attach_weigh_photos(&app, weighed, frames).await;
         }
     }
     Ok(order)
 }
 
-/// 过磅抓拍（04 §2.4）：磅单已经提交，这里只往那条称重轨迹上挂一张图。
+/// 过磅抓拍（04 §2.4）：磅单已经提交，这里只往那条称重轨迹上挂图。
 ///
-/// 两条取图通道在这儿分叉：`local_frame` 是 Some 时走 [`camera::store_provided_frame`]
-/// （本机 USB 摄像头，画面本来就开在工作台 WebView2 里，捕获瞬间取帧回传）；
-/// 否则走 [`camera::capture_snapshot`]（内网 IP 摄像机，HTTP 抓图）。
+/// **一次最多 3 台相机各拍一张**（04 §4）：遍历 [`camera::list_capture_cameras`] 拿到勾了
+/// 「过磅抓拍」的相机，逐台分叉取图——本机 USB 摄像头用前端回传的那帧
+/// （[`camera::store_frame_for`]，按 `device_id` 对号，没有对应帧就跳过该台），
+/// 内网 IP 摄像机由服务端 HTTP 抓图（[`camera::snapshot_for`]）。每张落一行 `attachment`
+/// （`biz_id`=本称重记录 id），并把**第一张**回填进 `weigh_record.photo_attachment_id`
+/// 作主图（读图与「无抓拍」判据的锚点），其余靠 attachment 表按 biz_id 枚举取回。
 ///
 /// 取图要等摄像机应答（连接与收图各 3 秒），所以放在称重事务**之外**——让一张照片
 /// 把已经成立的过磅拖回滚、或者把单连接的写事务开足三秒，都是把主次颠倒了（04 §4）。
 /// 于是这里的所有失败都就地降级成"无抓拍"，含"配置非法"那类：原因由 `camera` 写进
 /// `device_config.last_error`，站长在设备中心看得到，不该由一次称重去替它报警。
-async fn attach_weigh_photo(app: &AppHandle, weighed: &WeighOrder, local_frame: Option<String>) {
+async fn attach_weigh_photos(app: &AppHandle, weighed: &WeighOrder, frames: Vec<CaptureFrame>) {
     // capture() 成功即新增一条轨迹，`records` 按 seq 升序，最后一条就是刚称的那个头
     let Some(record) = weighed.records.as_ref().and_then(|rs| rs.last()) else {
         return;
@@ -2591,28 +2702,42 @@ async fn attach_weigh_photo(app: &AppHandle, weighed: &WeighOrder, local_frame: 
     let (Ok(app_dir), Ok(pool)) = (app.path().app_data_dir(), pool_of(app)) else { return };
     let (order_id, record_id, operator_id) = (weighed.id, record.id, record.operator_id);
     let weigh_type = record.weigh_type.clone();
-    let attached = tauri::async_runtime::spawn_blocking(move || -> Result<Option<i64>, String> {
+    let attached = tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
         let conn = pool.lock().unwrap_or_else(|p| p.into_inner());
         let key = if weigh_type == "tare" { "capture_on_tare" } else { "capture_on_gross" };
         if !setting_bool(&conn, key, true) {
-            return Ok(None);
+            return Ok(0);
         }
+        let cams = camera::list_capture_cameras(&conn)?;
         let ctx = crate::camera::CaptureContext { order_id, weigh_record_id: record_id, operator_id };
-        let photo = match &local_frame {
-            Some(b64) => crate::camera::store_provided_frame(&conn, &app_dir, &ctx, b64)?,
-            None => crate::camera::capture_snapshot(&conn, &app_dir, &ctx)?,
-        };
-        if let Some(att) = photo {
+        let mut stored: Vec<i64> = Vec::new();
+        for cam in &cams {
+            let photo = if camera::is_local_camera(&cam.config_json) {
+                // 本机相机：只认前端为这台设备回传的那帧；没带到就跳过（不拿别的机器的帧冒充）
+                match frames.iter().find(|f| f.device_id == cam.id) {
+                    Some(f) => crate::camera::store_frame_for(&conn, &app_dir, &ctx, cam, &f.b64)?,
+                    None => None,
+                }
+            } else {
+                crate::camera::snapshot_for(&conn, &app_dir, &ctx, cam)?
+            };
+            if let Some(att) = photo {
+                stored.push(att);
+            }
+        }
+        // 主图锚点：第一张挂到 photo_attachment_id（has_photo 与单图读通道都认它），
+        // 多出来的靠 attachment 表按 biz_id 枚举。一张没落上就保持 NULL → 「无抓拍」。
+        if let Some(&first) = stored.first() {
             conn.execute(
                 "UPDATE weigh_record SET photo_attachment_id = ?1 WHERE id = ?2",
-                params![att, record_id],
+                params![first, record_id],
             )
             .map_err(|e| format!("回填抓拍引用失败：{e}"))?;
         }
-        Ok(photo)
+        Ok(stored.len())
     })
     .await;
-    // 取不到图就是"无抓拍"：Ok(None) 的原因 camera 已写进台账并打到 stderr；
+    // 取不到图就是"无抓拍"：Ok(0) 的原因 camera 已写进台账并打到 stderr；
     // Err 是配置非法，同样不回头否定这次已经成立的过磅，只留一行现场可查的痕迹。
     if let Err(e) = attached {
         eprintln!("[抓拍] 本轮按无抓拍处理：{e}");
@@ -2767,6 +2892,11 @@ pub fn assign_destination(conn: &Connection, actor: &AuthProfile, input: AssignD
         params![order.id, dest.warehouse_id, dest.slot_id, keeper_id, now],
     )
     .map_err(|e| format!("登记去向失败：{e}"))?;
+    // 库存账入库侧的一条腿：去向就是「粮进了哪个仓」的真相，本单在 stock_movement
+    // 里的 in 投影跟着这里同步（改派 → UPDATE 那一行，清空 → 撤掉那一行）。
+    // 与磅单更新同事务——不能出现「去向改了、结存还是老仓房的」这种两条腿分家。
+    // 未结算的单本来就不在结存里（判据见 `stock::IN_QUALIFIED`），这里同步是空操作。
+    crate::stock::sync_in_movement(conn, order.id)?;
     let before = Destination {
         warehouse_id: order.warehouse_id,
         warehouse_name: order.warehouse_name.clone(),
@@ -2863,6 +2993,91 @@ pub fn set_grade(conn: &Connection, actor: &AuthProfile, input: GradeAdjustInput
 #[tauri::command]
 pub async fn order_set_grade(app: AppHandle, input: GradeAdjustInput) -> Result<Option<WeighOrder>, String> {
     write_tx(&app, move |conn, actor| set_grade(conn, actor, input), GRADE_ROLES, "调整等级").await
+}
+
+// --------------------------------------------------------------- 调整收购品种
+// 0017 之后品种不再挡制单：农户报不出品种时先把单取出来，等卸完货看清粮食再定。
+// 于是「定品种」从制单那一下变成了事后一次改写，入口有三处（制单格、化验区、结算框），
+// 改的都是 `weigh_order.variety_id` 同一列，所以只留这一条命令，别各写一份 UPDATE。
+//
+// 与等级同理，闸门沿用 VOIDABLE：一旦结算，品种连同单价就是货款的一部分，
+// 要改请站长走红冲（02 §F6.3），不许在这里改掉已结过的账。
+// 化验单上的 `qc_report.variety_id` 是当时判定所用的品种快照，改磅单不动它。
+
+#[derive(Debug, Deserialize)]
+pub struct VarietyAdjustInput {
+    pub order_no: String,
+    /// 目标品种。null / 省略 ＝ 清除定种（回到「未定品种」，只允许在还没化验、还没结算时清）
+    #[serde(default)]
+    pub variety_id: Option<i64>,
+    /// 改判事由，可选：留空时审计写「未填写」
+    #[serde(default)]
+    pub reason: String,
+    /// 操作人以会话为准，此字段只为与 mock 签名对齐而存在
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub operator_id: Option<i64>,
+}
+
+pub fn set_variety(conn: &Connection, actor: &AuthProfile, input: VarietyAdjustInput) -> Result<Option<WeighOrder>, String> {
+    // 填了品种就得是个能计价的品种；不填即清除，无需校验
+    let target_name: Option<String> = match input.variety_id {
+        None => None,
+        Some(vid) => Some(
+            conn.query_row(
+                "SELECT name FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
+                params![vid],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| format!("检查品种失败：{e}"))?
+            .ok_or_else(|| "所选品种不存在或已停用，请重新选择".to_string())?,
+        ),
+    };
+    let reason = input.reason.trim();
+    let reason_label = if reason.is_empty() { "未填写" } else { reason };
+    let order: Option<WeighOrder> = conn
+        .query_row(&format!("{ORDER_SELECT} WHERE o.order_no = ?1"), params![input.order_no], map_order_row)
+        .optional()
+        .map_err(|e| format!("读取磅单失败：{e}"))?;
+    let Some(order) = order else { return Ok(None) };
+    if !VOIDABLE.contains(&order.status.as_str()) {
+        return Err(match order.status.as_str() {
+            "voided" => "本单已作废，不能再调整品种".into(),
+            "rejected" => "本单化验拒收，不能再调整品种".into(),
+            other => format!("本单当前为「{other}」，已结算的单改品种请先由站长红冲（02 §F6.3）"),
+        });
+    }
+    if order.variety_id == input.variety_id {
+        // 没变就是没变：既不写库也不留痕，审计表里不该有"改了个寂寞"的噪音
+        return Ok(Some(order));
+    }
+    let now = now_iso();
+    conn.execute(
+        "UPDATE weigh_order SET variety_id = ?2, updated_at = ?3, updated_by = ?4 WHERE id = ?1",
+        params![order.id, input.variety_id, now, actor.id],
+    )
+    .map_err(|e| format!("调整品种失败：{e}"))?;
+    audit(
+        conn,
+        actor,
+        "order.variety",
+        "weigh_order",
+        &order.order_no,
+        Some(&format!(
+            "品种 {} → {}：{}",
+            order.variety_name.as_deref().unwrap_or("未定品种"),
+            target_name.as_deref().unwrap_or("未定品种"),
+            reason_label
+        )),
+        None,
+    );
+    load_order_full(conn, &order.order_no)
+}
+
+#[tauri::command]
+pub async fn order_set_variety(app: AppHandle, input: VarietyAdjustInput) -> Result<Option<WeighOrder>, String> {
+    write_tx(&app, move |conn, actor| set_variety(conn, actor, input), VARIETY_ROLES, "调整品种").await
 }
 
 // --------------------------------------------------------------- 修改基本信息（车牌 / 备注）

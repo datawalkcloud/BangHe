@@ -43,8 +43,11 @@ serialport = "4.10.1"
 # 添加设备表单要「自动扫描本机连接的打印机」：热敏直连小票机走 ticket-core 的 usbprint 枚举，
 # A4 / 针式这类打印队列打印机则用系统 EnumPrintersW 按名字挑机。复用锁文件里 tauri 已带进来的
 # windows 0.61，只在 Windows 目标下编译（代码里以 #[cfg(target_os = "windows")] 兜住非 Windows）。
+# `Win32_Graphics_Dwm` 另给 titlebar.rs 用：Tauri 自带的 set_theme 在 Windows 上只设 WebView2 的
+# preferred color scheme（wry 里就是一句 SetPreferredColorScheme），原生标题栏深浅必须自己调
+# DwmSetWindowAttribute。
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_Security", "Win32_Media_MediaFoundation", "Win32_System_Com"] }
+windows = { version = "0.61", features = ["Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Storage_Xps", "Win32_Security", "Win32_Media_MediaFoundation", "Win32_System_Com"] }
 # 队列直打（queue_print）要在 GDI 上画出票面二维码：纯 Rust、只取模块矩阵自己涂方块，
 # 不引图像编解码。热敏侧不需要它（ESC/POS 打印机固件自带 QR 指令）。
 qrcode = { version = "0.14", default-features = false }

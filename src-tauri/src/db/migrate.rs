@@ -134,6 +134,30 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0016_card_auto_register.sql",
         sql: include_str!("migrations/0016_card_auto_register.sql"),
     },
+    Migration {
+        name: "0017_order_variety_nullable.sql",
+        sql: include_str!("migrations/0017_order_variety_nullable.sql"),
+    },
+    Migration {
+        name: "0018_default_warehouse.sql",
+        sql: include_str!("migrations/0018_default_warehouse.sql"),
+    },
+    Migration {
+        name: "0019_capture_on_weigh.sql",
+        sql: include_str!("migrations/0019_capture_on_weigh.sql"),
+    },
+    Migration {
+        name: "0020_outbound_order.sql",
+        sql: include_str!("migrations/0020_outbound_order.sql"),
+    },
+    Migration {
+        name: "0021_stock_movement_outbound.sql",
+        sql: include_str!("migrations/0021_stock_movement_outbound.sql"),
+    },
+    Migration {
+        name: "0022_warehouse_opening.sql",
+        sql: include_str!("migrations/0022_warehouse_opening.sql"),
+    },
 ];
 
 #[derive(Error, Debug)]

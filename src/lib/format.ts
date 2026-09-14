@@ -265,6 +265,15 @@ export function orDash(v: string | number | null | undefined): string {
   return String(v);
 }
 
+/**
+ * 品种名（0017 起可空：制单只要卡 + 售粮人，品种后置到结算/化验前）。
+ * 空着不给破折号——磅单、码单、台账上那一格留白会被读成"数据丢了"，
+ * 打成「未定品种」才是一句能对着看的话。
+ */
+export function varietyLabel(name: string | null | undefined): string {
+  return name ? name : "未定品种";
+}
+
 export function todayISO(): string {
   const d = new Date();
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

@@ -31,6 +31,8 @@ export function ComboBox({
   id,
   className,
   emptyHint = "没有匹配的常用项，直接输入即可",
+  disabled,
+  invalid,
   "aria-label": ariaLabel,
 }: {
   value: string;
@@ -45,6 +47,10 @@ export function ComboBox({
   className?: string;
   /** 单行过滤后无命中时清单里的提示 */
   emptyHint?: string;
+  /** 锁定整格：文本框置灰、浮层与箭头都不出现（如化验区未制单时） */
+  disabled?: boolean;
+  /** 校验不通过：红框标在文本框本身，错误文案由调用方挂在字段上 */
+  invalid?: boolean;
   "aria-label"?: string;
 }) {
   const fieldRef = useRef<HTMLElement | null>(null);
@@ -109,12 +115,14 @@ export function ComboBox({
           ref={fieldRef as React.Ref<HTMLTextAreaElement>}
           id={id}
           rows={rows}
+          disabled={disabled}
+          aria-invalid={invalid || undefined}
           aria-label={ariaLabel}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onFieldKeyDown}
           placeholder={placeholder}
-          className={cn("min-h-0 pr-7", className)}
+          className={cn("min-h-0 pr-7", disabled && "opacity-60", className)}
         />
       ) : (
         <Input
@@ -122,6 +130,8 @@ export function ComboBox({
           id={id}
           role="combobox"
           aria-expanded={open}
+          disabled={disabled}
+          aria-invalid={invalid || undefined}
           aria-label={ariaLabel}
           value={value}
           onChange={(e) => {
@@ -130,25 +140,27 @@ export function ComboBox({
           }}
           onKeyDown={onFieldKeyDown}
           placeholder={placeholder}
-          className={cn("pr-7", className)}
+          className={cn("pr-7", disabled && "opacity-60", className)}
         />
       )}
 
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label="展开常用选项"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => {
-          setOpen((o) => !o);
-          fieldRef.current?.focus();
-        }}
-        className={cn(chevron, multiline ? "right-1 top-1.5" : "right-1 top-1/2 -translate-y-1/2")}
-      >
-        <ChevronDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
-      </button>
+      {!disabled && (
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="展开常用选项"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            setOpen((o) => !o);
+            fieldRef.current?.focus();
+          }}
+          className={cn(chevron, multiline ? "right-1 top-1.5" : "right-1 top-1/2 -translate-y-1/2")}
+        >
+          <ChevronDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+        </button>
+      )}
 
-      {open && (
+      {open && !disabled && (
         <div
           role="listbox"
           aria-label={ariaLabel}
