@@ -67,13 +67,14 @@ const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
 
 /* ---------------------------------------------------------- 新增设备表单 */
 
-/** 一栏关键参数：options 存在则渲染下拉，否则渲染文本框 */
+/** 一栏关键参数：options 存在则渲染下拉，否则渲染文本框；input="password" 走掩码输入框 */
 interface FieldSpec {
   key: string;
   label: string;
   placeholder?: string;
   options?: string[];
   required?: boolean;
+  input?: "text" | "password";
 }
 
 /**
@@ -101,6 +102,7 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
     prefix: "cam",
     // local_uvc = 本机 USB / 内置摄像头（Media Foundation 扫描回填）；hikvision_isapi / dahua_cgi 走内网 IP
     drivers: ["local_uvc", "hikvision_isapi", "dahua_cgi", "mock"],
+    // mock 驱动走这份兜底；真机网络（海康 / 大华）的字段由 networkCameraFields 按驱动给
     fields: [
       { key: "host", label: "地址（IP）", placeholder: "192.168.1.64", required: true },
       { key: "user", label: "登录用户", placeholder: "weigh" },
@@ -143,10 +145,52 @@ function paperOptionsFor(driver: string): string[] {
   return ["A4"];
 }
 
+/**
+ * 内网摄像机（非本机 USB）按驱动给出的默认端点，逐字对齐 camera.rs `target_from_config`
+ * 认的 `snapshotUrl` 键与海康 / 大华的实际端点，免得现场还要照文档抄一栏。
+ *  - `snapshot`：过磅抓拍走的主码流整图；
+ *  - `preview`：子码流的 HTTP 抓图——联机测试用它，`rtspUrl` 留空时实时画面的轨道号也是从这里的通道号推出来的；
+ *  - `rtsp`：工作台实时画面拉的那条**子码流**轨道（`camera_stream.rs` 读 `rtspUrl`）。
+ *    海康不填也能推出来（从 `channels/<数字>` 抄同一个通道号），大华推不出、必须填。
+ */
+const CAMERA_NET: Record<string, { snapshot?: string; preview?: string; rtsp?: string }> = {
+  hikvision_isapi: {
+    snapshot: "/ISAPI/Streaming/channels/101/picture",
+    preview: "/ISAPI/Streaming/channels/102/picture",
+    rtsp: "/Streaming/Channels/102",
+  },
+  dahua_cgi: { snapshot: "/cgi-bin/snapshot.cgi?channel=1", rtsp: "/cam/realmonitor?channel=1&subtype=1" },
+};
+
+/**
+ * 内网摄像机的登记字段。snapshotUrl / previewUrl / rtspUrl 用驱动默认值预填（见 patchDriver），
+ * 口令与认证方式一并露出——camera.rs 已按 `password` + `auth` 拼 Basic/Digest，
+ * 实时画面那条 RTSP 也吃同一份用户名口令（`rtspUrl` / `rtspPort` 只被预览用，抓拍不读）。
+ * 本轮登记先把这套参数收全，之后工作台联机、过磅抓拍与实时画面都直接吃台账里的这一份。
+ */
+function networkCameraFields(driver: string): FieldSpec[] {
+  const net = CAMERA_NET[driver];
+  return [
+    { key: "host", label: "地址（IP）", placeholder: "192.168.10.199", required: true },
+    { key: "snapshotUrl", label: "抓图路径", placeholder: net?.snapshot ?? "/ISAPI/Streaming/channels/101/picture", required: true },
+    { key: "previewUrl", label: "预览路径（可留空）", placeholder: net?.preview ?? "" },
+    { key: "rtspUrl", label: "RTSP 地址（海康可留空）", placeholder: net?.rtsp ?? "" },
+    { key: "rtspPort", label: "RTSP 端口（默认 554）", placeholder: "554" },
+    { key: "port", label: "端口（默认 80）", placeholder: "80" },
+    { key: "user", label: "登录用户", placeholder: "admin" },
+    { key: "password", label: "登录密码", placeholder: "留空＝匿名", input: "password" },
+    { key: "auth", label: "认证方式", options: ["digest", "basic"] },
+  ];
+}
+
 /** 一栏关键参数随驱动动态化：打印机纸型、本机摄像头靠扫描回填（无需手填 host），其余照 DEVICE_SPEC 原样 */
 function fieldsFor(kind: DeviceKind, driver: string): FieldSpec[] {
   if (kind === "printer") return [{ key: "paper", label: "纸型", options: paperOptionsFor(driver), required: true }];
-  if (kind === "camera") return driver === "local_uvc" ? [] : DEVICE_SPEC.camera.fields;
+  if (kind === "camera") {
+    if (driver === "local_uvc") return [];
+    if (driver === "mock") return DEVICE_SPEC.camera.fields;
+    return networkCameraFields(driver);
+  }
   return DEVICE_SPEC[kind].fields;
 }
 
@@ -306,6 +350,13 @@ export function DevicesPage() {
           delete cfg.transport;
           delete cfg.deviceName;
           delete cfg.deviceId;
+          // 内网机：抓图 / 预览 / 拉流三条路径预填成该驱动默认值，但已手填过的不动（现场换驱动不该丢掉自己配的通道号）
+          const snap = CAMERA_NET[driver]?.snapshot;
+          const preview = CAMERA_NET[driver]?.preview;
+          const rtsp = CAMERA_NET[driver]?.rtsp;
+          if (snap && !cfg.snapshotUrl) cfg.snapshotUrl = snap;
+          if (preview && !cfg.previewUrl) cfg.previewUrl = preview;
+          if (rtsp && !cfg.rtspUrl) cfg.rtspUrl = rtsp;
         }
       }
       return { ...f, driver, cfg };
@@ -1049,6 +1100,7 @@ export function DevicesPage() {
                   />
                 ) : (
                   <Input
+                    type={f.input === "password" ? "password" : "text"}
                     value={form.cfg[f.key] ?? ""}
                     onChange={(e) => patchCfg(f.key, e.target.value)}
                     placeholder={f.placeholder}

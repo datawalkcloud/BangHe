@@ -17,16 +17,19 @@
 //!
 //! 真实发网络请求那条路（`grab`/`http_get`/`connect`）**不在这里跑**：没有摄像头，
 //! 跑一次就是把测试挂在现场网络与一台不存在的 IP 上。它的外壳由 `capture_snapshot`
-//! 的降级分支守住——没摄像头/模拟模式/Digest 都在此之前返回，绝不碰 socket。
+//! 的降级分支守住——没摄像头 / 模拟模式 / 本机 USB 机都在碰 socket 之前返回。
+//! 认证本身（Digest 要两趟往返）离线钉：MD5 用 RFC 1321 标准向量，应答用 RFC 2617 §3.5
+//! 那个例子逐字段核对 + 独立复算，详见下面"MD5 与 Digest 认证"一节。
 
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
 
 use banghe_lib::camera::{
-    attachment_rel_path, base64_decode, base64_standard, build_get_request, check_jpeg, hex_preview,
-    http_body, http_status_reason, parse_http_head, safe_stem, store_snapshot, target_from_config,
-    AuthKind, AttachmentMeta, CaptureContext, HTTPS_UNSUPPORTED,
+    attachment_rel_path, base64_decode, base64_standard, build_get_request, check_jpeg, digest_authorization,
+    hex_preview, http_body, http_status_reason, md5_hex, parse_digest_challenge, parse_http_head, preview_target_from_config,
+    safe_stem, store_snapshot, target_from_config, AuthKind, AttachmentMeta, CaptureContext, DigestChallenge,
+    HTTPS_UNSUPPORTED,
 };
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 
@@ -226,16 +229,23 @@ fn illegal_config_is_refused_line_by_line() {
 }
 
 #[test]
-fn digest_auth_is_marked_not_supported_rather_than_guessed() {
-    // 04 §4.1 说海康 ISAPI 要 Digest。本轮只做 Basic：标出来，由调用方降级，不静默降级成"猜一次"
+fn auth_kind_follows_the_ledger_keys() {
+    // 04 §4.1：海康 ISAPI 要 Digest。台账里 `auth` 明说 digest 才走那条两趟的路，
+    // 只给 user 的按 Basic（老固件与大华常见），什么都不给就是匿名——猜不得。
     let t = target_from_config(
         1,
         "cam1",
         r#"{"host":"192.168.1.64","user":"weigh","auth":"digest","snapshotUrl":"/ISAPI/Streaming/channels/101/picture"}"#,
         None,
     )
-    .expect("digest 是合法配置，只是本轮做不到");
+    .expect("digest 是合法配置");
     assert_eq!(t.auth, AuthKind::Digest);
+
+    let t = target_from_config(1, "cam2", r#"{"host":"192.168.1.64","user":"weigh","password":"s" , "snapshotUrl":"/snap.jpg"}"#, None).unwrap();
+    assert_eq!(t.auth, AuthKind::Basic, "只给 user 就按 Basic，别悄悄升级成两趟往返");
+
+    let t = target_from_config(1, "cam3", r#"{"host":"192.168.1.64","snapshotUrl":"/snap.jpg"}"#, None).unwrap();
+    assert_eq!(t.auth, AuthKind::None);
 }
 
 // ------------------------------------------------------------------ 请求字节
@@ -280,6 +290,177 @@ fn base64_matches_the_standard_alphabet() {
     }
     // 非 ASCII 口令（现场真有人用中文口令）按 UTF-8 字节编
     assert_eq!(base64_standard("磅:1".as_bytes()), "56OFOjE=");
+}
+
+// ---------------------------------------------------------------- MD5 与 Digest 认证
+
+/// MD5 在本系统只有一个用途：HTTP Digest 的 `response`（RFC 7616）。登录口令走
+/// `auth.rs` 的 argon2，两者不许混。这几条是 RFC 1321 附录的标准向量，特意覆盖
+/// "空输入 / 正好一个 64 字节块 / 跨两块"这三种补位形态——补位写错只有第一块之后的数据会悄悄变味。
+#[test]
+fn md5_matches_the_rfc_1321_suite() {
+    assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
+    assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+    assert_eq!(md5_hex(b"message digest"), "f96b697d7cb7938d525a2f31aaf161d0");
+    assert_eq!(
+        md5_hex(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"),
+        "d174ab98d277d9f102245b4c78068b07",
+        "正好 64 字节：补位必须新开一块"
+    );
+    assert_eq!(
+        md5_hex(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"),
+        "57edf4a22be3c955ac49da2e2107b67a",
+        "80 字节：跨两块再加补位"
+    );
+}
+
+/// 从组好的 `Authorization` 头里取一个带引号参数的值。测试侧自己写一遍解析，
+/// 不复用生产代码——否则实现与断言是同一段逻辑，错了也一起错。
+fn digest_field(header: &str, key: &str) -> String {
+    let at = header
+        .find(&format!("{key}=\""))
+        .unwrap_or_else(|| panic!("应答里没有 {key}：{header}"));
+    let rest = &header[at + key.len() + 2..];
+    rest[..rest.find('"').expect("引号必须闭合")].to_string()
+}
+
+#[test]
+fn digest_challenge_parsing_keeps_quoted_commas_and_rejects_other_algorithms() {
+    // 现网海康就是这么回的：qop 是个候选列表，realm 里可能带逗号
+    let ch = parse_digest_challenge(
+        r#"Digest realm="Test realm at HQ, 3F", qop="auth,auth-int", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41", stale=FALSE, algorithm=MD5"#,
+    )
+    .expect("带引号的逗号不是分隔符");
+    assert_eq!(ch.realm, "Test realm at HQ, 3F");
+    assert_eq!(ch.nonce, "dcd98b7102dd2f0e8b11d0f600bfb0c093");
+    assert_eq!(ch.qop.as_deref(), Some("auth"), "只挑 auth：auth-int 要连实体一起摘要，现网没这么配");
+    assert_eq!(ch.opaque.as_deref(), Some("5ccc069c403ebaf9f0171e9517f40e41"));
+
+    // 没回 qop / algorithm：按 RFC 2617 的老式无计数模式，算法默认 MD5
+    let ch = parse_digest_challenge(r#"Digest realm="cam", nonce="n1""#).unwrap();
+    assert_eq!(ch.qop, None);
+    assert_eq!(ch.algorithm, "MD5");
+
+    // 非 MD5 要明说做不到（算出来必然 401，比"不知道行不行"更坏），并给出现场能照做的下一步
+    let err = parse_digest_challenge(r#"Digest realm="r", nonce="n", algorithm=SHA-256"#).unwrap_err();
+    assert!(err.contains("SHA-256") && err.contains("basic"), "{err}");
+    assert!(parse_digest_challenge(r#"Basic realm="cam""#).is_err(), "不是 Digest 质询就别硬解");
+    assert!(parse_digest_challenge(r#"Digest realm="cam""#).unwrap_err().contains("nonce"), "缺 nonce 无从应答要说清是谁缺");
+}
+
+/// 整条应答钉在 RFC 2617 §3.5 的例子上：HA1/HA2 用标准里那两条常量核对，
+/// `response` 再按公式独立复算一遍（cnonce 从组好的头里取回来），避免实现与断言同源。
+#[test]
+fn digest_answer_reproduces_the_rfc_2617_example() {
+    let t = target_from_config(
+        1,
+        "cam1",
+        r#"{"host":"10.0.0.8","user":"Mufasa","password":"Circle Of Life","auth":"digest","snapshotUrl":"/dir/index.html"}"#,
+        None,
+    )
+    .unwrap();
+    let ch = parse_digest_challenge(
+        r#"Digest realm="testrealm@host.com", qop="auth,auth-int", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", opaque="5ccc069c403ebaf9f0171e9517f40e41""#,
+    )
+    .unwrap();
+    let h = digest_authorization(&t, &ch).expect("应答组得出来");
+
+    assert_eq!(md5_hex(b"Mufasa:testrealm@host.com:Circle Of Life"), "939e7578ed9e3c518a452effe46c3c14", "RFC 钉死的 HA1");
+    assert_eq!(md5_hex(b"GET:/dir/index.html"), "39aff3a2bab6126f332b942af96d3366", "RFC 钉死的 HA2");
+    for want in [
+        "username=\"Mufasa\"",
+        "realm=\"testrealm@host.com\"",
+        "nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\"",
+        "uri=\"/dir/index.html\"",
+        "algorithm=MD5",
+        "qop=auth",
+        "nc=00000001",
+        "opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"",
+    ] {
+        assert!(h.starts_with("Digest ") && h.contains(want), "应答里少了 {want}：{h}");
+    }
+
+    let cnonce = digest_field(&h, "cnonce");
+    let ha1 = md5_hex(b"Mufasa:testrealm@host.com:Circle Of Life");
+    let ha2 = md5_hex(b"GET:/dir/index.html");
+    let want = md5_hex(format!("{ha1}:dcd98b7102dd2f0e8b11d0f600bfb0c093:00000001:{cnonce}:auth:{ha2}").as_bytes());
+    assert_eq!(digest_field(&h, "response"), want, "response 必须等于 RFC 公式的独立复算值");
+    // 同一 nonce 下连着两次应答不能一模一样（否则第二次就是重放），cnonce 得跟着换
+    assert_ne!(digest_field(&digest_authorization(&t, &ch).unwrap(), "cnonce"), cnonce);
+    assert!(!h.contains("Circle Of Life"), "口令绝不进头，进的只有摘要：{h}");
+
+    // 中文口令按 UTF-8 字节参与摘要（现场真有这种机），值里的引号也不会把 header 扯断
+    let t = target_from_config(1, "cam2", r#"{"host":"10.0.0.8","user":"磅","password":"房\"1","auth":"digest","snapshotUrl":"/s"}"#, None).unwrap();
+    let h = digest_authorization(&t, &ch).unwrap();
+    assert_eq!(digest_field(&h, "username"), "磅");
+    assert!(!h.contains("房"), "口令绝不进头：{h}");
+}
+
+#[test]
+fn digest_answer_without_qop_uses_the_legacy_formula() {
+    // 部分海康固件只回 realm+nonce：那一趟按 RFC 2617 的无计数模式算，别塞 nc/cnonce
+    let t = target_from_config(
+        1,
+        "cam1",
+        r#"{"host":"10.0.0.8","user":"admin","password":"pass1234","auth":"digest","snapshotUrl":"/ISAPI/Streaming/channels/102/picture"}"#,
+        None,
+    )
+    .unwrap();
+    let ch = parse_digest_challenge(r#"Digest realm="cam401", nonce="abcdef""#).unwrap();
+    let h = digest_authorization(&t, &ch).unwrap();
+    assert!(!h.contains("qop") && !h.contains("cnonce") && !h.contains("nc="), "无 qop 模式不该带这些参数：{h}");
+    let ha1 = md5_hex(b"admin:cam401:pass1234");
+    let ha2 = md5_hex(b"GET:/ISAPI/Streaming/channels/102/picture");
+    assert_eq!(digest_field(&h, "response"), md5_hex(format!("{ha1}:abcdef:{ha2}").as_bytes()));
+}
+
+/// realm / nonce / opaque 是从摄像机回包里抄来的，照原样插进请求头就等于让对端决定我们发什么。
+/// 带 CR/LF 的一律拒发——这是防"一次抓图顺手多写一条头"的唯一一道闸。
+#[test]
+fn camera_supplied_digest_params_cannot_add_a_header_line() {
+    let t = target_from_config(1, "cam1", r#"{"host":"10.0.0.8","user":"a","password":"b","auth":"digest","snapshotUrl":"/s"}"#, None).unwrap();
+
+    // 质询值里带真换行：解析阶段照原样收下来，组应答那一步必须拒发
+    let ch = parse_digest_challenge("Digest realm=\"r\", nonce=\"n\r\nX-Evil: 1\"").expect("解析只拆参数，不判字符");
+    assert!(ch.nonce.contains('\r'), "换行确实带进了 nonce，下面那道闸才有得测");
+    let err = digest_authorization(&t, &ch).expect_err("对端给的参数里带换行就拒发");
+    assert!(err.contains("换行"), "{err}");
+
+    // 值里的引号与反斜杠要转义：不转义就等于让对端提前收尾、把后面的参数扯断
+    let ch = DigestChallenge {
+        realm: r#"a"b\c"#.to_string(),
+        nonce: "n".to_string(),
+        opaque: None,
+        qop: None,
+        algorithm: "MD5".to_string(),
+    };
+    let h = digest_authorization(&t, &ch).unwrap();
+    assert!(h.contains(r#"realm="a\"b\\c""#), "引号与反斜杠都要转义：{h}");
+    assert_eq!(digest_field(&h, "nonce"), "n", "realm 里那对引号不该把后面的参数吃掉");
+}
+
+// -------------------------------------------------------------- 预览端点（工作台实时画面）
+
+/// 工作台那一格与过磅抓拍共用端点拼装，只把路径换成子码流 `previewUrl`：
+/// 一秒一张时主码流的几百 KB 会把磅房那条网线占满。没填就退回抓拍路径，
+/// 而不是"预览不了"——现场十台里有八台没人记得填第二行。
+#[test]
+fn preview_endpoint_prefers_the_substream_path() {
+    let cfg = r#"{"host":"192.168.10.199","port":"8080","user":"admin","password":"pass1234","auth":"digest",
+                 "snapshotUrl":"/ISAPI/Streaming/channels/101/picture","previewUrl":"/ISAPI/Streaming/channels/102/picture"}"#;
+    let t = preview_target_from_config(1, "cam1", cfg, None).unwrap();
+    assert_eq!(t.path, "/ISAPI/Streaming/channels/102/picture", "预览走子码流");
+    assert_eq!((t.host.as_str(), t.port), ("192.168.10.199", 8080), "host/端口照台账，别被路径带跑");
+    assert_eq!((t.user.as_deref(), t.auth), (Some("admin"), AuthKind::Digest), "认证与口令跟着抓拍那套走");
+
+    // 没配 previewUrl（或配了空串）→ 退回主码流路径
+    let t = preview_target_from_config(1, "cam1", r#"{"host":"h","snapshotUrl":"/snap.jpg","previewUrl":"  "}"#, None).unwrap();
+    assert_eq!(t.path, "/snap.jpg");
+
+    // 坏 JSON 的说法只留 target_from_config 那一句，这里不另造一种
+    let a = preview_target_from_config(1, "cam1", "{not json", None).unwrap_err();
+    let b = target_from_config(1, "cam1", "{not json", None).unwrap_err();
+    assert_eq!(a, b);
 }
 
 // ---------------------------------------------------------------- 收包与解析

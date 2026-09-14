@@ -7,13 +7,14 @@
 //! 自己写 `weigh_record.photo_attachment_id`——**本模块不碰业务表**（04 §2.4 的分工：
 //! 设备层只交图与附件行，业务归属由服务层落），于是磅单上的"无抓拍"终于有了真依据。
 //!
+//! **认证**：Basic 一趟过；Digest（04 §4.1 说海康 ISAPI 走这个，现网那台 192.168.10.199
+//! 实测对 Basic 只回 401）按"空认证撞质询 → 带应答重发"两趟走，MD5 手写不引依赖
+//! （见 `md5` 与 [`digest_authorization`]）。台账里的 `auth` 键决定用哪种。
+//!
 //! **本轮没接的东西**（都是有意不做，不是漏了）：
 //!  - **HTTPS**：抓图只走明文 HTTP。磅房里摄像机与磅房机同网段，厂商固件的 TLS 栈
 //!    多半是过期证书；要接得先定证书校验策略（04 §4.1 未给结论），所以配置里出现
 //!    `https://` 一律**明确拒绝**而不是退化成明文去试。
-//!  - **Digest 认证**：04 §4.1 说海康 ISAPI 走 Digest。Challenge 往返要维护第二次
-//!    请求与 nonce，本轮只做 Basic（现网多数固件的抓图 CGI 同时收 Basic）；
-//!    配置写了 `auth:"digest"` 的摄像机按降级处理，回一句人话而不是假装取到图。
 //!  - **RTSP 抽帧 / 录像回放 / 转码压缩**：方案 C（ffmpeg）与 NVR 回放都不在这里；
 //!    04 §4.2 的"长边 1600 px + 逐级降质"需要 `image` crate，本轮不加依赖，
 //!    原图超限就降级并把"去摄像机侧调低主码流"写进原因里。
@@ -175,7 +176,7 @@ fn list_local_cameras() -> Result<Vec<LocalCamera>, String> {
 
 // ---------------------------------------------------------------------- 抓图端点
 
-/// 认证方式。`Digest` 是"配置里写了但本轮做不到"，不是非法值。
+/// 认证方式。`Digest` 需要两趟往返（先空认证拿 401 质询，再带应答重发），见 `grab`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthKind {
     /// 不带头（匿名抓图的摄像机/录像机）
@@ -275,7 +276,7 @@ pub fn target_from_config(
         None => text(&cfg, &["host", "ip", "address"]).unwrap_or_default(),
     };
     let (host, port) = split_host_port(&host, &cfg, device_code)?;
-    let path = checked_path(&path, device_code)?;
+    let path = checked_path(&path, device_code, "抓图路径")?;
 
     let user = text(&cfg, &["user", "username", "account"]);
     let secret = secret_json.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
@@ -308,7 +309,9 @@ pub fn target_from_config(
     })
 }
 
-fn text(obj: &serde_json::Value, keys: &[&str]) -> Option<String> {
+/// 取一个字符串键：只认非空字符串与数字（端口常写成数字），并一律 trim。
+/// `camera_stream.rs` 推 RTSP 地址时读的是同一把尺子，两处不会一个认 `rtspUrl` 一个不认。
+pub(crate) fn text(obj: &serde_json::Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|k| obj.get(*k)).and_then(|v| match v {
         serde_json::Value::String(s) => {
             let t = s.trim();
@@ -363,26 +366,260 @@ fn split_host_port(raw: &str, cfg: &serde_json::Value, code: &str) -> Result<(St
     Ok((host, port))
 }
 
-/// 路径直接进请求行，所以除"以 / 开头"外还要卡字符：控制字符能撕开 HTTP 报文，
+/// 路径直接进请求行，所以除"以 / 开头"外还要卡字符：控制字符能撕开 HTTP/RTSP 报文，
 /// 非 ASCII 得先百分号编码（本轮不做，让现场在摄像机侧或配置里改好）。
-fn checked_path(raw: &str, code: &str) -> Result<String, String> {
+/// `what` 只影响报错时怎么称呼这一栏——抓图与预览两条通道共用同一把尺子。
+pub(crate) fn checked_path(raw: &str, code: &str, what: &str) -> Result<String, String> {
     if raw.contains(':') && raw.to_ascii_lowercase().contains("://") {
-        return Err(format!("摄像机「{code}」的抓图路径里不要带协议前缀"));
+        return Err(format!("摄像机「{code}」的{what}里不要带协议前缀"));
     }
     if !raw.starts_with('/') {
-        return Err(format!(
-            "摄像机「{code}」的抓图路径「{raw}」必须以 / 开头"
-        ));
+        return Err(format!("摄像机「{code}」的{what}「{raw}」必须以 / 开头"));
     }
     if raw.chars().any(|c| (c as u32) < 0x21 || c == '"' || c == '\\' || (c as u32) > 0x7e) {
         return Err(format!(
-            "摄像机「{code}」的抓图路径含空格、控制字符或非 ASCII 字符，请先在配置里改成 URL 编码形式"
+            "摄像机「{code}」的{what}含空格、控制字符或非 ASCII 字符，请先在配置里改成 URL 编码形式"
         ));
     }
     if raw.len() > 2000 {
-        return Err(format!("摄像机「{code}」的抓图路径过长"));
+        return Err(format!("摄像机「{code}」的{what}过长"));
     }
     Ok(raw.to_string())
+}
+
+// ---------------------------------------------------------- MD5 与 Digest 认证
+
+/// MD5（RFC 1321）。**只用于 HTTP Digest 的质询应答**——口令散列走 argon2（见 `auth.rs`），
+/// 两件事绝不能混。手写而不引 crate，与 [`base64_standard`] 同一取舍：
+/// 只为一次摘要就把磅房机的依赖树拉长一截不划算，且算法本身有 RFC 的官方测试向量可钉死。
+fn md5(input: &[u8]) -> [u8; 16] {
+    // 每轮左移位数与 K 表（K[i] = floor(2^32 × |sin(i+1)|)）都照 RFC 1321 的附录抄成常量，
+    // 不在运行时用浮点现算：那样每次构建的位都可能不一样，测试向量就白钉了。
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+        5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    const K: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+    ];
+
+    // 填充：0x80 + 若干 0x00 补到 ≡56 (mod 64)，末尾挂 64 位小端长度
+    let mut data = input.to_vec();
+    let bit_len = (input.len() as u64).wrapping_mul(8);
+    data.push(0x80);
+    while data.len() % 64 != 56 {
+        data.push(0x00);
+    }
+    data.extend_from_slice(&bit_len.to_le_bytes());
+
+    let (mut a0, mut b0, mut c0, mut d0) = (0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32);
+    for chunk in data.chunks(64) {
+        let mut m = [0u32; 16];
+        for (i, w) in m.iter_mut().enumerate() {
+            let off = i * 4;
+            *w = u32::from_le_bytes([
+                chunk[off],
+                chunk[off + 1],
+                chunk[off + 2],
+                chunk[off + 3],
+            ]);
+        }
+        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+        for i in 0..64 {
+            // 四轮各自的 F/G 索引式，照 RFC 1321 §3.4
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | ((!b) & d), i),
+                1 => ((d & b) | ((!d) & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | (!d)), (7 * i) % 16),
+            };
+            let next = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(
+                a.wrapping_add(f)
+                    .wrapping_add(K[i])
+                    .wrapping_add(m[g])
+                    .rotate_left(S[i]),
+            );
+            a = next;
+        }
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+    let mut out = [0u8; 16];
+    for (i, w) in [a0, b0, c0, d0].iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+    }
+    out
+}
+
+/// MD5 的小写十六进制串——`Authorization` 里的 `response` 就是这个形状。
+pub fn md5_hex(input: &[u8]) -> String {
+    md5(input).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 一次 `WWW-Authenticate: Digest ...` 里真正要用的几个参数。
+/// `qop` 只认 `auth`（`auth-int` 要连实体一起摘要，现网海康 / 大华都没这么配）；
+/// 没回 `qop` 就按 RFC 2617 的老式无计数模式算，海康部分固件正是这种。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DigestChallenge {
+    pub realm: String,
+    pub nonce: String,
+    pub opaque: Option<String>,
+    pub qop: Option<String>,
+    pub algorithm: String,
+}
+
+/// 拆 `Digest key="value", key2=value2, ...`。值可以带引号也可以不带，
+/// 而带引号的值里真会出现逗号（`qop="auth,auth-int"`、realm 带地名），
+/// 所以按引号状态扫一遍再切逗号，不能 `split(',')`。
+pub fn parse_digest_challenge(header: &str) -> Result<DigestChallenge, String> {
+    let body = header.trim();
+    let body = match body.get(..6) {
+        Some(p) if p.eq_ignore_ascii_case("digest") => &body[6..],
+        _ => return Err(format!("摄像机回的认证头不是 Digest 质询：{header}")),
+    };
+    let mut params: Vec<(String, String)> = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in body.chars() {
+        match ch {
+            '"' => {
+                quoted = !quoted;
+                cur.push(ch);
+            }
+            ',' if !quoted => {
+                params.push(cur);
+                cur = String::new();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    params.push(cur);
+
+    let mut realm = None;
+    let mut nonce = None;
+    let mut opaque = None;
+    let mut qop = None;
+    let mut algorithm = None;
+    for kv in params {
+        let Some((k, v)) = kv.split_once('=') else { continue };
+        let value = {
+            let v = v.trim();
+            v.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(v).to_string()
+        };
+        match k.trim().to_ascii_lowercase().as_str() {
+            "realm" => realm = Some(value),
+            "nonce" => nonce = Some(value),
+            "opaque" => opaque = Some(value),
+            "algorithm" => algorithm = Some(value),
+            // 只挑 auth；候选列表里是它就用它，不是就按无 qop 算（见上）
+            "qop" => qop = value.split(',').map(|s| s.trim()).find(|s| s.eq_ignore_ascii_case("auth")).map(|s| s.to_string()),
+            _ => {}
+        }
+    }
+    let realm = realm.ok_or_else(|| format!("Digest 质询里没有 realm，无法算 HA1：{header}"))?;
+    let nonce = nonce.ok_or_else(|| format!("Digest 质询里没有 nonce，无从应答：{header}"))?;
+    let algorithm = algorithm.unwrap_or_else(|| "MD5".to_string());
+    if !algorithm.eq_ignore_ascii_case("MD5") {
+        return Err(format!("摄像机要求 {algorithm} 的 Digest 认证，本轮只实现 MD5：把认证方式改成 basic 试一次"));
+    }
+    Ok(DigestChallenge { realm, nonce, opaque, qop, algorithm })
+}
+
+/// 把值包成 `quoted-string`：转义 `\` 与 `"`，遇到 CR/LF 直接拒绝——
+/// realm/nonce/opaque 是从摄像机回包里抄来的，照原样塞进请求头等于让对端决定我们发什么。
+fn digest_quoted(key: &str, value: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(value.len() + 3);
+    out.push('"');
+    for ch in value.chars() {
+        if matches!(ch, '\r' | '\n') {
+            return Err(format!("Digest 参数 {key} 里带了换行，拒发这条应答"));
+        }
+        if ch == '\\' || ch == '"' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    Ok(out)
+}
+
+/// 客户端随机串。没有 `rand` 依赖，用"纳秒时钟 + 进程内计数 + 线程号"再过一道 MD5：
+/// 它只要每次不同、不可预测到能撞就行，不承担密码学职责。
+fn cnonce() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seed = format!("{nanos}:{}:{}", SEQ.fetch_add(1, Ordering::Relaxed), std::process::id());
+    md5_hex(seed.as_bytes())[..16].to_string()
+}
+
+/// 组出第二趟的 `Authorization: Digest ...`（RFC 7616 §3.3）。
+/// `uri` 用抓图路径本身、用户名与口令按 UTF-8 字节参与摘要（中文口令的摄像机现场真遇到过）。
+pub fn digest_authorization(target: &SnapshotTarget, challenge: &DigestChallenge) -> Result<String, String> {
+    digest_header(
+        target.user.as_deref().unwrap_or_default(),
+        target.password.as_deref().unwrap_or_default(),
+        "GET",
+        &target.path,
+        challenge,
+    )
+}
+
+/// Digest 应答的本体。HTTP 抓图与 RTSP 预览共用这一份算法，差别只在 `method` 与 `uri`：
+/// RTSP 每趟请求的 URI 都是完整的 `rtsp://host:port/path`、方法也可能是 SETUP/PLAY，
+/// 所以这两个入参必须由调用方给，不能从 [`SnapshotTarget`] 里抄。
+/// 质询里的 realm/nonce/opaque 来自对端，一律过 [`digest_quoted`]（带换行就拒发）。
+pub(crate) fn digest_header(
+    user: &str,
+    password: &str,
+    method: &str,
+    uri: &str,
+    challenge: &DigestChallenge,
+) -> Result<String, String> {
+    let nc = "00000001";
+    let cnonce = cnonce();
+
+    let ha1 = md5_hex(format!("{user}:{}:{password}", challenge.realm).as_bytes());
+    let ha2 = md5_hex(format!("{method}:{uri}").as_bytes());
+    let response = match challenge.qop.as_deref() {
+        Some(q) => md5_hex(format!("{ha1}:{}:{nc}:{cnonce}:{q}:{ha2}", challenge.nonce).as_bytes()),
+        None => md5_hex(format!("{ha1}:{}:{ha2}", challenge.nonce).as_bytes()),
+    };
+
+    let mut parts = vec![
+        format!("username={}", digest_quoted("username", user)?),
+        format!("realm={}", digest_quoted("realm", &challenge.realm)?),
+        format!("nonce={}", digest_quoted("nonce", &challenge.nonce)?),
+        format!("uri={}", digest_quoted("uri", uri)?),
+        "algorithm=MD5".to_string(),
+    ];
+    if let Some(q) = challenge.qop.as_deref() {
+        parts.push(format!("qop={q}"));
+        parts.push(format!("nc={nc}"));
+        parts.push(format!("cnonce={}", digest_quoted("cnonce", &cnonce)?));
+    }
+    parts.push(format!("response={}", digest_quoted("response", &response)?));
+    if let Some(op) = &challenge.opaque {
+        parts.push(format!("opaque={}", digest_quoted("opaque", op)?));
+    }
+    Ok(format!("Digest {}", parts.join(", ")))
 }
 
 // ------------------------------------------------------------------- 极简 HTTP/1.1
@@ -441,6 +678,13 @@ pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
 
 /// 组一次 `GET` 的请求字节。纯函数，所以认证串、Host、端口、路径都能离线钉死。
 pub fn build_get_request(target: &SnapshotTarget) -> Vec<u8> {
+    build_get_request_with_auth(target, static_authorization(target).as_deref())
+}
+
+/// 与 [`build_get_request`] 同一条请求，只把 `Authorization` 那一行交给调用方：
+/// Digest 要"先空认证拿 401、再带应答重发"，第二趟的头只能在往返途中才知道。
+/// `authorization` 传 `None` 就是不带认证头（匿名，或 Digest 的第一趟质询）。
+pub fn build_get_request_with_auth(target: &SnapshotTarget, authorization: Option<&str>) -> Vec<u8> {
     let host_header = if target.port == 80 {
         target.host.clone()
     } else {
@@ -450,13 +694,8 @@ pub fn build_get_request(target: &SnapshotTarget) -> Vec<u8> {
         format!("GET {} HTTP/1.1", target.path),
         format!("Host: {host_header}"),
     ];
-    if target.auth == AuthKind::Basic {
-        let cred = format!(
-            "{}:{}",
-            target.user.clone().unwrap_or_default(),
-            target.password.clone().unwrap_or_default()
-        );
-        lines.push(format!("Authorization: Basic {}", base64_standard(cred.as_bytes())));
+    if let Some(auth) = authorization {
+        lines.push(format!("Authorization: {auth}"));
     }
     // 一次抓图一条连接：keep-alive 要管连接池，而摄像机端常主动掐，反而更难判定
     lines.push("Connection: close".to_string());
@@ -471,6 +710,12 @@ pub fn build_get_request(target: &SnapshotTarget) -> Vec<u8> {
 }
 
 /// 响应头。`body_start` 是 body 在原始字节里的起点，省掉调用方各算一遍偏移。
+/// `www_authenticate` 只在 Digest 那一趟用得上：401 没有它就没法应答质询。
+///
+/// **HTTP 与 RTSP 共用这一个解析器**：RFC 2326 §7.1 明说 RTSP 响应就是 HTTP/1.1 报文格式，
+/// 分成两份只会让"哪边认 Content-Length、哪边认大小写"变成两套口径。
+/// `headers` 是除上面几个已具名字段外的全部头（键小写），RTSP 的 `session:` /
+/// `transport:` / `rtp-info:` 从这里取——加解析器不如加一个列表。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpHead {
     pub status: u16,
@@ -478,6 +723,9 @@ pub struct HttpHead {
     pub content_length: Option<usize>,
     pub content_type: Option<String>,
     pub chunked: bool,
+    pub www_authenticate: Option<String>,
+    /// 全部头字段（键转小写、值 trim），按出现顺序。已具名的那几个也在里面。
+    pub headers: Vec<(String, String)>,
     pub body_start: usize,
 }
 
@@ -502,9 +750,9 @@ pub fn parse_http_head(raw: &[u8]) -> Result<HttpHead, String> {
     let status_line = lines.next().unwrap_or_default();
     let mut parts = status_line.splitn(3, ' ');
     let version = parts.next().unwrap_or_default();
-    if !version.starts_with("HTTP/") {
+    if !version.starts_with("HTTP/") && !version.starts_with("RTSP/") {
         return Err(format!(
-            "摄像机回的第一行不是 HTTP 状态行（前 {} 字节：{}）",
+            "摄像机回的第一行不是 HTTP/RTSP 状态行（前 {} 字节：{}）",
             raw.len().min(32),
             hex_preview(raw, 32)
         ));
@@ -519,15 +767,19 @@ pub fn parse_http_head(raw: &[u8]) -> Result<HttpHead, String> {
         content_length: None,
         content_type: None,
         chunked: false,
+        www_authenticate: None,
+        headers: Vec::new(),
         body_start,
     };
     for line in lines {
         let Some((k, v)) = line.split_once(':') else { continue };
         let key = k.trim().to_ascii_lowercase();
         let value = v.trim();
+        head.headers.push((key.clone(), value.to_string()));
         match key.as_str() {
             "content-length" => head.content_length = value.parse::<usize>().ok(),
             "content-type" => head.content_type = Some(value.to_string()),
+            "www-authenticate" => head.www_authenticate = Some(value.to_string()),
             "transfer-encoding" => {
                 if value.to_ascii_lowercase().contains("chunked") {
                     head.chunked = true;
@@ -537,6 +789,17 @@ pub fn parse_http_head(raw: &[u8]) -> Result<HttpHead, String> {
         }
     }
     Ok(head)
+}
+
+/// 取一个头的值（大小写已归一）。RTSP 的 `Session: 1234;timeout=60` 这种带参数的
+/// 头由调用方自己切分，这里只负责"有没有、原样是什么"。
+impl HttpHead {
+    pub fn header(&self, key: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 /// 按 `Content-Length` 或"收到连接关闭为止"取 body。
@@ -558,7 +821,7 @@ pub fn http_body(raw: &[u8], head: &HttpHead) -> Result<Vec<u8>, String> {
 /// 状态码 → 人话（04 §6 要求故障建议能指到下一步动作）。
 pub fn http_status_reason(status: u16) -> String {
     match status {
-        401 | 403 => "摄像机拒绝登录（HTTP 401/403）：核对 user 与口令，本轮只支持 Basic 认证".into(),
+        401 | 403 => "摄像机拒绝登录（HTTP 401/403）：核对 user 与登录密码；Digest 质询应答不过多半是口令错，Basic 不通可把认证方式改成 digest 再试".into(),
         404 => "抓图路径不存在（HTTP 404）：核对 snapshotUrl 的通道号与码流号".into(),
         408 => "摄像机自己超时（HTTP 408）：稍后再过磅，或降低主码流分辨率".into(),
         500..=599 => format!("摄像机内部错误（HTTP {status}）：多半是固件或通道配置问题"),
@@ -566,13 +829,27 @@ pub fn http_status_reason(status: u16) -> String {
     }
 }
 
-/// 联网抓一张图：连接、发请求、收包、状态判定、JPEG 校验。失败回中文短句。
+/// 台账里静态配好的那一行 `Authorization`（Basic 才有；Digest 与匿名都是 `None`）。
+/// 与 [`build_get_request`] 同源，抽出来是为了让 [`grab`] 的 Digest 两趟能复用同一套发送逻辑。
+fn static_authorization(target: &SnapshotTarget) -> Option<String> {
+    (target.auth == AuthKind::Basic).then(|| {
+        let cred = format!(
+            "{}:{}",
+            target.user.clone().unwrap_or_default(),
+            target.password.clone().unwrap_or_default()
+        );
+        format!("Basic {}", base64_standard(cred.as_bytes()))
+    })
+}
+
+/// 一次完整的请求—收包：连接、发请求、按上限收完、解出响应头就返回。
+/// 状态判定与 JPEG 校验留给调用方——Digest 得先看是不是 401 质询才能决定下一步。
 ///
 /// 有界性靠三件事：连接与每次读写都带 3 秒超时、响应头上限 64 KB、
 /// 整体字节上限（`max_bytes + 头部余量`）。任何一条超限就断开，绝不无界等下去。
-fn grab(target: &SnapshotTarget, max_bytes: usize) -> Result<Vec<u8>, String> {
+fn exchange(target: &SnapshotTarget, authorization: Option<&str>, max_bytes: usize) -> Result<(HttpHead, Vec<u8>), String> {
     let mut stream = connect(target)?;
-    let request = build_get_request(target);
+    let request = build_get_request_with_auth(target, authorization);
     stream
         .write_all(&request)
         .and_then(|_| stream.flush())
@@ -637,20 +914,64 @@ fn grab(target: &SnapshotTarget, max_bytes: usize) -> Result<Vec<u8>, String> {
         return Err("摄像机没回任何字节：IP 或端口不对，或摄像头已掉线".into());
     }
     let head = parse_http_head(&buf)?;
+    Ok((head, buf))
+}
+
+/// 200 → 取 body → JPEG 校验；非 200 一律按状态码回一句人话。
+fn image_of(head: &HttpHead, buf: &[u8], max_bytes: usize) -> Result<Vec<u8>, String> {
     if head.status != 200 {
         return Err(http_status_reason(head.status));
     }
-    let body = http_body(&buf, &head)?;
-    check_jpeg(&body, max_bytes)?;
-    Ok(body)
+    let body = http_body(buf, head)?;
+    check_jpeg(body, max_bytes)?;
+    Ok(body.to_vec())
+}
+
+/// 联网抓一张图（失败回中文短句，由调用方按 04 §4.2 降级）。
+///
+/// **Digest 要两趟**（04 §4.1：海康 ISAPI 只认 Digest）：第一趟按台账配好的认证发出去，
+/// 撞上 401 就从 `WWW-Authenticate` 里取 realm/nonce 算应答，第二趟带应答重发。
+/// 本模块本来就是一条连接一次请求（`Connection: close`），所以第二趟天然是新连接——
+/// nonce 一次一换，没有任何值得跨磅缓存的状态。第一趟就给 200 的固件（少数型号对抓图
+/// CGI 直接放行）照单收下，不多跑那一趟。
+fn grab(target: &SnapshotTarget, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let (head, buf) = exchange(target, static_authorization(target).as_deref(), max_bytes)?;
+    if target.auth != AuthKind::Digest || head.status == 200 {
+        return image_of(&head, &buf, max_bytes);
+    }
+    if head.status != 401 {
+        return Err(http_status_reason(head.status));
+    }
+    let challenge = head
+        .www_authenticate
+        .as_deref()
+        .ok_or("摄像机回 401 却没带 WWW-Authenticate：无从应答质询，核对 user 与登录密码，或把认证方式改成 basic")?;
+    let answer = digest_authorization(target, &parse_digest_challenge(challenge)?)?;
+
+    let (again, body) = exchange(target, Some(&answer), max_bytes)?;
+    if again.status == 401 {
+        return Err("摄像机拒收 Digest 应答（第二次仍 401）：多半是登录密码不对，其次是固件用了非 MD5 的算法".into());
+    }
+    image_of(&again, &body, max_bytes)
 }
 
 fn connect(target: &SnapshotTarget) -> Result<TcpStream, String> {
-    // `to_socket_addrs` 对主机名走 getaddrinfo，**没有超时可言**（磅房网段常配 .local /
-    //  NetBIOS 名，DNS 不响应时能卡十几秒）。丢给一条一次性线程去解，主路径只等 3 秒：
-    // 解不出来就降级，绝不让过磅陪着等。那条线程之后自己结束，不占任何锁与连接。
+    let stream = connect_to(&target.host, target.port)?;
+    stream
+        .set_read_timeout(Some(SNAPSHOT_TIMEOUT))
+        .and_then(|_| stream.set_write_timeout(Some(SNAPSHOT_TIMEOUT)))
+        .map_err(|e| net_reason(&e, "设置抓图超时"))?;
+    Ok(stream)
+}
+
+/// 解析 + 连接，一趟最多等 3 秒，**不设读写超时**（RTSP 预览要自己定节奏，抓拍用 [`connect`]）。
+///
+/// `to_socket_addrs` 对主机名走 getaddrinfo，**没有超时可言**（磅房网段常配 .local /
+/// NetBIOS 名，DNS 不响应时能卡十几秒）。丢给一条一次性线程去解，主路径只等 3 秒：
+/// 解不出来就降级，绝不让过磅陪着等。那条线程之后自己结束，不占任何锁与连接。
+pub(crate) fn connect_to(host: &str, port: u16) -> Result<TcpStream, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let (host, port) = (target.host.clone(), target.port);
+    let (host, port) = (host.to_string(), port);
     std::thread::spawn(move || {
         let _ = tx.send(
             (host.as_str(), port)
@@ -667,14 +988,8 @@ fn connect(target: &SnapshotTarget) -> Result<TcpStream, String> {
         ))??
         .into_iter()
         .next()
-        .ok_or_else(|| format!("解析不到摄像机地址：{}", target.host))?;
-    let stream = TcpStream::connect_timeout(&addr, SNAPSHOT_TIMEOUT)
-        .map_err(|e| net_reason(&e, "连接摄像机"))?;
-    stream
-        .set_read_timeout(Some(SNAPSHOT_TIMEOUT))
-        .and_then(|_| stream.set_write_timeout(Some(SNAPSHOT_TIMEOUT)))
-        .map_err(|e| net_reason(&e, "设置抓图超时"))?;
-    Ok(stream)
+        .ok_or_else(|| format!("解析不到摄像机地址：{host}"))?;
+    TcpStream::connect_timeout(&addr, SNAPSHOT_TIMEOUT).map_err(|e| net_reason(&e, "连接摄像机"))
 }
 
 // ------------------------------------------------------------------ JPEG 与文件名
@@ -1238,12 +1553,6 @@ pub fn snapshot_for(
             return Err(reason);
         }
     };
-    if target.auth == AuthKind::Digest {
-        let reason = "该摄像机要求 Digest 认证，本轮抓图只支持 Basic：把 auth 改成 basic 或在摄像机侧启用 Basic";
-        note_fail(conn, id, reason);
-        degrade(reason)?;
-        return Ok(None);
-    }
 
     let max_bytes = max_snapshot_bytes(conn);
     let jpeg = match grab(&target, max_bytes) {
@@ -1284,16 +1593,123 @@ fn degrade(reason: &str) -> Result<(), String> {
 }
 
 /// `attachment_max_kb`（04 §4.2）→ 字节上限。离谱值按默认兜，不给 0 或负数放行。
-fn max_snapshot_bytes(conn: &Connection) -> usize {
+pub(crate) fn max_snapshot_bytes(conn: &Connection) -> usize {
     let kb = crate::orders::setting_int(conn, "attachment_max_kb", DEFAULT_MAX_KB);
     let kb = if (32..=20480).contains(&kb) { kb } else { DEFAULT_MAX_KB };
     kb as usize * 1024
 }
 
+// ------------------------------------------------- 工作台实时画面（RTSP 拉流，不落库）
+
+/// 预览一行的台账读出的东西：一条**已校验**的端点 + 原始配置 JSON。
+///
+/// 为什么两个都给：host / 端口 / 路径 / 口令 / 认证方式这五件事的裁决权在
+/// [`preview_target_from_config`]，RTSP 侧不能自己再拼一遍（拼出来就是第二条校验口径，
+/// 迟早一条通过一条不通过）；但 `rtspUrl` / `rtspPort` 这两个只有预览认的键，
+/// 又必须从配置里读，所以把 JSON 一起带回，让 `camera_stream` 只读这两个键。
+pub(crate) struct LiveRow {
+    pub target: SnapshotTarget,
+    pub config_json: String,
+}
+
+/// 该不该去拉这一路的流，以及向哪儿拉。判据与抓拍、联机测试同源：Mock 档、已停用、
+/// 本机 USB 机这三条**绝不能**去开 RTSP（本机机的画面在 WebView2 里，服务端去连只会
+/// 拿一句"未配置 host"，把一台好机器报成故障）。
+///
+/// 失败一律 `Err(中文短句)`，由画面那一格显示在自己框里（04 §4.2 的失败降级）：
+/// 摄像机掉线不弹框、更不打断称重。
+pub(crate) fn live_preview_row(conn: &Connection, code: &str) -> Result<LiveRow, String> {
+    let row = conn
+        .query_row(
+            "SELECT id, name, code, config_json, secret_json, is_mock, is_enabled
+             FROM device_config WHERE code = ?1 AND kind = 'camera'",
+            params![code],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| format!("读取摄像机配置失败：{e}"))?;
+    let Some((id, name, code, config_json, secret_json, is_mock, is_enabled)) = row else {
+        return Err(format!("台账里没有编码为「{code}」的摄像机（或它不是 camera 类型）"));
+    };
+    if is_mock == 1 {
+        return Err(format!("摄像机「{name}」当前是 Mock 模拟档，不出真画面：到设备中心切回真实设备"));
+    }
+    if is_enabled == 0 {
+        return Err(format!("摄像机「{name}」已停用：先在设备中心启用再看画面"));
+    }
+    if is_local_camera(&config_json) {
+        return Err(format!("摄像机「{name}」是本机 USB 摄像头，画面由工作台直接开流显示，不走这条取帧通道"));
+    }
+    let target = preview_target_from_config(id, &code, &config_json, secret_json.as_deref())?;
+    Ok(LiveRow { target, config_json })
+}
+
+/// 预览端点＝抓拍端点，只把路径换成 `previewUrl`（海康的子码流）。没填就照旧用
+/// `snapshotUrl`。预览这条通道现在走 RTSP 拉流（见 `camera_stream.rs`），一台机一条
+/// 会话、一秒十来帧全在子码流上跑——子码流是 768×432 量级，主码流是 2560×1440，
+/// 拿主码流做常驻画面会把磅房那条网线和摄像机连接数吃满，所以预览必须能单独指路径。
+/// host / 端口 / 口令 / 认证方式仍由 [`target_from_config`] 一处裁决，
+/// 设备中心改一次两条通道同时生效。
+pub fn preview_target_from_config(
+    device_id: i64,
+    device_code: &str,
+    config_json: &str,
+    secret_json: Option<&str>,
+) -> Result<SnapshotTarget, String> {
+    let mut cfg: serde_json::Value = match serde_json::from_str(config_json) {
+        Ok(v) => v,
+        // 坏 JSON 交给 target_from_config 说那句"配置不是合法 JSON"，这里不造第二种说法
+        Err(_) => return target_from_config(device_id, device_code, config_json, secret_json),
+    };
+    let preview = ["previewUrl", "preview_url"]
+        .iter()
+        .filter_map(|k| cfg.get(*k))
+        .find_map(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    if let (Some(p), Some(obj)) = (preview, cfg.as_object_mut()) {
+        obj.insert("snapshotUrl".to_string(), serde_json::Value::String(p));
+    }
+    let rewritten = serde_json::to_string(&cfg).unwrap_or_else(|_| config_json.to_string());
+    target_from_config(device_id, device_code, &rewritten, secret_json)
+}
+
+/// 设备中心「联机测试」的一探：走的就是抓拍与工作台预览那条 `grab`，只取图不落库。
+/// 测过＝这台机此刻出得来图（同一端点、同一套认证、同一条上限），测不过把原因原样回给人看。
+pub fn probe_snapshot(target: &SnapshotTarget, max_bytes: usize) -> (bool, String) {
+    let started = Instant::now();
+    match grab(target, max_bytes) {
+        Ok(jpeg) => (
+            true,
+            format!(
+                "已抓到一帧 JPEG：{} KB · {} ms（{}:{}{}）",
+                jpeg.len() / 1024,
+                started.elapsed().as_millis(),
+                target.host,
+                target.port,
+                target.path
+            ),
+        ),
+        Err(reason) => (false, format!("{}（等了 {} ms）", reason, started.elapsed().as_millis())),
+    }
+}
+
 // ------------------------------------------------------------------- 错误话术
 // 三条通道各一个：网络、磁盘、数据库。共同点是**绝不带文件路径**（附件里是农户人像）。
+// RTSP 预览（`camera_stream.rs`）复用 `net_reason`：同一类网络故障不该有两套说法。
 
-fn net_reason(e: &Error, what: &str) -> String {
+pub(crate) fn net_reason(e: &Error, what: &str) -> String {
     match e.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => {
             format!("{what}超时（{} 秒）：检查网线与摄像头是否在线", SNAPSHOT_TIMEOUT.as_secs())

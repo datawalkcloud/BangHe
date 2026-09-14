@@ -1,5 +1,5 @@
 /**
- * ③′ 过磅摄像头画面（04 §4 方案 A：IP 摄像机 HTTP 抓图 / 本机 USB 摄像头实时画面，工作台常驻窗）。
+ * ③′ 过磅摄像头画面（04 §4 方案 A：IP 摄像机 RTSP 连续流 / 本机 USB 摄像头实时画面，工作台常驻窗）。
  *
  * 为什么单独占一块：磅员判断「压边 / 不上全磅 / 中途换货 / 车厢夹带」靠的是眼睛，
  * 读数只能证明重量。所以画面必须常驻在工作台，而不是等结算完在角落看到几张缩略图。
@@ -8,8 +8,16 @@
  * （CSS grid `auto-fit`+`minmax`）；磅员用右上角「显示」菜单挑掉不看的镜头，隐藏集合按人存
  * 在 `user_preference`，重开工作台还是他那一套。
  *
+ * 画面从哪来（三条通道，逐台按台账判）：
+ *  - 本机 USB 摄像头（`transport=local`）：WebView2 `getUserMedia` 直接开流；
+ *  - 内网 IP 摄像机（海康 ISAPI / 大华 CGI）：服务端按台账开**一条 RTSP 会话**、软解 H.264
+ *    子码流，一帧一张 JPEG 由 `device://camera-frame` 推屏（`IpCameraLive` + `camera_stream_*`，
+ *    见 `src/lib/camera-stream.ts`）。放在服务端是两桩硬事：海康只认 Digest，web 侧给不出认证头；
+ *    且口令只存在于台账，不该下发到页面。子码流若是 H.265，这一格会直接说明去哪儿改。
+ *  - 两者都不可得（Mock 档、没填地址）：这一格回一句人话，不当绿标也不拦作业。
+ *
  * 三条边界不变：
- *  1. 画面不可用（离线、401、浏览器预览没有原生抓图通道）时只降级为占位 + 文字说明，
+ *  1. 画面不可用（离线、401、子码流不是 H.264、浏览器预览没有这条通道）时只降级为占位 + 文字说明，
  *     绝不阻断称重与结算（04 §4 失败降级、H6）；磅单上以「无抓拍」标记留痕。
  *  2. 画面里有人像与车牌，属个人信息：不外传、不上传云端；缩略图常驻，
  *     点开放大才按需拉原图并记 `pii.read` 审计（04 §4 隐私）。
@@ -24,6 +32,7 @@ import { api } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { localCameraSpec } from "@/lib/local-camera";
 import { LocalCameraLive } from "@/components/business/LocalCameraLive";
+import { IpCameraLive, ipCameraSpec } from "@/components/business/IpCameraLive";
 import { useSession } from "@/store/session";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -223,7 +232,7 @@ export function CameraPanel({
             <DialogTitle className="flex flex-wrap items-center gap-2 text-sm">
               过磅画面放大查看
               {zoomCam && (
-                <ToneBadge tone={localCameraSpec(zoomCam) != null || zoomCam.last_status === "online" ? "success" : "danger"}>
+                <ToneBadge tone={localCameraSpec(zoomCam) != null || ipCameraSpec(zoomCam) != null || zoomCam.last_status === "online" ? "success" : "danger"}>
                   {zoomCam.name}
                 </ToneBadge>
               )}
@@ -269,9 +278,11 @@ function CameraTile({
   compact: boolean;
   onZoom: () => void;
 }) {
-  // 本机 USB 摄像头：画面直接开在这块里（getUserMedia）；IP 机在桌面端才由原生通道回帧。
+  // 三条通道各走各的：本机 USB 摄像头在 WebView2 里直接开流；内网 IP 机由服务端按台账
+  // 拉一条 RTSP 子码流、解出的帧推回这一格（见 `IpCameraLive`）；剩下的才降级成一句占位说明。
   const spec = localCameraSpec(cam);
-  const online = spec != null || cam.last_status === "online";
+  const ip = spec == null ? ipCameraSpec(cam) : null;
+  const online = spec != null || ip != null || cam.last_status === "online";
   return (
     <div
       className={cn(
@@ -282,20 +293,14 @@ function CameraTile({
     >
       {spec ? (
         <LocalCameraLive spec={spec} />
+      ) : ip ? (
+        <IpCameraLive spec={ip} />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center px-2 text-center">
-          {online ? (
-            !compact && (
-              <p className="text-[11px] leading-tight text-muted-foreground">
-                {ipSnapshotHint(cam)} 实时抓图
-                <br />
-                <span className="text-[10px] opacity-75">（桌面端加载监控帧，支持点击放大）</span>
-              </p>
-            )
-          ) : (
-            <p className="flex flex-col items-center gap-0.5 text-[11px] text-muted-foreground">
+          {!compact && (
+            <p className="flex flex-col items-center gap-0.5 text-[11px] leading-tight text-muted-foreground">
               <CctvIcon className="size-4" />
-              {cam.last_error ?? "摄像机离线，本单将标「无抓拍」"}
+              {noFrameHint(cam)}
             </p>
           )}
         </div>
@@ -324,17 +329,20 @@ function CameraTile({
   );
 }
 
-/** 放大弹窗里的实时画面块——跟小卡走同一套在线/降级判断，只是拿 aspect-video 撑大 */
+/** 放大画面里的实时画面块——跟小卡走同一套通道判断，只是拿 aspect-video 撑大并带上帧信息 */
 function ZoomBody({ cam, order }: { cam: DeviceConfig; order: WeighOrder | null }) {
   const spec = localCameraSpec(cam);
-  const online = spec != null || cam.last_status === "online";
+  const ip = spec == null ? ipCameraSpec(cam) : null;
+  const online = spec != null || ip != null || cam.last_status === "online";
   return (
     <div className="relative aspect-video w-full overflow-hidden border bg-muted/60">
       {spec ? (
         <LocalCameraLive spec={spec} />
+      ) : ip ? (
+        <IpCameraLive spec={ip} meta />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-muted-foreground">
-          {online ? `桌面端在此按需要显示 ${ipSnapshotHint(cam)} 的原图（查看原图会写 pii.read 审计）` : (cam.last_error ?? "摄像机离线，无画面")}
+          {online ? noFrameHint(cam) : (cam.last_error ?? "摄像机离线，无画面")}
         </div>
       )}
       {order?.vehicle_no && (
@@ -344,6 +352,12 @@ function ZoomBody({ cam, order }: { cam: DeviceConfig; order: WeighOrder | null 
   );
 }
 
-function ipSnapshotHint(cam: DeviceConfig): string {
-  return `${cam.config?.host ?? "—"}${String(cam.config?.snapshotUrl ?? "")}`;
+/**
+ * 没画面时的那句话：只说"此刻为什么没画面、去设备中心拧哪一颗螺丝"。
+ * 拉流本身的失败（401、连不上、子码流是 H.265）由 `IpCameraLive` 带着服务端原话显示，不到这里来。
+ */
+function noFrameHint(cam: DeviceConfig): string {
+  if (cam.is_mock === 1) return "这台是 Mock 模拟档：到设备中心切回真实设备才出画面";
+  if (!String(cam.config?.host ?? "").trim()) return "台账里没填摄像机地址：到设备中心补「地址（IP）」";
+  return cam.last_error ?? "摄像机离线，本单将标「无抓拍」";
 }
