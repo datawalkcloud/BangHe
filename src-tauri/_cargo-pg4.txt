@@ -1,0 +1,94 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --test cards_contract --test outbound_contract ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.99s
+     Running tests\cards_contract.rs (target\debug\deps\cards_contract-8bf60ffd7be23ab8.exe)
+
+running 8 tests
+test normalize_strips_separators_and_uppercases ... ok
+test locate_reports_card_state_and_order ... ok
+test retire_only_touches_free_cards_and_lists_pool ... ok
+test issue_binds_newest_cardless_open_order ... ok
+test manual_release_ignores_which_order_is_on_panel ... ok
+test issue_gates_reject_bad_requests ... ok
+test issuing_twice_on_bound_order_is_rejected ... ok
+test terminal_state_auto_releases_card ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests\command_wiring_contract.rs (target\debug\deps\command_wiring_contract-29ce820496030634.exe)
+
+running 6 tests
+test handler_module_prefixes_are_declared_modules ... ok
+test every_rust_command_is_registered_in_invoke_handler ... ok
+test every_registered_command_is_called_by_the_frontend ... ok
+test every_frontend_command_has_a_registered_backend ... ok
+test every_emit_targets_a_declared_channel ... ok
+test device_event_channels_are_declared_on_both_sides ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests\dashboard_contract.rs (target\debug\deps\dashboard_contract-731a523030ae57ab.exe)
+
+running 9 tests
+test device_panel_and_offline_alert_share_source ... ok
+test hour_curve_counts_all_today_arrivals ... ok
+test empty_db_dashboard_is_zeroed_but_well_shaped ... ok
+test trend_and_grouping_window_is_14_days_back ... ok
+test open_order_overdue_follows_setting_and_fresh_order_not_inflated ... ok
+test serde_keys_match_frontend_dashboard_contract ... ok
+test today_totals_redflush_pairs_counted_void_rejected_excluded ... ok
+test views_do_not_inflate_elapsed_time ... ok
+test credit_alert_reads_warn_hours_setting ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests\ledger_contract.rs (target\debug\deps\ledger_contract-388ce7733230ce93.exe)
+
+running 9 tests
+test staff_load_counts_one_order_for_both_weigher_and_registrar ... ok
+test staff_load_counts_voids_for_the_registrar_only ... ok
+test quality_emits_a_zero_row_for_every_variety_in_the_archive ... ok
+test ledger_shows_unsettled_order_with_null_amounts_instead_of_zero ... ok
+test party_rank_separates_activity_from_totals_and_keeps_full_history_tare ... ok
+test quality_uses_two_denominators_and_dedupes_over_any ... ok
+test json_keys_match_the_mock_types_verbatim ... ok
+test party_rank_sorted_by_net_weight_descending ... ok
+test ledger_keeps_redflush_pairs_and_numbers_rows_by_sequence ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests\outbound_contract.rs (target\debug\deps\outbound_contract-a22f2ad0ef07fc7d.exe)
+
+running 10 tests
+test migration_backfill_projects_each_qualifying_order_once ... ok
+test pricing_rules_reject_record_price_require_party_and_round_half_up ... ok
+test outbound_number_uses_ck_segment_with_monthly_sequence ... ok
+test inbound_qualification_gate ... ok
+test balance_is_inbound_projection_minus_outbound_per_warehouse_variety ... ok
+test complete_writes_exactly_one_out_movement_matching_the_doc ... ok
+test red_reversal_keeps_original_and_adds_symmetric_in ... ok
+test overdraw_is_allowed_and_warns_without_blocking ... ok
+test state_machine_gates_reject_illegal_transitions ... ok
+test in_projection_is_idempotent_and_follows_warehouse_moves ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests\reports_contract.rs (target\debug\deps\reports_contract-c178924b58ed99ee.exe)
+
+running 7 tests
+test cross_midnight_order_belongs_to_business_date_only ... ok
+test avg_moisture_rounds_like_javascript_math_round ... ok
+test serde_keys_match_frontend_contract ... ok
+test empty_db_returns_zero_shape_not_error ... ok
+test settlement_keyword_date_and_limit ... ok
+test daily_rows_and_total_are_hand_computed ... ok
+test settlement_status_three_way_split_matches_shift_tabs ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+

@@ -1,0 +1,42 @@
+﻿cargo :    Compiling ticket-core v0.1.0 (G:\Github\BangHe\crates\ticket-core)
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --test orders_contract *> _cargo-pricegate-raw ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ti...es\ticket-core):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> G:\Github\BangHe\crates\ticket-core\src\render.rs:470:13
+    |
+470 |             qr(p, &t.qr_text, QR_DEFAULT_SIZE)?;
+    |             ^^-------------------------------- argument #4 of type `u16` is missing
+    |
+note: function defined here
+   --> G:\Github\BangHe\crates\ticket-core\src\render.rs:261:4
+    |
+261 | fn qr<D: Driver>(p: &mut Printer<D>, text: &str, size: u8, pad_left: u16) -> R<()> {
+    |    ^^                                                      -------------
+help: provide the argument
+    |
+470 |             qr(p, &t.qr_text, QR_DEFAULT_SIZE, /* u16 */)?;
+    |                                              +++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> G:\Github\BangHe\crates\ticket-core\src\render.rs:560:5
+    |
+560 |     qr(p, "BANGHE-SELFTEST", QR_DEFAULT_SIZE)?;
+    |     ^^--------------------------------------- argument #4 of type `u16` is missing
+    |
+note: function defined here
+   --> G:\Github\BangHe\crates\ticket-core\src\render.rs:261:4
+    |
+261 | fn qr<D: Driver>(p: &mut Printer<D>, text: &str, size: u8, pad_left: u16) -> R<()> {
+    |    ^^                                                      -------------
+help: provide the argument
+    |
+560 |     qr(p, "BANGHE-SELFTEST", QR_DEFAULT_SIZE, /* u16 */)?;
+    |                                             +++++++++++
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `ticket-core` (lib) due to 2 previous errors
+

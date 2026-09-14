@@ -1,0 +1,18 @@
+﻿cargo :     Blocking waiting for file lock on build directory
+所在位置 行:445 字符: 32
++ ... \src-tauri; cargo test --test orders_contract list_parties 2>&1 | Out ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Blocking wa...build directory:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.95s
+     Running tests\orders_contract.rs (target\debug\deps\orders_contract-95f93b260d889008.exe)
+
+running 2 tests
+test list_parties_supports_type_and_keyword_together ... ok
+test list_parties_treats_all_as_no_type_filter ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 41 filtered out; finished in 0.04s
+
+exit=0

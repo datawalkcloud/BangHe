@@ -1,0 +1,106 @@
+﻿cargo :    Compiling ticket-core v0.1.0 (G:\Github\BangHe\crates\ticket-core)
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --test orders_contract *> _cargo-pg2-raw.txt;  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ti...es\ticket-core):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+     Running tests\orders_contract.rs (target\debug\deps\orders_contract-95f93b260d889008.exe)
+
+running 41 tests
+test creating_with_an_inactive_variety_is_still_refused ... ok
+test capture_reweigh_keeps_single_adopted_per_type ... FAILED
+test capture_rejects_tare_not_below_gross ... ok
+test destination_backfill_signs_the_keeper_and_audits_every_change ... ok
+test a_lost_file_reads_back_as_an_actionable_error ... ok
+test capture_tare_tolerance_recomputed_server_side ... FAILED
+test card_photo_lands_on_the_party_and_reads_back_as_a_data_url ... ok
+test destination_rejects_mismatched_and_inactive_archives ... ok
+test a_new_order_must_carry_its_variety ... ok
+test clearing_when_there_was_no_photo_is_a_no_op ... ok
+test clearing_a_portrait_removes_row_and_file ... ok
+test a_scale_capture_reads_back_by_attachment_and_absent_is_not_an_error ... FAILED
+test create_order_numbers_by_spec_and_snapshots_party ... ok
+test capture_rejects_nonpositive_weight ... ok
+test create_order_binds_a_free_card_or_refuses_the_number ... ok
+test an_order_without_variety_still_reads_back_on_every_path ... ok
+test meta_edit_is_not_blocked_by_settlement_state ... FAILED
+test party_id_card_fingerprint_merges_and_blocks_duplicates ... ok
+test destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones ... FAILED
+test junk_or_missing_source_is_refused_without_touching_the_party ... ok
+test party_phone_is_unique_and_names_the_conflicting_archive ... ok
+test party_rows_carry_the_photo_reference_through_list_and_detail ... ok
+test saving_the_same_picture_twice_does_not_churn_the_attachment ... ok
+test list_parties_supports_type_and_keyword_together ... ok
+test phone_only_party_archives_are_allowed_and_stay_distinct ... ok
+test set_price_gates_off_list_reason_and_settled_orders ... ok
+test meta_edit_autosaves_vehicle_and_remark_with_one_audit_per_change ... ok
+test print_log_records_reprint_and_operator ... ok
+test set_price_requires_a_variety ... ok
+test list_orders_summary_excludes_unsettled_and_filters ... ok
+test qc_recheck_chain_and_reject_flow ... ok
+test replacing_a_portrait_leaves_no_stale_row_or_file ... ok
+test set_variety_gates_and_stays_silent_when_nothing_changed ... FAILED
+test settle_math_and_money_trail ... ok
+test settlement_of_links_order_and_settled_order_cannot_be_voided ... ok
+test tare_over_tolerance_still_captures_and_warns ... FAILED
+test variety_is_a_hard_gate_before_qc_and_settlement ... ok
+test settle_rejects_over_deduction_and_negative_payable ... ok
+test settle_part_pay_lands_on_credit_and_finishes_with_record_payment ... ok
+test void_gates_on_reason_and_state_machine_without_authorization ... ok
+test weigh_flow_drives_status_and_party_tare ... ok
+
+failures:
+
+---- capture_reweigh_keeps_single_adopted_per_type stdout ----
+
+thread 'capture_reweigh_keeps_single_adopted_per_type' (41208) panicked at tests\orders_contract.rs:150:6:
+called `Result::unwrap()` on an `Err` value: "鏈崟杩樻病鏈夊崟浠凤細璇峰厛鍦ㄧО閲嶅尯鎶婂崟浠峰～濂斤紙瀹氫环 / 鏀逛环锛夛紝鍐嶅埛鍗℃垨褰曞叆姣涢噸"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- capture_tare_tolerance_recomputed_server_side stdout ----
+
+thread 'capture_tare_tolerance_recomputed_server_side' (8776) panicked at tests\orders_contract.rs:150:6:
+called `Result::unwrap()` on an `Err` value: "鏈崟杩樻病鏈夊崟浠凤細璇峰厛鍦ㄧО閲嶅尯鎶婂崟浠峰～濂斤紙瀹氫环 / 鏀逛环锛夛紝鍐嶅埛鍗℃垨褰曞叆姣涢噸"
+
+---- a_scale_capture_reads_back_by_attachment_and_absent_is_not_an_error stdout ----
+
+thread 'a_scale_capture_reads_back_by_attachment_and_absent_is_not_an_error' (17260) panicked at tests\orders_contract.rs:150:6:
+called `Result::unwrap()` on an `Err` value: "鏈崟杩樻病鏈夊崟浠凤細璇峰厛鍦ㄧО閲嶅尯鎶婂崟浠峰～濂斤紙瀹氫环 / 鏀逛环锛夛紝鍐嶅埛鍗℃垨褰曞叆姣涢噸"
+
+---- meta_edit_is_not_blocked_by_settlement_state stdout ----
+
+thread 'meta_edit_is_not_blocked_by_settlement_state' (29240) panicked at tests\orders_contract.rs:150:6:
+called `Result::unwrap()` on an `Err` value: "鏈崟杩樻病鏈夊崟浠凤細璇峰厛鍦ㄧО閲嶅尯鎶婂崟浠峰～濂斤紙瀹氫环 / 鏀逛环锛夛紝鍐嶅埛鍗℃垨褰曞叆姣涢噸"
+
+---- destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones stdout ----
+
+thread 'destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones' (30252) panicked at tests\orders_contract.rs:150:6:
+called `Result::unwrap()` on an `Err` value: "鏈崟杩樻病鏈夊崟浠凤細璇峰厛鍦ㄧО閲嶅尯鎶婂崟浠峰～濂斤紙瀹氫环 / 鏀逛环锛夛紝鍐嶅埛鍗℃垨褰曞叆姣涢噸"
+
+---- set_variety_gates_and_stays_silent_when_nothing_changed stdout ----
+
+thread 'set_variety_gates_and_stays_silent_when_nothing_changed' (26536) panicked at tests\orders_contract.rs:150:6:
+called `Result::unwrap()` on an `Err` value: "鏈崟杩樻病鏈夊崟浠凤細璇峰厛鍦ㄧО閲嶅尯鎶婂崟浠峰～濂斤紙瀹氫环 / 鏀逛环锛夛紝鍐嶅埛鍗℃垨褰曞叆姣涢噸"
+
+---- tare_over_tolerance_still_captures_and_warns stdout ----
+
+thread 'tare_over_tolerance_still_captures_and_warns' (22676) panicked at tests\orders_contract.rs:150:6:
+called `Result::unwrap()` on an `Err` value: "鏈崟杩樻病鏈夊崟浠凤細璇峰厛鍦ㄧО閲嶅尯鎶婂崟浠峰～濂斤紙瀹氫环 / 鏀逛环锛夛紝鍐嶅埛鍗℃垨褰曞叆姣涢噸"
+
+
+failures:
+    a_scale_capture_reads_back_by_attachment_and_absent_is_not_an_error
+    capture_reweigh_keeps_single_adopted_per_type
+    capture_tare_tolerance_recomputed_server_side
+    destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones
+    meta_edit_is_not_blocked_by_settlement_state
+    set_variety_gates_and_stays_silent_when_nothing_changed
+    tare_over_tolerance_still_captures_and_warns
+
+test result: FAILED. 34 passed; 7 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.68s
+
+error: test failed, to rerun pass `--test orders_contract`
+

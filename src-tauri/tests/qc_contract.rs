@@ -70,8 +70,27 @@ fn new_party(conn: &Connection, name: &str, idc: &str) -> i64 {
     .id
 }
 
+/// 一张"能过磅的单"要先有价：`capture` 在毛重那一捕上有价格闸（02 §F1.4），没价这一捕直接被拒。
+/// 只在**这个品种还没有任何价**时补一条——已经 seed 过的用例不动，免得把 `price_list_id` 那个锚挪走。
+fn ensure_price(conn: &Connection, variety: i64) -> i64 {
+    let existing: Option<i64> = conn
+        .query_row("SELECT id FROM price_list WHERE variety_id = ?1 ORDER BY id LIMIT 1", params![variety], |r| r.get(0))
+        .ok();
+    if let Some(id) = existing {
+        return id;
+    }
+    conn.execute(
+        "INSERT INTO price_list (variety_id, grade, price_fen_per_ton, effective_from, effective_to, basis, made_by, created_at, created_by)
+         VALUES (?1, '一等', 240000, '2026-01-01', '9999-12-31', '测试定价', 1, '2026-01-01T00:00:00.000+08:00', 1)",
+        params![variety],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
 fn new_order(conn: &Connection, party: i64, no_hint: &str) -> String {
     let _ = no_hint;
+    ensure_price(conn, 1);
     create_order(
         conn,
         &actor(2, "weigher"),

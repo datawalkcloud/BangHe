@@ -1,22 +1,11 @@
 import * as React from "react"
-import dayjs, { type Dayjs } from "dayjs"
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
-import { Popover } from "@base-ui/react/popover"
-import { Button, buttonVariants } from "@/components/ui/button"
+import dayjs from "dayjs"
+import { CalendarIcon } from "lucide-react"
+import { zhCN } from "react-day-picker/locale"
+import { buttonVariants } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "cn"
-
-const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"]
-
-function toISO(d: Dayjs): string {
-  return d.format("YYYY-MM-DD")
-}
-
-/** 以周日为起点生成 6×7 的日期网格 */
-function buildMonthGrid(viewMonth: Dayjs): Dayjs[] {
-  const first = viewMonth.startOf("month")
-  const start = first.subtract(first.day(), "day") // 回退到所在周的周日
-  return Array.from({ length: 42 }, (_, i) => start.add(i, "day"))
-}
 
 export interface DatePickerProps {
   /** ISO 日期字符串 YYYY-MM-DD；空串或 undefined 表示未选 */
@@ -28,6 +17,12 @@ export interface DatePickerProps {
   "aria-label"?: string
 }
 
+/**
+ * 单日选择：shadcn Popover + Calendar，对外仍是 `YYYY-MM-DD` 字符串。
+ *
+ * 日期字符串一律按**本地时区**解析（`dayjs(iso)` 得到本地零点），不碰 `toISOString()`
+ * ——那是 UTC，东八区会把当天算成前一天，业务日期就差了一天。
+ */
 export function DatePicker({
   value,
   onChange,
@@ -37,31 +32,15 @@ export function DatePicker({
   ...rest
 }: DatePickerProps) {
   const iso = value ?? ""
-  const selected = iso ? dayjs(iso) : null
-  const [open, setOpen] = React.useState(false)
-  const [viewMonth, setViewMonth] = React.useState<Dayjs>(() =>
-    (selected?.isValid() ? selected : dayjs()).startOf("month")
-  )
-
-  React.useEffect(() => {
+  const selected = React.useMemo(() => {
     const d = iso ? dayjs(iso) : null
-    if (d?.isValid()) setViewMonth(d.startOf("month"))
-    // 仅在外部 value 变化时同步视图月份
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return d?.isValid() ? d.toDate() : undefined
   }, [iso])
-
-  const grid = React.useMemo(() => buildMonthGrid(viewMonth), [viewMonth])
-  const today = dayjs().startOf("day")
-
-  function pick(d: Dayjs) {
-    onChange(toISO(d))
-    setOpen(false)
-  }
+  const [open, setOpen] = React.useState(false)
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
-        type="button"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
         disabled={disabled}
         aria-label={rest["aria-label"]}
         className={cn(
@@ -76,69 +55,23 @@ export function DatePicker({
         )}
       >
         <CalendarIcon className="size-4 shrink-0 opacity-70" />
-        <span className="truncate">{selected?.isValid() ? selected.format("YYYY-MM-DD") : placeholder}</span>
-      </Popover.Trigger>
-      <Popover.Portal>
-        {/* z 必须在 Positioner 上：它是 position:fixed，自成层叠上下文，
-            只给内层 Popup 写 z-50 出不去，会被同样 z-50 的 Dialog 整块盖住 */}
-        <Popover.Positioner className="isolate z-50" side="bottom" align="start" sideOffset={4}>
-          <Popover.Popup className="z-50 w-[280px] rounded-2xl border border-border bg-popover p-3 text-popover-foreground shadow-lg outline-none">
-            <div className="mb-2 flex items-center justify-between">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                className="text-muted-foreground"
-                onClick={() => setViewMonth((m) => m.subtract(1, "month"))}
-                aria-label="上个月"
-              >
-                <ChevronLeftIcon className="size-4" />
-              </Button>
-              <span className="tnum text-sm font-medium">{viewMonth.format("YYYY 年 M 月")}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                className="text-muted-foreground"
-                onClick={() => setViewMonth((m) => m.add(1, "month"))}
-                aria-label="下个月"
-              >
-                <ChevronRightIcon className="size-4" />
-              </Button>
-            </div>
-            <div className="mb-1 grid grid-cols-7 text-center text-xs text-muted-foreground">
-              {WEEKDAYS.map((w) => (
-                <div key={w} className="py-1">
-                  {w}
-                </div>
-              ))}
-            </div>
-            <div className="grid grid-cols-7 gap-0.5">
-              {grid.map((d) => {
-                const inMonth = d.month() === viewMonth.month()
-                const isSelected = !!selected?.isValid() && d.isSame(selected, "day")
-                const isToday = d.isSame(today, "day")
-                return (
-                  <button
-                    key={d.format("YYYY-MM-DD")}
-                    type="button"
-                    onClick={() => pick(d)}
-                    className={cn(
-                      "tnum flex h-8 items-center justify-center rounded-lg text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                      !inMonth && "text-muted-foreground/40",
-                      inMonth && "hover:bg-accent hover:text-accent-foreground",
-                      isToday && !isSelected && "font-semibold text-primary",
-                      isSelected && "bg-primary font-medium text-primary-foreground hover:bg-primary hover:text-primary-foreground"
-                    )}
-                  >
-                    {d.date()}
-                  </button>
-                )
-              })}
-            </div>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+        <span className="truncate">{selected ? dayjs(selected).format("YYYY-MM-DD") : placeholder}</span>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto p-0">
+        <Calendar
+          mode="single"
+          locale={zhCN}
+          // 沿用仓库一贯的日历口径：周日打头（zhCN 默认是周一起）
+          weekStartsOn={0}
+          selected={selected}
+          defaultMonth={selected}
+          autoFocus
+          onSelect={(d) => {
+            onChange(d ? dayjs(d).format("YYYY-MM-DD") : "")
+            setOpen(false)
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   )
 }

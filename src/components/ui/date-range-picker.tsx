@@ -1,22 +1,20 @@
 import * as React from "react"
-import dayjs, { type Dayjs } from "dayjs"
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
-import { Popover } from "@base-ui/react/popover"
+import dayjs from "dayjs"
+import { CalendarIcon, XIcon } from "lucide-react"
+import type { DateRange as RdpRange } from "react-day-picker"
+import { zhCN } from "react-day-picker/locale"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { RANGE_PRESETS, resolveRange } from "@/lib/date-range"
 import { cn } from "cn"
 
-const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"]
+const FMT = "YYYY-MM-DD"
 
-function toISO(d: Dayjs): string {
-  return d.format("YYYY-MM-DD")
-}
-
-/** 以周日为起点生成 6×7 的日期网格 */
-function buildMonthGrid(viewMonth: Dayjs): Dayjs[] {
-  const first = viewMonth.startOf("month")
-  const start = first.subtract(first.day(), "day") // 回退到所在周的周日
-  return Array.from({ length: 42 }, (_, i) => start.add(i, "day"))
+/** ISO → Date，空串/非法值一律按「未选」处理（本地时区解析，不用 UTC） */
+function toDate(iso?: string): Date | undefined {
+  const d = iso ? dayjs(iso) : null
+  return d?.isValid() ? d.toDate() : undefined
 }
 
 export interface DateRangeValue {
@@ -40,6 +38,12 @@ export interface DateRangePickerProps {
   invalid?: boolean
 }
 
+/**
+ * 区间选择：shadcn Popover + Calendar（range 模式），对外仍是两个 `YYYY-MM-DD` 字符串。
+ *
+ * 半程选择（只点了起始日）只留在组件内部的 `draft`，不回写外部 value——
+ * 否则筛选条件会被一个还没选完的区间触发刷新。
+ */
 export function DateRangePicker({
   value,
   onChange,
@@ -53,59 +57,49 @@ export function DateRangePicker({
 }: DateRangePickerProps) {
   const { from, to } = value
   const [open, setOpen] = React.useState(false)
-  // 面板内的“半程选择”：已点下起始日、还没点结束日时暂存，避免中途回写外部 value
-  const [anchor, setAnchor] = React.useState<Dayjs | null>(null)
-  const [hover, setHover] = React.useState<Dayjs | null>(null)
-  const [viewMonth, setViewMonth] = React.useState<Dayjs>(() =>
-    (dayjs(from || to).isValid() ? dayjs(from || to) : dayjs()).startOf("month")
-  )
+  const [draft, setDraft] = React.useState<RdpRange | undefined>(undefined)
 
   function openPanel() {
-    const seed = from || to
-    if (dayjs(seed).isValid()) setViewMonth(dayjs(seed).startOf("month"))
-    setAnchor(null)
-    setHover(null)
+    const f = toDate(from)
+    const t = toDate(to)
+    setDraft(f || t ? { from: f, to: t } : undefined)
     setOpen(true)
   }
 
-  // 面板高亮区间：优先展示半程选择（anchor ~ hover），否则展示已提交的 from~to
-  const lo = anchor ? (hover && hover.isBefore(anchor) ? hover : anchor) : from ? dayjs(from) : null
-  const hi = anchor ? (hover && hover.isAfter(anchor) ? hover : anchor) : to ? dayjs(to) : null
-  const loISO = lo?.isValid() ? toISO(lo) : ""
-  const hiISO = hi?.isValid() ? toISO(hi) : ""
-
-  function pickDay(d: Dayjs) {
-    if (!anchor) {
-      setAnchor(d)
-      setHover(null)
-      return
-    }
-    const a = toISO(anchor)
-    const b = toISO(d)
-    onChange(a <= b ? a : b, a <= b ? b : a)
-    setAnchor(null)
+  function commit(nextFrom: string, nextTo: string) {
+    onChange(nextFrom, nextTo)
     setOpen(false)
   }
 
-  function applyPreset(key: (typeof RANGE_PRESETS)[number]["key"]) {
-    const r = resolveRange(key)
-    onChange(r.from, r.to)
-    setViewMonth(dayjs(r.from).startOf("month"))
-    setAnchor(null)
-    setOpen(false)
+  function handleSelect(range: RdpRange | undefined, triggerDate: Date) {
+    // min=1 下「再点一次起始日」RDP 给的是 undefined；这里按单日区间理解，
+    // 不然想选同一天就得点三次，且第二次点击看起来像被清掉了。
+    if (!range?.from) {
+      const sameDayAgain =
+        !range && draft?.from && !draft.to && dayjs(triggerDate).isSame(draft.from, "day")
+      if (sameDayAgain && draft?.from) {
+        const iso = dayjs(draft.from).format(FMT)
+        setDraft(undefined)
+        commit(iso, iso)
+        return
+      }
+      setDraft(undefined)
+      return
+    }
+    setDraft(range)
+    if (!range.to) return // 半程：等第二个端点
+    const a = dayjs(range.from)
+    const b = dayjs(range.to)
+    const [lo, hi] = a.isAfter(b) ? [b, a] : [a, b]
+    commit(lo.format(FMT), hi.format(FMT))
   }
 
   const filled = !!(from && to)
-  const label = !filled
-    ? placeholder
-    : from === to
-      ? from
-      : `${from} ~ ${to}`
+  const label = !filled ? placeholder : from === to ? from : `${from} ~ ${to}`
 
   return (
-    <Popover.Root open={open} onOpenChange={(next) => (next ? openPanel() : setOpen(false))}>
-      <Popover.Trigger
-        type="button"
+    <Popover open={open} onOpenChange={(next) => (next ? openPanel() : setOpen(false))}>
+      <PopoverTrigger
         disabled={disabled}
         aria-label={rest["aria-label"]}
         aria-invalid={invalid || undefined}
@@ -122,111 +116,59 @@ export function DateRangePicker({
       >
         <CalendarIcon className="size-4 shrink-0 opacity-70" />
         <span className="truncate">{label}</span>
-      </Popover.Trigger>
-      <Popover.Portal>
-        {/* z 必须在 Positioner 上：它是 position:fixed，自成层叠上下文，
-            只给内层 Popup 写 z-50 出不去，会被同样 z-50 的 Dialog 整块盖住 */}
-        <Popover.Positioner className="isolate z-50" side="bottom" align="start" sideOffset={4}>
-          <Popover.Popup className="z-50 flex w-auto rounded-2xl border border-border bg-popover p-3 text-popover-foreground shadow-lg outline-none">
-            {presets && (
-              <div className="mr-3 flex w-20 shrink-0 flex-col gap-1 border-r pr-3">
-                <span className="mb-0.5 text-xs text-muted-foreground">快捷</span>
-                {RANGE_PRESETS.map((preset) => {
-                  const r = resolveRange(preset.key)
-                  const active = from === r.from && to === r.to
-                  return (
-                    <Button
-                      key={preset.key}
-                      type="button"
-                      size="xs"
-                      variant={active ? "secondary" : "ghost"}
-                      className="justify-start"
-                      onClick={() => applyPreset(preset.key)}
-                    >
-                      {preset.label}
-                    </Button>
-                  )
-                })}
-                {allowClear && (
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto p-0">
+        <div className="flex">
+          {presets && (
+            <div className="flex w-24 shrink-0 flex-col gap-1 border-r p-3">
+              <span className="mb-0.5 text-xs text-muted-foreground">快捷</span>
+              {RANGE_PRESETS.map((preset) => {
+                const r = resolveRange(preset.key)
+                const active = from === r.from && to === r.to
+                return (
                   <Button
+                    key={preset.key}
                     type="button"
                     size="xs"
-                    variant="ghost"
-                    className="justify-start text-muted-foreground"
-                    onClick={() => {
-                      onChange("", "")
-                      setAnchor(null)
-                      setOpen(false)
-                    }}
+                    variant={active ? "secondary" : "ghost"}
+                    className="justify-start"
+                    onClick={() => commit(r.from, r.to)}
                   >
-                    <XIcon className="size-3" />
-                    清除
+                    {preset.label}
                   </Button>
-                )}
-              </div>
-            )}
-            <div className="w-[280px]">
-              <div className="mb-2 flex items-center justify-between">
+                )
+              })}
+              {allowClear && (
                 <Button
                   type="button"
+                  size="xs"
                   variant="ghost"
-                  size="icon-xs"
-                  className="text-muted-foreground"
-                  onClick={() => setViewMonth((m) => m.subtract(1, "month"))}
-                  aria-label="上个月"
+                  className="justify-start text-muted-foreground"
+                  onClick={() => {
+                    setDraft(undefined)
+                    commit("", "")
+                  }}
                 >
-                  <ChevronLeftIcon className="size-4" />
+                  <XIcon className="size-3" />
+                  清除
                 </Button>
-                <span className="tnum text-sm font-medium">{viewMonth.format("YYYY 年 M 月")}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="text-muted-foreground"
-                  onClick={() => setViewMonth((m) => m.add(1, "month"))}
-                  aria-label="下个月"
-                >
-                  <ChevronRightIcon className="size-4" />
-                </Button>
-              </div>
-              <div className="mb-1 grid grid-cols-7 text-center text-xs text-muted-foreground">
-                {WEEKDAYS.map((w) => (
-                  <div key={w} className="py-1">
-                    {w}
-                  </div>
-                ))}
-              </div>
-              <div className="grid grid-cols-7 gap-0.5" onMouseLeave={() => setHover(null)}>
-                {buildMonthGrid(viewMonth).map((d) => {
-                  const iso = toISO(d)
-                  const inMonth = d.month() === viewMonth.month()
-                  const isToday = d.isSame(dayjs().startOf("day"), "day")
-                  const isEdge = (loISO && iso === loISO) || (hiISO && iso === hiISO)
-                  const inMiddle = !!loISO && !!hiISO && iso > loISO && iso < hiISO
-                  return (
-                    <button
-                      key={iso}
-                      type="button"
-                      onClick={() => pickDay(d)}
-                      onMouseEnter={() => anchor && setHover(d)}
-                      className={cn(
-                        "tnum flex h-8 items-center justify-center rounded-lg text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                        !inMonth && "text-muted-foreground/40",
-                        inMonth && !isEdge && !inMiddle && "hover:bg-accent hover:text-accent-foreground",
-                        inMiddle && "bg-primary/10",
-                        isToday && !isEdge && "font-semibold text-primary",
-                        isEdge && "bg-primary font-medium text-primary-foreground"
-                      )}
-                    >
-                      {d.date()}
-                    </button>
-                  )
-                })}
-              </div>
+              )}
             </div>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+          )}
+          <Calendar
+            mode="range"
+            locale={zhCN}
+            // 沿用仓库一贯的日历口径：周日打头（zhCN 默认是周一起）
+            weekStartsOn={0}
+            // 让第一次点击只定起始日；不加 min 的话 RDP 会当场补上 to=同一天并立刻收敛
+            min={1}
+            selected={draft}
+            defaultMonth={toDate(from) ?? toDate(to)}
+            autoFocus
+            onSelect={handleSelect}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }

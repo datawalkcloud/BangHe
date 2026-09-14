@@ -47,6 +47,9 @@ import type {
 import type { CardStatus, DeviceStatus, OrderStatus, PaperKind, PaymentMethod, PrintChannel } from "@/lib/constants";
 import { GRADES } from "@/lib/constants";
 import { stamp, type PrintVerify } from "@/lib/print-guard";
+// 价目取现行价的规则只有一份（`lookupPrice`）：制单带挂牌价、磅单改价、结算这条改价闸
+// 三处都必须用同一套，否则"制单带出来的价"与"结算框铺出来的价"会不是同一个数
+import { lookupPrice } from "@/lib/settle-defaults";
 import {
   ALL_SLOTS,
   parties,
@@ -987,8 +990,9 @@ export const api = {
 
   async createOrder(input: {
     party_id: number;
-    /** 收购品种：可空（0017）。制单只认「卡 + 售粮人」，品种留到结算/化验前再定 */
-    variety_id: number | null;
+    /** 收购品种：**制单必填**。品种是这一单往后一切的锚（结算单价对回价目表、化验指标集与
+     *  扣量基准全来自品种档案），空着取号等于把两件事都往后拖。与 Rust `create_order` 同口径 */
+    variety_id: number;
     vehicle_no: string | null;
     warehouse_id: number | null;
     slot_id: number | null;
@@ -1000,8 +1004,10 @@ export const api = {
   }): Promise<WeighOrder> {
     await sleep(120);
     const p = parties.find((x) => x.id === input.party_id)!;
-    const v = input.variety_id == null ? undefined : varieties.find((x) => x.id === input.variety_id);
-    if (input.variety_id != null && !v) throw new Error("所选品种不存在或已停用，请重新选择");
+    // 品种必填：0 / null / undefined 都算没选，报错与 Rust 那一句逐字一致
+    if (!input.variety_id) throw new Error("还没定收购品种：制单必须选定品种，请先选好再取号制单");
+    const v = varieties.find((x) => x.id === input.variety_id);
+    if (!v) throw new Error("所选品种不存在或已停用，请重新选择");
     // 「制单必须绑卡」+ 这张卡能不能占（与 Rust cards::check_card_for_create 同一套闸）
     const settingOf = (key: string, fallback: string) => settings.find((s) => s.key === key)?.value ?? fallback;
     const requireCard =
@@ -1021,6 +1027,12 @@ export const api = {
     }
     const date = todayKey();
     const now = new Date();
+    // 挂牌价：取号那一刻就把该品种的现行价落到磅单上（02 §F1.4）。农户是先问价、谈成才卸货的，
+    // 票面与库里都没价，事后就是一笔只能靠嘴说的糊涂账。规则与 Rust `create_order` 里的
+    // `lookup_price` 同一套——等级这一刻还没定（化验才有），所以按品种取最近生效的一条；
+    // 化验定级后由磅员/站长用 `setOrderPrice` 按实际等级修正。
+    // 该品种在价目表里没有现行价时**不拦制单**：价是后头补得上的，号取不出来才是真卡住现场。
+    const listed = lookupPrice(priceLists, v.id, null, date);
     const o: WeighOrder = {
       id: orders.length + 1000,
       order_no: previewOrderNo(date),
@@ -1030,9 +1042,9 @@ export const api = {
       party_name: p.name,
       party_type: p.party_type,
       id_card_no: p.id_card_no,
-      variety_id: v?.id ?? null,
-      variety_code: v?.code ?? null,
-      variety_name: v?.name ?? null,
+      variety_id: v.id,
+      variety_code: v.code,
+      variety_name: v.name,
       grade: null,
       warehouse_id: input.warehouse_id,
       warehouse_name: warehouses.find((w) => w.id === input.warehouse_id)?.name ?? null,
@@ -1050,8 +1062,8 @@ export const api = {
       other_deduct_01kg: 0,
       deduct_total_01kg: 0,
       settlement_weight_01kg: null,
-      price_fen_per_ton: null,
-      price_list_id: null,
+      price_fen_per_ton: listed?.price_fen_per_ton ?? null,
+      price_list_id: listed?.id ?? null,
       price_override_reason: null,
       goods_amount_fen: null,
       deduction_fee_fen: 0,
@@ -1121,6 +1133,12 @@ export const api = {
     await sleep(80);
     const o = orderOf(input.order_no);
     if (!o) return null;
+    // 价闸（02 §F1.4）：毛重是"这车粮上磅"的那一刻，价必须在这之前谈定并落在单上。文案与
+    // Rust `orders.rs::capture`、前端 `lib/weigh-gate.ts` 逐字一致——三处说的是同一条规矩。
+    // 皮重那一捕不设这道闸：空车多重与这车粮值多少钱无关，而先捕皮重的车毛重那一捕照样被拦下。
+    if (input.weigh_type === "gross" && o.price_fen_per_ton == null) {
+      throw new Error("本单还没有单价：请先在称重区把单价填好（定价 / 改价），再刷卡或录入毛重");
+    }
     o.records = o.records ?? [];
     const at = localIso(new Date());
     o.records.push({
@@ -1234,7 +1252,11 @@ export const api = {
     other_deduct_01kg: number;
     deduction_fee_fen: number;
     pay_now: boolean;
-    payment_method: PaymentMethod;
+    /**
+     * 付款方式。空串＝**当场付款时还没选**（结算框里这一栏不预选）、或挂账那一支压根没得选——
+     * 两种情况服务端都不写这一列，值域校验也只在不挂账时生效（与 Rust `orders.rs::settle` 同口径）。
+     */
+    payment_method: PaymentMethod | "";
     /**
      * 当场实付金额（分），与 Rust `SettleInput.paid_amount_fen` 逐字同口径：
      * 不传＝按应付全额付清；传了且小于应付＝部分付款，差额进挂账台账（`partial`）。
@@ -1243,7 +1265,7 @@ export const api = {
     settler_id: number;
     /** 价目表带出时记下来源，便于事后追溯"这个价从哪张表来的" */
     price_list_id?: number | null;
-    /** 偏离价目表时的改价事由（选填，写了留痕） */
+    /** 改价事由：**选填**。结算价偏离价目表现行价时写了就留痕，不写也放行 */
     price_override_reason?: string | null;
     /** 售粮人是否已在纸质码单上签字 */
     party_signed?: boolean;
@@ -1251,8 +1273,8 @@ export const api = {
     grade?: string | null;
   }): Promise<{ order: WeighOrder; settlement: Settlement } | null> {
     await sleep(160);
-    // 01 §F2.3 已从「必填」降为「选填」：偏离价目/手工定价不填事由也能结算，
-    // 有值即留痕、无值落 NULL（与 Rust 端 settle 同口径）
+    // 改价事由：**选填**，与 Rust `orders.rs::settle`、本文件 `setOrderPrice` 同一套判据。
+    // 偏离价目表现行价（含本站这个品种压根没有现行价目＝手工定价）时写了就留痕，不写也放行。
     const targetGrade = (input.grade ?? "").trim();
     if (targetGrade && !GRADES.some((g) => g === targetGrade)) {
       throw new Error(`等级「${targetGrade}」不在值域内（${GRADES.join(" / ")}）`);
@@ -1266,11 +1288,23 @@ export const api = {
     if (settlements.some((s) => s.orders.some((r) => r.order_id === o.id))) {
       throw new Error(`磅单 ${o.order_no} 已生成过结算单，不能重复结算（不变式 6）`);
     }
-    // 0017 之后品种不再挡制单，但它是这一单唯一能对回价目表的锚：没品种，价格偏离了
-    // 价目表这件事在库里没有任何一处能发现。与 Rust `orders.rs::settle` 同一道闸。
+    // 品种是这一单唯一能对回价目表的锚：没品种，价格偏离了价目表这件事在库里没有任何一处
+    // 能发现。新单在制单那一刻就必填了，这一道是给存量单 / 事后被清空的单兜底的。
     if (o.variety_id == null) {
       throw new Error("本单还没有定收购品种，请先选定品种再结算");
     }
+    // 本单结算后生效的等级＝送来的等级，没送就沿用磅单现值（与下面 COALESCE 同一口径）。
+    // 价跟着等级走是正常流程，不算改价——真正的改价只有一种：人写了一个价目表上没有的数。
+    const liveFen = lookupPrice(priceLists, o.variety_id, targetGrade || o.grade, o.business_date)?.price_fen_per_ton ?? null;
+    const reason = (input.price_override_reason ?? "").trim();
+    const deviates = liveFen !== input.price_fen_per_ton;
+    // 只有真改价才留事由：照价目执行的那一遍把事由清掉（0001_init.sql:217「改价后置 NULL 并填 reason」）
+    const overrideReason = deviates && reason ? reason : null;
+    // 价没动就保住磅单上那一行的取价来源（制单挂牌价来自哪版价目是事后对账的锚，不该因为
+    // 结算框没把它带上来就被抹成 NULL）；改价则用前端带上来的行，没带即 NULL
+    // —— 0001_init.sql:217「取价来源，改价后置 NULL 并填 reason」。
+    const bookedListId = o.price_list_id;
+    const listId = deviates ? (input.price_list_id ?? null) : (input.price_list_id ?? bookedListId ?? null);
     const now = localIso(new Date());
     const deduct = input.package_deduct_01kg + input.moisture_deduct_01kg + input.impurity_deduct_01kg + input.other_deduct_01kg;
     const settleWeight = o.net_weight_01kg - deduct;
@@ -1291,6 +1325,13 @@ export const api = {
       paidFen = want;
     }
     const payStatus: Settlement["payment_status"] = !input.pay_now ? "unpaid" : paidFen >= payable ? "paid" : "partial";
+    /**
+     * 这一笔的付款方式。**只有当场付款那一支才存在**：支付方式在结算框里不预选，
+     * 不勾「当场已付」时那个下拉是禁用的、传上来的就是空串，真库那一刻也不写这一列
+     * （`orders.rs::settle` 的值域校验同样只在 `pay_now` 时生效）。
+     */
+    const payMethod: PaymentMethod | null =
+      input.pay_now && input.payment_method ? input.payment_method : null;
     Object.assign(o, {
       package_deduct_01kg: input.package_deduct_01kg,
       moisture_deduct_01kg: input.moisture_deduct_01kg,
@@ -1299,8 +1340,8 @@ export const api = {
       deduct_total_01kg: deduct,
       settlement_weight_01kg: settleWeight,
       price_fen_per_ton: input.price_fen_per_ton,
-      price_list_id: input.price_list_id ?? null,
-      price_override_reason: input.price_override_reason ?? null,
+      price_list_id: listId,
+      price_override_reason: overrideReason,
       goods_amount_fen: goods,
       deduction_fee_fen: input.deduction_fee_fen,
       payable_amount_fen: payable,
@@ -1310,7 +1351,7 @@ export const api = {
     });
     o.paid_amount_fen = paidFen;
     o.payment_status = payStatus;
-    o.payment_method = input.pay_now ? input.payment_method : null;
+    o.payment_method = payMethod;
     // 部分付款时 paid_at 留 NULL：这一列记的是"钱付清的时刻"，补录付清后才补上（与 record_payment 同口径）
     o.paid_at = payStatus === "paid" ? now : null;
     // 结算即终态：自动回收该单绑的流转卡回池（与真库 release_for_order 同口径，06 §6.3）
@@ -1342,7 +1383,7 @@ export const api = {
       payable_fen: payable,
       paid_fen: o.paid_amount_fen,
       payment_status: payStatus,
-      main_method: input.pay_now ? input.payment_method : null,
+      main_method: payMethod,
       payee_name: o.party_name,
       signed_by_party: input.party_signed ? 1 : 0,
       status: "normal",
@@ -1352,8 +1393,10 @@ export const api = {
       remark: "工作台当场结算",
     };
     settlements.push(settlement);
-    // 挂账（paidFen=0）一笔流水都不该有；部分付款只登记实付那一段，剩下的靠补录付款接手
-    if (paidFen > 0) {
+    // 挂账（paidFen=0）一笔流水都不该有；部分付款只登记实付那一段，剩下的靠补录付款接手。
+    // `payMethod` 那半个条件在实际调用里恒真（有钱付就必是当场付款、也就必已选支付方式），
+    // 摆在这儿只是让"没付款方式就不落流水"这件事在类型上也立得住。
+    if (paidFen > 0 && payMethod) {
       payments.push({
         id: payments.length + 1,
         pay_no: `FK${station.code}${date.replace(/-/g, "")}${String(payments.length + 1).padStart(6, "0")}`,
@@ -1364,7 +1407,7 @@ export const api = {
         party_id: o.party_id,
         party_name: o.party_name,
         amount_fen: paidFen,
-        method: input.payment_method,
+        method: payMethod,
         trade_no: null,
         payee_name: o.party_name,
         paid_at: now,
@@ -1425,8 +1468,9 @@ export const api = {
   },
 
   /**
-   * 调整收购品种：制单可以不带品种（0017「卡 + 售粮人」即取号），品种后置到化验/结算前再定，
-   * 定它、改它都走这一条命令。与 Rust `orders.rs::set_variety` 同口径：
+   * 调整收购品种：制单时品种已是必填（闸门在 `createOrder`），所以这条命令管的是两件
+   * 事后的事——存量单 / 被清空的单补定品种，以及磅单上写错了要改判。
+   * 与 Rust `orders.rs::set_variety` 同口径：
    * 品种必须存在且未停用；作废/拒收/已结算等终态一律拦下（改已结算是红冲的事，不是改品种的事）；
    * 值没变就直接回读，既不写库也不在审计表里留"改了个寂寞"的噪音。
    * 单价由界面按 `variety_id` 重查价目表，所以这里只换品种、不动任何价格快照。
@@ -1467,6 +1511,76 @@ export const api = {
       entity: "weigh_order",
       entity_no: o.order_no,
       reason: `品种 ${before} → ${v?.name ?? "未定品种"}：${input.reason.trim() || "未填写"}`,
+      authorized_by: null,
+      result: "ok",
+    });
+    return o;
+  },
+
+  /**
+   * 定价 / 改价：写 `weigh_order.price_fen_per_ton`（连同取价来源与事由）。
+   *
+   * 价**不是结算的产物，是成交的前提**：农户到站先问价、谈成才卸货。所以制单那一刻就按价目表
+   * 带一次挂牌价（见 `createOrder`），化验定级之后按实际等级修正、或现场议价，都走这条命令。
+   * 与 Rust `orders.rs::set_price` 同口径：
+   *  - 闸门沿用 VOIDABLE：作废 / 拒收 / 已结算等终态一律拦下（改已经收过的钱是红冲的事）；
+   *  - 偏离价目表现行价（含该品种压根没有现行价目＝手工定价）时**事由选填**，写了就留痕；
+   *  - 送了 `price_list_id` 就必须真的是该品种现行有效的那一行，否则取价来源会变成一句随手填的备注；
+   *  - 价没变就直接回读，既不动库也不在审计里留"改了个寂寞"的噪音（同 setOrderGrade）。
+   */
+  async setOrderPrice(input: {
+    order_no: string;
+    /** 本单定价（分/吨），必须大于 0 */
+    price_fen_per_ton: number;
+    /** 这个价取自价目表的哪一行；手工议价时传 null */
+    price_list_id?: number | null;
+    /** 改价事由：偏离价目表现行价时写了就留痕，选填 */
+    reason: string;
+    operator_id: number;
+  }): Promise<WeighOrder | null> {
+    await sleep(120);
+    if (input.price_fen_per_ton <= 0) throw new Error("单价必须大于 0");
+    const o = orderOf(input.order_no);
+    if (!o) return null;
+    if (["voided", "rejected"].includes(o.status)) {
+      throw new Error(`本单已${o.status === "voided" ? "作废" : "化验拒收"}，不能再定价`);
+    }
+    if (["settled", "paid", "archived", "reversed"].includes(o.status)) {
+      throw new Error(`本单当前为「${o.status}」，已结算的单改价请先由站长红冲`);
+    }
+    if (o.variety_id == null) {
+      throw new Error("本单还没有定收购品种：价对不回价目表，请先定品种再定价");
+    }
+    const reason = input.reason.trim();
+    const live = lookupPrice(priceLists, o.variety_id, o.grade, o.business_date);
+    const liveFen = live?.price_fen_per_ton ?? null;
+    // 与 Rust `orders.rs::set_price` 同口径：只有真改价才留事由，且不强制（选填）
+    const deviates = liveFen !== input.price_fen_per_ton;
+    if (input.price_list_id != null && live?.id !== input.price_list_id) {
+      throw new Error("所选取价行与这个品种的现行价目对不上，请重新从价目表取价");
+    }
+    const listId = deviates ? (input.price_list_id ?? null) : (input.price_list_id ?? live?.id ?? null);
+    // 只有真改价才留事由：照价目执行的那一遍把事由清掉（0001_init.sql:217「改价后置 NULL 并填 reason」）
+    const storedReason = deviates && reason ? reason : null;
+    if (o.price_fen_per_ton === input.price_fen_per_ton && o.price_list_id === listId && (o.price_override_reason ?? null) === storedReason) {
+      return o;
+    }
+    const now = localIso(new Date());
+    const textOf = (fen: number | null) => (fen == null ? "未定价" : `${(fen / 100000).toFixed(3)} 元/公斤`);
+    const before = textOf(o.price_fen_per_ton);
+    o.price_fen_per_ton = input.price_fen_per_ton;
+    o.price_list_id = listId;
+    o.price_override_reason = storedReason;
+    o.updated_at = now;
+    auditLogs.unshift({
+      id: o.id,
+      at: now,
+      actor_id: input.operator_id,
+      actor_name: users.find((u) => u.id === input.operator_id)?.display_name ?? "—",
+      action: "price.override",
+      entity: "weigh_order",
+      entity_no: o.order_no,
+      reason: `单价 ${before} → ${textOf(input.price_fen_per_ton)}：${deviates ? reason || "未填写改价事由" : "照价目表执行"}`,
       authorized_by: null,
       result: "ok",
     });

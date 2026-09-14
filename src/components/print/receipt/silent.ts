@@ -91,7 +91,13 @@ export async function printReceiptSilently({
   const docLabel = SCENARIOS[scenario]?.label ?? "单据";
   const tpl = effectiveTemplate(scenario);
   const target = resolveDirectTarget(devices, tpl.paper as PaperKind);
-  const lines = receiptLines(tpl, { ...context, reprint: isReprint });
+  // 告诉机器的那张纸要一起给排版的：热敏机的码落点与宽度预算都按它算（见 code-size.ts）。
+  // 队列机不传——A4/针式的可打区是驱动给的，落点不归我们算。
+  const lines = receiptLines(
+    tpl,
+    { ...context, reprint: isReprint },
+    target.kind === "thermal" ? { machinePaper: target.paper } : undefined,
+  );
 
   let channel: PrintChannel;
   let printerName: string;

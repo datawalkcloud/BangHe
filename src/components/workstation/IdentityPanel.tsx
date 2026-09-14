@@ -22,8 +22,11 @@
  *     同一个人建两张档案，对账时就是两个余额（`party_save` 的"一人一档"闸门同一条理由）。
  * 三条出路最终都回到同一句 `autoCreate`：卡与人都就位，号就取掉。
  *
- * **品种不挡制单**（迁移 0017）：制单只认「卡 + 售粮人」，品种可以空着取号，
- * 结算与录化验前再定（那两处各自有硬闸门，见 `orders.rs` 的 settle / save_qc）。
+ * **品种是必填的**：结算的单价要对回价目表、化验的指标集与扣量基准全来自品种档案，
+ * 这两件事都等不起（车卸完了才发现没品种，价格已经错过一次对照）。所以品种与售粮人同级，
+ * 缺了就不出号。沿用的上一张单的品种（`emptyDraft` 的初值，磅房最省手）覆盖绝大多数场合，
+ * 只有当天第一单、或从顶栏直接开单时才要磅员动一下手。服务端 `orders.rs::create_order`
+ * 有同一道闸兜底，别只靠这里。
  */
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -136,6 +139,20 @@ export function IdentityPanel({
   const cardNoRef = useRef<string | null>(presetCardNo);
   cardNoRef.current = cardNo;
   /**
+   * `draft.varietyId` 的镜像，与 `cardNoRef` 同一条理由：`enrollFromCard` 里那个 `await`
+   * 之后、以及读卡那一路的副作用里，闭包拿到的可能是上一轮草稿。品种现在是出号的硬条件，
+   * 判"此刻到底选没选"必须读现值的 ref。
+   */
+  const varietyIdRef = useRef<number | null>(draft.varietyId);
+  varietyIdRef.current = draft.varietyId;
+  /** 点过「取号并制单」却还缺品种时把那一格标红：提示过一次之后才亮，不预先红着吓人 */
+  const [varietyMissing, setVarietyMissing] = useState(false);
+  // 品种一旦补上就撤掉红框。写在 effect 里是为了连"父层换草稿时直接塞进一个品种"
+  // （`emptyDraft(lastVarietyId)`）也能撤——那条路不经过下拉的 onChange
+  useEffect(() => {
+    if (draft.varietyId != null) setVarietyMissing(false);
+  }, [draft.varietyId]);
+  /**
    * 同一次「卡 + 人」只自动发一个号：读卡回写、草稿重跑都可能把同一对组合再送进来一次，
    * 而取号是不可逆的（`order_no` 一天一个序列）。制单成功或失败即复位，换卡/换人自然算新一轮。
    */
@@ -241,15 +258,15 @@ export function IdentityPanel({
 
   const create = useMutation({
     /**
-     * 卡号与售粮人都走 mutation 变量：刷卡弹窗的回调里 `setCardNo` 还没生效、读卡那一路
-     * 更是刚把档案挑出来，两种场合从闭包读 `draft.party` 都会拿到上一个人——取号不可逆，
-     * 把上一个人的名字做成这一单，比制不出单严重得多。
+     * 卡号、售粮人、品种三样都走 mutation 变量：刷卡弹窗的回调里 `setCardNo` 还没生效、
+     * 读卡那一路更是刚把档案挑出来，两种场合从闭包读 `draft` 都会拿到上一个人 / 上一个品种——
+     * 取号不可逆，把上一个人的名字或上一个品种做成这一单，比制不出单严重得多。
      */
-    mutationFn: (input: { card: string | null; party: Party }) =>
+    mutationFn: (input: { card: string | null; party: Party; varietyId: number }) =>
       api.createOrder({
         party_id: input.party.id,
-        // 品种可空（迁移 0017）：制单只认「卡 + 售粮人」，结算与录化验前再定
-        variety_id: draft.varietyId,
+        // 品种是必填项（与 Rust `create_order` 同一道闸）：出号前一律先过 `createNow` 的齐备检查
+        variety_id: input.varietyId,
         vehicle_no: draft.vehicleNo.trim() || null,
         warehouse_id: draft.warehouseId,
         slot_id: draft.slotId,
@@ -286,17 +303,33 @@ export function IdentityPanel({
     onDraft({ party: p, vehicleNo: draft.vehicleNo || p.default_vehicle_no || "" });
 
   /**
-   * 卡与人都就位 → 把这单制掉，零点击（06 §4.0 两刷一条流）。
-   * **卡不在位一律不动**：没刷到流转卡就自动出号，等于绕过本站的绑卡闸门；
-   * 那种场合仍由人点「取号并制单」（或走后台发卡），本面板不替磅员决定。
+   * 品种那一格还空着：把话说在眼前，光标也直接送到那个下拉上——不让人自己在一屏控件里
+   * 找是哪儿没填。固定 toast id 去重：卡与人的自动流程跑起来会连着调它两次。
+   */
+  const needVariety = () => {
+    setVarietyMissing(true);
+    toast.warning("请先选收购品种：制单必填（结算单价与化验指标都跟着它走）", { id: "ws-variety-required" });
+    announce("请先选收购品种");
+    document.getElementById("ws-variety")?.focus();
+  };
+
+  /**
+   * 卡、人、品种三样齐了才出号，零点击（06 §4.0 两刷一条流）。缺哪样都不在本函数里代劳：
+   * **卡不在位一律不动**——没刷到流转卡就自动出号，等于绕过本站的绑卡闸门；
+   * **品种没选也只提示不动手**——品种是必填项，等磅员点一下那个下拉再按主按钮。
    */
   const autoCreate = (p: Party) => {
     const card = cardNoRef.current;
     if (!card) return;
+    const varietyId = varietyIdRef.current;
+    if (varietyId == null) {
+      needVariety();
+      return;
+    }
     const key = `${card}:${p.id}`;
     if (autoFired.current === key) return; // 同一张卡反复压在读卡器上不该再吃一个号
     autoFired.current = key;
-    create.mutate({ card, party: p });
+    create.mutate({ card, party: p, varietyId });
   };
 
   /** 查无此证时的默认出路：照卡面静默建档，建好直接用于本单；**建不成**才回落到手工登记框 */
@@ -314,23 +347,28 @@ export function IdentityPanel({
   };
 
   /**
-   * 制单闸门只剩**岗位权限**一道：品种可空（迁移 0017）、售粮人由那一轮自动监听去拿，
-   * 这两样都不该把按钮按死——按死了 F7 就变成"点了没反应的灰按钮"，只剩彻底静默失败。
-   * 所以「还没选人」时按钮照常可点，点了是把身份证监听起起来（见 `submit`）。
+   * 制单闸门对按钮只有**岗位权限**一道：品种必填、售粮人由那一轮自动监听去拿，这两样
+   * 都不该把按钮按死——按死了 F7 就变成"点了没反应的灰按钮"，只剩彻底静默失败。
+   * 所以缺品种 / 缺人时按钮照常可点，点了会把缺的那一样说出声（见 `submit`）。
    */
   const blocked = !can("order.create")
     ? `当前岗位「${actor ? ROLE[actor.role] : "—"}」无权制单，需磅员、登记员或站长`
     : null;
 
   /**
-   * 「取号并制单」缺什么补什么，顺序就是农户手上的先后：先要卡（本站强制绑卡而卡还没就位 →
-   * 弹刷卡框），再要人（人还没定 → 起那一轮 15 秒行内监听，听不到才退回人工读卡/搜档案），
-   * 两样都在就把这单制掉（06 §4.0）。
+   * 「取号并制单」缺什么补什么，顺序按柜面上的先后：先看品种（形式最上面那一格，也是唯一
+   * 板上钉钉的必填项），再要卡（本站强制绑卡而卡还没就位 → 弹刷卡框），再要人（人还没定 →
+   * 起那一轮 15 秒行内监听，听不到才退回人工读卡 / 搜档案），三样都在才把这单制掉（06 §4.0）。
    */
   const submit = () => {
     if (blocked) {
       // 走到这儿多半是按了 F7：按钮是灰的、点了没反应，不念一句就是彻底的静默失败
       announce(blocked);
+      return;
+    }
+    const varietyId = draft.varietyId;
+    if (varietyId == null) {
+      needVariety();
       return;
     }
     if (requireCard && !cardNo) {
@@ -342,7 +380,7 @@ export function IdentityPanel({
       setIdWatching(true);
       return;
     }
-    create.mutate({ card: cardNo, party: draft.party });
+    create.mutate({ card: cardNo, party: draft.party, varietyId });
   };
 
   /** 停用只挡住新单：制单下拉一律排除 is_active = 0 的档案，历史磅单上仍按当时快照显示 */
@@ -532,14 +570,20 @@ export function IdentityPanel({
 
         <div className="grid gap-1">
           <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-            收购品种（选填，结算与化验前必填）
+            收购品种 <span className="text-warning">*</span>
+            {/* 沿用的上一张单的品种已经预填（`emptyDraft` 的初值），多数时候磅员不用动这一格 */}
             <Choose
               aria-label="收购品种"
               id="ws-variety"
+              invalid={varietyMissing && draft.varietyId == null}
               value={String(draft.varietyId ?? "")}
-              onChange={(v) => onDraft({ varietyId: v ? Number(v) : null })}
+              onChange={(v) => {
+                const id = v ? Number(v) : null;
+                setVarietyMissing(false);
+                onDraft({ varietyId: id });
+              }}
               options={[
-                { value: "", label: "未定（结算前再选）" },
+                { value: "", label: "请选择品种" },
                 ...activeVarieties.map((v) => ({ value: String(v.id), label: v.name })),
               ]}
             />
@@ -676,8 +720,13 @@ export function IdentityPanel({
         onPicked={(sn) => {
           setBindOpen(false);
           setCardNo(sn);
-          // 强制绑卡的站点：卡一就位就把这单制掉，省一次点击（弹窗文案就是这么说的）
-          if (requireCard && draft.party) create.mutate({ card: sn, party: draft.party });
+          // 强制绑卡的站点：卡一就位就把这单制掉，省一次点击（弹窗文案就是这么说的）。
+          // 品种还没选就退回主按钮那条路——由它先把缺的品种说出来，别在这儿闷着不响
+          if (requireCard && draft.party) {
+            const varietyId = varietyIdRef.current;
+            if (varietyId == null) needVariety();
+            else create.mutate({ card: sn, party: draft.party, varietyId });
+          }
         }}
         onSkip={() => {
           setBindOpen(false);

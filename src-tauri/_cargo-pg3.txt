@@ -1,0 +1,107 @@
+﻿cargo :    Compiling ticket-core v0.1.0 (G:\Github\BangHe\crates\ticket-core)
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --test orders_contract --test qc_contract --te ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ti...es\ticket-core):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 25s
+     Running tests\orders_contract.rs (target\debug\deps\orders_contract-95f93b260d889008.exe)
+
+running 42 tests
+test creating_with_an_inactive_variety_is_still_refused ... ok
+test capture_rejects_nonpositive_weight ... ok
+test capture_reweigh_keeps_single_adopted_per_type ... ok
+test capture_rejects_tare_not_below_gross ... ok
+test create_order_numbers_by_spec_and_snapshots_party ... ok
+test clearing_when_there_was_no_photo_is_a_no_op ... ok
+test capture_tare_tolerance_recomputed_server_side ... ok
+test a_gross_capture_needs_a_price_on_the_order ... ok
+test destination_backfill_signs_the_keeper_and_audits_every_change ... ok
+test a_scale_capture_reads_back_by_attachment_and_absent_is_not_an_error ... ok
+test create_order_binds_a_free_card_or_refuses_the_number ... ok
+test a_new_order_must_carry_its_variety ... ok
+test a_lost_file_reads_back_as_an_actionable_error ... ok
+test clearing_a_portrait_removes_row_and_file ... ok
+test card_photo_lands_on_the_party_and_reads_back_as_a_data_url ... ok
+test an_order_without_variety_still_reads_back_on_every_path ... ok
+test destination_rejects_mismatched_and_inactive_archives ... ok
+test party_id_card_fingerprint_merges_and_blocks_duplicates ... ok
+test meta_edit_autosaves_vehicle_and_remark_with_one_audit_per_change ... ok
+test meta_edit_is_not_blocked_by_settlement_state ... ok
+test list_parties_supports_type_and_keyword_together ... ok
+test saving_the_same_picture_twice_does_not_churn_the_attachment ... ok
+test replacing_a_portrait_leaves_no_stale_row_or_file ... ok
+test party_phone_is_unique_and_names_the_conflicting_archive ... ok
+test junk_or_missing_source_is_refused_without_touching_the_party ... ok
+test print_log_records_reprint_and_operator ... ok
+test phone_only_party_archives_are_allowed_and_stay_distinct ... ok
+test qc_recheck_chain_and_reject_flow ... ok
+test party_rows_carry_the_photo_reference_through_list_and_detail ... ok
+test set_price_gates_off_list_reason_and_settled_orders ... ok
+test destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones ... ok
+test list_orders_summary_excludes_unsettled_and_filters ... ok
+test set_price_requires_a_variety ... ok
+test settle_rejects_over_deduction_and_negative_payable ... ok
+test void_gates_on_reason_and_state_machine_without_authorization ... ok
+test variety_is_a_hard_gate_before_qc_and_settlement ... ok
+test settlement_of_links_order_and_settled_order_cannot_be_voided ... ok
+test tare_over_tolerance_still_captures_and_warns ... ok
+test settle_math_and_money_trail ... ok
+test settle_part_pay_lands_on_credit_and_finishes_with_record_payment ... ok
+test weigh_flow_drives_status_and_party_tare ... ok
+test set_variety_gates_and_stays_silent_when_nothing_changed ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.74s
+
+     Running tests\payments_contract.rs (target\debug\deps\payments_contract-d97b78bb89a6e7e8.exe)
+
+running 7 tests
+test bad_date_is_rejected_in_chinese ... ok
+test order_only_payment_falls_back_to_weigh_order_and_party ... ok
+test dist_tone_follows_channel_not_rank_and_is_repeatable ... ok
+test list_reads_back_what_the_write_paths_produced ... ok
+test date_window_is_closed_and_blank_bound_is_open ... ok
+test reversed_stays_in_list_and_leaves_dist ... ok
+test over_limit_range_is_refused_not_truncated ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests\qc_contract.rs (target\debug\deps\qc_contract-b02ef4af902287d2.exe)
+
+running 6 tests
+test detail_returns_none_for_unknown_no_and_omits_first_on_first_report ... ok
+test queue_keeps_order_whose_first_report_was_replaced_by_recheck ... ok
+test queue_includes_gross_weighed_order_without_report ... ok
+test queue_rows_carry_list_shape_only ... ok
+test queue_holds_registered_orders_and_drops_after_effective_report ... ok
+test queue_excludes_terminal_orders ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests\search_contract.rs (target\debug\deps\search_contract-b540b26e7e312a81.exe)
+
+running 7 tests
+test blank_keyword_returns_three_empty_groups_without_touching_the_database ... ok
+test soft_deleted_party_leaves_the_results ... ok
+test payload_matches_the_frontend_contract_without_detail_buckets ... ok
+test orders_come_newest_first_and_party_name_hits_outrank_field_hits ... ok
+test order_hits_cover_no_name_vehicle_and_last_four_id_digits ... ok
+test wildcard_characters_in_keyword_are_matched_literally ... ok
+test each_group_is_capped_in_sql_at_8_6_6 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests\settlements_contract.rs (target\debug\deps\settlements_contract-4961b9ee3238609b.exe)
+
+running 5 tests
+test detail_assembles_settlement_orders_and_payments ... ok
+test record_payment_drives_partial_then_paid_and_leaves_trail ... ok
+test payment_does_not_flip_signature_and_rejects_bad_inputs ... ok
+test pending_pool_groups_unsettled_orders_by_party ... ok
+test credits_lists_aging_and_excludes_settled_and_revoked ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+

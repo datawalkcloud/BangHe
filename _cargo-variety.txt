@@ -1,0 +1,54 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 42
++ ... thub\BangHe\src-tauri; cargo test --test orders_contract 2>&1 | Out-F ...
++                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.14s
+     Running tests\orders_contract.rs (target\debug\deps\orders_contract-95f93b260d889008.exe)
+
+running 39 tests
+test creating_with_an_inactive_variety_is_still_refused ... ok
+test capture_rejects_tare_not_below_gross ... ok
+test capture_reweigh_keeps_single_adopted_per_type ... ok
+test card_photo_lands_on_the_party_and_reads_back_as_a_data_url ... ok
+test destination_backfill_signs_the_keeper_and_audits_every_change ... ok
+test a_lost_file_reads_back_as_an_actionable_error ... ok
+test clearing_when_there_was_no_photo_is_a_no_op ... ok
+test capture_tare_tolerance_recomputed_server_side ... ok
+test capture_rejects_nonpositive_weight ... ok
+test a_new_order_must_carry_its_variety ... ok
+test destination_rejects_mismatched_and_inactive_archives ... ok
+test clearing_a_portrait_removes_row_and_file ... ok
+test create_order_numbers_by_spec_and_snapshots_party ... ok
+test a_scale_capture_reads_back_by_attachment_and_absent_is_not_an_error ... ok
+test create_order_binds_a_free_card_or_refuses_the_number ... ok
+test an_order_without_variety_still_reads_back_on_every_path ... ok
+test party_id_card_fingerprint_merges_and_blocks_duplicates ... ok
+test meta_edit_is_not_blocked_by_settlement_state ... ok
+test junk_or_missing_source_is_refused_without_touching_the_party ... ok
+test list_parties_supports_type_and_keyword_together ... ok
+test meta_edit_autosaves_vehicle_and_remark_with_one_audit_per_change ... ok
+test party_rows_carry_the_photo_reference_through_list_and_detail ... ok
+test phone_only_party_archives_are_allowed_and_stay_distinct ... ok
+test print_log_records_reprint_and_operator ... ok
+test destination_writes_are_refused_on_voided_tickets_but_not_on_settled_ones ... ok
+test saving_the_same_picture_twice_does_not_churn_the_attachment ... ok
+test replacing_a_portrait_leaves_no_stale_row_or_file ... ok
+test party_phone_is_unique_and_names_the_conflicting_archive ... ok
+test qc_recheck_chain_and_reject_flow ... ok
+test set_variety_gates_and_stays_silent_when_nothing_changed ... ok
+test list_orders_summary_excludes_unsettled_and_filters ... ok
+test settle_math_and_money_trail ... ok
+test variety_is_a_hard_gate_before_qc_and_settlement ... ok
+test settle_rejects_over_deduction_and_negative_payable ... ok
+test settlement_of_links_order_and_settled_order_cannot_be_voided ... ok
+test weigh_flow_drives_status_and_party_tare ... ok
+test tare_over_tolerance_still_captures_and_warns ... ok
+test void_gates_on_reason_and_state_machine_without_authorization ... ok
+test settle_part_pay_lands_on_credit_and_finishes_with_record_payment ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+exit=0

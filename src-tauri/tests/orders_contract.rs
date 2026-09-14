@@ -23,8 +23,8 @@ use banghe_lib::auth::AuthProfile;
 use banghe_lib::cards::{pool_register, pool_retire, RegisterInput, RetireInput};
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::orders::{
-    capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, void_order, assign_destination,
-    party_photo_view, capture_photo_view, set_party_photo, update_meta, set_variety, CaptureInput, CreateOrderInput, OrderFilters, PartyPhotoInput, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, SaveQcInput, SettleInput, VarietyAdjustInput, VoidOrderInput, AssignDestinationInput, UpdateOrderInput,
+    capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, set_price, void_order, assign_destination,
+    party_photo_view, capture_photo_view, set_party_photo, update_meta, set_variety, CaptureInput, CreateOrderInput, OrderFilters, PartyPhotoInput, PartySaveInput, PrintLogInput, QcIndicatorInput, QcListOpts, PriceAdjustInput, SaveQcInput, SettleInput, VarietyAdjustInput, VoidOrderInput, AssignDestinationInput, UpdateOrderInput,
 };
 
 fn db() -> Connection {
@@ -110,7 +110,19 @@ fn free_card(conn: &Connection) -> String {
     card_no
 }
 
+/// 一张"能过磅的单"要先有价：`capture` 在毛重那一捕上有价格闸（02 §F1.4），没价这一捕直接被拒。
+///
+/// 只在**这个品种还没有任何价**时补一条。已经 seed 过的用例一律不动——好几个用例是"先
+/// `seed_price` 再制单"，为的是断言 `price_list_id` 锚到哪一行；多插一行会把那个锚挪到新行上。
+fn ensure_price(conn: &Connection, variety: i64) -> i64 {
+    let existing: Option<i64> = conn
+        .query_row("SELECT id FROM price_list WHERE variety_id = ?1 ORDER BY id LIMIT 1", params![variety], |r| r.get(0))
+        .ok();
+    existing.unwrap_or_else(|| seed_price(conn, variety))
+}
+
 fn create(conn: &Connection, party: i64, variety: i64) -> String {
+    ensure_price(conn, variety);
     create_order(
         conn,
         &actor(1, "weigher"),
@@ -207,6 +219,9 @@ fn latest_price(conn: &Connection) -> i64 {
     conn.query_row("SELECT id FROM price_list ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap()
 }
 
+/// 结算辅助。改价事由恒带：`settle` 只在**真改价**时才落这条事由（照价目执行的那一遍落 NULL），
+/// 所以带上它不会污染"照价目执行"那几个用例；而给某些没建价目行的品种结算时，正是这道闸门
+/// （2026-09-14 起：偏离价目 / 手工定价必须写清事由）要求它。
 fn settle_now(conn: &Connection, no: &str, price: i64, pay_now: bool) -> banghe_lib::orders::SettleResult {
     settle(
         conn,
@@ -224,7 +239,7 @@ fn settle_now(conn: &Connection, no: &str, price: i64, pay_now: bool) -> banghe_
             payment_method: "cash".into(),
             settler_id: None,
             price_list_id: Some(latest_price(conn)),
-            price_override_reason: None,
+            price_override_reason: Some("测试结算价".into()),
             party_signed: Some(true),
             grade: None,
         },
@@ -406,6 +421,68 @@ fn weigh_flow_drives_status_and_party_tare() {
     assert!(e.contains("不能再称重"), "拒绝原因要回人话：{e}");
 }
 
+/// 毛重那一捕之前单上必须有价（02 §F1.4）。
+///
+/// 闸口刻意落在**毛重**：那是"这车粮上磅"的那一刻，谈成才卸货。皮重不设这道闸——空车多重与
+/// 这车粮值多少钱无关，而一次/二次称重顺序自由，先捕皮重后捕毛重的车，毛重那一捕照样被拦下。
+/// 拦下的只是这一捕：单的状态、重量、轨迹一概不写，填好价再捕照常有迹可循。
+#[test]
+fn a_gross_capture_needs_a_price_on_the_order() {
+    let conn = db();
+    ensure_users(&conn);
+    let p = new_party(&conn, "价", "341204199301272099");
+    let xm: i64 = conn.query_row("SELECT id FROM grain_variety WHERE code='XM'", [], |r| r.get(0)).unwrap();
+    // 这个品种在价目表里没有现行价 → 制单不带价。**制单那一刻不拦**（价是后头补得上的，
+    // 号取不出来才是真卡住现场），拦的是收粮那一捕。
+    let no = create_order(
+        &conn,
+        &actor(1, "weigher"),
+        CreateOrderInput {
+            party_id: p,
+            variety_id: Some(xm),
+            vehicle_no: None,
+            warehouse_id: None,
+            slot_id: None,
+            remark: None,
+            card_no: Some(free_card(&conn)),
+            registered_by: None,
+            weight_source: "scale".into(),
+        },
+    )
+    .expect("没价的单也要制得出来")
+    .order_no;
+
+    let e = cap(&conn, &no, "gross", 200000, None).unwrap_err();
+    assert!(e.contains("单价"), "没价的毛重捕获必须被拦下：{e}");
+    let o = load_order_full(&conn, &no).unwrap().unwrap();
+    assert!(o.price_fen_per_ton.is_none(), "制单时该品种没有现行价目，本单不该凭空有价");
+    assert_eq!(o.status, "registered", "拦下的是这一捕，不推进状态");
+    assert!(o.gross_weight_01kg.is_none());
+    assert!(o.records.as_ref().unwrap().is_empty(), "被拦下的一捕不许留轨迹");
+
+    // 皮重那一捕不设这道闸：先捕皮重的车（一次/二次称重顺序自由）照样收得下
+    capture_tare(&conn, &no, 100000, None);
+
+    // 现场谈定价（该品种无现行价目 ⇒ 手工定价，事由必填）→ 毛重那一捕照常过，净重也算得出
+    set_price(
+        &conn,
+        &actor(1, "station_master"),
+        PriceAdjustInput {
+            order_no: no.clone(),
+            price_fen_per_ton: 240000,
+            price_list_id: None,
+            reason: "现场谈的价".into(),
+            operator_id: None,
+        },
+    )
+    .unwrap()
+    .expect("单应存在");
+    capture_gross(&conn, &no, 200000);
+    let o = load_order_full(&conn, &no).unwrap().unwrap();
+    assert_eq!(o.net_weight_01kg, Some(100000));
+    assert_eq!(o.status, "to_settle");
+}
+
 /// 皮重偏差超容差不再拦下：数据照常有效，捕获成功并自动记一条警示（无授权人），基准不被污染。
 #[test]
 fn tare_over_tolerance_still_captures_and_warns() {
@@ -576,25 +653,23 @@ fn settle_math_and_money_trail() {
     .unwrap_err();
     assert!(e.contains("重复结算"), "回人话：{e}");
 
-    // 手填单价不填事由 → 改价事由降为选填：结算照常放行，事由落 NULL
+    // 手填单价偏离价目表却不写事由 → **照常放行**（2026-09-14 起改口径：改价事由是选填）。
+    // 写了才随结算留痕，不写那列就落 NULL——票面照出，"凭什么"留给事后解释。
     let no2 = create(&conn, party, xm);
     capture_gross(&conn, &no2, 200000);
     capture_tare(&conn, &no2, 100000, None);
-    let r_no_reason = settle(
-        &conn,
-        &actor(4, "cashier"),
-        SettleInput {
-            order_no: no2.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
-            other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), paid_amount_fen: None, settler_id: None,
-            price_list_id: None, price_override_reason: None, party_signed: None,
-            grade: None,
-        },
-    )
-    .unwrap()
-    .expect("事由选填，不填也必须能结算");
-    assert_eq!(r_no_reason.order.price_override_reason, None, "未填事由应落 NULL");
+    let settle_no2 = |reason: Option<&str>| SettleInput {
+        order_no: no2.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
+        other_deduct_01kg: 0, deduction_fee_fen: 0, pay_now: true, payment_method: "cash".into(), paid_amount_fen: None, settler_id: None,
+        price_list_id: None, price_override_reason: reason.map(str::to_string), party_signed: None,
+        grade: None,
+    };
+    let r3 = settle(&conn, &actor(4, "cashier"), settle_no2(None)).unwrap().unwrap();
+    assert_eq!(r3.order.price_fen_per_ton, Some(250000), "偏离价目也放行：改价事由是选填");
+    assert_eq!(r3.order.price_override_reason, None, "没写事由就不该凭空冒出一句");
+    assert_eq!(r3.order.status, "settled");
 
-    // 当场结清（填了事由）：付款流水同事务落，FK 单号同 seq_counter
+    // 当场结清（写清事由）：付款流水同事务落，FK 单号同 seq_counter
     let no3 = create(&conn, party, xm);
     capture_gross(&conn, &no3, 200000);
     capture_tare(&conn, &no3, 100000, None);
@@ -1229,6 +1304,26 @@ fn list_parties_supports_type_and_keyword_together() {
     assert!(none.is_empty());
 }
 
+#[test]
+fn list_parties_treats_all_as_no_type_filter() {
+    let conn = db();
+    new_party(&conn, "甲张", "341204199301272031");
+    new_party(&conn, "乙李", "341204199301272032");
+    // "all" 是界面筛选项的兜底值（出库单领出方下拉就传过它），拿去比对 party_type
+    // 会查成空表，所以这里必须当「不限类型」处理
+    let all = list_parties(&conn, "", Some("all")).expect("all 不应报错");
+    assert_eq!(all.len(), 2, "all＝不限类型，不该一条都查不出来");
+    assert_eq!(
+        list_parties(&conn, "", Some("")).unwrap().len(),
+        2,
+        "空串同样是「不限」"
+    );
+    assert!(
+        list_parties(&conn, "", Some("company")).unwrap().is_empty(),
+        "真类型照常过滤，别把兜底值和真类型混为一谈"
+    );
+}
+
 // ------------------------------------------------------------ 补录入仓去向
 // 去向在制单时选填（03 §9.9），所以这条写路径要守住三件事：填了就得自洽
 // （不许留"有货位没仓房"的半截去向）、谁登记的署名进 keeper_id、改派留审计。
@@ -1757,27 +1852,61 @@ fn meta_edit_is_not_blocked_by_settlement_state() {
     assert_eq!(o.remark.as_deref(), Some("复检留样"));
 }
 
-// ------------------------------------------------ 品种后置（迁移 0017 · 两刷零按键制单）
+// ------------------------------------------------ 品种：制单必填 · 存量无品种单照旧可读
 
-/// 造一张**没定品种**的单：02 §F1.1 之后 IC 卡 + 售粮人就够取号，品种留到化验/结算前再补
+/// 造一张**没定品种**的单。制单这一步品种现在是必填（`create_order` 直接拒，见下一条），
+/// 所以这种单只可能来自两处：升级前的存量行、以及事后被 `order_set_variety` 清空的那类。
+/// 它们还在库里，读路径（详情 / 在途看板 / 列表 / 台账 / 码单）必须照旧看得见——
+/// 车就在磅上、看板说没车，是最坏的一种丢单。
 fn create_no_variety(conn: &Connection, party: i64) -> String {
-    create_order(
-        conn,
+    let no = create(conn, party, xm_id(conn));
+    set_variety(conn, &actor(1, "weigher"), variety_adjust(&no, None)).expect("把品种清回未定应成功");
+    no
+}
+
+/// 取号那一次到底吃没吃流水号（闸门不过时不许把号吃掉，05 §3.5）
+fn seq_rows(conn: &Connection) -> i64 {
+    let ym = Local::now().format("%Y%m").to_string();
+    conn.query_row("SELECT COUNT(*) FROM seq_counter WHERE prefix_key = ?1", params![format!("BD:01:{ym}")], |r| r.get(0))
+        .unwrap()
+}
+
+/// 兑现在源码里的那条规矩：**品种在取号这一刻就是必填**。它是这一单往后一切的锚——
+/// 结算的单价要对回价目表、化验的指标集与扣量基准全来自品种档案，空着取号等于把这两件事
+/// 都往后拖，拖到卸完货才发现，价格已经错过一次对照。
+#[test]
+fn a_new_order_must_carry_its_variety() {
+    let conn = db();
+    ensure_users(&conn);
+    let party = new_party(&conn, "没报品种就取号", "341204199301272116");
+    let e = create_order(
+        &conn,
         &actor(1, "weigher"),
         CreateOrderInput {
             party_id: party,
             variety_id: None,
-            vehicle_no: Some("豫A12345".into()),
+            vehicle_no: None,
             warehouse_id: None,
             slot_id: None,
             remark: None,
-            card_no: Some(free_card(conn)),
+            card_no: Some(free_card(&conn)),
             registered_by: None,
             weight_source: "scale".into(),
         },
     )
-    .expect("没定品种也该制得下这张单（两刷零按键）")
-    .order_no
+    .unwrap_err();
+    assert!(e.contains("收购品种"), "要说清缺的是品种（磅员照着念就能补），实际：{e}");
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM weigh_order", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "闸门不过不许留半张单");
+    assert_eq!(seq_rows(&conn), 0, "也不该白白吃掉一个流水号");
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM audit_log WHERE action='order.create'", [], |r| r.get::<_, i64>(0)).unwrap(),
+        0,
+        "没成的单不许留审计，否则账面多一笔没有实体的动作"
+    );
+
+    // 补上品种就照常出号，且是这一天的第 1 号——被拦下的那次没有占位
+    let no = create(&conn, party, xm_id(&conn));
+    assert!(no.ends_with("000001"), "被拦下的那次不许占号，实际：{no}");
 }
 
 /// 一个停用品种：验"给了品种仍要在册且启用"这条闸——停用档案只许存量单读出来，不许再挂新单
@@ -1826,15 +1955,18 @@ fn an_order_without_variety_still_reads_back_on_every_path() {
     let o = load_order_full(&conn, &no).unwrap().expect("详情读得回来");
     assert_eq!(o.variety_id, None, "品种列就是 NULL，不是某个默认品种");
     assert_eq!(o.variety_name, None);
-    // 时间轴与审计里那一格必须写「未定品种」——打出 "null" 的磅单没人敢签
+    // 时间轴与审计里那一格必须写「未定品种」——打出 "null" 的磅单没人敢签。
+    // 时间轴那条是 `build_timeline` 在**读的时候**按 `o.variety_name` 现算的（不是照抄审计），
+    // 所以这一条钉的正是读路径对 NULL 的处置
     let timeline = o.timeline.clone().unwrap_or_default();
     assert!(
         timeline.iter().any(|e| e.action == "order.create" && e.detail.as_deref().is_some_and(|d| d.contains("未定品种"))),
         "时间轴要写「未定品种」，实际：{:?}",
         timeline.iter().map(|e| (&e.action, &e.detail)).collect::<Vec<_>>()
     );
+    // 清品种那一次落的审计（这张单的来路）同样不许打 null
     let audited: String = conn
-        .query_row("SELECT reason FROM audit_log WHERE action='order.create' AND entity_no = ?1", params![&no], |r| r.get(0))
+        .query_row("SELECT reason FROM audit_log WHERE action='order.variety' AND entity_no = ?1", params![&no], |r| r.get(0))
         .unwrap();
     assert!(audited.contains("未定品种"), "审计 detail 同样不许打 null，实际：{audited}");
 
@@ -1857,11 +1989,13 @@ fn an_order_without_variety_still_reads_back_on_every_path() {
 
 #[test]
 fn variety_is_a_hard_gate_before_qc_and_settlement() {
+    // 制单那边已经有闸了，但库里仍可能有没品种的单（存量行 / 事后被清空），
+    // 所以化验与结算各自的闸门一条都不能撤——这时拦住才是最后一道防线
     let conn = db();
     ensure_users(&conn);
     let xm = xm_id(&conn);
     seed_price(&conn, xm);
-    let no = create_no_variety(&conn, new_party(&conn, "卸完货才报品种", "341204199301272112"));
+    let no = create_no_variety(&conn, new_party(&conn, "库存单没品种", "341204199301272112"));
     capture_gross(&conn, &no, 52000);
     capture_tare(&conn, &no, 12000, None);
 
@@ -1892,10 +2026,12 @@ fn set_variety_gates_and_stays_silent_when_nothing_changed() {
     let ym = conn.query_row("SELECT id FROM grain_variety WHERE code='YM'", [], |r| r.get::<_, i64>(0)).unwrap();
     let dead = seed_inactive_variety(&conn, "ZZ");
     let no = create_no_variety(&conn, new_party(&conn, "改品种留痕", "341204199301272113"));
+    // 这张单的来路是"先有品种、后被清成未定"，所以起点本来就有一条痕；下面判的是一共再多几条
+    let base = variety_audit(&conn, &no).len();
 
     // 清成"仍然没定"＝值没变：库里这行不该被 touch，审计表里更不该有"改了个寂寞"
     set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, None)).unwrap().expect("单应存在");
-    assert_eq!(variety_audit(&conn, &no), Vec::<String>::new(), "没变出一道痕迹就是噪音");
+    assert_eq!(variety_audit(&conn, &no).len(), base, "没变出一道痕迹就是噪音");
 
     // 停用的品种档案只许存量单读出来，不许再挂新单
     let e = set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(dead))).unwrap_err();
@@ -1903,14 +2039,14 @@ fn set_variety_gates_and_stays_silent_when_nothing_changed() {
 
     set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(xm))).unwrap().expect("定品种应成功");
     let a = variety_audit(&conn, &no);
-    assert_eq!(a.len(), 1, "定一次品种只留一条痕");
-    assert!(a[0].contains("未定品种 → 小麦"), "审计要写得清旧→新，实际：{a:?}");
+    assert_eq!(a.len(), base + 1, "定一次品种只留一条痕");
+    assert!(a.last().unwrap().contains("未定品种 → 小麦"), "审计要写得清旧→新，实际：{a:?}");
     set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(xm))).unwrap().expect("重复提交同一值不该报错");
-    assert_eq!(variety_audit(&conn, &no).len(), 1, "值没变就不该再记一条");
+    assert_eq!(variety_audit(&conn, &no).len(), base + 1, "值没变就不该再记一条");
 
     set_variety(&conn, &actor(1, "weigher"), variety_adjust(&no, Some(ym))).unwrap().expect("换成另一个品种应成功");
     let a = variety_audit(&conn, &no);
-    assert_eq!(a.len(), 2, "两次改判两条痕");
+    assert_eq!(a.len(), base + 2, "两次改判两条痕");
     assert!(a.last().unwrap().contains("小麦 → 玉米"), "改判痕要写清新旧，实际：{a:?}");
 
     // 已结算：钱的凭据已经按这个品种印出去了，要改只能由站长红冲重录
@@ -1924,9 +2060,89 @@ fn set_variety_gates_and_stays_silent_when_nothing_changed() {
     assert_eq!(variety_audit(&conn, &paid), Vec::<String>::new(), "被拦下的改判不留痕");
 }
 
+/// 定价 / 改价（02 §F1.4，2026-09-14）：价是成交的前提，票面要把它印给客户，
+/// 所以偏离价目表就是一次真实议价——**可以**留一句事由，但不留也放行（事由选填）；
+/// 已结算的单则一律不许再改（只能走红冲）。
+#[test]
+fn set_price_keeps_reason_optional_and_blocks_settled_orders() {
+    let conn = db();
+    ensure_users(&conn);
+    let xm = xm_id(&conn);
+    let list_id = seed_price(&conn, xm);
+    let party = new_party(&conn, "定价留痕", "341204199301272116");
+    // 制单即带挂牌价：农户到站先问价，票打出来之前价就得在单上
+    let no = create(&conn, party, xm);
+    let o = load_order_full(&conn, &no).unwrap().unwrap();
+    assert_eq!(o.price_fen_per_ton, Some(240000), "制单应按价目表带出挂牌价");
+    assert_eq!(o.price_list_id, Some(list_id));
+
+    let price_audit = |no: &str| -> Vec<String> {
+        let mut st = conn
+            .prepare("SELECT reason FROM audit_log WHERE action='price.override' AND entity_no=?1 ORDER BY id")
+            .unwrap();
+        let rows = st.query_map(params![no], |r| r.get::<_, Option<String>>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        rows.into_iter().map(|r| r.unwrap_or_default()).collect()
+    };
+    let adjust = |price: i64, reason: &str| PriceAdjustInput {
+        order_no: no.clone(),
+        price_fen_per_ton: price,
+        price_list_id: None,
+        reason: reason.into(),
+        operator_id: None,
+    };
+
+    // ① 照价目执行：事由不必填，取价来源记回那一行
+    let o = set_price(&conn, &actor(1, "weigher"), PriceAdjustInput { price_list_id: Some(list_id), ..adjust(240000, "") }).unwrap().unwrap();
+    assert_eq!((o.price_fen_per_ton, o.price_list_id, o.price_override_reason.clone()), (Some(240000), Some(list_id), None));
+    assert!(price_audit(&no).is_empty(), "值没变就不该留痕");
+
+    // ② 偏离价目、写清事由 → 落价、清掉取价来源、审计里能看见前后值
+    let o = set_price(&conn, &actor(1, "weigher"), adjust(250000, "当日市场价上浮，站长口头确认")).unwrap().unwrap();
+    assert_eq!(o.price_fen_per_ton, Some(250000));
+    assert_eq!(o.price_override_reason.as_deref(), Some("当日市场价上浮，站长口头确认"));
+    assert_eq!(o.price_list_id, None, "议价即与价目表脱钩（0001_init.sql:217）");
+    let a = price_audit(&no);
+    assert_eq!(a.len(), 1, "改一次价只留一条痕");
+    assert!(a[0].contains("2.400") && a[0].contains("2.500"), "审计要写清前后值，实际：{a:?}");
+
+    // ③ 不写事由同样放行（选填）：价照落、事由那列落 NULL，审计里写明"没写"而不是留一句空的
+    let o = set_price(&conn, &actor(1, "weigher"), adjust(260000, "")).unwrap().unwrap();
+    assert_eq!((o.price_fen_per_ton, o.price_override_reason.clone()), (Some(260000), None), "选填＝不写也落价");
+    let a = price_audit(&no);
+    assert_eq!(a.len(), 2);
+    assert!(a[1].contains("未填写改价事由"), "没写事由审计里要写明没写，实际：{a:?}");
+
+    // ④ 改回价目表价：事由随之清空（照价目执行不是议价）
+    let o = set_price(&conn, &actor(1, "weigher"), PriceAdjustInput { price_list_id: Some(list_id), ..adjust(240000, "") }).unwrap().unwrap();
+    assert_eq!((o.price_fen_per_ton, o.price_override_reason.clone()), (Some(240000), None));
+
+    // ⑤ 已结算：票面已经把这个价印给客户了，要改只能站长红冲
+    capture_gross(&conn, &no, 200000);
+    capture_tare(&conn, &no, 100000, None);
+    settle_now(&conn, &no, 240000, false);
+    let e = set_price(&conn, &actor(1, "weigher"), adjust(260000, "市场价又涨了")).unwrap_err();
+    assert!(e.contains("红冲"), "要说清去走红冲，实际：{e}");
+    assert_eq!(price_audit(&no).len(), 3, "被拦下的改价不留痕");
+}
+
+/// 还没定品种的单不许定价：价对不回价目表，"偏离了多少"在库里没有任何一处能发现
+#[test]
+fn set_price_requires_a_variety() {
+    let conn = db();
+    ensure_users(&conn);
+    let no = create_no_variety(&conn, new_party(&conn, "无品种定价", "341204199301272117"));
+    let e = set_price(
+        &conn,
+        &actor(1, "weigher"),
+        PriceAdjustInput { order_no: no.clone(), price_fen_per_ton: 240000, price_list_id: None, reason: "现场谈的价".into(), operator_id: None },
+    )
+    .unwrap_err();
+    assert!(e.contains("品种"), "实际：{e}");
+}
+
 #[test]
 fn creating_with_an_inactive_variety_is_still_refused() {
-    // 可空的是"可以不填"，不是"填什么都行"：给了品种就照样过在册 + 启用那道闸（02 §F6.1）
+    // 必填的是"必须给一个品种"，不是"给什么都行"：给了就得过在册 + 启用那道闸（02 §F6.1）
     let conn = db();
     ensure_users(&conn);
     let dead = seed_inactive_variety(&conn, "ZZ");

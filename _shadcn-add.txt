@@ -1,0 +1,18 @@
+﻿node.exe : - Checking registry.
+所在位置 行:1 字符: 1
++ & "C:\Users\Sprin\.workbuddy\binaries\node\versions\22.22.2-3/node.ex ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (- Checking registry.:String) [],  
+   RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+鈭?Checking registry.
+- Installing dependencies.
+- Installing dependencies.
+鈭?Installing dependencies.
+- Updating files.
+鈭?Created 2 files:
+  - src\components\ui\popover.tsx
+  - src\components\ui\calendar.tsx
+i Updated 1 file:
+  - src\components\ui\button.tsx

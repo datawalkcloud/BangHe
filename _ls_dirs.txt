@@ -1,0 +1,17 @@
+﻿.qwen-scratch
+.vscode
+.workbuddy
+brand
+crates
+dist
+dist-verify
+dist-verify-width
+docs
+node_modules
+public
+scripts
+src
+src-tauri
+tools
+vibe_images
+_qa

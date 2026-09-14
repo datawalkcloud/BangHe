@@ -1,0 +1,12 @@
+﻿KEEP _probe-bar.ts
+KEEP _probe-bar.cjs
+KEEP _probe2.txt
+KEEP _probe-build.txt
+KEEP _rc.cjs
+KEEP _rc.txt
+KEEP _ct.txt
+KEEP _cc.txt
+KEEP _cp.txt
+KEEP _tsc.txt
+KEEP _vite.txt
+KEEP _rmcheck.txt

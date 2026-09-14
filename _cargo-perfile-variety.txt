@@ -1,0 +1,29 @@
+﻿=== cards_contract ===
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+=== qc_contract ===
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+=== payments_contract ===
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+=== search_contract ===
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+=== settlements_contract ===
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+=== dashboard_contract ===
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+=== reports_contract ===
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+=== ledger_contract ===
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+=== command_wiring_contract ===
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+=== outbound_contract ===
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+=== schema_contract ===
+thread 'schema_matches_blessed_snapshot' (12460) panicked at tests\schema_contract.rs:457:9:
+thread 'doc_section9_columns_match_database' (15656) panicked at tests\schema_contract.rs:426:5:
+test result: FAILED. 17 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.13s
+error: test failed, to rerun pass `--test schema_contract`
+=== mock_coverage_contract ===
+thread 'every_native_module_is_merged_into_api_ts' (12172) panicked at tests\mock_coverage_contract.rs:175:5:
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+error: test failed, to rerun pass `--test mock_coverage_contract`

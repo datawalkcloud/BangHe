@@ -1,0 +1,179 @@
+﻿cargo :    Compiling ticket-core v0.1.0 (G:\Github\BangHe\crates\ticket-core)
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --no-fail-fast --test system_contract --test p ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ti...es\ticket-core):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 29s
+     Running tests\prefs_contract.rs (target\debug\deps\prefs_contract-ef853f0413213d06.exe)
+
+running 5 tests
+test key_gate_rejects_junk_names ... ok
+test value_gate_rejects_non_json_and_oversize ... ok
+test absent_key_reads_none_so_frontend_falls_back_to_default ... ok
+test accounts_are_isolated_and_follow_the_account_when_it_goes ... ok
+test write_is_upsert_one_row_per_key ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests\scale_contract.rs (target\debug\deps\scale_contract-be0c7e0d3c48f079.exe)
+
+running 61 tests
+test a9_decimal_count_flag_divides_the_integer ... ok
+test broken_template_says_why_in_chinese_without_rust_debug ... ok
+test a_queue_of_good_frames_is_not_mistaken_for_an_oversize_junk ... ok
+test decimal_places_only_pads_a_short_fraction ... ok
+test empty_config_lands_on_every_document_default ... ok
+test document_template_deserializes_verbatim ... ok
+test a_fast_meter_keeps_framing_until_the_window_is_long_enough ... ok
+test c_family_query_is_throttled_by_interval ... ok
+test every_parse_error_is_chinese_and_short ... ok
+test fixed_len_framing_for_polled_binary_answers ... ok
+test frame_display_escapes_control_bytes_for_the_monitor ... ok
+test frame_without_digits_or_with_merged_digits_is_an_error ... ok
+test a9_snapshot_explains_a_window_that_is_too_short ... ok
+test garbage_before_start_is_counted_and_does_not_block_the_next_good_frame ... ok
+test hex_command_accepts_both_spellings ... ok
+test a9_checksum_is_case_insensitive ... ok
+test good_frame_after_bad_ones_clears_the_streak ... ok
+test half_frame_stays_in_buffer_and_finishes_next_read ... ok
+test a9_continuous_stream_reads_through_the_whole_pipeline ... ok
+test judgement_shape_is_camel_case_for_debugging ... ok
+test a9_frames_alternating_two_kg_stabilize_and_say_why ... ok
+test last_reading_survives_an_offline_report ... ok
+test a9_xor_ascii_hex_mismatch_is_a_bad_frame_not_a_reading ... ok
+test device_reported_stable_relaxes_but_does_not_skip_the_local_check ... ok
+test nearest_div_matches_the_frontend_rounding ... ok
+test negative_weight_for_backing_off_and_tare_correction ... ok
+test no_decimal_point_means_plain_kg ... ok
+test checksum_failure_counts_err_and_twenty_in_a_row_is_bad_frame ... ok
+test no_frame_for_five_seconds_reports_offline_once ... ok
+test judgement_helpers_are_pure_and_repeatable ... ok
+test event_field_names_are_exactly_what_the_frontend_wires ... ok
+test partial_sections_fall_back_per_field_not_wholesale ... ok
+test oversize_junk_frame_is_dropped_and_counted ... ok
+test overload_display_is_rejected_as_a_reading ... ok
+test one_division_tolerance_config_is_the_front_end_line ... ok
+test parses_document_sample_frame ... ok
+test no_min_weight_gate_by_default_but_an_opt_in_threshold_still_works ... ok
+test real_xk3190_a9_frame_parses_to_62_kg ... ok
+test space_padded_field_skips_padding ... ok
+test splits_one_whole_frame_and_keeps_start_and_terminator ... ok
+test port_that_does_not_exist_opens_to_a_chinese_hint_not_a_panic ... ok
+test stable_frame_bypasses_the_throttle_and_is_pushed_at_once ... ok
+test stability_needs_a_full_window_then_spread_within_divisions ... ok
+test status_dto_is_camel_case_for_the_device_center ... ok
+test spread_exactly_two_divisions_is_stable_but_one_tenth_more_is_not ... ok
+test stx_etx_delimited_variant ... ok
+test sticky_two_frames_split_with_no_lost_bytes ... ok
+test unknown_driver_has_no_preset ... ok
+test unknown_keys_are_tolerated_because_config_json_is_shared ... ok
+test stable_ms_is_a_real_duration_gate ... ok
+test unit_outside_kg_still_lands_on_01kg ... ok
+test window_slides_out_the_oldest_sample ... ok
+test unstable_frames_are_throttled_to_ten_per_second ... ok
+test mock_scale_is_refused_with_a_plain_chinese_sentence ... ok
+test missing_port_and_tcp_transport_are_caught_before_touching_the_serial_port ... ok
+test flat_ledger_form_gets_the_driver_preset ... ok
+test enabled_poll_without_a_usable_command_is_refused ... ok
+test missing_code_and_disabled_and_wrong_kind_all_say_why_in_chinese ... ok
+test bad_port_in_a_real_row_still_resolves_then_fails_cleanly ... ok
+test full_nested_template_is_never_overwritten_by_the_preset ... ok
+test real_ledger_row_yields_a_runnable_template ... ok
+
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests\schema_contract.rs (target\debug\deps\schema_contract-e4ab23a0700c29ce.exe)
+
+running 19 tests
+test checksum_ignores_line_endings ... ok
+test every_migration_file_is_registered ... ok
+test failed_script_rolls_back_and_is_not_recorded ... ok
+test migration_0013_dedupes_party_phones_before_the_unique_index ... ok
+test migration_0017_keeps_legacy_varieties_and_lets_new_rows_be_null ... ok
+test foreign_keys_are_enforced ... ok
+test tampered_applied_script_refuses_startup ... ok
+test legacy_crlf_checksum_is_healed_once_and_accepted ... ok
+test migrate_is_idempotent_across_restarts ... ok
+test upgrade_from_older_version_backs_up_and_fills_gap ... ok
+test schema_matches_blessed_snapshot ... FAILED
+test newer_database_version_refuses_startup ... ok
+test version_bump_without_marker_snapshots_pre_upgrade ... ok
+test overwrite_install_snapshots_once_per_install ... ok
+test seed_baseline_matches_design_doc ... ok
+test doc_named_indexes_and_views_exist ... ok
+test doc_section9_table_set_matches_database ... ok
+test enums_are_single_sourced_across_three_places ... ok
+test doc_section9_columns_match_database ... FAILED
+
+failures:
+
+---- schema_matches_blessed_snapshot stdout ----
+
+thread 'schema_matches_blessed_snapshot' (11916) panicked at tests\schema_contract.rs:457:9:
+瀹為檯缁撴瀯涓庡揩鐓т笉涓€鑷达紙鍚屼竴鎵硅剼鏈繀椤诲湪浠讳綍鏈哄櫒涓婂緱鍒伴€愬瓧鐩稿悓鐨勭粨鏋勶級锛?  index	uk_stock_opening	CREATE UNIQUE INDEX uk_stock_opening ON stock_movement(to_warehouse_id) WHERE is_opening = 1
+  table	stock_movement	CREATE TABLE stock_movement ( id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, move_no TEXT UNIQUE, kind TEXT CHECK (kind IN ('in','out','transfer','loss','adjust')), order_id INTEGER REFERENCES weigh_order(id), -- 鍏ュ簱鍙函婧愬埌纾呭崟 party_id INTEGER REFERENCES party(id), variety_id INTEGER REFERENCES grain_variety(id), grade TEXT, from_warehouse_id INTEGER REFERENCES warehouse(id), from_slot_id INTEGER REFERENCES storage_slot(id), to_warehouse_id INTEGER REFERENCES warehouse(id), to_slot_id INTEGER REFERENCES storage_slot(id), weight_01kg INTEGER NOT NULL, price_fen_per_ton INTEGER, amount_fen INTEGER, business_date TEXT NOT NULL, operated_at TEXT NOT NULL, operator_id INTEGER NOT NULL REFERENCES user_account(id), remark TEXT , outbound_id INTEGER REFERENCES outbound_order(id), reversal_of_id INTEGER REFERENCES stock_movement(id))
+  table	stock_movement	CREATE TABLE stock_movement ( id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, move_no TEXT UNIQUE, kind TEXT CHECK (kind IN ('in','out','transfer','loss','adjust')), order_id INTEGER REFERENCES weigh_order(id), -- 鍏ュ簱鍙函婧愬埌纾呭崟 party_id INTEGER REFERENCES party(id), variety_id INTEGER REFERENCES grain_variety(id), grade TEXT, from_warehouse_id INTEGER REFERENCES warehouse(id), from_slot_id INTEGER REFERENCES storage_slot(id), to_warehouse_id INTEGER REFERENCES warehouse(id), to_slot_id INTEGER REFERENCES storage_slot(id), weight_01kg INTEGER NOT NULL, price_fen_per_ton INTEGER, amount_fen INTEGER, business_date TEXT NOT NULL, operated_at TEXT NOT NULL, operator_id INTEGER NOT NULL REFERENCES user_account(id), remark TEXT , outbound_id INTEGER REFERENCES outbound_order(id), reversal_of_id INTEGER REFERENCES stock_movement(id), is_opening INTEGER NOT NULL DEFAULT 0)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- doc_section9_columns_match_database stdout ----
+
+thread 'doc_section9_columns_match_database' (12088) panicked at tests\schema_contract.rs:426:5:
+
+搂9 琛ㄧ粨鏋?鈫?瀹為檯缁撴瀯锛? 澶勪笉涓€鑷?  路 stock_movement.is_opening锛氬簱閲屾湁璇ュ垪锛屄? 娌℃湁锛堟枃妗ｆ病鍚屾锛屾垨鑴氭湰澶氬啓浜嗭級
+淇硶鏄銆屾枃妗?/ 寤鸿〃鑴氭湰 / 鍓嶇甯搁噺銆嶄笁鑰呭榻愶紝涓嶈鍗曠嫭鏀惧鏌愪竴椤广€?
+
+failures:
+    doc_section9_columns_match_database
+    schema_matches_blessed_snapshot
+
+test result: FAILED. 17 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+
+error: test failed, to rerun pass `--test schema_contract`
+     Running tests\system_contract.rs (target\debug\deps\system_contract-639c379f0ad73a59.exe)
+
+running 25 tests
+test filename_grammar_helpers_stay_inside_their_grammar ... ok
+test backup_status_reports_settings_only_as_stored ... ok
+test audit_list_authorizes_by_person_name_not_by_id ... ok
+test audit_list_date_range_uses_local_day_not_utc ... ok
+test health_report_on_a_fresh_library_is_clean ... ok
+test audit_list_hits_chinese_names_and_honours_filters ... ok
+test health_report_caps_the_foreign_key_sample ... ok
+test health_report_flags_a_dangling_reference ... ok
+test import_backup_refuses_paths_it_should_not_touch ... ok
+test auto_backup_records_an_audit_row_without_a_person ... ok
+test import_backup_never_overwrites_and_drops_a_broken_copy ... ok
+test backup_run_produces_a_usable_copy_with_sidecar ... ok
+test backup_run_rejects_injected_kind_and_bad_stamp ... ok
+test backup_verify_catches_truncated_and_single_byte_edits ... ok
+test preflight_rejects_missing_and_traversing_names ... ok
+test import_backup_takes_an_usb_copy_back_and_restores_it ... ok
+test verify_and_prune_survive_a_missing_backup_dir ... ok
+test restore_requires_verbatim_confirm_and_the_right_role ... ok
+test restore_aborts_before_touching_files_when_preflight_fails ... ok
+test preflight_accepts_a_real_copy_and_flags_a_tampered_one ... ok
+test backup_run_prunes_only_older_copies_and_deletes_pairs ... ok
+test preflight_refuses_a_copy_whose_schema_the_app_cannot_open ... ok
+test prune_keeps_a_copy_that_a_restore_is_about_to_use ... ok
+test auto_backup_makes_a_copy_only_when_the_gap_is_due ... ok
+test restore_swaps_the_live_db_and_keeps_the_old_file ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+     Running tests\window_contract.rs (target\debug\deps\window_contract-fc7248e298eae77b.exe)
+
+running 4 tests
+test only_hide_is_recognized_everything_else_exits ... ok
+test close_behavior_key_is_the_same_on_both_sides ... ok
+test display_window_never_shares_the_main_label ... ok
+test out_of_the_box_the_window_hides_to_the_tray ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `--test schema_contract`
+

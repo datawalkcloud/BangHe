@@ -352,13 +352,17 @@ mod imp {
                     self.need(h);
                     self.y += h;
                 }
-                PrintLine::Qr { text, size } => {
+                // `pad_left` 在队列这一侧**故意不认**：热敏那条路要自己算落点，是因为
+                // 小票机只会按自己的头宽居中、跟装的是哪卷纸无关；而页式打印机的可打区
+                // 是打印机驱动给的确定矩形（`self.left..self.right`），下面两个函数本来
+                // 就在这个矩形里居中并按它压缩，再叠一层前端算的落点只会算两遍。
+                PrintLine::Qr { text, size, .. } => {
                     if text.is_empty() {
                         return;
                     }
                     self.qr(text, *size, qr_err);
                 }
-                PrintLine::Barcode { runs, dots, height } => self.barcode(runs, *dots, *height),
+                PrintLine::Barcode { runs, width, height, .. } => self.barcode(runs, *width, *height),
             }
         }
 
@@ -497,16 +501,19 @@ mod imp {
 
         /// 一维条码：照前端算好的条空模块序列涂黑方块（偶数位是条）。
         ///
-        /// 这里**不做任何 CODE128 编码**——条空宽度、模块点数、条高都是前端
+        /// 这里**不做任何 CODE128 编码**——条空宽度、总点宽、条高都是前端
         /// `code128.ts` 一次算出来的，预览、热敏、这一路共用同一条几何。
-        fn barcode(&mut self, runs: &[u8], dots: u8, height: u8) {
+        fn barcode(&mut self, runs: &[u8], width: u16, height: u8) {
             let total: i32 = runs.iter().map(|&w| w as i32).sum();
             if total == 0 {
                 return;
             }
             let avail = self.right - self.left;
+            // 前端给的是整条的点宽（纸窄时模块宽度被压成过小数，见 code-size.ts），
+            // 这里按模块数摊回"每模块几点"。定长纸从来不是窄的那一方，整除即可。
+            let per_module = ((width as i32) / total).max(1);
             // 先按模板档位算模块宽度，超出可打宽度就逐像素压小（宁可码窄，不能被切掉）
-            let mut module = dots_px(dots.max(1) as i32, self.dpi_x).max(1);
+            let mut module = dots_px(per_module, self.dpi_x).max(1);
             while module > 1 && (total + BAR_QUIET_MODULES * 2) * module > avail {
                 module -= 1;
             }
@@ -617,13 +624,16 @@ mod imp {
                 PrintLine::Qr {
                     text: "BH1:BD100120260912000001".into(),
                     size: 4,
+                    // 队列这一侧不认落点（自己在驱动给的可打区里居中），给 0 就是真实情形
+                    pad_left: 0,
                 },
                 // 条空序列是合成的（这张票判的是"驱动收不收下任务"，不是码的内容），
                 // 但它会真的走一遍 GDI 的条码绘制分支
                 PrintLine::Barcode {
                     runs: vec![2, 1, 2, 2, 1, 2, 4, 1, 2, 1, 2, 2, 1, 4],
-                    dots: 2,
+                    width: 54, // 27 模块 × 2 点（这一路按模块数摊回每模块几点）
                     height: 96,
+                    pad_left: 0,
                 },
                 PrintLine::Feed { n: 2 },
             ];

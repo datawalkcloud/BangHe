@@ -163,6 +163,7 @@ pub fn run() {
             orders::order_settle,
             orders::order_set_grade,
             orders::order_set_variety,
+            orders::order_set_price,
             orders::order_update,
             orders::print_log_add,
             orders::order_void,

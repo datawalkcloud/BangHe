@@ -18,7 +18,7 @@
  * 磅员手里正压着一车粮，界面渲染不出来比布局丢了严重得多。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { verticalCompactor } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
@@ -215,9 +215,15 @@ function withHidden(doc: LayoutDoc, id: PanelId, hide: boolean): LayoutDoc {
  *
  * 写入只在拖拽/缩放**结束**、以及收起/放出/重置时发生。网格在拖动过程中每帧都在报
  * 新格子（react-grid-layout 的行为），那时只更本地状态，不然一次拖动往库里写几十行。
+ *
+ * **写到库里之后必须把同一份文本回填查询缓存**（见 `remember`）。不回填的话，工作台这个
+ * 路由组件一被卸载，它内部的 `loadedFor` ref 就清零了；再切回来时缓存在 `staleTime: Infinity`
+ * 下不重取，回来的还是保存前那份旧文本，于是被当成本人的排布灌回本地状态——用户看到的就是
+ * "点完完成、切去别的页面再回来，布局还是保存前的"。同一份值两处口径必须一致，别再拆开写。
  */
 export function useWorkstationLayout() {
   const actorId = useSession((s) => s.session?.actor.id ?? null);
+  const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["pref", LAYOUT_KEY, actorId],
     queryFn: () => api.getPref(LAYOUT_KEY),
@@ -238,9 +244,43 @@ export function useWorkstationLayout() {
     setDoc(parseDoc(query.data ?? null));
   }, [actorId, query.isFetched, query.data]);
 
+  /**
+   * 已发出的写入序号。落库走的是并发的 IPC，两次快速改动（连点两下面板菜单）的回执可能倒着
+   * 回来。缓存里该留的是**最后一次意图**，不是最后一个回执，所以回填时只认最新那一次序号，
+   * 免得先写的那份把后写的那份盖回去。
+   */
+  const writeSeq = useRef(0);
+
+  /**
+   * 把"本会话自己写出去的那一份"记下来，两件事必须一起做：
+   *  1. 回填查询缓存 —— 否则切走再切回来读到的还是保存前那份（见 hook 头注）；
+   *  2. 把 `loadedFor` 标成这份 —— 本地状态已经是它了，不需要再被回灌一次
+   *     （拖动中防抖落库时回灌会把用户正拽着的那块弹回挤干净后的位置）。
+   */
+  const remember = useCallback(
+    (json: string, seq: number) => {
+      if (seq !== writeSeq.current) return;
+      void queryClient.setQueryData(["pref", LAYOUT_KEY, actorId], json);
+      loadedFor.current = actorId == null ? null : `${actorId}:${json}`;
+    },
+    [actorId, queryClient],
+  );
+
   const save = useMutation({
-    mutationFn: (next: LayoutDoc) => api.setPref(LAYOUT_KEY, stringifyDoc(settle(next))),
-    onError: (e: Error) => toast.error(`布局没能保存：${e.message}（本机仍生效，重启后可能回到原样）`),
+    mutationFn: async (next: LayoutDoc) => {
+      const json = stringifyDoc(settle(next));
+      const seq = ++writeSeq.current;
+      await api.setPref(LAYOUT_KEY, json);
+      return { json, seq };
+    },
+    onSuccess: ({ json, seq }) => remember(json, seq),
+    onError: (e: Error, next: LayoutDoc) => {
+      // 库没写进去，但这一份在本次会话里仍然算数：提示语说了"本机仍生效"，就得真的生效，
+      // 否则用户切个页面回来发现调整没了，比"重启后可能回到原样"更难受。序号取当前值——
+      // 失败的若是最新那次，它才是该留下的意图。
+      remember(stringifyDoc(settle(next)), writeSeq.current);
+      toast.error(`布局没能保存：${e.message}（本机仍生效，重启后可能回到原样）`);
+    },
   });
   const persist = save.mutate;
 

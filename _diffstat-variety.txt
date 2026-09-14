@@ -1,0 +1,21 @@
+﻿ .workbuddy/memory/MEMORY.md                        | 63 ++++++++++++--
+ dist-verify/assets/dist-js-BcRuyXHf.js             |  1 -
+ dist-verify/assets/index-Ci0zV4f0.js               | 70 ----------------
+ dist-verify/assets/index-CjCsusKA.css              |  2 -
+ dist-verify/index.html                             |  4 +-
+ ...250\241\345\235\227\350\247\204\345\210\222.md" |  6 +-
+ ...225\260\346\215\256\346\250\241\345\236\213.md" |  9 +-
+ ...272\244\344\272\222\350\247\204\350\214\203.md" |  8 +-
+ ...265\201\350\275\254\345\207\255\350\257\201.md" |  9 +-
+ src-tauri/src/orders.rs                            | 40 +++++----
+ src-tauri/tests/orders_contract.rs                 | 75 +++++++++++++----
+ src/components/settlement/SettleForm.tsx           | 16 ++--
+ src/components/workstation/IdentityPanel.tsx       | 97 ++++++++++++++++------
+ src/components/workstation/QcPanel.tsx             | 28 +++----
+ src/components/workstation/layout.ts               | 46 +++++++++-
+ src/lib/format.ts                                  |  2 +-
+ src/lib/orders-native.ts                           |  5 +-
+ src/mock/analytics.ts                              |  2 +-
+ src/mock/api.ts                                    | 26 +++---
+ src/mock/types.ts                                  |  6 +-
+ 20 files changed, 324 insertions(+), 191 deletions(-)

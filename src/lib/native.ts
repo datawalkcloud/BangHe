@@ -107,6 +107,22 @@ export interface ReceiptTicket {
  * 翻成 ESC/POS 指令，不再认任何一种写死的票面结构。字段名一律单词、与 Rust 同形——
  * 大小写约定只在一处（`#[serde(tag = "kind", rename_all = "camelCase")]`）。
  */
+/**
+ * 码的横向落点（点，从打印头左端起算）。
+ *
+ * 为什么由前端算而不是让机器居中：`ESC a 1` 按**打印机自己认的可打宽度**居中，而那个数
+ * 只跟机身有关、与这卷纸无关。80 机装 58 卷时机身仍按 72mm 居中，48mm 宽的条码就落在
+ * 12~60mm，而纸只有 58mm——右端连停止符一起被切在纸外。落点只能自己算，
+ * 算法与依据见 `src/components/print/receipt/code-size.ts::codeOffsetDots`。
+ *
+ * 缺省 0 = 贴着纸左端起排（定长纸走打印队列时用不上它，那一侧的可打区是驱动给的，
+ * 见 `queue_print.rs`）。
+ */
+type PadLeft = {
+  /** 码左侧的空点（203dpi）。热敏直打才有；预览 / A4 队列为 0 */
+  padLeft?: number;
+};
+
 export type NativePrintLine =
   | {
       kind: "text";
@@ -124,7 +140,7 @@ export type NativePrintLine =
   | { kind: "pair"; l1: string; v1: string; l2: string; v2: string }
   | { kind: "rule" }
   | { kind: "feed"; n: number }
-  | {
+  | ({
       kind: "qr";
       text: string;
       /**
@@ -134,8 +150,8 @@ export type NativePrintLine =
        * 从「中」调到「超大」，A4 与预览变了、小票机纹丝不动。
        */
       size?: number;
-    }
-  | {
+    } & PadLeft)
+  | ({
       /**
        * 一维条码（CODE128）。
        *
@@ -148,11 +164,18 @@ export type NativePrintLine =
       kind: "barcode";
       /** 条 / 空宽度交替序列（单位：模块），第一个元素是条 */
       runs: number[];
-      /** 一个模块占几个点（203dpi，1 点 = 0.125mm）。纸宽放不下时前端已压过这个数 */
-      dots: number;
+      /**
+       * 条身的**总点宽**（203dpi，1 点 = 0.125mm，不含静区）。
+       *
+       * 发的不是"一个模块几点"而是整条的总宽：纸窄到放不下时前端按**实数**压模块宽度
+       * （见 `fitModuleDots`），而 `GS v 0` 栅格只能按整数点排——所以小数那一份在前端
+       * 一次折好，Rust 照着总宽把每段分到点上即可，两边不会再各自乘出一个不同的宽度。
+       * 纸宽放不下时前端已经压过这个数。
+       */
+      width: number;
       /** 条高（点） */
       height: number;
-    };
+    } & PadLeft);
 
 export type NativeResult<T> =
   | { available: true; data?: T; error?: string }

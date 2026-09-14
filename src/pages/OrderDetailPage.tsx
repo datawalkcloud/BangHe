@@ -6,7 +6,8 @@
  *   基本信息 → 重量轨迹（含被弃用的读数）→ 化验指标 → 结算明细
  *   → 附件墙 → 打印记录 → 全链路时间轴
  *
- * 页面上只有两处写操作：「作废」不需要授权、只需填明事由留痕；「入仓去向」由值仓事后补录
+ * 页面上只有三处写操作：「作废」不需要授权、只需填明事由留痕；「定价 / 改价」改的是本单
+ *  结算价（票面按它出票，偏离价目表须写清事由，02 §F1.4）；「入仓去向」由值仓事后补录
  *  （制单时选填，见 03 §9.9），改派写 order.destination 审计、署名进 keeper_id。
  * 红冲（ reversals ）在 mock 层没有对应接口，因此这里只给出跳转与说明，
  * 绝不伪装成已完成的操作（02 §F6.3 要求红冲另立新单，接口未实现）。
@@ -14,7 +15,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangleIcon, ArrowLeftIcon, BadgeCheckIcon, FlaskConicalIcon, MapPinIcon, PrinterIcon, ShieldAlertIcon } from "lucide-react";
+import { AlertTriangleIcon, ArrowLeftIcon, BadgeCheckIcon, FlaskConicalIcon, MapPinIcon, PrinterIcon, ShieldAlertIcon, TagIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { WeighRecord } from "@/mock/types";
@@ -38,6 +39,7 @@ import { DataTable, type Column } from "@/components/business/DataTable";
 import { Choose } from "@/components/business/Choose";
 import { VoidReasonField } from "@/components/business/VoidReasonField";
 import { ComboBox } from "@/components/business/ComboBox";
+import { PriceDialog } from "@/components/business/PriceDialog";
 import { MoneyLine } from "@/components/business/NumField";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { CapturePhotoThumb } from "@/components/business/CapturePhotoThumb";
@@ -98,6 +100,11 @@ export function OrderDetailBody({
   const [gradeValue, setGradeValue] = useState("");
   const [gradeReason, setGradeReason] = useState("");
   const { options: gradeReasonOptions } = useQuickOptions("price");
+  /**
+   * 定价 / 改价（02 §F1.4）。框是共用的 `PriceDialog`，与磅房称重区那个入口同一份判定
+   * ——都在改 `weigh_order.price_fen_per_ton` 这一列，各写一份必然分叉出"同一张单两个价"。
+   */
+  const [priceOpen, setPriceOpen] = useState(false);
 
   const { data: order, isLoading } = useQuery({
     queryKey: ["order", orderNo],
@@ -262,6 +269,18 @@ export function OrderDetailBody({
         : !can("order.grade")
           ? "当前岗位无权调整等级（需化验员、出纳或站长）"
           : null;
+  /**
+   * 价的闸门与等级同一条线：结算完成（settled/paid/archived/reversed）后价就是"钱"的一部分，
+   * 票面也已经把它印给客户了，想改只能由站长红冲——否则会出现"票上是这个价、账上是另一个价"。
+   */
+  const priceBlocked =
+    locked
+      ? "作废/拒收的单不能再定价"
+      : ["settled", "paid", "archived", "reversed"].includes(order.status)
+        ? "本单已结算，改价请先由站长红冲（02 §F6.3）"
+        : !can("price.override")
+          ? "当前岗位无权定价（需磅员或站长）"
+          : null;
   /** 补打角标只看 print_log 里真正出过纸的那几条，与工作台同一口径 */
   const weighPrinted = prints.filter((p) => p.doc_type === "weigh_order" && p.result === "success").length;
   /**
@@ -415,6 +434,16 @@ export function OrderDetailBody({
                     <Button
                       size="xs"
                       variant="outline"
+                      onClick={() => setPriceOpen(true)}
+                      disabled={!!priceBlocked}
+                      title={priceBlocked ?? "定价 / 改价（票面按本单价出票，偏离价目表可写事由留痕，选填）"}
+                    >
+                      <TagIcon />
+                      {order.price_fen_per_ton == null ? "定价" : "改价"}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
                       onClick={openGrade}
                       disabled={!!gradeBlocked}
                       title={gradeBlocked ?? "调整磅单上的业务定级（化验单判定不受影响）"}
@@ -490,8 +519,8 @@ export function OrderDetailBody({
                     { label: "皮重", value: <span className="tnum">{weight(order.tare_weight_01kg)}</span> },
                     { label: "净重", value: <span className="tnum font-semibold">{weight(order.net_weight_01kg)}</span> },
                     { label: "包装物", value: <span className="tnum">{weight(order.package_deduct_01kg)} × {order.package_count} 件</span> },
-                    { label: "扣水", value: <span className="tnum">{weight(order.moisture_deduct_01kg)}</span> },
-                    { label: "扣杂", value: <span className="tnum">{weight(order.impurity_deduct_01kg)}</span> },
+                    { label: "扣水（磅单值）", value: <span className="tnum">{weight(order.moisture_deduct_01kg)}</span> },
+                    { label: "扣杂（磅单值）", value: <span className="tnum">{weight(order.impurity_deduct_01kg)}</span> },
                     { label: "其他扣重", value: <span className="tnum">{weight(order.other_deduct_01kg)}</span> },
                     { label: "扣重合计", value: <span className="tnum">{weight(order.deduct_total_01kg)}</span> },
                     {
@@ -501,9 +530,20 @@ export function OrderDetailBody({
                     },
                   ]}
                 />
+                {/* 化验单上还有一组同名的扣水/扣杂（化验给出的建议）。两个数不等不是错，
+                    是"现场按实际情况改过"，但页面必须替人说清哪一份算了钱——否则迎检时
+                    两张卡上的同名数字会被当成录入重复。 */}
+                {qc && (qc.moisture_deduct_01kg !== order.moisture_deduct_01kg || qc.impurity_deduct_01kg !== order.impurity_deduct_01kg) && (
+                  <p className="text-xs text-warning">
+                    化验给出的建议扣量是 扣水 <span className="tnum">{weight(qc.moisture_deduct_01kg)}</span>／扣杂{" "}
+                    <span className="tnum">{weight(qc.impurity_deduct_01kg)}</span>，
+                    本单按上表（扣水 <span className="tnum">{weight(order.moisture_deduct_01kg)}</span>／扣杂{" "}
+                    <span className="tnum">{weight(order.impurity_deduct_01kg)}</span>）结算——结算重量、票面与台账一律认磅单这份。
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
                   净重 = 毛重 − 皮重；结算重量 = 净重 − 扣重合计。首版不实现水分/杂质自动增扣量（02 §F4.4），
-                  上表扣重均为人工录入值。
+                  上表扣重均为人工录入值，其中扣水/扣杂以<span className="text-foreground">结算时在计算单确认的磅单值</span>为准。
                 </p>
               </CardContent>
             </Card>
@@ -555,8 +595,8 @@ export function OrderDetailBody({
                         { label: "定级", value: orDash(qc.grade) },
                         { label: "化验员", value: `${names(qc.inspector_id)} · ${dateTime(qc.inspected_at)}` },
                         { label: "留样", value: qc.retention_no ? `${qc.retention_no}（至 ${qc.retention_until}）` : "未留样" },
-                        { label: "扣水", value: <span className="tnum">{weight(qc.moisture_deduct_01kg)}</span> },
-                        { label: "扣杂", value: <span className="tnum">{weight(qc.impurity_deduct_01kg)}</span> },
+                        { label: "扣水（建议）", value: <span className="tnum">{weight(qc.moisture_deduct_01kg)}</span> },
+                        { label: "扣杂（建议）", value: <span className="tnum">{weight(qc.impurity_deduct_01kg)}</span> },
                         {
                           label: "拒收原因",
                           value: <span className="text-destructive">{orDash(qc.reject_reason)}</span>,
@@ -612,7 +652,9 @@ export function OrderDetailBody({
                       </TableBody>
                     </Table>
                     <p className="text-xs text-muted-foreground">
-                      基准值仅用于超标提示与定级参考，不参与扣量计算。
+                      基准值仅用于超标提示与定级参考，不参与扣量计算；「定级」是化验员按国标的判定（复检另立新单，本单永不改写），
+                      与磅单上"这一车按几等结钱"的业务等级是两条线。「扣水（建议）／扣杂（建议）」也一样——
+                      结算时以计算单确认进磅单的那份为准，化验这份不会被回写。
                     </p>
                   </>
                 )}
@@ -892,6 +934,12 @@ export function OrderDetailBody({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/*
+        定价 / 改价：与磅房称重区共用同一个 `PriceDialog`（同一列、同一套判定）。
+        挂在等级框前面——票面出票按价走，价比等级更贴"钱"。
+      */}
+      <PriceDialog open={priceOpen} onOpenChange={setPriceOpen} order={order} qc={qc} />
 
       <AlertDialog open={voidOpen} onOpenChange={setVoidOpen}>
         <AlertDialogContent className="max-w-[520px]">

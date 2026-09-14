@@ -7,7 +7,7 @@
  * 纸上扫不动"的来源。所以这里把点当基本单位，毫米一律由 `DOT_MM` 乘出来。
  */
 import type { PaperKind } from "@/lib/constants";
-import { PAPER_SPEC } from "./paper";
+import { isRollPaper, PAPER_SPEC } from "./paper";
 
 /** 203dpi 热敏机一个点的物理边长（mm） */
 export const DOT_MM = 0.125;
@@ -52,29 +52,98 @@ export const barcodeHeightMm = () => BARCODE_HEIGHT_DOTS * DOT_MM;
 export const dotsToMm = (dots: number) => dots * DOT_MM;
 
 /**
- * 纸面上码能打多宽（mm）。
+ * 纸面上码能打多宽（点）。
  *
  * 热敏纸取的是**机内栅格**而不是纸的标称宽度：58 纸可打 384 点、80 纸 512 点（203dpi），
  * 也就是 48 / 64mm——纸边那 5~8mm 是走纸轮压着的，码打上去就是被切掉一半的废票。
  * 定长纸（A4 / 241）反过来，页边距内都是可打区。
  */
-export function printableMm(paper: PaperKind): number {
-  if (paper === "thermal58") return dotsToMm(384);
-  if (paper === "thermal80") return dotsToMm(512);
+export function printableDots(paper: PaperKind): number {
+  if (paper === "thermal58") return 384;
+  if (paper === "thermal80") return 512;
   const m = PAPER_SPEC[paper].marginMm;
-  return PAPER_SPEC[paper].widthMm - m.left - m.right;
+  return Math.round((PAPER_SPEC[paper].widthMm - m.left - m.right) / DOT_MM);
+}
+
+/** 同上，按毫米报（编辑器里"这一档实际多大"给人的是毫米） */
+export function printableMm(paper: PaperKind): number {
+  return dotsToMm(printableDots(paper));
 }
 
 /**
- * 一维码放不进纸宽时，把模块点数压到放得下为止，最低 1 点（0.125mm，扫码枪的近距极限）。
+ * 打印头的点宽（203dpi）。这是**机身属性**，按机器装的那卷纸推：58 机 384 点（48mm）、
+ * 80 机 576 点（72mm）。
+ *
+ * 它和纸宽不是一回事，两者都可能是窄的那一方：80 纸 640 点比 576 点宽（纸边各 4mm 打不到），
+ * 58 纸 464 点比 576 点窄（机身有 10mm 宽的纸边用不上）。码的横向落点算的就是这个差。
+ */
+function headDots(paper: PaperKind): number {
+  return paper === "thermal58" ? 384 : 576;
+}
+
+/** 卷纸的整幅点宽（含纸边那圈不可用区）：58 → 464，80 → 640。定长纸返回 0（不参与热敏落点） */
+function rollDots(paper: PaperKind): number {
+  return isRollPaper(paper) ? Math.round(PAPER_SPEC[paper].widthMm / DOT_MM) : 0;
+}
+
+/**
+ * 码的宽度预算（点）：票面纸型的可打宽度，与机器头宽里更窄的那个。
+ *
+ * `machinePaper` = 这次出纸**告诉机器的**那张纸（`print_receipt` 的 paper 参数）。
+ * 票面按 80 排、机器却是 58 时，预算被机头压到 384 点——不改的话码按 64mm 算出来，
+ * 机器根本打不下，右半截直接消失。
+ */
+export function codeBudgetDots(paper: PaperKind, machinePaper?: PaperKind): number {
+  const base = printableDots(paper);
+  return isRollPaper(paper) && machinePaper ? Math.min(base, headDots(machinePaper)) : base;
+}
+
+/**
+ * 码的横向落点（点，从**打印头左端**起算）。
+ *
+ * 为什么不让固件居中：`ESC a 1` 按**打印机自己认的可打宽度**居中，而那个数只跟机身有关、
+ * 与这卷纸无关。80 机装 58 卷时机身仍按 576 点（72mm）居中，48mm 宽的条码就落在 12~60mm，
+ * 而纸只有 58mm——右端连着停止符一起被切在纸外，票看着打出来了，扫码枪却读不出来。
+ * 正文早就按这条原则办了（`render.rs::aligned` 用前导空格补齐，不交给 `ESC a`），
+ * 码是最后两个漏网的；现在落点在这里一次算清，机器只负责照点排（见 `escpos.ts` 与
+ * `render.rs::barcode`）。
+ *
+ * 轴取"纸"与"头"里更窄的那个，理由是纸在机身上的装法只有两种：
+ *  - 纸比头窄（58 卷装在 80 机上）——卷贴着头的左端，于是"在卷上居中"就是"在这个更窄的轴里居中"；
+ *  - 纸比头宽（80 纸对 576 点头）——卷在头下面居中，量到卷心的距离恰好就是头宽本身。
+ * 后一种正是固件一直在用的轴，于是**装态一致的站点（票面纸型 = 机器纸型）这一改分毫不动**。
+ *
+ * 与预览的关系：预览把码居中画在纸宽里，所以这里的落点也按纸算，两边才重合。
+ */
+export function codeOffsetDots(codeDots: number, paper: PaperKind, machinePaper?: PaperKind): number {
+  const roll = rollDots(paper);
+  if (roll === 0) return 0; // 定长纸走打印队列，落点由驱动的可打区说了算，见 queue_print.rs
+  const axis = Math.min(roll, headDots(machinePaper ?? paper));
+  return Math.max(0, Math.round((axis - codeDots) / 2));
+}
+
+/** 再压也不能低于 1 点（0.125mm）：栅格画不出半个点，细于 1 点的模块会整条消失 */
+export const MIN_MODULE_DOTS = 1;
+
+/**
+ * 一维码放不进纸宽时，把模块宽度压到刚好放得下——**按实数压，不落到整数点上**。
+ *
+ * 为什么不能只压到整数点：模块数一旦超过纸宽点数的一半，整数档位之间就没有中间值了。
+ * 实测这条凭证载荷（20 字符 → 连静区 253 个模块）落在 58 纸的 384 个可打点上：
+ *   - 1 点/模块 → 条身 233 点 = 29mm，只有 58mm 纸的一半，而且细到枪读不动；
+ *   - 2 点/模块 → 466 点 = 58mm，直接顶出纸外（正是"条码超出纸张"那一次）；
+ *   - 真正该用的是 384/253 ≈ 1.52 点/模块：整条铺满可打宽度，模块宽 0.19mm，
+ *     仍然在扫码枪读得动的那一档。
+ * 也就是说，"压小"和"占满纸宽"本不该互斥——互斥是"只取整数点"这个写法造出来的。
  *
  * 这条压缩**必须**同时作用于预览和出纸，否则就退回"预览一套、纸上一套"的老坑：
  * 站长在预览里看到码放得好好的，纸上右半边被切掉，客户站在结算窗口才发现。
  * 所以它写在取码几何的那一处（`code128.ts` 的 `measureCode128`），两个渲染器都只调它。
+ *
+ * 返回值是**实数**（点/模块）：预览按它画（SVG 认小数），热敏栅格按它折算成每段整数点宽
+ * （见 `code128.ts::widthDots` 与 `render.rs::barcode`）。三处宽度因此仍是同一个数。
  */
-export function fitModuleDots(totalModules: number, paper: PaperKind, want: number): number {
-  const max = printableMm(paper);
-  let dots = want;
-  while (dots > 1 && dotsToMm(totalModules * dots) > max) dots -= 1;
-  return dots;
+export function fitModuleDots(totalModules: number, maxDots: number, want: number): number {
+  if (totalModules <= 0) return want;
+  return Math.max(MIN_MODULE_DOTS, Math.min(want, maxDots / totalModules));
 }

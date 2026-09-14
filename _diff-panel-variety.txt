@@ -1,0 +1,152 @@
+﻿diff --git a/src/components/workstation/IdentityPanel.tsx b/src/components/workstation/IdentityPanel.tsx
+index 5e27d91..1e13940 100644
+--- a/src/components/workstation/IdentityPanel.tsx
++++ b/src/components/workstation/IdentityPanel.tsx
+@@ -22,8 +22,11 @@
+  *     鍚屼竴涓汉寤轰袱寮犳。妗堬紝瀵硅处鏃跺氨鏄袱涓綑棰濓紙`party_save` 鐨?涓€浜轰竴妗?闂搁棬鍚屼竴鏉＄悊鐢憋級銆?  * 涓夋潯鍑鸿矾鏈€缁堥兘鍥炲埌鍚屼竴鍙?`autoCreate`锛氬崱涓庝汉閮藉氨浣嶏紝鍙峰氨鍙栨帀銆?  *
+- * **鍝佺涓嶆尅鍒跺崟**锛堣縼绉?0017锛夛細鍒跺崟鍙銆屽崱 + 鍞伯浜恒€嶏紝鍝佺鍙互绌虹潃鍙栧彿锛?- * 缁撶畻涓庡綍鍖栭獙鍓嶅啀瀹氾紙閭ｄ袱澶勫悇鑷湁纭椄闂紝瑙?`orders.rs` 鐨?settle / save_qc锛夈€?+ * **鍝佺鏄繀濉殑**锛氱粨绠楃殑鍗曚环瑕佸鍥炰环鐩〃銆佸寲楠岀殑鎸囨爣闆嗕笌鎵ｉ噺鍩哄噯鍏ㄦ潵鑷搧绉嶆。妗堬紝
++ * 杩欎袱浠朵簨閮界瓑涓嶈捣锛堣溅鍗稿畬浜嗘墠鍙戠幇娌″搧绉嶏紝浠锋牸宸茬粡閿欒繃涓€娆″鐓э級銆傛墍浠ュ搧绉嶄笌鍞伯浜哄悓绾э紝
++ * 缂轰簡灏变笉鍑哄彿銆傛部鐢ㄧ殑涓婁竴寮犲崟鐨勫搧绉嶏紙`emptyDraft` 鐨勫垵鍊硷紝纾呮埧鏈€鐪佹墜锛夎鐩栫粷澶у鏁板満鍚堬紝
++ * 鍙湁褰撳ぉ绗竴鍗曘€佹垨浠庨《鏍忕洿鎺ュ紑鍗曟椂鎵嶈纾呭憳鍔ㄤ竴涓嬫墜銆傛湇鍔＄ `orders.rs::create_order`
++ * 鏈夊悓涓€閬撻椄鍏滃簳锛屽埆鍙潬杩欓噷銆?  */
+ import { useEffect, useRef, useState } from "react";
+ import { useMutation, useQueryClient } from "@tanstack/react-query";
+@@ -135,6 +138,20 @@ export function IdentityPanel({
+    */
+   const cardNoRef = useRef<string | null>(presetCardNo);
+   cardNoRef.current = cardNo;
++  /**
++   * `draft.varietyId` 鐨勯暅鍍忥紝涓?`cardNoRef` 鍚屼竴鏉＄悊鐢憋細`enrollFromCard` 閲岄偅涓?`await`
++   * 涔嬪悗銆佷互鍙婅鍗￠偅涓€璺殑鍓綔鐢ㄩ噷锛岄棴鍖呮嬁鍒扮殑鍙兘鏄笂涓€杞崏绋裤€傚搧绉嶇幇鍦ㄦ槸鍑哄彿鐨勭‖鏉′欢锛?+   * 鍒?姝ゅ埢鍒板簳閫夋病閫?蹇呴』璇荤幇鍊肩殑 ref銆?+   */
++  const varietyIdRef = useRef<number | null>(draft.varietyId);
++  varietyIdRef.current = draft.varietyId;
++  /** 鐐硅繃銆屽彇鍙峰苟鍒跺崟銆嶅嵈杩樼己鍝佺鏃舵妸閭ｄ竴鏍兼爣绾細鎻愮ず杩囦竴娆′箣鍚庢墠浜紝涓嶉鍏堢孩鐫€鍚撲汉 */
++  const [varietyMissing, setVarietyMissing] = useState(false);
++  // 鍝佺涓€鏃﹁ˉ涓婂氨鎾ゆ帀绾㈡銆傚啓鍦?effect 閲屾槸涓轰簡杩?鐖跺眰鎹㈣崏绋挎椂鐩存帴濉炶繘涓€涓搧绉?
++  // 锛坄emptyDraft(lastVarietyId)`锛変篃鑳芥挙鈥斺€旈偅鏉¤矾涓嶇粡杩囦笅鎷夌殑 onChange
++  useEffect(() => {
++    if (draft.varietyId != null) setVarietyMissing(false);
++  }, [draft.varietyId]);
+   /**
+    * 鍚屼竴娆°€屽崱 + 浜恒€嶅彧鑷姩鍙戜竴涓彿锛氳鍗″洖鍐欍€佽崏绋块噸璺戦兘鍙兘鎶婂悓涓€瀵圭粍鍚堝啀閫佽繘鏉ヤ竴娆★紝
+    * 鑰屽彇鍙锋槸涓嶅彲閫嗙殑锛坄order_no` 涓€澶╀竴涓簭鍒楋級銆傚埗鍗曟垚鍔熸垨澶辫触鍗冲浣嶏紝鎹㈠崱/鎹汉鑷劧绠楁柊涓€杞€?@@ -241,15 +258,15 @@ export function IdentityPanel({
+ 
+   const create = useMutation({
+     /**
+-     * 鍗″彿涓庡敭绮汉閮借蛋 mutation 鍙橀噺锛氬埛鍗″脊绐楃殑鍥炶皟閲?`setCardNo` 杩樻病鐢熸晥銆佽鍗￠偅涓€璺?-     * 鏇存槸鍒氭妸妗ｆ鎸戝嚭鏉ワ紝涓ょ鍦哄悎浠庨棴鍖呰 `draft.party` 閮戒細鎷垮埌涓婁竴涓汉鈥斺€斿彇鍙蜂笉鍙€嗭紝
+-     * 鎶婁笂涓€涓汉鐨勫悕瀛楀仛鎴愯繖涓€鍗曪紝姣斿埗涓嶅嚭鍗曚弗閲嶅緱澶氥€?+     * 鍗″彿銆佸敭绮汉銆佸搧绉嶄笁鏍烽兘璧?mutation 鍙橀噺锛氬埛鍗″脊绐楃殑鍥炶皟閲?`setCardNo` 杩樻病鐢熸晥銆?+     * 璇诲崱閭ｄ竴璺洿鏄垰鎶婃。妗堟寫鍑烘潵锛屼袱绉嶅満鍚堜粠闂寘璇?`draft` 閮戒細鎷垮埌涓婁竴涓汉 / 涓婁竴涓搧绉嶁€斺€?+     * 鍙栧彿涓嶅彲閫嗭紝鎶婁笂涓€涓汉鐨勫悕瀛楁垨涓婁竴涓搧绉嶅仛鎴愯繖涓€鍗曪紝姣斿埗涓嶅嚭鍗曚弗閲嶅緱澶氥€?      */
+-    mutationFn: (input: { card: string | null; party: Party }) =>
++    mutationFn: (input: { card: string | null; party: Party; varietyId: number }) =>
+       api.createOrder({
+         party_id: input.party.id,
+-        // 鍝佺鍙┖锛堣縼绉?0017锛夛細鍒跺崟鍙銆屽崱 + 鍞伯浜恒€嶏紝缁撶畻涓庡綍鍖栭獙鍓嶅啀瀹?-        variety_id: draft.varietyId,
++        // 鍝佺鏄繀濉」锛堜笌 Rust `create_order` 鍚屼竴閬撻椄锛夛細鍑哄彿鍓嶄竴寰嬪厛杩?`createNow` 鐨勯綈澶囨鏌?+        variety_id: input.varietyId,
+         vehicle_no: draft.vehicleNo.trim() || null,
+         warehouse_id: draft.warehouseId,
+         slot_id: draft.slotId,
+@@ -286,17 +303,33 @@ export function IdentityPanel({
+     onDraft({ party: p, vehicleNo: draft.vehicleNo || p.default_vehicle_no || "" });
+ 
+   /**
+-   * 鍗′笌浜洪兘灏变綅 鈫?鎶婅繖鍗曞埗鎺夛紝闆剁偣鍑伙紙06 搂4.0 涓ゅ埛涓€鏉℃祦锛夈€?-   * **鍗′笉鍦ㄤ綅涓€寰嬩笉鍔?*锛氭病鍒峰埌娴佽浆鍗″氨鑷姩鍑哄彿锛岀瓑浜庣粫杩囨湰绔欑殑缁戝崱闂搁棬锛?-   * 閭ｇ鍦哄悎浠嶇敱浜虹偣銆屽彇鍙峰苟鍒跺崟銆嶏紙鎴栬蛋鍚庡彴鍙戝崱锛夛紝鏈潰鏉夸笉鏇跨鍛樺喅瀹氥€?+   * 鍝佺閭ｄ竴鏍艰繕绌虹潃锛氭妸璇濊鍦ㄧ溂鍓嶏紝鍏夋爣涔熺洿鎺ラ€佸埌閭ｄ釜涓嬫媺涓娾€斺€斾笉璁╀汉鑷繁鍦ㄤ竴灞忔帶浠堕噷
++   * 鎵炬槸鍝効娌″～銆傚浐瀹?toast id 鍘婚噸锛氬崱涓庝汉鐨勮嚜鍔ㄦ祦绋嬭窇璧锋潵浼氳繛鐫€璋冨畠涓ゆ銆?+   */
++  const needVariety = () => {
++    setVarietyMissing(true);
++    toast.warning("璇峰厛閫夋敹璐搧绉嶏細鍒跺崟蹇呭～锛堢粨绠楀崟浠蜂笌鍖栭獙鎸囨爣閮借窡鐫€瀹冭蛋锛?, { id: "ws-variety-required" });
++    announce("璇峰厛閫夋敹璐搧绉?);
++    document.getElementById("ws-variety")?.focus();
++  };
++
++  /**
++   * 鍗°€佷汉銆佸搧绉嶄笁鏍烽綈浜嗘墠鍑哄彿锛岄浂鐐瑰嚮锛?6 搂4.0 涓ゅ埛涓€鏉℃祦锛夈€傜己鍝牱閮戒笉鍦ㄦ湰鍑芥暟閲屼唬鍔筹細
++   * **鍗′笉鍦ㄤ綅涓€寰嬩笉鍔?*鈥斺€旀病鍒峰埌娴佽浆鍗″氨鑷姩鍑哄彿锛岀瓑浜庣粫杩囨湰绔欑殑缁戝崱闂搁棬锛?+   * **鍝佺娌￠€変篃鍙彁绀轰笉鍔ㄦ墜**鈥斺€斿搧绉嶆槸蹇呭～椤癸紝绛夌鍛樼偣涓€涓嬮偅涓笅鎷夊啀鎸変富鎸夐挳銆?    */
+   const autoCreate = (p: Party) => {
+     const card = cardNoRef.current;
+     if (!card) return;
++    const varietyId = varietyIdRef.current;
++    if (varietyId == null) {
++      needVariety();
++      return;
++    }
+     const key = `${card}:${p.id}`;
+     if (autoFired.current === key) return; // 鍚屼竴寮犲崱鍙嶅鍘嬪湪璇诲崱鍣ㄤ笂涓嶈鍐嶅悆涓€涓彿
+     autoFired.current = key;
+-    create.mutate({ card, party: p });
++    create.mutate({ card, party: p, varietyId });
+   };
+ 
+   /** 鏌ユ棤姝よ瘉鏃剁殑榛樿鍑鸿矾锛氱収鍗￠潰闈欓粯寤烘。锛屽缓濂界洿鎺ョ敤浜庢湰鍗曪紱**寤轰笉鎴?*鎵嶅洖钀藉埌鎵嬪伐鐧昏妗?*/
+@@ -314,18 +347,18 @@ export function IdentityPanel({
+   };
+ 
+   /**
+-   * 鍒跺崟闂搁棬鍙墿**宀椾綅鏉冮檺**涓€閬擄細鍝佺鍙┖锛堣縼绉?0017锛夈€佸敭绮汉鐢遍偅涓€杞嚜鍔ㄧ洃鍚幓鎷匡紝
+-   * 杩欎袱鏍烽兘涓嶈鎶婃寜閽寜姝烩€斺€旀寜姝讳簡 F7 灏卞彉鎴?鐐逛簡娌″弽搴旂殑鐏版寜閽?锛屽彧鍓╁交搴曢潤榛樺け璐ャ€?-   * 鎵€浠ャ€岃繕娌￠€変汉銆嶆椂鎸夐挳鐓у父鍙偣锛岀偣浜嗘槸鎶婅韩浠借瘉鐩戝惉璧疯捣鏉ワ紙瑙?`submit`锛夈€?+   * 鍒跺崟闂搁棬瀵规寜閽彧鏈?*宀椾綅鏉冮檺**涓€閬擄細鍝佺蹇呭～銆佸敭绮汉鐢遍偅涓€杞嚜鍔ㄧ洃鍚幓鎷匡紝杩欎袱鏍?+   * 閮戒笉璇ユ妸鎸夐挳鎸夋鈥斺€旀寜姝讳簡 F7 灏卞彉鎴?鐐逛簡娌″弽搴旂殑鐏版寜閽?锛屽彧鍓╁交搴曢潤榛樺け璐ャ€?+   * 鎵€浠ョ己鍝佺 / 缂轰汉鏃舵寜閽収甯稿彲鐐癸紝鐐逛簡浼氭妸缂虹殑閭ｄ竴鏍疯鍑哄０锛堣 `submit`锛夈€?    */
+   const blocked = !can("order.create")
+     ? `褰撳墠宀椾綅銆?{actor ? ROLE[actor.role] : "鈥?}銆嶆棤鏉冨埗鍗曪紝闇€纾呭憳銆佺櫥璁板憳鎴栫珯闀縛
+     : null;
+ 
+   /**
+-   * 銆屽彇鍙峰苟鍒跺崟銆嶇己浠€涔堣ˉ浠€涔堬紝椤哄簭灏辨槸鍐滄埛鎵嬩笂鐨勫厛鍚庯細鍏堣鍗★紙鏈珯寮哄埗缁戝崱鑰屽崱杩樻病灏变綅 鈫?-   * 寮瑰埛鍗℃锛夛紝鍐嶈浜猴紙浜鸿繕娌″畾 鈫?璧烽偅涓€杞?15 绉掕鍐呯洃鍚紝鍚笉鍒版墠閫€鍥炰汉宸ヨ鍗?鎼滄。妗堬級锛?-   * 涓ゆ牱閮藉湪灏辨妸杩欏崟鍒舵帀锛?6 搂4.0锛夈€?+   * 銆屽彇鍙峰苟鍒跺崟銆嶇己浠€涔堣ˉ浠€涔堬紝椤哄簭鎸夋煖闈笂鐨勫厛鍚庯細鍏堢湅鍝佺锛堝舰寮忔渶涓婇潰閭ｄ竴鏍硷紝涔熸槸鍞竴
++   * 鏉夸笂閽夐拤鐨勫繀濉」锛夛紝鍐嶈鍗★紙鏈珯寮哄埗缁戝崱鑰屽崱杩樻病灏变綅 鈫?寮瑰埛鍗℃锛夛紝鍐嶈浜猴紙浜鸿繕娌″畾 鈫?+   * 璧烽偅涓€杞?15 绉掕鍐呯洃鍚紝鍚笉鍒版墠閫€鍥炰汉宸ヨ鍗?/ 鎼滄。妗堬級锛屼笁鏍烽兘鍦ㄦ墠鎶婅繖鍗曞埗鎺夛紙06 搂4.0锛夈€?    */
+   const submit = () => {
+     if (blocked) {
+@@ -333,6 +366,11 @@ export function IdentityPanel({
+       announce(blocked);
+       return;
+     }
++    const varietyId = draft.varietyId;
++    if (varietyId == null) {
++      needVariety();
++      return;
++    }
+     if (requireCard && !cardNo) {
+       setBindOpen(true);
+       return;
+@@ -342,7 +380,7 @@ export function IdentityPanel({
+       setIdWatching(true);
+       return;
+     }
+-    create.mutate({ card: cardNo, party: draft.party });
++    create.mutate({ card: cardNo, party: draft.party, varietyId });
+   };
+ 
+   /** 鍋滅敤鍙尅浣忔柊鍗曪細鍒跺崟涓嬫媺涓€寰嬫帓闄?is_active = 0 鐨勬。妗堬紝鍘嗗彶纾呭崟涓婁粛鎸夊綋鏃跺揩鐓ф樉绀?*/
+@@ -532,14 +570,20 @@ export function IdentityPanel({
+ 
+         <div className="grid gap-1">
+           <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+-            鏀惰喘鍝佺锛堥€夊～锛岀粨绠椾笌鍖栭獙鍓嶅繀濉級
++            鏀惰喘鍝佺 <span className="text-warning">*</span>
++            {/* 娌跨敤鐨勪笂涓€寮犲崟鐨勫搧绉嶅凡缁忛濉紙`emptyDraft` 鐨勫垵鍊硷級锛屽鏁版椂鍊欑鍛樹笉鐢ㄥ姩杩欎竴鏍?*/}
+             <Choose
+               aria-label="鏀惰喘鍝佺"
+               id="ws-variety"
++              invalid={varietyMissing && draft.varietyId == null}
+               value={String(draft.varietyId ?? "")}
+-              onChange={(v) => onDraft({ varietyId: v ? Number(v) : null })}
++              onChange={(v) => {
++                const id = v ? Number(v) : null;
++                setVarietyMissing(false);
++                onDraft({ varietyId: id });
++              }}
+               options={[
+-                { value: "", label: "鏈畾锛堢粨绠楀墠鍐嶉€夛級" },
++                { value: "", label: "璇烽€夋嫨鍝佺" },
+                 ...activeVarieties.map((v) => ({ value: String(v.id), label: v.name })),
+               ]}
+             />
+@@ -676,8 +720,13 @@ export function IdentityPanel({
+         onPicked={(sn) => {
+           setBindOpen(false);
+           setCardNo(sn);
+-          // 寮哄埗缁戝崱鐨勭珯鐐癸細鍗′竴灏变綅灏辨妸杩欏崟鍒舵帀锛岀渷涓€娆＄偣鍑伙紙寮圭獥鏂囨灏辨槸杩欎箞璇寸殑锛?-          if (requireCard && draft.party) create.mutate({ card: sn, party: draft.party });
++          // 寮哄埗缁戝崱鐨勭珯鐐癸細鍗′竴灏变綅灏辨妸杩欏崟鍒舵帀锛岀渷涓€娆＄偣鍑伙紙寮圭獥鏂囨灏辨槸杩欎箞璇寸殑锛夈€?+          // 鍝佺杩樻病閫夊氨閫€鍥炰富鎸夐挳閭ｆ潯璺€斺€旂敱瀹冨厛鎶婄己鐨勫搧绉嶈鍑烘潵锛屽埆鍦ㄨ繖鍎块椃鐫€涓嶅搷
++          if (requireCard && draft.party) {
++            const varietyId = varietyIdRef.current;
++            if (varietyId == null) needVariety();
++            else create.mutate({ card: sn, party: draft.party, varietyId });
++          }
+         }}
+         onSkip={() => {
+           setBindOpen(false);

@@ -1,0 +1,51 @@
+﻿G:\Github\BangHe\src-tauri\src\lib.rs:166:orders::order_set_price,
+G:\Github\BangHe\src-tauri\src\orders.rs:99:/// 否则票面没有价、事后无从对账。价目表只是"挂牌"起点，议价偏离必须留事由（见 `set_price`）。
+G:\Github\BangHe\src-tauri\src\orders.rs:255:pub price_override_reason: Option<String>,
+G:\Github\BangHe\src-tauri\src\orders.rs:512:o.price_fen_per_ton, o.price_list_id, o.price_override_reason, o.goods_amount_fen, o.deduction_fee_fen, o.advance_fee_fen,
+G:\Github\BangHe\src-tauri\src\orders.rs:556:price_override_reason: r.get(30)?,
+G:\Github\BangHe\src-tauri\src\orders.rs:1744:// "最近生效的一条"当挂牌价；化验定级之后由磅员/站长用 `order_set_price` 按实际等级修正。
+G:\Github\BangHe\src-tauri\src\orders.rs:1860:// 价目表带出的挂牌价、或磅房现场用 `order_set_price` 定的价。没有价就收粮，事后只能靠嘴对账。
+G:\Github\BangHe\src-tauri\src\orders.rs:2236:pub price_override_reason: Option<String>,
+G:\Github\BangHe\src-tauri\src\orders.rs:2280:// 改价事由的必填口径（02 §F1.4）：**结算价偏离价目表现行价时必填**，照价目执行的不必填。
+G:\Github\BangHe\src-tauri\src\orders.rs:2312:// 改价事由：偏离价目表现行价时必须写清（含"这个品种压根没有现行价目"这种彻底的手工定价）——
+G:\Github\BangHe\src-tauri\src\orders.rs:2315:let reason = input.price_override_reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
+G:\Github\BangHe\src-tauri\src\orders.rs:2325:"本单结算价与价目表现行价 {} 不一致，属改价：请填写改价事由（不少于 4 个字，写明按什么谈的）",
+G:\Github\BangHe\src-tauri\src\orders.rs:2328:None => "本站这个品种没有现行价目，属手工定价：请填写改价事由（不少于 4 个字，写明这个价是怎么定的）".into(),
+G:\Github\BangHe\src-tauri\src\orders.rs:2406:price_fen_per_ton = ?7, price_list_id = ?8, price_override_reason = ?9,
+G:\Github\BangHe\src-tauri\src\orders.rs:3243:/// 改价事由：**偏离价目表现行价时必填**（不少于 4 个字）。票面要印给客户，事后得能对账
+G:\Github\BangHe\src-tauri\src\orders.rs:3252:pub fn set_price(conn: &Connection, actor: &AuthProfile, input: PriceAdjustInput) -> Result<Option<WeighOrder>, String> {
+G:\Github\BangHe\src-tauri\src\orders.rs:3283:"这个价偏离了价目表现行价 {}，请填写改价事由（不少于 4 个字，写明按什么谈的、谁同意的）",
+G:\Github\BangHe\src-tauri\src\orders.rs:3286:None => "本站这个品种没有现行价目，属手工定价：请填写改价事由（不少于 4 个字，写明这个价是怎么定的）".into(),
+G:\Github\BangHe\src-tauri\src\orders.rs:3302:&& order.price_override_reason.as_deref() == stored_reason
+G:\Github\BangHe\src-tauri\src\orders.rs:3309:"UPDATE weigh_order SET price_fen_per_ton = ?2, price_list_id = ?3, price_override_reason = ?4,
+G:\Github\BangHe\src-tauri\src\orders.rs:3333:pub async fn order_set_price(app: AppHandle, input: PriceAdjustInput) -> Result<Option<WeighOrder>, String> {
+G:\Github\BangHe\src-tauri\src\orders.rs:3334:write_tx(&app, move |conn, actor| set_price(conn, actor, input), PRICE_OVERRIDE_ROLES, "定价").await
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:26:capture, create_order, get_party, list_orders, list_parties, list_qc, load_order_full, log_print, open_orders, save_party, save_qc, settlement_of, settle, set_price, void_order, assign_destination,
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:222:/// 结算辅助。改价事由恒带：`settle` 只在**真改价**时才落这条事由（照价目执行的那一遍落 NULL），
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:242:price_override_reason: Some("测试结算价".into()),
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:467:set_price(
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:623:price_override_reason: None,
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:649:price_list_id: Some(latest_price(&conn)), price_override_reason: None, party_signed: None,
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:656:// 手填单价偏离价目表却不写事由 → **硬闸门拦下**（2026-09-14 起：改价事由是必填，不是选填）。
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:664:price_list_id: None, price_override_reason: reason.map(str::to_string), party_signed: None,
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:668:assert!(e.contains("改价事由"), "偏离价目要说清为什么结不了：{e}");
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:671:assert!(e.contains("改价事由"), "事由太短也要拦：{e}");
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:686:price_list_id: None, price_override_reason: Some("当日市场价上浮，站长口头确认".into()), party_signed: Some(true),
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:1088:price_override_reason: None,
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2050:fn set_price_gates_off_list_reason_and_settled_orders() {
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2078:let o = set_price(&conn, &actor(1, "weigher"), PriceAdjustInput { price_list_id: Some(list_id), ..adjust(240000, "") }).unwrap().unwrap();
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2079:assert_eq!((o.price_fen_per_ton, o.price_list_id, o.price_override_reason.clone()), (Some(240000), Some(list_id), None));
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2083:let e = set_price(&conn, &actor(1, "weigher"), adjust(250000, "")).unwrap_err();
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2084:assert!(e.contains("改价事由"), "实际：{e}");
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2085:let e = set_price(&conn, &actor(1, "weigher"), adjust(250000, "涨了")).unwrap_err();
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2086:assert!(e.contains("改价事由"), "不足 4 个字同样是没写清：{e}");
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2091:let o = set_price(&conn, &actor(1, "weigher"), adjust(250000, "当日市场价上浮，站长口头确认")).unwrap().unwrap();
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2099:let o = set_price(&conn, &actor(1, "weigher"), PriceAdjustInput { price_list_id: Some(list_id), ..adjust(240000, "") }).unwrap().unwrap();
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2100:assert_eq!((o.price_fen_per_ton, o.price_override_reason.clone()), (Some(240000), None));
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2106:let e = set_price(&conn, &actor(1, "weigher"), adjust(260000, "市场价又涨了")).unwrap_err();
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2113:fn set_price_requires_a_variety() {
+G:\Github\BangHe\src-tauri\tests\orders_contract.rs:2117:let e = set_price(
+G:\Github\BangHe\src-tauri\tests\payments_contract.rs:160:price_override_reason: Some("测试改价事由".into()),
+G:\Github\BangHe\src-tauri\tests\qc_contract.rs:271:price_override_reason: Some("测试结算：本轮不建价目行".into()),
+G:\Github\BangHe\src-tauri\tests\search_contract.rs:160:price_override_reason: None,
+G:\Github\BangHe\src-tauri\tests\settlements_contract.rs:141:price_override_reason: None,

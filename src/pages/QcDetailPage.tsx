@@ -178,15 +178,16 @@ export function QcDetailBody({
                         <span className="text-warning">未留样</span>
                       ),
                     },
-                    { label: "扣水", value: <span className="tnum">{weight(report.moisture_deduct_01kg)}</span> },
-                    { label: "扣杂", value: <span className="tnum">{weight(report.impurity_deduct_01kg)}</span> },
+                    { label: "扣水（建议）", value: <span className="tnum">{weight(report.moisture_deduct_01kg)}</span> },
+                    { label: "扣杂（建议）", value: <span className="tnum">{weight(report.impurity_deduct_01kg)}</span> },
                     { label: "拒收原因", value: <span className="text-destructive">{orDash(report.reject_reason)}</span>, span: 2 },
                     { label: "备注", value: orDash(report.remark), span: 2 },
                   ]}
                 />
                 <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
-                  扣水/扣杂为化验员人工录入值。水分增扣量、等级加减价的规则引擎首版不实现（02 §F4.4），
-                  因此这里的扣重不会被任何公式自动改写。
+                  扣水/扣杂为化验员人工录入值，在本单里只作<span className="text-foreground">结算建议</span>：
+                  结算时若现场另有议定，改的是磅单上那一份、不会回写这张化验单（复检另立新单，本单永不改写）。
+                  水分增扣量、等级加减价的规则引擎首版不实现（02 §F4.4），因此这里的扣重不会被任何公式自动改写。
                 </p>
               </div>
             </section>

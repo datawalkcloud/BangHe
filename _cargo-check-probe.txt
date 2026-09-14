@@ -1,0 +1,35 @@
+﻿cargo :     Blocking waiting for file lock on package cache
+所在位置 行:445 字符: 41
++ cd G:\Github\BangHe\tools\escpos-probe; cargo check *>&1 | Out-File - ...
++                                         ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Blocking wa...n package cache 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling rustversion v1.0.23
+   Compiling serde_core v1.0.229
+    Checking core_detect v1.0.0
+    Checking foldhash v0.2.0
+    Checking windows-link v0.2.1
+    Checking scopeguard v1.2.0
+    Checking cfg-if v1.0.4
+   Compiling multiversion_no_op v1.0.0
+   Compiling serde v1.0.229
+    Checking simdutf8 v0.1.5
+    Checking log v0.4.34
+    Checking spin v0.12.3
+    Checking hashbrown v0.17.1
+    Checking windows-sys v0.61.2
+   Compiling encoding_rs v0.8.41
+   Compiling syn v3.0.5
+   Compiling multiversion-macros v0.9.0
+   Compiling serde_derive v1.0.229
+    Checking multiversion v0.9.0
+    Checking escpos v0.20.0
+    Checking ticket-core v0.1.0 (G:\Github\BangHe\crates\ticket-core)
+    Checking escpos-probe v0.1.0 (G:\Github\BangHe\tools\escpos-probe)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.96s
+exit=0

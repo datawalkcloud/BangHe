@@ -26,12 +26,36 @@ export const PERMISSIONS: Record<string, Role[]> = {
   /** 调整业务定级：化验员定级、出纳结算时改判，站长兜底（与 Rust GRADE_ROLES 同源） */
   "order.grade": ["station_master", "inspector", "cashier"],
   "tare.override": ["station_master"],
+  /** 价目表维护（调价、新增价目）：这是"改站点挂的牌子"，只给站长。与 Rust `masters.rs` 同源 */
   "price.edit": ["station_master"],
-  "price.override": ["station_master"],
+  /**
+   * 改单价：给**某一单**落价 / 改价（`order_set_price`），不是改价目表。
+   *
+   * 为什么磅员也有：农户到站是先问价、谈成才卸货的，价必须在过磅出票之前就落下来，否则票面
+   * 没有价、事后无从对账。而议价就发生在磅房窗口上——车停在磅上、价谈定了才卸货，让磅员跑去
+   * 叫出纳来落价，等于把成交那一刻拉长，而票是当场要打给客户的。这把钥匙不含收钱：
+   * 收付款在 `settle.create` / `pay.record` 上，与它互不相干。
+   *
+   * 与 Rust `orders.rs::PRICE_OVERRIDE_ROLES` 同源；审计动作码也叫 `price.override`
+   * （`SystemPage` 的「改单价」话术），能力点与动作码同名是既有用法（`tare.override` 亦然）。
+   */
+  "price.override": ["station_master", "weigher"],
   "qc.save": ["station_master", "inspector"],
   "weigh.capture": ["station_master", "weigher"],
   "weigh.manual": ["station_master", "weigher"],
   "settle.create": ["station_master", "cashier"],
+  /**
+   * 挂账结算：**能生成结算单把单挂上账，但不动现金**。
+   *
+   * 为什么要单开一条而不是把 `weigher` 加进 `settle.create`：磅房的现场节奏是"过完磅就走、
+   * 钱回头再算"（02 §F1.4），皮重刚捕完那一刻如果不许磅员把单挂上账，整条两刷一条流就得
+   * 卡在窗口等人取钱；可磅员若拿到 `settle.create`，同一把钥匙也开得了"当场付款"那扇门
+   * ——收钱是出纳的活（05 §5：磅员只负责出票，不负认定价与收付）。所以这里把两件事拆成
+   * 两把钥匙：磅员这把只挂账，`pay.record` 仍只给站长与出纳。
+   *
+   * 与 Rust `orders.rs::SETTLE_CREDIT_ROLES` 同源；命令层按 `pay_now` 选角色集，不是选并集。
+   */
+  "settle.credit": ["station_master", "cashier", "weigher"],
   "settle.revoke": ["station_master"],
   "pay.record": ["station_master", "cashier"],
   /** 粮食出库（02 §M11）：值仓是主经办，站长兜底，磅员/登记员现场代做。

@@ -1,0 +1,18 @@
+﻿
+
+.                       : @{import=; require=}
+./style                 : @{sass=./src/style.css}
+./style.css             : @{style=; import=; require=}
+./style.module          : @{sass=./src/style.module.css}
+./style.module.css      : @{style=; import=; require=}
+./src/style.css         : @{style=; import=; require=}
+./src/style.module.css  : @{style=; import=; require=}
+./dist/style.css        : @{style=; import=; require=}
+./dist/style.module.css : @{style=; import=; require=}
+./package.json          : @{import=./package.json; require=./package.json; defa
+                          ult=./package.json}
+./locale                : @{import=; require=}
+./locale/*              : @{import=; require=}
+
+
+
