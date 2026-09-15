@@ -927,32 +927,35 @@ fn image_of(head: &HttpHead, buf: &[u8], max_bytes: usize) -> Result<Vec<u8>, St
     Ok(body)
 }
 
-/// 联网抓一张图（失败回中文短句，由调用方按 04 §4.2 降级）。
+/// 一趟"空认证撞质询 → 带应答重发"的 GET，回**响应头 + 原始 body**（不校验图像）。
 ///
-/// **Digest 要两趟**（04 §4.1：海康 ISAPI 只认 Digest）：第一趟按台账配好的认证发出去，
-/// 撞上 401 就从 `WWW-Authenticate` 里取 realm/nonce 算应答，第二趟带应答重发。
-/// 本模块本来就是一条连接一次请求（`Connection: close`），所以第二趟天然是新连接——
-/// nonce 一次一换，没有任何值得跨磅缓存的状态。第一趟就给 200 的固件（少数型号对抓图
-/// CGI 直接放行）照单收下，不多跑那一趟。
-fn grab(target: &SnapshotTarget, max_bytes: usize) -> Result<Vec<u8>, String> {
+/// 从 [`grab`] 抽出来，是为了让海康 ISAPI 的自检探针（读 `deviceInfo` 那份 XML）走与抓拍、
+/// 预览**同一条**认证通路：Digest 要两趟、Basic 一趟过、匿名直接收，判据只写一遍，
+/// 免得自检认定的认证方式和真抓拍用的对不上。`auth != Digest` 或非 401 时第一趟即返回，
+/// 由调用方按 `head.status` 决定下一步（抓拍看是不是 200 出图，自检看 200 收 XML、401 判口令错）。
+pub(crate) fn authorized_get(target: &SnapshotTarget, max_bytes: usize) -> Result<(HttpHead, Vec<u8>), String> {
     let (head, buf) = exchange(target, static_authorization(target).as_deref(), max_bytes)?;
-    if target.auth != AuthKind::Digest || head.status == 200 {
-        return image_of(&head, &buf, max_bytes);
-    }
-    if head.status != 401 {
-        return Err(http_status_reason(head.status));
+    if target.auth != AuthKind::Digest || head.status != 401 {
+        return Ok((head, buf));
     }
     let challenge = head
         .www_authenticate
         .as_deref()
         .ok_or("摄像机回 401 却没带 WWW-Authenticate：无从应答质询，核对 user 与登录密码，或把认证方式改成 basic")?;
     let answer = digest_authorization(target, &parse_digest_challenge(challenge)?)?;
+    exchange(target, Some(&answer), max_bytes)
+}
 
-    let (again, body) = exchange(target, Some(&answer), max_bytes)?;
-    if again.status == 401 {
-        return Err("摄像机拒收 Digest 应答（第二次仍 401）：多半是登录密码不对，其次是固件用了非 MD5 的算法".into());
+/// 联网抓一张图（失败回中文短句，由调用方按 04 §4.2 降级）。
+///
+/// **Digest 要两趟**（04 §4.1：海康 ISAPI 只认 Digest）：认证往返收在 [`authorized_get`]，
+/// 与自检探针同一套。第一趟就给 200 的固件（少数型号对抓图 CGI 直接放行）照单收下。
+fn grab(target: &SnapshotTarget, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let (head, buf) = authorized_get(target, max_bytes)?;
+    if head.status == 401 {
+        return Err("摄像机拒收认证应答（HTTP 401）：多半是登录密码不对，其次 Digest 只实现 MD5、少数固件用了别的算法".into());
     }
-    image_of(&again, &body, max_bytes)
+    image_of(&head, &buf, max_bytes)
 }
 
 fn connect(target: &SnapshotTarget) -> Result<TcpStream, String> {
@@ -1703,6 +1706,299 @@ pub fn probe_snapshot(target: &SnapshotTarget, max_bytes: usize) -> (bool, Strin
         ),
         Err(reason) => (false, format!("{}（等了 {} ms）", reason, started.elapsed().as_millis())),
     }
+}
+
+// ------------------------------------------------- 内网摄像机自动检测（海康 ISAPI）
+//
+// 设备中心「添加海康相机」只让现场填 IP + 登录用户 + 口令，剩下的 HTTP 端口、认证方式
+// （digest/basic/匿名）、抓拍/预览路径、RTSP 地址与端口全部由这里探出来。判据与抓拍、
+// 预览同源（同一 `authorized_get`），所以自检认定的认证方式就是真抓拍要用的那一种。
+// 探不到绝不编一组默认值糊上去——「登记 ≠ 验证」这条（02 §M9）在这里同样成立：
+// 连不上、口令错都回中文短句，让界面停在「未检测」，而不是假装配好了。
+
+/// deviceInfo 那份 XML 很小，给 1 MB 足够；抓拍整图另用一条上限探测。
+const DETECT_BODY_MAX: usize = 1024 * 1024;
+/// 自检探测抓拍图的上限：只为确认「这条路出得来图」，不入库，按 8 MB 兜住异常大包。
+const DETECT_SNAP_MAX: usize = 8 * 1024 * 1024;
+/// 海康 ISAPI 常见的两个 HTTP 端口：80 是标准 web/ISAPI 口，8000 是海康私有 http 口。
+const HTTP_PORT_CANDIDATES: [u16; 2] = [80, 8000];
+/// RTSP 常见端口：554 标准，8000 是海康在某些机型上把 RTSP 也放这个口的情况。
+const RTSP_PORT_CANDIDATES: [u16; 2] = [554, 8000];
+
+/// 探测到的完整配置 + 一句给人看的结论。`config` 的键与 [`target_from_config`] /
+/// `camera_stream.rs` 读的键逐字对齐，落进台账 `config_json` 后两条通道直接可用。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraDetect {
+    pub config: std::collections::BTreeMap<String, String>,
+    pub message: String,
+}
+
+/// 现场常把浏览器地址栏整条粘进来，也可能只填 IP。这里统一收敛成裸主机名（去掉协议、
+/// 路径、尾部斜杠），端口若写在 `host:port` 里且没另给 `explicit_port`，就顺带取出来。
+pub fn normalize_host(raw: &str, explicit_port: Option<u16>) -> Result<(String, Option<u16>), String> {
+    let s = raw.trim();
+    let s = s.strip_prefix("http://").or_else(|| s.strip_prefix("HTTP://")).unwrap_or(s);
+    let s = s.trim_end_matches('/');
+    // 去掉可能粘进来的路径段（第一个 '/' 之后都不是 host）
+    let authority = s.split('/').next().unwrap_or(s);
+    if authority.is_empty() {
+        return Err("地址为空：填摄像机的 IP，如 192.168.10.64".into());
+    }
+    let (host, port_from_host) = match authority.rsplit_once(':') {
+        Some((h, p))
+            if !h.is_empty()
+                && !p.is_empty()
+                && authority.matches(':').count() == 1
+                && p.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            (h.to_string(), Some(p.to_string()))
+        }
+        _ => (authority.to_string(), None),
+    };
+    let port = match (explicit_port, port_from_host) {
+        (Some(p), _) => Some(p),
+        (None, Some(p)) => p.parse::<u16>().ok(),
+        (None, None) => None,
+    };
+    if !host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        || host.starts_with('-')
+        || host.ends_with('-')
+        || host.contains("..")
+    {
+        return Err(format!("「{host}」不是合法的 IP 或主机名"));
+    }
+    Ok((host, port))
+}
+
+/// 认证方式候选：现场不勾，全凭摄像机自己回的 `WWW-Authenticate` 决定。
+/// 海康 ISAPI 默认 Digest，少数固件或被改过配置的走 Basic。
+pub fn auth_from_www_authenticate(header: Option<&str>) -> AuthKind {
+    match header.map(|h| h.to_ascii_lowercase()) {
+        Some(h) if h.contains("digest") => AuthKind::Digest,
+        Some(h) if h.contains("basic") => AuthKind::Basic,
+        _ => AuthKind::None,
+    }
+}
+
+/// 从 XML 里取第一个 `<tag>…</tag>` 的文本（deviceInfo 的 `<model>` / `<serialNumber>` 够用）。
+/// 不引 XML 库：这几个标签都是单行纯文本，扫一对尖括号即可；找不到就 `None`，探测降级不致命。
+pub fn xml_first_tag(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let mut from = 0usize;
+    // 找第一个「确实是这个标签」的开标签：`<model` 不能命中 `<modelVersion>`，
+    // 所以紧跟其后的字符必须是 '>' 或空白，否则跳过这次命中继续往后找。
+    loop {
+        let i = xml[from..].find(&open).map(|p| from + p)?;
+        let after_open = &xml[i + open.len()..];
+        let next = after_open.chars().next()?;
+        if !(next == '>' || next.is_whitespace()) {
+            from = i + open.len();
+            continue;
+        }
+        let gt = after_open.find('>')?;
+        let body = &after_open[gt + 1..];
+        let close = body.find(&format!("</{tag}>"))?;
+        let text = body[..close].trim();
+        return (!text.is_empty()).then(|| text.to_string());
+    }
+}
+
+/// 一次海康探测用到的端点。deviceInfo 与抓拍共用 host/user/password，只差 path 与认证。
+fn detect_target(host: &str, port: u16, path: &str, user: Option<&str>, password: Option<&str>, auth: AuthKind) -> SnapshotTarget {
+    SnapshotTarget {
+        device_id: 0,
+        device_code: String::new(),
+        host: host.to_string(),
+        port,
+        path: path.to_string(),
+        user: user.map(|s| s.to_string()),
+        password: password.map(|s| s.to_string()),
+        auth,
+    }
+}
+
+/// 用**已经学到的那份质询**直接签一条 `Authorization` 头，省掉"先空手撞 401 再应答"那一趟。
+///  - `None` 认证 → 不带；
+///  - Basic → 台账口令 base64（无需质询）；
+///  - Digest → 按本请求自己的 method+URI 现签（URI 变了必须重签，否则海康当场 401），
+///    但复用同一 nonce/opaque——这正是"探测多端点却只吃一次 401"的关键。
+/// 缺质询又要 Digest 时明确报错，绝不退回空手撞（那等于把失败次数又交回给摄像机决定）。
+fn build_auth_header(target: &SnapshotTarget, challenge: Option<&DigestChallenge>) -> Result<Option<String>, String> {
+    match target.auth {
+        AuthKind::None => Ok(None),
+        AuthKind::Basic => Ok(static_authorization(target)),
+        AuthKind::Digest => {
+            let ch = challenge.ok_or_else(|| "Digest 认证缺少质询，无法预先签应答".to_string())?;
+            Ok(Some(digest_authorization(target, ch)?))
+        }
+    }
+}
+
+/// TCP 探一下端口通不通（RTSP 口不做完整握手，只确认能连上）。带超时，别把添加表单卡死。
+fn tcp_open(host: &str, port: u16) -> bool {
+    match connect_to(host, port) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// 探测海康 ISAPI：先摸 HTTP 口与认证方式，验口令，确认主码流出得来图，再定 RTSP 口。
+/// 任一步探不出来就回 `Err(中文短句)`，界面据此停在「未检测」。
+pub fn detect_hikvision(raw_host: &str, port: Option<u16>, user: Option<&str>, password: Option<&str>) -> Result<CameraDetect, String> {
+    let (host, host_port) = normalize_host(raw_host, port)?;
+    let port = host_port.or(port);
+    let user = user.map(str::trim).filter(|s| !s.is_empty());
+    let password = password.map(|s| s.to_string()).filter(|s| !s.is_empty());
+    let http_ports: Vec<u16> = match port {
+        Some(p) => vec![p],
+        None => HTTP_PORT_CANDIDATES.to_vec(),
+    };
+
+    let mut unreachable: Vec<String> = Vec::new();
+    for p in http_ports {
+        // 唯一一次"故意吃 401"就在这：匿名探 deviceInfo，只为认出认证方式并拿到 Digest 质询。
+        // 后面所有带口令的请求都用这份质询**预先签好应答**直接发，不再空手撞一次——
+        // 海康把每一次 401 都计进"登录失败次数"（默认约 7 次锁 30 分钟），一趟探测多撞的
+        // 那几下（deviceInfo 再来一次、抓拍再来一次）叠上反复点「联机测试」，就足以把好账号锁死。
+        let anon = detect_target(&host, p, "/ISAPI/System/deviceInfo", None, None, AuthKind::None);
+        let (head, body) = match exchange(&anon, None, DETECT_BODY_MAX) {
+            Ok(v) => v,
+            Err(e) => {
+                unreachable.push(format!("{host}:{p} —— {e}"));
+                continue;
+            }
+        };
+        let (auth, challenge) = match head.status {
+            200 => (AuthKind::None, None),
+            401 => {
+                let raw = head.www_authenticate.as_deref().ok_or(format!(
+                    "{host}:{p} 回 401 却没带 WWW-Authenticate：无从应答质询，核对地址与端口"
+                ))?;
+                let kind = auth_from_www_authenticate(Some(raw));
+                let ch = if kind == AuthKind::Digest { Some(parse_digest_challenge(raw)?) } else { None };
+                (kind, ch)
+            }
+            other => {
+                unreachable.push(format!("{host}:{p} —— {}", http_status_reason(other)));
+                continue;
+            }
+        };
+        // 带口令验一次 deviceInfo（直接签好应答）：这次仍 401/403 就是口令/权限错，
+        // **立刻判死**——不换端口重试、也不去试抓拍，免得把失败次数继续往上堆。
+        let xml = if auth == AuthKind::None {
+            String::from_utf8_lossy(&http_body_from(&head, &body)).to_string()
+        } else {
+            let authed = detect_target(&host, p, "/ISAPI/System/deviceInfo", user, password.as_deref(), auth);
+            let header = build_auth_header(&authed, challenge.as_ref())?;
+            let (h2, b2) = exchange(&authed, header.as_deref(), DETECT_BODY_MAX)?;
+            match h2.status {
+                200 => String::from_utf8_lossy(&http_body_from(&h2, &b2)).to_string(),
+                401 | 403 => {
+                    return Err(format!(
+                        "{host}:{p} 能连上但拒绝登录：核对「登录用户」与「登录密码」（海康默认用户多为 admin）；账号若已被锁定，请等待锁定期或到相机网页端解锁"
+                    ))
+                }
+                other => return Err(http_status_reason(other)),
+            }
+        };
+        let model = xml_first_tag(&xml, "model");
+
+        // 主码流整图：这是过磅抓拍真正要的端点，探它=确认「这条路出得来图」。通道号默认 1（101）。
+        // 复用同一份质询按新 URI 现签应答，海康接受同一 nonce 覆盖多个请求，不再多撞一次 401。
+        let snap_path = "/ISAPI/Streaming/channels/101/picture";
+        let snap = detect_target(&host, p, snap_path, user, password.as_deref(), auth);
+        let snap_header = build_auth_header(&snap, challenge.as_ref())?;
+        let (head_snap, _) = exchange(&snap, snap_header.as_deref(), DETECT_SNAP_MAX)
+            .map_err(|e| format!("{host}:{p} 抓图探测失败：{e}"))?;
+        if head_snap.status == 401 || head_snap.status == 403 {
+            return Err(format!("{host}:{p} 抓图被拒（HTTP {}）：口令或该账号的预览权限不对", head_snap.status));
+        }
+        if head_snap.status != 200 {
+            return Err(format!(
+                "{host}:{p} 已登录但主码流抓图回 {}：核对通道号（海康主码流是 channels/101）",
+                head_snap.status
+            ));
+        }
+
+        // RTSP：连得来的那个口；都连不上回退 554，并在结论里点一句"实时画面待联机测试确认"
+        let rtsp_port = RTSP_PORT_CANDIDATES.into_iter().find(|rp| tcp_open(&host, *rp)).unwrap_or(RTSP_DEFAULT_PORT_HINT);
+        let rtsp_reachable = RTSP_PORT_CANDIDATES.contains(&rtsp_port);
+
+        let auth_name = match auth {
+            AuthKind::Digest => "digest",
+            AuthKind::Basic => "basic",
+            AuthKind::None => "none",
+        };
+        let mut config = std::collections::BTreeMap::new();
+        config.insert("host".to_string(), host.clone());
+        config.insert("port".to_string(), p.to_string());
+        config.insert("snapshotUrl".to_string(), snap_path.to_string());
+        config.insert("previewUrl".to_string(), "/ISAPI/Streaming/channels/102/picture".to_string());
+        config.insert("rtspUrl".to_string(), "/Streaming/Channels/102".to_string());
+        config.insert("rtspPort".to_string(), rtsp_port.to_string());
+        config.insert("auth".to_string(), auth_name.to_string());
+        if let Some(u) = user {
+            config.insert("user".to_string(), u.to_string());
+        }
+        if let Some(pwd) = password.as_deref() {
+            config.insert("password".to_string(), pwd.to_string());
+        }
+
+        let mut message = format!(
+            "海康{}：{host}:{p} 认证 {auth_name} · 抓拍 101 / 预览 102 · RTSP {rtsp_port}",
+            model.map(|m| format!(" · 型号 {m}")).unwrap_or_default()
+        );
+        if !rtsp_reachable {
+            message.push_str("（RTSP 端口未探到，实时画面需联机测试再确认）");
+        }
+        return Ok(CameraDetect { config, message });
+    }
+    Err(format!(
+        "连不上海康摄像机：{}",
+        if unreachable.is_empty() {
+            format!("{host} 未响应，检查 IP、网线与电源")
+        } else {
+            unreachable.join("；")
+        }
+    ))
+}
+
+/// RTSP 探测失败时的兜底端口（与 `camera_stream.rs` 的默认口径一致）。
+const RTSP_DEFAULT_PORT_HINT: u16 = 554;
+
+/// `http_body` 的取 body 简化版：探测只吃 deviceInfo 这种带 Content-Length 的小 XML，
+/// 不复制 chunked/截断判定那一整套（那些是抓拍入库的路径，这里不入库）。
+fn http_body_from(head: &HttpHead, raw: &[u8]) -> Vec<u8> {
+    let rest = raw.get(head.body_start..).unwrap_or_default();
+    match head.content_length {
+        Some(n) => rest[..n.min(rest.len())].to_vec(),
+        None => rest.to_vec(),
+    }
+}
+
+/// 探测本机之外的海康摄像机：只吃 IP + 用户 + 口令，其余自动判定。命令层丢给一次性线程，
+/// 一次探测最多几秒（每端口连接 3 秒超时 + Digest 两趟），别占住 async 工作线程。
+#[command]
+pub async fn camera_detect(
+    host: String,
+    port: Option<u16>,
+    user: Option<String>,
+    password: Option<String>,
+) -> Result<CameraDetect, String> {
+    let host = host.trim().to_string();
+    let user = user.filter(|s| !s.trim().is_empty());
+    let password = password.filter(|s| !s.is_empty());
+    if host.is_empty() {
+        return Err("先填摄像机的 IP 地址".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        detect_hikvision(&host, port, user.as_deref(), password.as_deref())
+    })
+    .await
+    .map_err(|e| format!("摄像机检测任务失败：{e}"))?
 }
 
 // ------------------------------------------------------------------- 错误话术

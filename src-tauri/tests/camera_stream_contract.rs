@@ -21,9 +21,9 @@
 
 use banghe_lib::camera::parse_http_head;
 use banghe_lib::camera_stream::{
-    derive_rtsp_path, has_idr, interleaved_channels, join_control, nal_type, next_msg, parse_rtp, rtsp_path_from_url,
-    rtsp_request, session_id, session_timeout_secs, video_track, H264Stream, RtspMsg, NAL_IDR, PHASE_CONNECTING,
-    PHASE_ERROR, PHASE_KEYFRAME, PHASE_STREAMING,
+    derive_rtsp_path, has_idr, interleaved_channels, is_auth_failure, join_control, nal_type, next_msg, parse_rtp,
+    rtsp_failure, rtsp_path_from_url, rtsp_request, session_id, session_timeout_secs, video_track, H264Stream,
+    RtspMsg, NAL_IDR, PHASE_CONNECTING, PHASE_ERROR, PHASE_KEYFRAME, PHASE_STREAMING,
 };
 
 /// 一条 `$` 交织帧：`$` + 通道 + u16 大端长度 + RTP 包。
@@ -609,4 +609,34 @@ fn shared_head_parser_still_accepts_rtsp_status_lines() {
     // 反之：非 HTTP/RTSP 的第一行仍然当场拒
     assert!(parse_http_head(b"SIP/2.0 100 trying\r\n\r\n").is_err());
     assert!(parse_http_head(b"\x00\x01\x02\x03\r\n\r\n").is_err());
+}
+
+// =========================================== 认证被拒 = 唯一"不再重连"的那类失败
+//
+// 海康把每次 401 都计进登录失败次数（默认约 7 次锁 30 分钟）。RTSP 连不上会带退避重连，
+// 但认证被拒重连也进不去，只会继续把账号往锁定线上推。stream_loop 靠 is_auth_failure
+// 认这类失败并当场停重连——判据与 rtsp_failure 的中文措辞耦合，这里把这对耦合钉死：
+// 改了话术却忘了改判据，"停止重连"就会静默失效，测试必须红。
+
+fn head_of(status_line: &str) -> banghe_lib::camera::HttpHead {
+    let raw = format!("{status_line}\r\nCSeq: 1\r\n\r\n");
+    parse_http_head(raw.as_bytes()).expect("合成状态行应能解析")
+}
+
+#[test]
+fn auth_rejection_is_the_one_failure_we_stop_retrying_on() {
+    // 401 / 403：认证被拒 → is_auth_failure 必须为真（据此停止重连）
+    for line in ["RTSP/1.0 401 Unauthorized", "RTSP/1.0 403 Forbidden"] {
+        let why = rtsp_failure("DESCRIBE", &head_of(line));
+        assert!(is_auth_failure(&why), "认证类失败要能被认出来：{why}");
+    }
+    // 会话失效(454)、传输不支持(461)、内部错误(500)：都是"重连可能就好了"那一类 → 不能误判成认证
+    for line in [
+        "RTSP/1.0 454 Session Not Found",
+        "RTSP/1.0 461 Unsupported Transport",
+        "RTSP/1.0 500 Internal Server Error",
+    ] {
+        let why = rtsp_failure("SETUP", &head_of(line));
+        assert!(!is_auth_failure(&why), "非认证失败不该触发停止重连：{why}");
+    }
 }

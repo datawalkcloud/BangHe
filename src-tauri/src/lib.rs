@@ -122,6 +122,7 @@ pub fn run() {
             printer::print_receipt,
             queue_print::print_receipt_queue,
             camera::camera_list_local,
+            camera::camera_detect,
             camera_stream::camera_stream_start,
             camera_stream::camera_stream_stop,
             camera_stream::camera_stream_status,

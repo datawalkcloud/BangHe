@@ -872,3 +872,52 @@ fn broken_local_frames_degrade_and_blame_the_device_not_the_weighing() {
     assert_eq!((status.as_str(), count), ("error", 3), "坏帧计入设备状态，现场在设备中心看得见");
     assert!(last.unwrap().contains("上限"), "最后这句得说清为什么拒：超限在解码前");
 }
+
+// ============================================================= 海康自动检测（纯函数离线钉）
+//
+// detect_hikvision 真要联网，测试里不跑（把测试挂在现场网络与一台不存在的 IP 上）。
+// 这里钉它周围的三把尺子：地址收敛、认证方式判定、XML 取值——正是"检测填进去的端口/
+// 认证/型号对不对"的判定源，网络那一半只保证把这三样的结论写进 config。
+
+use banghe_lib::camera::{auth_from_www_authenticate, normalize_host, xml_first_tag};
+
+#[test]
+fn normalize_host_schemes_paths_and_inline_ports() {
+    // 裸 IP：不猜端口，交给上层按候选试
+    assert_eq!(normalize_host("192.168.10.64", None).unwrap(), ("192.168.10.64".to_string(), None));
+    // 整条浏览器地址粘进来：切协议、丢路径、带出的端口要认
+    assert_eq!(
+        normalize_host("http://192.168.10.64:8080/ISAPI/System/deviceInfo", None).unwrap(),
+        ("192.168.10.64".to_string(), Some(8080))
+    );
+    // 尾部斜杠与大小写前缀都收敛
+    assert_eq!(normalize_host("HTTP://Cam-Local/", None).unwrap(), ("Cam-Local".to_string(), None));
+    // 显式端口压过地址里内联的那个
+    assert_eq!(normalize_host("1.2.3.4:80", Some(8000)).unwrap(), ("1.2.3.4".to_string(), Some(8000)));
+    // 非法与空：回中文短句，绝不静默拼出一个坏端点
+    assert!(normalize_host("", None).is_err());
+    assert!(normalize_host("10.0.0..1", None).is_err());
+}
+
+#[test]
+fn auth_kind_follows_the_challenge_the_camera_actually_sends() {
+    assert_eq!(auth_from_www_authenticate(Some("Digest realm=\"IPCam\", qop=\"auth\", nonce=\"ab\"")), AuthKind::Digest);
+    assert_eq!(auth_from_www_authenticate(Some("Basic realm=\"test\"")), AuthKind::Basic);
+    // 没回认证头（比如直接 200 的匿名机）→ 不带认证
+    assert_eq!(auth_from_www_authenticate(None), AuthKind::None);
+    assert_eq!(auth_from_www_authenticate(Some("NTLM")), AuthKind::None);
+}
+
+#[test]
+fn model_tag_is_read_from_device_info_without_an_xml_lib() {
+    let xml = r#"<?xml version="1.0"?><DeviceDescription><model>DS-2CD2T47G2-L</model><serialNumber>12345</serialNumber></DeviceDescription>"#;
+    assert_eq!(xml_first_tag(xml, "model").as_deref(), Some("DS-2CD2T47G2-L"));
+    assert_eq!(xml_first_tag(xml, "serialNumber").as_deref(), Some("12345"));
+    // 带属性的标签也能取（先跳过 '>'），认不出的标签回 None 让探测降级而不是崩
+    assert_eq!(xml_first_tag(r#"<model lang="cn">X1"</model>"#, "model").as_deref(), Some("X1\""));
+    assert_eq!(xml_first_tag(xml, "firmwareVersion"), None);
+    // 前缀撞车：找 "model" 不能被更长的 "<modelVersion>" 抢先，得跳到真正那一个
+    let collide = r#"<modelVersion>4.2</modelVersion><model>DS-2CD</model>"#;
+    assert_eq!(xml_first_tag(collide, "model").as_deref(), Some("DS-2CD"));
+    assert_eq!(xml_first_tag(collide, "modelVersion").as_deref(), Some("4.2"));
+}

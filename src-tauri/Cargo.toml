@@ -73,5 +73,15 @@ opt-level = 3
 panic = "unwind"
 strip = true
 
+# 相机预览的「解码 + 压 JPEG」是纯计算热点。dev 默认 -O0 下，纯 Rust 的 jpeg-encoder
+# 与 openh264 编进来的 Cisco C 源码都会慢一个数量级——实测一帧 768×432 要 ~120ms，
+# 把 `tauri dev` 的实时画面死死摁在 8fps，而这完全不代表 release（本来就 -O3）的真实帧率。
+# 只给这两个包在 dev 下也开 -O3：openh264 的 build.rs 会据此把 C 源码按 -O3 编，
+# jpeg-encoder 的泛型也才展开得动。不动整个 crate，主程序增量编译速度基本不受影响。
+[profile.dev.package.jpeg-encoder]
+opt-level = 3
+[profile.dev.package.openh264]
+opt-level = 3
+
 [dev-dependencies]
 regex = "1.13.1"

@@ -944,12 +944,18 @@ impl Session {
         }
     }
 
-    /// 一趟握手请求，带上"第一次 401 就学质询、换一条连接重打一遍"这一手。
+    /// 一趟握手请求，带上"第一次 401 就学质询、就地带应答重打"这一手。
     ///
     /// 为什么每次都判：海康要认证时是**每一趟**都可能先回 401，不只是 DESCRIBE——
     /// 台账把匿名读开着但 SETUP 要口令的机器，只处理 DESCRIBE 就会永远卡在"SETUP 被拒绝"。
-    /// 而 401 之后这条 TCP 往往当场被对端关掉（真机实测），所以重试必须换连接，
-    /// 换连接又要把手上已经拿到的 Session 号/轨道号带过去。
+    ///
+    /// 为什么**先在同一条连接上**重打，而不是像 HTTP 抓拍那样换连接：海康的 HTTP/ISAPI
+    /// 服务把 nonce 做成无状态校验（口令+时间戳算出来的），换一条新连接照样认旧 nonce，
+    /// 所以抓拍那两趟各开一条连接没事；但 RTSP 是设备上另一个进程，它把质询**绑在这条
+    /// TCP 上**——拿旧连接发的 nonce 去问新连接，当场第二个 401（真机现象：抓拍能过、
+    /// 预览一直 401）。ffmpeg / VLC / live555 拉海康也都是「DESCRIBE→401→同一 socket
+    /// 补 Authorization」从不重连，正是这个缘故。只有当对端在 401 后**真的把这条连接关了**
+    /// （同连接重发直接读不到响应而报错）时，才退回换连接、把质询与 Session 号带过去。
     fn call(
         &mut self,
         method: &str,
@@ -964,20 +970,29 @@ impl Session {
             return Ok((head, body));
         };
         let challenge = camera::parse_digest_challenge(raw)?;
-        let mut fresh = Session::new(self.target.clone(), self.stop.clone())?;
-        // 换连接等于换一条会话，手上有的东西得逐项搬过去——包括刚学到的质询，
-        // 否则重打的那一趟还是裸的，第二个 401 立刻回来。
-        fresh.challenge = Some(challenge);
-        fresh.session_id = self.session_id.clone();
-        fresh.track_uri = self.track_uri.clone();
-        fresh.video_pt = self.video_pt;
-        fresh.video_channel = self.video_channel;
-        fresh.keepalive_gap = self.keepalive_gap;
-        fresh.keepalive_method = self.keepalive_method;
-        // 交换之后 `fresh`（旧那条连接）出作用域就被丢弃；401 之后对端多半已经关了它
-        std::mem::swap(self, &mut fresh);
-        // 第二次还不 200 就别再兜圈子：状态码原样交出去，由 rtsp_failure 说人话
-        self.call_once(method, uri, extra)
+        // 质询记在会话上：后面每一趟（SETUP/PLAY）都按自己的 method+URI 现签应答。
+        self.challenge = Some(challenge);
+        // 先在同一条连接上带应答重打。第二次还不 200 就别再兜圈子：状态码原样交出去，
+        // 由 rtsp_failure 说人话（is_auth_failure 认这类失败并停止重连，避免撞锁账号）。
+        match self.call_once(method, uri, extra) {
+            Ok(v) => Ok(v),
+            // 同连接重发没拿到干净响应——多半是 401 后对端关了这条 TCP。换一条连接，
+            // 把刚学到的质询和手上已有的 Session 号/轨道号逐项搬过去再打一趟。
+            Err(first_err) => {
+                let mut fresh = Session::new(self.target.clone(), self.stop.clone())?;
+                fresh.challenge = self.challenge.clone();
+                fresh.session_id = self.session_id.clone();
+                fresh.track_uri = self.track_uri.clone();
+                fresh.video_pt = self.video_pt;
+                fresh.video_channel = self.video_channel;
+                fresh.keepalive_gap = self.keepalive_gap;
+                fresh.keepalive_method = self.keepalive_method;
+                // 交换之后 `fresh`（旧那条连接）出作用域就被丢弃
+                std::mem::swap(self, &mut fresh);
+                self.call_once(method, uri, extra)
+                    .map_err(|e| format!("{first_err}；换连接重打也没成：{e}"))
+            }
+        }
     }
 
     /// 收一条消息；`deadline` 到了还没有就回 `Ok(None)`（调用方借此查停止位与保活钟）。
@@ -1086,10 +1101,12 @@ fn open_session(target: &RtspTarget, stop: &Arc<AtomicBool>) -> Result<(Session,
 }
 
 /// 状态码 → 人话。与抓拍那条通道同一套说法：现场只看一句话，不该有两份词典。
-fn rtsp_failure(method: &str, head: &HttpHead) -> String {
+/// `pub` 是为了让契约测试把「401/403 的说法」和 [`is_auth_failure`] 的判据钉在一起——
+/// 这俩靠中文措辞耦合，改一处忘了另一处，"认证被拒不再重连"就会静默失效。
+pub fn rtsp_failure(method: &str, head: &HttpHead) -> String {
     match head.status {
         401 | 403 => format!(
-            "{method} 被拒绝（RTSP {}）：核对台账里的登录用户名与口令；口令对但仍被拒，多半是这台机要求 digest 之外的算法",
+            "{method} 被拒绝（RTSP {}）：核对台账里的登录用户名与口令。抓拍能过而这里被拒，多半是该账号没开「实时预览」权限（海康的 HTTP 与 RTSP 权限是分开的），或多次失败已把账号锁进冷却期",
             head.status
         ),
         404 => format!(
@@ -1115,6 +1132,13 @@ struct Player {
     rgb: Vec<u8>,
     last_frame: Instant,
     seq: u64,
+    // ---- 临时诊断（定位 8fps 到底卡在哪一段）：一个滚动 ~1 秒窗口内的计数，够定位就删。
+    dbg_win_start: Instant,
+    dbg_packets: u32,
+    dbg_au: u32,
+    dbg_frames: u32,
+    dbg_decode_us: u128,
+    dbg_emit_us: u128,
 }
 
 impl Player {
@@ -1128,7 +1152,40 @@ impl Player {
             rgb: Vec::new(),
             last_frame: Instant::now(),
             seq: 0,
+            dbg_win_start: Instant::now(),
+            dbg_packets: 0,
+            dbg_au: 0,
+            dbg_frames: 0,
+            dbg_decode_us: 0,
+            dbg_emit_us: 0,
         })
+    }
+
+    /// 攒够 ~1 秒就把这一窗口的吞吐打到终端，然后清零。跑一次就能分清是「收得少」
+    /// 「解得慢」还是「emit 慢 / 前端回调被拖」。定位完删掉这段。
+    fn dbg_report(&mut self, code: &str) {
+        let el = self.dbg_win_start.elapsed();
+        if el < std::time::Duration::from_millis(1000) {
+            return;
+        }
+        let secs = el.as_secs_f64().max(0.001);
+        let f = self.dbg_frames.max(1) as f64;
+        eprintln!(
+            "[cam-dbg {code}] {:.1}s  收视频包={}  组帧={}  出帧={}（{:.1}fps）  每帧解码+压图={:.1}ms  每帧emit={:.1}ms",
+            secs,
+            self.dbg_packets,
+            self.dbg_au,
+            self.dbg_frames,
+            self.dbg_frames as f64 / secs,
+            self.dbg_decode_us as f64 / f / 1000.0,
+            self.dbg_emit_us as f64 / f / 1000.0,
+        );
+        self.dbg_win_start = Instant::now();
+        self.dbg_packets = 0;
+        self.dbg_au = 0;
+        self.dbg_frames = 0;
+        self.dbg_decode_us = 0;
+        self.dbg_emit_us = 0;
     }
 
     /// 一个 `$` 包 → 可能出若干帧。RTCP 与音频通道直接忽略。
@@ -1150,7 +1207,9 @@ impl Player {
         if rtp.payload_type != pt {
             return Ok(out);
         }
+        self.dbg_packets += 1;
         for au in self.stream.feed(rtp.payload, rtp.timestamp, rtp.marker) {
+            self.dbg_au += 1;
             if let Some(frame) = self.renderer.push(au, &mut self.rgb)? {
                 out.push(frame);
             }
@@ -1266,8 +1325,11 @@ fn deliver(
     channel: u8,
     packet: &[u8],
 ) -> Result<(), String> {
+    let t_decode = Instant::now();
     let frames = player.on_packet(channel, video_channel, packet, video_pt)?;
+    player.dbg_decode_us += t_decode.elapsed().as_micros();
     for f in frames {
+        player.dbg_frames += 1;
         player.seq += 1;
         player.last_frame = Instant::now();
         let seq = player.seq;
@@ -1283,7 +1345,9 @@ fn deliver(
             bytes,
             at,
         };
+        let t_emit = Instant::now();
         let _ = app.emit(CAMERA_FRAME_EVENT, &payload);
+        player.dbg_emit_us += t_emit.elapsed().as_micros();
         let (w, h) = (f.width, f.height);
         let mut streaming = false;
         touch(live, |s| {
@@ -1303,6 +1367,7 @@ fn deliver(
             publish_status(live);
         }
     }
+    player.dbg_report(code);
     Ok(())
 }
 
@@ -1534,7 +1599,16 @@ impl CameraStreamHub {
     }
 }
 
-/// 线程主体：失败就退避重连，直到被要求停止。
+/// 认证被摄像机拒绝（RTSP 401/403）的判据。跟着 [`rtsp_failure`] 里那句固定说法
+/// 「…被拒绝（RTSP 40x）…」——这类失败重连也进不去，只会每趟再撞几次 401，
+/// 把海康的"登录失败次数"堆到锁定阈值（默认约 7 次锁 30 分钟）。措辞一改要同步这里，
+/// 契约测试 `auth_rejection_is_the_one_failure_we_stop_retrying_on` 正钉着这对耦合。
+pub fn is_auth_failure(why: &str) -> bool {
+    why.contains("被拒绝（RTSP 401") || why.contains("被拒绝（RTSP 403")
+}
+
+/// 线程主体：失败就退避重连，直到被要求停止。**认证被拒是唯一例外**——
+/// 那种失败重连进不去，继续只会把相机账号撞锁，所以当场停在错误态、不再重连。
 fn stream_loop(
     app: AppHandle,
     live: &Arc<Mutex<StreamStatus>>,
@@ -1549,8 +1623,14 @@ fn stream_loop(
         // 只能带走这一路画面，不能让它连状态都不落——那一格会一直显示"在流"。
         match catch_unwind(AssertUnwindSafe(|| run_once(&app, live, stop, target))) {
             Ok(Ok(())) => break,
-            Ok(Err(_)) => {
+            Ok(Err(why)) => {
                 if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                // 口令/权限不对：run_once 已把这一格标成错误态并写了原因；这里补一句
+                // "已停止重连"就跳出。继续重连每趟都要再撞几次 401，好账号会被海康锁死。
+                if is_auth_failure(&why) {
+                    publish_error(&app, live, &format!("{why}（已停止重连，避免继续触发相机端登录锁定）"));
                     break;
                 }
                 // 撑过 30 秒说明这台机平时是好的，这次只是抖了一下：退避重新算起，
