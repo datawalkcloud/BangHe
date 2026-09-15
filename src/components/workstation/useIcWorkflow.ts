@@ -10,6 +10,8 @@
  *     制成就绑它，不让人把同一张卡再刷一遍）；在途卡→**先把工作台定位到这张卡绑的那张单**
  *     （哪怕此刻仪表离线、读数未稳，也要让面板说的是这张单），再按这张单缺什么推进；
  *  ③ 推进只认"此刻地磅稳定读数"，读数未稳 / 皮重超容差一律不写库、交回面板手点（06 §2.2 三条硬规矩）；
+ *     另有一道数据闸排在它前面：**捕毛重之前磅单上必须有价**（02 §F1.4，判定在 `lib/weigh-gate.ts`），
+ *     没价这一刷什么都不写，让磅员先在称重区把价填好再刷——价是成交的前提，没价就等于还没谈成；
  *  ④ "一刷"的判据是**边沿**：`reader.ic.watch` 只在换卡、或天线空过一次之后再放上时才命中，
  *    卡压在感应区不动不会一轮轮重复推进（06 §4.2）；本 hook 再叠一层 `card_swipe_debounce_ms`
  *    时间窗当第二道保险（同一张卡同一待办步窗口内只算一刷）。
@@ -22,6 +24,10 @@
  *
  * 结算落点与扫码窗口不冲突：第三刷只把**这张单**交给 `onRequestSettle`，由页面弹复用 `SettleForm`
  * 的结算框完成收付款；`/scan-settle` 是同一条 `api.settle` 的另一个入口，两条都算同一份价。
+ *
+ * ③ 那一刷之后还有一步：**这一捕把净重凑齐了**（不管补上的是毛重还是皮重），本 hook 就把单交给
+ * `onNetDetermined`，由页面决定收尾——出码单，以及"磅单上已经有价就直接挂账结掉 / 没价才弹结算框"。
+ * 本 hook 不掺和那条判定，手点捕获（`WeighPanel`）走的是同一个出口，两条路必须给出同一个结论。
  */
 import { useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,6 +35,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { autoRegisterCard, autoRegisterOn } from "@/lib/card-auto-register";
 import { announce } from "@/lib/voice-prompt";
+import { priceGateOf } from "@/lib/weigh-gate";
 import type { DeviceConfig, WeighOrder } from "@/mock/types";
 import { grabCaptureFrames } from "@/lib/local-camera";
 import { useDeviceStore } from "@/store/device";
@@ -75,7 +82,7 @@ export function useIcWorkflow({
   captureCams,
   anyCamOnline,
   onRequestSettle,
-  onWeighed,
+  onNetDetermined,
   onRequestRegister,
   onFocusOrder,
 }: {
@@ -87,8 +94,14 @@ export function useIcWorkflow({
   anyCamOnline: boolean;
   /** 第三刷：把这张单交给页面的结算框（复用 SettleForm） */
   onRequestSettle: (orderNo: string) => void;
-  /** 皮重捕获成功（算完净重）后回调，页面据此自动出码单 */
-  onWeighed: (order: WeighOrder) => void;
+  /**
+   * 这一捕把净重凑齐了（算完净重）之后回调，页面据此收尾：出码单，以及
+   * "自动挂账结算 / 弹结算框"那一步（判定见 `lib/settle-defaults.ts::postWeighAction`）。
+   *
+   * 判据是"净重刚定"而不是"这一捕是皮重"：一次/二次称重顺序自由（02 §F1.2），先捕皮重后捕
+   * 毛重的车，凑齐净重的是毛重那一捕——原先按类型判，那种车的第三刷要靠人记着去刷。
+   */
+  onNetDetermined: (order: WeighOrder) => void;
   /** 刷到一张空闲卡、但库里没有等发卡的在途单：把这张卡交给页面弹制单框，制成就绑这张卡 */
   onRequestRegister: (cardNo: string) => void;
   /**
@@ -127,9 +140,9 @@ export function useIcWorkflow({
    * 真机上正压着卡的那一轮 read 会被 epoch 判废、这一刷凭空丢掉。收成 ref，effect 只依赖稳定量。
    * `captureCams`/`anyCamOnline` 同理：它们来自 devices 查询，每次刷新都是新值，只能进 ref，绝不能进依赖。
    */
-  const cbs = useRef({ onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, captureCams, anyCamOnline });
+  const cbs = useRef({ onRequestSettle, onNetDetermined, onRequestRegister, onFocusOrder, captureCams, anyCamOnline });
   useEffect(() => {
-    cbs.current = { onRequestSettle, onWeighed, onRequestRegister, onFocusOrder, captureCams, anyCamOnline };
+    cbs.current = { onRequestSettle, onNetDetermined, onRequestRegister, onFocusOrder, captureCams, anyCamOnline };
   });
 
   const refresh = useCallback((orderNo: string, partyId: number) => {
@@ -182,6 +195,21 @@ export function useIcWorkflow({
         cbs.current.onRequestSettle(o.order_no);
         return;
       }
+      /**
+       * 价闸（02 §F1.4）：毛重那一捕之前磅单上必须有价。判定与文案在 `lib/weigh-gate.ts`——
+       * 手点 / 手录那条路（`WeighPanel.submit`）调的是同一份，否则同一张单会因"是刷的还是点的"
+       * 走出两种结果。这一刷什么都不写：让磅员先在称重区把价填好，再把卡刷一次
+       * （服务端 `capture` 与 mock 另有同一句话的硬闸兜底，这里只是把话说在现场）。
+       *
+       * 排在仪表两道闸之前：缺价是"这一单还不该收粮"，仪表离线只是"这一下读不到数"，
+       * 前者的处置（填价）比后者的处置（等仪表）更要紧，先说要紧的。
+       */
+      const priceMsg = priceGateOf(o, step);
+      if (priceMsg) {
+        toast.warning(priceMsg, sticky(`ic-price-required:${o.order_no}`));
+        announce("这一单还没有单价，请先填好单价再刷一次卡", `ic-price-required:${o.order_no}`);
+        return;
+      }
       // 毛重 / 皮重都要"此刻稳定读数"，未稳这一刷作废、不缓存不凑数
       if (!scale.connected || !scale.stable) {
         toast.warning(scale.error ? `仪表离线：${scale.error}` : "读数未稳，请等车停稳再刷", sticky(`ic-scale:${o.order_no}`));
@@ -227,8 +255,15 @@ export function useIcWorkflow({
           announce("皮重偏差超出容差，请核对车上有没有留人", `ic-tare-tol:${o.order_no}`);
         }
         refresh(o.order_no, o.party_id);
-        if (step === "tare") cbs.current.onWeighed(updated); // 皮重即净重已定 → 自动出码单
-        else if (updated.settled_at == null && updated.net_weight_01kg != null) cbs.current.onRequestSettle(updated.order_no);
+        /**
+         * 这一捕把净重凑齐了就交给页面收尾（出码单 + 自动挂账结算 / 弹结算框）。
+         * 毛重补齐最后一笔与皮重补齐最后一笔同权——`step` 是"缺哪项"，**不是**"这一捕的意义"。
+         * `o` 是捕获前取的那份，拿它比才知道净重是"刚定"还是"本来就有"：复称、补捕、
+         * 已经结算过的单都不该再被推进一遍。
+         */
+        if (o.net_weight_01kg == null && updated.net_weight_01kg != null && updated.settled_at == null) {
+          cbs.current.onNetDetermined(updated);
+        }
       } catch (e) {
         toast.error(`捕获失败：${e instanceof Error ? e.message : "请重试；读数未丢，仪表仍在推送"}`, sticky(`ic-capture:${o.order_no}`));
         announce("捕获失败，读数没有丢，再刷一次", `ic-catch:${o.order_no}`);

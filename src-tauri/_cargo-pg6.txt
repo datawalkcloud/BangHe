@@ -1,0 +1,109 @@
+﻿cargo :     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --test mock_coverage_contract --test system_co ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `t...get(s) in 0.81s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+     Running tests\auth_contract.rs (target\debug\deps\auth_contract-b7d354357acd5898.exe)
+
+running 15 tests
+test idle_boundary_uses_the_ttl_and_fails_closed_on_garbage ... ok
+test admin_seed_still_ships_without_a_usable_hash ... ok
+test nothing_leaks_the_hash_or_the_raw_counter ... ok
+test logout_and_idle_timeout_are_separate_audit_actions ... ok
+test unlock_verifies_only_the_person_and_keeps_the_session ... ok
+test only_station_master_may_reset_others ... ok
+test supervisor_authorize_never_signs_in_or_touches_last_login ... ok
+test idle_lock_minutes_is_read_from_app_setting_with_a_compile_time_fallback ... ok
+test lockout_kicks_in_at_threshold_and_blocks_the_right_password ... ok
+test superadmin_is_seeded_and_usable_only_via_install_bootstrap ... ok
+test password_rules_reject_short_and_bootstrap_values ... ok
+test disabled_account_is_refused_by_name_not_by_password ... ok
+test every_attempt_leaves_an_audit_trail ... ok
+test unknown_user_and_wrong_password_answer_identically ... ok
+test changing_password_retires_the_bootstrap_route ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
+
+     Running tests\camera_contract.rs (target\debug\deps\camera_contract-2bf141fe6e126e3a.exe)
+
+running 22 tests
+test base64_matches_the_standard_alphabet ... ok
+test https_is_refused_in_chinese_instead_of_pretending ... ok
+test digest_auth_is_marked_not_supported_rather_than_guessed ... ok
+test http_status_reasons_point_at_the_next_action ... ok
+test base64_decode_pairs_with_the_encoder_and_tolerates_the_dataurl_shapes ... ok
+test illegal_config_is_refused_line_by_line ... ok
+test mock_masters_key_names_build_a_working_endpoint ... ok
+test head_parsing_covers_both_body_framings ... ok
+test request_bytes_are_pinned ... ok
+test only_real_jpegs_within_the_size_cap_get_through ... ok
+test file_names_are_built_locally_and_never_camera_controlled ... ok
+test the_timeout_constant_is_the_one_the_design_doc_promised ... ok
+test truncated_chunked_and_non_http_replies_are_explained ... ok
+test five_straight_failures_flip_the_device_offline ... ok
+test a_failed_insert_does_not_leave_an_orphan_photo ... ok
+test a_local_frame_is_stored_and_flips_the_camera_online ... ok
+test missing_or_mock_camera_degrades_without_touching_the_network ... ok
+test bad_config_surfaces_as_error_and_is_written_back_to_the_device ... ok
+test traversal_in_configured_names_cannot_escape_the_data_dir ... ok
+test broken_local_frames_degrade_and_blame_the_device_not_the_weighing ... ok
+test snapshot_lands_in_app_dir_and_the_attachment_row_is_right ... ok
+test two_captures_in_the_same_millisecond_do_not_overwrite_each_other ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests\devices_contract.rs (target\debug\deps\devices_contract-f3c5beb1f4c78e1a.exe)
+
+running 15 tests
+test scale_verdict_turns_green_only_while_the_stream_is_parsing_frames ... ok
+test scale_verdict_from_probe_separates_open_port_from_reading_frames ... ok
+test enable_toggle_moves_the_light_and_mock_toggle_does_not ... ok
+test unverified_config_saves_as_yellow_light_with_a_marked_audit ... ok
+test create_device_demotes_previous_default_of_same_kind_only ... ok
+test failed_device_test_blocks_the_save_and_keeps_old_config ... ok
+test probe_report_unknown_is_not_counted_as_a_fault ... ok
+test duplicate_code_is_refused_with_mock_wording_and_leaves_a_trace ... ok
+test probe_plan_survives_broken_config_json ... ok
+test probe_plan_routes_only_drivers_with_a_real_channel ... ok
+test device_verified_config_flips_the_light_and_clears_counters ... ok
+test blank_code_is_numbered_by_kind_and_out_of_range_inputs_are_refused ... ok
+test probe_plan_refuses_to_open_a_port_for_mock_or_disabled_scale ... ok
+test probe_report_online_clears_error_and_offline_counts_it ... ok
+test probe_plan_routes_a_real_scale_to_the_serial_stream ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+     Running tests\idcard_reader.rs (target\debug\deps\idcard_reader-0d890ca977a11b2a.exe)
+
+running 1 test
+test read_card_in_64bit_process ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\mock_coverage_contract.rs (target\debug\deps\mock_coverage_contract-5bec03845c2fa155.exe)
+
+running 5 tests
+test mock_api_is_spread_first ... ok
+test native_overrides_do_not_collide ... ok
+test mock_surface_is_not_empty ... ok
+test remaining_mock_surface_is_documented ... ok
+test every_native_module_is_merged_into_api_ts ... FAILED
+
+failures:
+
+---- every_native_module_is_merged_into_api_ts stdout ----
+
+thread 'every_native_module_is_merged_into_api_ts' (19800) panicked at tests\mock_coverage_contract.rs:175:5:
+杩欎簺鍘熺敓妯″潡鍐欎簡鍗存病琚?api.ts 灞曞紑锛岄〉闈笂杩欎竴鍧椾粛鏄亣鏁版嵁锛歔"windowApi"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    every_native_module_is_merged_into_api_ts
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `--test mock_coverage_contract`
+

@@ -85,8 +85,19 @@ fn soft_delete(conn: &Connection, id: i64) {
     conn.execute("UPDATE party SET deleted_at = '2026-01-02T00:00:00.000+08:00' WHERE id = ?1", params![id]).unwrap();
 }
 
+/// 一张"能过磅的单"要先有价：`capture` 在毛重那一捕上有价格闸（02 §F1.4），没价这一捕直接被拒。
+/// 只在**这个品种还没有任何价**时补一条——本文件里好几处是"先 seed_price 再走单"，为的是断言
+/// `price_list_id` 锚到哪一行；多插一行会把那个锚挪到新行上，settle 的"必须是现行那一行"就会拒。
+fn ensure_price(conn: &Connection, variety: i64) -> i64 {
+    let existing: Option<i64> = conn
+        .query_row("SELECT id FROM price_list WHERE variety_id = ?1 ORDER BY id LIMIT 1", params![variety], |r| r.get(0))
+        .ok();
+    existing.unwrap_or_else(|| seed_price(conn, variety))
+}
+
 /// 制单 + 毛/皮双称，停在 to_settle；车牌可空
 fn weighed_order(conn: &Connection, party_id: i64, variety: i64, vehicle_no: Option<&str>) -> String {
+    ensure_price(conn, variety);
     let no = create_order(
         conn,
         &actor(1, "weigher"),

@@ -21,8 +21,10 @@ import { weight } from "@/lib/format";
 import { DEVICE_STATUS } from "@/lib/constants";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { Dot } from "@/components/business/badges";
 import { operatorLabel } from "@/components/business/OperatorSwitch";
+import { ShortcutHelpDialog } from "@/components/business/ShortcutHelpDialog";
 import { cn } from "cn";
 import type { DeviceConfig } from "@/mock/types";
 import type { DeviceStatus } from "@/lib/constants";
@@ -164,6 +166,10 @@ export function DeviceStatusStrip() {
   const prtCfg = devices.find((d) => d.kind === "printer" && d.is_default === 1) ?? cfg("prt1");
   const { readerDev } = readerGateOf(devices);
 
+  /** 底栏键盘图标开的就是顶栏「帮助 → 快捷键一览」那一张，键位表同一份（F1 也是它） */
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [hintOpen, setHintOpen] = useState(false);
+
   const scaleDetail = scale.connected
     ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg)} · ${scale.stable ? "稳" : "不稳"}`
     : `${String(scaleCfg?.config.port ?? "COM3")} 离线，可改手录`;
@@ -221,16 +227,31 @@ export function DeviceStatusStrip() {
       <span className="ml-auto flex shrink-0 items-center gap-3">
         <Clock />
         <Separator orientation="vertical" className="h-4" />
-        <Tooltip>
-          <TooltipTrigger render={<span className="inline-flex" />}>
-            <KeyboardIcon className="size-3.5 text-muted-foreground" />
+        {/* 键盘图标原先只挂悬停提示：触屏机上没有 hover，点了没反应，等于一颗死图标
+            （旁边的「磅/卡/像/印」都能点进设备中心，更容易让人以为它也能点）。
+            现在点它开「快捷键一览」，与顶栏菜单、F1 是同一张弹窗、同一份键位表。 */}
+        <Tooltip open={hintOpen && !helpOpen} onOpenChange={setHintOpen}>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-foreground"
+                aria-label="快捷键一览（F1）"
+                onClick={() => setHelpOpen(true)}
+              />
+            }
+          >
+            <KeyboardIcon className="size-3.5" />
           </TooltipTrigger>
           <TooltipContent side="top">
             <p className="font-medium">主要快捷键</p>
             <p className="text-muted-foreground">空格 捕获 · F7 下一单 · F8 读卡 · F5 化验 · F6 带价</p>
             <p className="text-muted-foreground">F9 打码单 · F10 扫码结算 · F2 对外大屏 · Ctrl+K 检索 · Ctrl+B 折叠侧栏</p>
+            <p className="text-muted-foreground">点击查看全部（F1）</p>
           </TooltipContent>
         </Tooltip>
+        <ShortcutHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
         <Separator orientation="vertical" className="h-4" />
         <span className="text-xs text-muted-foreground">
           当前操作员：

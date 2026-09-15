@@ -8,7 +8,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ReceiptScenario, ReceiptTemplate } from "./types";
-import { defaultTemplate, ensureRequiredBlocks } from "./defaults";
+import { defaultTemplate, normalizeTemplate } from "./defaults";
 
 interface ReceiptStore {
   /** 用户保存过的覆盖模板（按场景） */
@@ -48,15 +48,16 @@ export const useReceiptStore = create<ReceiptStore>()(
 /**
  * 取某场景当前生效的模板（用户覆盖优先，否则出厂默认）。
  *
- * 「必备区块」的兜底刻意放在**取用**这一侧而不是保存这一侧：覆盖模板是历史某一刻存的，
- * 而码单上的凭票码是后加进默认的——只在保存时校验等于放行所有已经存好的旧模板。
+ * 缺项兜底（必备区块、码下方的可读内容）刻意放在**取用**这一侧而不是保存这一侧：
+ * 覆盖模板是历史某一刻存的，而凭票码、码下方那行字都是后加进默认的——
+ * 只在保存时校验等于放行所有已经存好的旧模板。见 `defaults.ts::normalizeTemplate`。
  */
 export function effectiveTemplate(scenario: ReceiptScenario): ReceiptTemplate {
-  return ensureRequiredBlocks(useReceiptStore.getState().custom[scenario] ?? defaultTemplate(scenario));
+  return normalizeTemplate(useReceiptStore.getState().custom[scenario] ?? defaultTemplate(scenario));
 }
 
 /** 组件内响应式读取某场景的生效模板 */
 export function useReceiptTemplate(scenario: ReceiptScenario): ReceiptTemplate {
   const custom = useReceiptStore((s) => s.custom[scenario]);
-  return ensureRequiredBlocks(custom ?? defaultTemplate(scenario));
+  return normalizeTemplate(custom ?? defaultTemplate(scenario));
 }

@@ -1,0 +1,21 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 32
++ ... ub\BangHe\src-tauri; cargo test --test payments_contract 2>&1 | Out-F ...
++                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.44s
+     Running tests\payments_contract.rs (target\debug\deps\payments_contract-d97b78bb89a6e7e8.exe)
+
+running 7 tests
+test bad_date_is_rejected_in_chinese ... ok
+test dist_tone_follows_channel_not_rank_and_is_repeatable ... ok
+test order_only_payment_falls_back_to_weigh_order_and_party ... ok
+test reversed_stays_in_list_and_leaves_dist ... ok
+test date_window_is_closed_and_blank_bound_is_open ... ok
+test list_reads_back_what_the_write_paths_produced ... ok
+test over_limit_range_is_refused_not_truncated ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+

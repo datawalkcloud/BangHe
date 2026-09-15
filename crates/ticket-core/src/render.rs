@@ -34,8 +34,9 @@ fn begin<D: Driver>(p: &mut Printer<D>) -> R<()> {
     p.bold(false)?;
     p.underline(UnderlineMode::None)?;
     p.reverse(false)?;
-    // 左对齐是整张票的恒定基准：文字行的对齐全靠空格补齐（见 `aligned`），
-    // 全文只有两种码行（`qr` / `barcode`）会临时改 justify，且它们自己负责复位。
+    // 左对齐是整张票的恒定基准：**没有任何一行靠 `ESC a` 对齐**——文字行用前导空格补齐
+    // （见 `aligned`），两种码行用前端算好的 `pad_left`（见 `barcode` / `qr`）。
+    // 理由只有一个：固件的居中是按机身头宽算的，而票要落在**这卷纸**上。
     p.justify(JustifyMode::LEFT)?;
     Ok(())
 }
@@ -79,29 +80,32 @@ fn put<D: Driver>(p: &mut Printer<D>, s: &str) -> R<()> {
 
 /* ---------------------------------------------------------------- 排版原语 */
 
-/// 单个字符占几列：CJK 与全角标点按 2 列算，其余按 1 列。
+/// 单个字符在票面上占几列。
+///
+/// 判据**不手写码表**，直接问 GBK：编出来是双字节的就是全角（2 列），其余 1 列。
+///
+/// 手写区段表必然漏——`—`(U+2014)、`…`(U+2026)、`“”`、`·` 这些全角标点在 Unicode 里落在
+/// General Punctuation / Latin-1 补充段，不属于任何 CJK 区段，但在 GBK 里占两个字节、
+/// 打印机一律按全角画。按 1 列算的后果是 `kv` / `pair` 少算一列：行尾正好顶到纸宽，
+/// 热敏机在边界上自己硬折，数值被甩到下一行单独打——"皮重净重为空时打了横杠，
+/// 横杠换行单独打印"就是这么来的（有数值时全是 ASCII，算得对，所以只有空值才犯）。
+///
+/// 与 `gbk_safe` 同一口径：编不出的字符出门前已经是 `?`（1 列），半角 `¥` 已经是
+/// 全角 `￥`（2 列）。按"净化后的结果"计宽，折点才不会和纸上错位。
 fn char_width(c: char) -> usize {
-    const RANGES: &[(u32, u32)] = &[
-        (0x1100, 0x115F),
-        (0x2E80, 0x32FF),
-        (0x3400, 0x4DBF),
-        (0x4E00, 0x9FFF),
-        (0xA000, 0xA4CF),
-        (0xAC00, 0xD7A3),
-        (0xF900, 0xFAFF),
-        (0xFE30, 0xFE6F),
-        (0xFF00, 0xFF60),
-        (0xFFE0, 0xFFE6),
-    ];
-    let u = c as u32;
-    if RANGES.iter().any(|&(a, b)| (a..=b).contains(&u)) {
-        2
-    } else {
+    if c == '\u{00A5}' {
+        return 2; // 出门前换成全角 ￥（见 gbk_safe）
+    }
+    let mut buf = [0u8; 4];
+    let (bytes, _, unmappable) = GBK.encode(c.encode_utf8(&mut buf));
+    if unmappable || bytes.len() < 2 {
         1
+    } else {
+        2
     }
 }
 
-/// 显示宽度：CJK 与全角标点按 2 列算，其余按 1 列。
+/// 显示宽度：GBK 双字节字形（CJK 与全角标点）按 2 列，其余按 1 列。判据见 `char_width`。
 pub fn display_width(s: &str) -> usize {
     s.chars().map(char_width).sum()
 }
@@ -243,22 +247,37 @@ fn center<D: Driver>(p: &mut Printer<D>, text: &str, cols: usize) -> R<()> {
 /// 写死版式的老码单与自检票走这一档，行为与引入尺寸参数之前完全一致。
 const QR_DEFAULT_SIZE: u8 = 4;
 
-/// 二维码。栅格图补不了空格（`GS ( k` 从当前位置起打），居中只能交给 `ESC a 1`——
-/// 于是这是全文件唯一还按**机内可打宽度**对齐的地方：80 机（48 列）装 58 纸、票面按
-/// 32 列排版时，码会落在第 24 列正中而非第 16 列，整体偏右约 8 列 ≈ 12mm。
-/// 发完必须复位左对齐，否则这行 `ESC a 1` 会泄漏给后面的文字行。
+/// 字体 A 里一个半角字符的前进宽度（点）：203dpi 下标准的 12 点/字符。
+///
+/// 二维码的横向落点只能靠它来推：`GS ( k` 从**当前位置**起排点，补不了栅格，
+/// 唯一能把它推到别处的手段就是先打几个空格。`ESC a 1` 不行——那是按机身的头宽居中，
+/// 装 58 卷的 80 机会把码推出纸外（与 `barcode` 同一个坑，见那里的说明）。
+const HALF_COL_DOTS: usize = 12;
+
+/// 二维码。`pad_left` 是前端按纸算好的左侧空点（见 `code-size.ts::codeOffsetDots`），
+/// 这里换算成空格：**向下取整**，宁可偏左一个字符，也不能因为取整把它推出纸面。
+/// 量化误差最多 11 点（1.4mm），对"和条码对齐"这件事看不出来。
+///
+/// **`pad_left` 只能由算得出二维码点宽的那一侧给。** 这一侧算不出来：`escpos` 的
+/// `qrcode_option` 只把载荷发出去（`escpos::domain::codes::qrcode` 里连编码器都没有），
+/// 版本是**固件**按自己的容量表和字符集挑的，于是点宽随机器而变。模板票那边由前端
+/// `QrGraphic.tsx::qrSideDots`（`qrcode` 库，纠错 H，与固件同档）算出落点传进来；
+/// 写死版式的两张老票（[`write_weigh_ticket`] / [`write_self_test`]）没有这个来源，
+/// 一律传 **0**：贴可打区左端起排，宁可偏左，绝不推出纸面。
 ///
 /// `size` 是模板里那一档尺寸换算成的点数。**纠错等级钉死 H**：前端画预览用的也是 H
 /// （见 `QrGraphic.tsx`），等级不同会让两边挑到不同的 QR 版本，模块数一变，
 /// "预览里多大、纸上多大"就成了一句空话。
-fn qr<D: Driver>(p: &mut Printer<D>, text: &str, size: u8) -> R<()> {
-    p.justify(JustifyMode::CENTER)?;
+fn qr<D: Driver>(p: &mut Printer<D>, text: &str, size: u8, pad_left: u16) -> R<()> {
+    let cols = pad_left as usize / HALF_COL_DOTS;
+    if cols > 0 {
+        put(p, &" ".repeat(cols))?;
+    }
     p.qrcode_option(
         text,
         QRCodeOption::new(QRCodeModel::Model1, size.clamp(1, 16), QRCodeCorrectionLevel::H),
     )?;
     p.feed()?;
-    p.justify(JustifyMode::LEFT)?;
     Ok(())
 }
 
@@ -268,29 +287,48 @@ fn qr<D: Driver>(p: &mut Printer<D>, text: &str, size: u8) -> R<()> {
 /// 功能 A 支持的码制里，让固件自己编码又会让纸比预览窄。这里只按 `runs` 排点，
 /// 于是屏幕上的条空与纸上的条空是同一个数组。
 ///
-/// 每一行都一样，所以只算一行再重复 `height` 次；模块宽度取整数个点，窄条正好落在
-/// 203dpi 的栅格上，不会因为 mm 换算取整把两条糊成一条。
-fn barcode<D: Driver>(p: &mut Printer<D>, runs: &[u8], dots: u8, height: u8) -> R<()> {
-    let dots = dots.clamp(1, 16) as usize;
+/// 每一行都一样，所以只算一行再重复 `height` 次。
+///
+/// **段宽按总宽分，不按"每模块几点"乘**：纸窄的时候前端压出来的模块宽度是小数
+/// （58 纸上常见 1.52 点/模块），而栅格只认整数点。若在这里各自取整，要么整条缩回
+/// 纸的一半，要么顶出纸外——所以前端把小数折进总宽 `width`，这里按累计模块数把
+/// 总宽分摊到每一段（`round(累计模块 × 总宽 ÷ 总模块)`），保证：
+///   - 整条宽度**恰好**是 `width` 个点（误差 0，因为最后一段取到边）；
+///   - 每一段至少 1 个点（`width` ≥ 总模块数，前端已保证），不会有条被抹掉。
+/// 分摊出来的段宽会有 1 点的抖动，这是任何栅格化都有的，扫码枪按相对宽度解码，读得动。
+///
+/// **横向落点自己补**：`pad_left` 个空点补在栅格左边，然后**左对齐**发出去。
+/// 从前这里走 `ESC a 1` 让固件居中，而固件是按机身头宽居中的——80 机装 58 卷时它仍按
+/// 576 点（72mm）居中，48mm 宽的条码落在 12~60mm，纸只有 58mm，右端连着停止符一起
+/// 被切在纸外：票看着打出来了，扫码枪读不出来。落点由知道纸宽的前端算（`code-size.ts`
+/// 的 `codeOffsetDots`），这里只照点排。
+fn barcode<D: Driver>(p: &mut Printer<D>, runs: &[u8], width: u16, height: u8, pad_left: u16) -> R<()> {
+    let total: usize = runs.iter().map(|&w| w as usize).sum();
+    let body = (width as usize).max(total); // 至少每段 1 点，否则会有条被抹平
     let height = (height as usize).clamp(1, 255);
-    let width = runs.iter().map(|&w| w as usize).sum::<usize>() * dots;
-    if width == 0 {
+    let pad = pad_left as usize;
+    if total == 0 {
         return Ok(());
     }
-    let row_bytes = (width + 7) / 8;
+    let row_dots = pad + body;
+    let row_bytes = (row_dots + 7) / 8;
     let mut row = vec![0u8; row_bytes];
-    let mut x = 0usize;
+    // 从 pad 处开始排：左边那一段保持 0（白），就是落点
+    let mut x = pad;
+    let mut cum = 0usize; // 已走过的模块数
     for (i, &w) in runs.iter().enumerate() {
-        let n = w as usize * dots;
+        cum += w as usize;
+        // 这一段的右沿（点）：按累计模块数分摊总宽，四舍五入
+        let edge = pad + (cum * body + total / 2) / total;
+        let n = edge.saturating_sub(x);
         if i % 2 == 0 {
             // 偶数个元素是"条"：点亮这一段里的每一个点（MSB 在左，与 GS v 0 一致）
             for _ in 0..n {
                 row[x / 8] |= 0x80 >> (x % 8);
                 x += 1;
             }
-        } else {
-            x += n;
         }
+        x = edge;
     }
     let mut cmd: Vec<u8> = vec![
         0x1D, 0x76, 0x30, 0x00, // GS v 0，模式 0 = 正常密度
@@ -302,10 +340,8 @@ fn barcode<D: Driver>(p: &mut Printer<D>, runs: &[u8], dots: u8, height: u8) -> 
     for _ in 0..height {
         cmd.extend_from_slice(&row);
     }
-    p.justify(JustifyMode::CENTER)?;
     p.custom(&cmd)?;
     p.feed()?;
-    p.justify(JustifyMode::LEFT)?;
     Ok(())
 }
 
@@ -451,7 +487,9 @@ pub fn write_weigh_ticket<D: Driver>(p: &mut Printer<D>, t: &WeighTicket) -> R<(
 
         if !t.qr_text.is_empty() {
             rule(p, cols)?;
-            qr(p, &t.qr_text, QR_DEFAULT_SIZE)?;
+            // 写死版式的老码单没有前端算好的落点：按 `pad_left` 的缺省口径贴左端起排
+            // （与 `PrintLine::Barcode/Qr` 不带这个字段时同一条路）。要居中得由调用方按纸宽算。
+            qr(p, &t.qr_text, QR_DEFAULT_SIZE, 0)?;
         }
 
         rule(p, cols)?;
@@ -541,7 +579,9 @@ pub fn write_self_test<D: Driver>(p: &mut Printer<D>, paper: Paper, device_label
     line(p, "把折行处的刻度数填进「小票机列数」")?;
 
     rule(p, cols)?;
-    qr(p, "BANGHE-SELFTEST", QR_DEFAULT_SIZE)?;
+    // 自检票同样走缺省落点（贴左端起排）：这一页是给装纸/列宽的对位用的，
+    // 码在不在正中无关紧要，能不能完整落在纸上才是要害（见 `qr` 的说明）。
+    qr(p, "BANGHE-SELFTEST", QR_DEFAULT_SIZE, 0)?;
     center(p, "若本页字清晰即通道可用", cols)?;
     p.feeds(4)?;
     p.print_cut()?;
@@ -621,12 +661,14 @@ pub fn write_lines<D: Driver>(
                 PrintLine::Feed { n } => {
                     p.feeds((*n).clamp(1, 8))?;
                 }
-                PrintLine::Qr { text, size } => {
+                PrintLine::Qr { text, size, pad_left } => {
                     if !text.is_empty() {
-                        qr(p, text, *size)?;
+                        qr(p, text, *size, *pad_left)?;
                     }
                 }
-                PrintLine::Barcode { runs, dots, height } => barcode(p, runs, *dots, *height)?,
+                PrintLine::Barcode { runs, width, height, pad_left } => {
+                    barcode(p, runs, *width, *height, *pad_left)?
+                }
             }
         }
         p.feeds(3)?;
@@ -641,7 +683,7 @@ pub fn write_lines<D: Driver>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{PrintLine, TextAlign};
+    use crate::model::{PrintLine, TextAlign, WeighTicket};
 
     #[test]
     fn display_width_counts_cjk_as_two() {
@@ -649,6 +691,62 @@ mod tests {
         assert_eq!(display_width("kg"), 2);
         assert_eq!(display_width("粮站kg"), 6);
         assert_eq!(display_width("（全角"), 6);
+    }
+
+    /// 全角标点回归：`—` `…` `“”` `·` 在 Unicode 里**不在**任何 CJK 区段（落在
+    /// General Punctuation / Latin-1 补充段），但在 GBK 里是双字节、打印机按全角画。
+    /// 手写区段表会按 1 列算它们——这条测试就是那张表已经被换掉的依据。
+    #[test]
+    fn gbk_full_width_punctuation_is_two_columns() {
+        for c in ['—', '…', '“', '”', '·'] {
+            assert!(!GBK.encode(&c.to_string()).2, "前提：{c:?} 在 GBK 里");
+            assert_eq!(
+                display_width(&c.to_string()),
+                2,
+                "{c:?} 在 GBK 里是双字节，票面上占两列"
+            );
+        }
+        // 纯 ASCII 的数值不受影响：有数值的行一列都不会挪
+        assert_eq!(display_width("1 234.5 kg"), 10);
+        assert_eq!(display_width("— kg"), 5);
+    }
+
+    /// 现场事故回归：空值打成横杠时，横杠必须留在标签那一行的行尾。
+    ///
+    /// 少算一列 → 行尾顶到纸宽 → 热敏机在边界上硬折 → 横杠另起一行单独打，
+    /// 票面看起来就是"皮重"下面孤零零一个横杠。溢出不会截断，只会折行，所以这里
+    /// 钉的是**发出去的字节里到底有几行**。
+    #[test]
+    fn an_empty_value_stays_at_the_end_of_its_row() {
+        for paper in [Paper::P58, Paper::P80] {
+            let buf = Capture::default();
+            let mut p = new_printer(buf.clone(), paper);
+            let lines = vec![
+                PrintLine::Kv { label: "皮重".into(), value: "—".into() },
+                PrintLine::Kv { label: "净重".into(), value: "—".into() },
+            ];
+            write_lines(&mut p, paper.cols(), &lines, 1, false).expect("kv 行不应失败");
+            let bytes = buf.0.borrow();
+            let rows: Vec<(String, usize)> = visible_lines(&bytes)
+                .into_iter()
+                .filter(|(l, _)| l.contains('皮') || l.contains('净'))
+                .collect();
+            assert_eq!(
+                rows.len(),
+                2,
+                "{paper:?}：皮重/净重各占一行，横杠不该被折到下一行——实际 {rows:?}"
+            );
+            for (l, wide) in &rows {
+                // 基准用 physical_cols（数 GBK 字节），不用 display_width：
+                // 这次的 bug 正是 display_width 少算一列，用它自己当基准会自洽地通过
+                assert_eq!(
+                    physical_cols(l) * wide,
+                    paper.cols(),
+                    "{paper:?}：行宽要正好是纸的列数，多一列就会被机器硬折——实际 {l:?}"
+                );
+                assert!(l.trim_end().ends_with('—'), "{paper:?}：横杠应留在行尾——实际 {l:?}");
+            }
+        }
     }
 
     #[test]
@@ -710,10 +808,11 @@ mod tests {
             {"kind":"feed","n":2},
             {"kind":"qr","text":"BANGHE-SELFTEST","size":6},
             {"kind":"qr","text":"BH1:BD20260912000031"},
-            {"kind":"barcode","runs":[2,2,2,2,2,1,4,4,4,4,4,1],"dots":3,"height":96}
+            {"kind":"barcode","runs":[2,2,2,2,2,1,4,4,4,4,4,1],"width":96,"height":96},
+            {"kind":"barcode","runs":[2,2,2,2,2,1,4,4,4,4,4,1],"width":96,"height":96,"pad_left":40}
         ]"#;
         let lines: Vec<PrintLine> = serde_json::from_str(json).expect("前端行序列必须能反序列化");
-        assert_eq!(lines.len(), 8);
+        assert_eq!(lines.len(), 9);
         match &lines[0] {
             // 缺省字段（underline / reverse）要走 serde default，不能报缺字段
             PrintLine::Text { text, align, bold, wide, tall, underline, reverse } => {
@@ -738,11 +837,16 @@ mod tests {
             other => panic!("第 5/6 行应为 Qr，实际 {other:?}"),
         }
         match &lines[7] {
-            PrintLine::Barcode { runs, dots, height } => {
+            PrintLine::Barcode { runs, width, height, pad_left } => {
                 assert_eq!(runs.as_slice(), &[2, 2, 2, 2, 2, 1, 4, 4, 4, 4, 4, 1]);
-                assert_eq!((*dots, *height), (3, 96));
+                assert_eq!((*width, *height), (96, 96));
+                assert_eq!(*pad_left, 0, "不带 pad_left 的老调用必须落回贴左端起排");
             }
             other => panic!("第 7 行应为 Barcode，实际 {other:?}"),
+        }
+        match &lines[8] {
+            PrintLine::Barcode { pad_left, .. } => assert_eq!(*pad_left, 40),
+            other => panic!("第 8 行应为带落点的 Barcode，实际 {other:?}"),
         }
         // 极简形态也要成立：只给 kind，其余全默认
         let bare: Vec<PrintLine> = serde_json::from_str(r#"[{"kind":"text","text":"x"}]"#).unwrap();
@@ -785,8 +889,9 @@ mod tests {
     fn barcode_emits_a_left_aligned_msb_raster() {
         let lines = vec![PrintLine::Barcode {
             runs: vec![2, 1, 2, 1], // 条2 空1 条2 空1 = 6 模块
-            dots: 2,                // 每模块 2 点 → 12 点宽 → 每行 2 字节
+            width: 12,              // 6 模块 × 2 点 → 每行 2 字节
             height: 3,
+            pad_left: 0,            // 贴左端起排
         }];
         let buf = Capture::default();
         let mut p = new_printer(buf.clone(), Paper::P80);
@@ -802,11 +907,99 @@ mod tests {
             &[0xF3, 0xC0, 0xF3, 0xC0, 0xF3, 0xC0],
             "点阵必须每行都一样、且黑位在左"
         );
-        // 码发完必须回到左对齐，否则整张票后半边跟着居中
-        assert!(bytes
-            .windows(3)
-            .skip(head.unwrap() + 8)
-            .any(|w| w == [0x1B, 0x61, 0x00]));
+        // `begin` 那次复位之后，整张票不许再出现任何 `ESC a`——尤其 `ESC a 1`（固件居中）。
+        // 固件是按**机身头宽**对齐的：80 机装 58 卷时它把 48mm 宽的条码推到 12~60mm，
+        // 右端连着停止符一起出纸外。对齐一律自己算（文字补空格、码补 pad_left）。
+        assert!(
+            !bytes.windows(3).skip(2).any(|w| w == [0x1B, 0x61, 0x01]),
+            "整张票不得把对齐交回固件：{bytes:02X?}"
+        );
+    }
+
+    /// 落点：`pad_left` 个空点补在栅格左边，机器照点排就落在纸上那个位置。
+    ///
+    /// 这条钉的是"80 机装 58 卷"那类装态——不在纸上画出来，谁都不知道它跑哪儿去了。
+    #[test]
+    fn barcode_starts_at_the_pad_left_the_frontend_computed() {
+        let lines = vec![PrintLine::Barcode {
+            runs: vec![2, 1, 2, 1], // 6 模块
+            width: 12,              // 12 点宽
+            height: 2,
+            pad_left: 8,            // 左边先空 8 点 → 每行 20 点 → 3 字节
+        }];
+        let buf = Capture::default();
+        let mut p = new_printer(buf.clone(), Paper::P80);
+        write_lines(&mut p, Paper::P80.cols(), &lines, 1, false).expect("条码行不应失败");
+        let bytes = buf.0.borrow();
+
+        let head = bytes.windows(8).position(|w| w == [0x1D, 0x76, 0x30, 0x00, 3, 0, 2, 0]);
+        assert!(head.is_some(), "行宽必须把空点算进去（xL=3 字节）：{bytes:02X?}");
+        let data = &bytes[head.unwrap() + 8..];
+        // 空 8 点 → 0x00；条 4 点 + 空 2 点 → 1111 0011 = 0xF3；条 4 点 + 尾 4 位 → 1100 0000 = 0xC0
+        assert_eq!(
+            &data[..6],
+            &[0x00, 0xF3, 0xC0, 0x00, 0xF3, 0xC0],
+            "条必须整段右移 8 点，不是被压扁"
+        );
+    }
+
+    /// 总宽不是模块数的整数倍时（纸窄，前端按实数压过模块宽度），按累计模块数分摊。
+    ///
+    /// 这一条钉的是"58 纸上条码只占半张纸"那个坑的另一半：光能压还不够，压出来的小数
+    /// 必须真的落到纸上——分摊完的整条宽度要**分毫不差**等于前端给的总宽，多一个点就
+    /// 可能顶出纸外，少一段就是缴掉的纸宽。
+    #[test]
+    fn barcode_shares_an_awkward_width_across_the_runs() {
+        let lines = vec![PrintLine::Barcode {
+            runs: vec![2, 1, 2, 1], // 6 模块，总宽 11 点 → 折合 1.83 点/模块
+            width: 11,
+            height: 2,
+            pad_left: 0,
+        }];
+        let buf = Capture::default();
+        let mut p = new_printer(buf.clone(), Paper::P80);
+        write_lines(&mut p, Paper::P80.cols(), &lines, 1, false).expect("条码行不应失败");
+        let bytes = buf.0.borrow();
+
+        // 11 点宽 → 每行仍是 2 字节（不是按 12 点算出的 2 字节碰巧一样，是 11 就该是 2）
+        let head = bytes.windows(8).position(|w| w == [0x1D, 0x76, 0x30, 0x00, 2, 0, 2, 0]);
+        assert!(head.is_some(), "未找到 GS v 0 头（xL=2 字节/行）：{bytes:02X?}");
+        let data = &bytes[head.unwrap() + 8..];
+        // 分摊：4 点黑 | 2 白 | 3 点黑 | 2 白（合计 11）→ 1111 0011 | 1000 0000
+        assert_eq!(
+            &data[..4],
+            &[0xF3, 0x80, 0xF3, 0x80],
+            "段宽要按 4/2/3/2 分摊，整条正好 11 点：{data:02X?}"
+        );
+    }
+
+    /// 二维码的落点只能靠空格推（`GS ( k` 从当前位置起排点），换算必须向下取整：
+    /// 宁可偏左一个字符，也不能因为取整把码推出纸面。
+    #[test]
+    fn qr_pad_becomes_half_width_spaces() {
+        let lines = vec![PrintLine::Qr {
+            text: "BH1:BD20260912000031".into(),
+            size: 4,
+            pad_left: 36, // 36 / 12 = 3 个半角空格
+        }];
+        let buf = Capture::default();
+        let mut p = new_printer(buf.clone(), Paper::P80);
+        write_lines(&mut p, Paper::P80.cols(), &lines, 1, false).expect("二维码行不应失败");
+        let bytes = buf.0.borrow();
+        assert!(
+            bytes.windows(6).any(|w| w == [0x20, 0x20, 0x20, 0x1D, 0x28, 0x6B]),
+            "三个空格后必须紧跟 GS ( k：{bytes:02X?}"
+        );
+        // 取不满一格就丢掉（36 → 3 格是对的；再多 11 点仍是 3 格，绝不进位到 4）
+        let lines = vec![PrintLine::Qr { text: "X".into(), size: 4, pad_left: 47 }];
+        let buf2 = Capture::default();
+        let mut p2 = new_printer(buf2.clone(), Paper::P80);
+        write_lines(&mut p2, Paper::P80.cols(), &lines, 1, false).expect("二维码行不应失败");
+        let bytes2 = buf2.0.borrow();
+        assert!(
+            !bytes2.windows(6).any(|w| w == [0x20, 0x20, 0x20, 0x20, 0x1D, 0x28]),
+            "47 点只能推 3 格，不许进位：{bytes2:02X?}"
+        );
     }
 
     /// 已知控制序列的字节数。只覆盖本 crate 会发的那几条，不求解析整个 ESC/POS
@@ -862,6 +1055,27 @@ mod tests {
             i += 1;
         }
         out
+    }
+
+    /// **独立口径**的行宽：直接数 GBK 字节——单字节 1 列、双字节 2 列。
+    ///
+    /// 断言行宽必须用这个，不能用 `display_width`：`display_width` 就是被测的那个函数，
+    /// 它算错了会连断言一起错，测试自洽地通过，坑还在（第一版守卫就是这个下场）。
+    /// 字节长度不受任何宽度表影响——GBK 里一个字符占几个字节，打印机就画几列。
+    fn physical_cols(s: &str) -> usize {
+        let (bytes, _, _) = GBK.encode(s);
+        let mut cols = 0usize;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] < 0x80 {
+                cols += 1;
+                i += 1;
+            } else {
+                cols += 2; // 双字节字形，打印机按全角画
+                i += 2;
+            }
+        }
+        cols
     }
 
     /// 现场事故回归 ①：半角 `¥` 不在 GBK 里，编码器会把它退化成 `&#165;` 印在纸上。
@@ -935,7 +1149,8 @@ mod tests {
             let tag = format!("{paper:?}/{cols}列");
             let rendered = visible_lines(&buf.0.borrow());
             for (i, (l, wide)) in rendered.iter().enumerate() {
-                let physical = display_width(l) * wide;
+                // 用独立口径（数 GBK 字节），不用 display_width——那是被测函数自己
+                let physical = physical_cols(l) * wide;
                 assert!(
                     physical <= cols,
                     "{tag} 第 {i} 行物理宽 {physical} 超过 {cols} 列（字号 {wide} 倍）：{l:?}"
@@ -999,10 +1214,10 @@ mod tests {
 
         let rendered = visible_lines(&bytes);
         let right = rendered.iter().find(|(l, _)| l.trim() == "货款").expect("右对齐行没打出来");
-        assert_eq!(display_width(&right.0), 32, "右对齐应贴到票面第 32 列");
+        assert_eq!(physical_cols(&right.0), 32, "右对齐应贴到票面第 32 列");
 
         let mid = rendered.iter().find(|(l, _)| l.trim() == "存根联").expect("居中行没打出来");
-        assert_eq!(display_width(&mid.0), 6 + 13, "居中应补 13 列（余数落右边）");
+        assert_eq!(physical_cols(&mid.0), 6 + 13, "居中应补 13 列（余数落右边）");
 
         let head = rendered
             .iter()
@@ -1010,7 +1225,7 @@ mod tests {
             .expect("倍宽站名没打出来");
         assert_eq!(head.1, 2, "站名应仍是 2 倍宽");
         // 补位空格和正文一样是倍宽：按缩放后的 16 列补 1 列 → 物理宽 15 × 2
-        assert_eq!(display_width(&head.0) * head.1, 30, "倍宽行的补齐要按缩放后的列数算");
+        assert_eq!(physical_cols(&head.0) * head.1, 30, "倍宽行的补齐要按缩放后的列数算");
     }
 
     /// 实测列数必须真的改变排版：同一个"身份证号"行在 48 列放得下、在 24 列放不下。
@@ -1036,5 +1251,48 @@ mod tests {
             rendered.iter().any(|(l, _)| l == label) && rendered.iter().any(|(l, _)| l.trim() == value),
             "24 列下应退化成两行式，实际 {rendered:?}"
         );
+    }
+
+    /// 写死版式的两张老票（内建码单 / 自检票）同样不许把横向对齐交回固件。
+    ///
+    /// 这两张票的落点只能传 0——这一侧算不出二维码的点宽（固件自己挑版本，见 `qr` 的
+    /// 说明），而 0 是唯一不可能把码推出纸面的值。这条测试钉住的就是"别再给它们塞一个
+    /// 猜出来的落点、也别退回去用 `ESC a 1`"：`ESC a 1` 按机身头宽居中，
+    /// 80 机装 58 卷时正好是这次要修的那个坑。
+    #[test]
+    fn fixed_layout_tickets_never_delegate_alignment() {
+        for paper in [Paper::P58, Paper::P80] {
+            let ticket = WeighTicket {
+                qr_text: "BH1:BD20260912000031".into(),
+                paper,
+                ..Default::default()
+            };
+            let buf = Capture::default();
+            let mut p = new_printer(buf.clone(), paper);
+            write_weigh_ticket(&mut p, &ticket).expect("内建码单不应失败");
+            write_self_test(&mut p, paper, "捕获-01").expect("自检票不应失败");
+            let bytes = buf.0.borrow();
+
+            // `begin()` 那条 `ESC a 0` 允许留着；带非零参数的（= 交给固件居中/右对齐）一律不许
+            let delegated: Vec<u8> = bytes
+                .windows(3)
+                .filter(|w| w[0] == 0x1B && w[1] == 0x61 && w[2] != 0)
+                .map(|w| w[2])
+                .collect();
+            assert!(
+                delegated.is_empty(),
+                "{paper:?} 上仍把对齐交给了固件（ESC a {delegated:?}）"
+            );
+            // 两张票都得真的发出二维码：`GS ( k` 的三个字节，否则上一条断言是空过的
+            assert!(
+                bytes.windows(3).any(|w| w == [0x1D, 0x28, 0x6B]),
+                "{paper:?} 未发出二维码指令，这张票的落点没被验证到"
+            );
+            // 落点 0：二维码指令前面不许有补位空格（`GS ( k` 从当前位起排点，空格就是位移）
+            assert!(
+                !bytes.windows(4).any(|w| w == [0x20, 0x1D, 0x28, 0x6B]),
+                "{paper:?} 二维码前冒出了补位空格，说明落点不是 0"
+            );
+        }
     }
 }

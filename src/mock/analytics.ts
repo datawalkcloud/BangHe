@@ -194,7 +194,7 @@ function varietySpecAll() {
 export function buildDaily(date: string): DailyReport {
   /**
    * 一组订单出一行明细。抽成函数是为了"未定品种"那一组走**同一套算法**，不是抄一遍再少算几列。
-   * 与 Rust `reports.rs` 同一口径：制单没带品种的单（0017 之后允许）必须自己占一行，
+   * 与 Rust `reports.rs` 同一口径：没品种的单（存量单，或事后被清空的那类）必须自己占一行，
    * 否则日报总额里有它、明细里没有它——那是最要命的"数字对不上"。
    */
   const rowOf = (

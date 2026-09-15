@@ -1,0 +1,58 @@
+﻿EXITCODE=0
+[36mvite v8.3.0 [32mbuilding client environment for production...[36m[39m
+transforming...
+鉁?3765 modules transformed.
+rendering chunks...
+computing gzip size...
+dist-verify/index.html                                                0.69 kB 鈹?gzip:   0.50 kB
+dist-verify/assets/inter-vietnamese-wght-normal-CBcvBZtf.woff2       10.25 kB
+dist-verify/assets/inter-greek-ext-wght-normal-DlzME5K_.woff2        11.23 kB
+dist-verify/assets/inter-cyrillic-wght-normal-DqGufNeO.woff2         18.74 kB
+dist-verify/assets/inter-greek-wght-normal-CkhJZR-_.woff2            18.99 kB
+dist-verify/assets/inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2     25.96 kB
+dist-verify/assets/inter-latin-wght-normal-Dx4kXJAl.woff2            48.25 kB
+dist-verify/assets/inter-latin-ext-wght-normal-DO1Apj_S.woff2        85.06 kB
+dist-verify/assets/index-BqP0bmHs.css                               168.18 kB 鈹?gzip:  26.20 kB
+dist-verify/assets/dist-js-HxGJ9Ryu.js                                0.13 kB 鈹?gzip:   0.13 kB
+dist-verify/assets/dist-js-DfUv_FHi.js                                0.28 kB 鈹?gzip:   0.17 kB
+dist-verify/assets/index-_ZI7APJr.js                              1,780.63 kB 鈹?gzip: 543.40 kB
+
+node.exe : [33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0mnode_modules/@tauri-apps/
+api/core.js is dynamically imported by src/lib/auth.ts, src/lib/cards-native.ts
+, src/lib/dashboard-native.ts, src/lib/devices-native.ts, src/lib/export-csv.ts
+x, ... but also statically imported by node_modules/@tauri-apps/api/dpi.js, nod
+e_modules/@tauri-apps/api/event.js, node_modules/@tauri-apps/api/image.js, node
+_modules/@tauri-apps/api/webview.js, node_modules/@tauri-apps/api/webviewWindow
+.js, ..., dynamic import will not move module into another chunk.
+所在位置 行:1 字符: 1
++ & "C:\Users\Sprin\.workbuddy\binaries\node\versions\22.22.2-3/node.ex ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33m[33m[INEF... another chunk. 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[39m
+[33m[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://r
+olldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39
+m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0mnode_modules/@tauri-apps/api/event.j
+s is dynamically imported by src/lib/scale-native.ts but also statically import
+ed by node_modules/@tauri-apps/api/webview.js, node_modules/@tauri-apps/api/web
+viewWindow.js, node_modules/@tauri-apps/api/window.js, dynamic import will not 
+move module into another chunk.
+[39m
+[32m鉁?built in 5.80s[39m
+[33m[33m[PLUGIN_TIMINGS] [0mPlugin hooks ran for 5.2s of this 5.8s build (89
+%).
+The slowest hooks, timed inside each callback (the wait before a callback start
+s is excluded, the time it awaits is included):
+  - @tailwindcss/vite:generate:build transform (79%, 4.6s, 1 call)
+Additional hook time came from hooks under 1s.
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more de
+tails.
+[39m
+

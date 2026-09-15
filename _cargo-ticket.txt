@@ -1,0 +1,37 @@
+﻿cargo :    Compiling ticket-core v0.1.0 (G:\Github\BangHe\crates\ticket-core)
+所在位置 行:445 字符: 41
++ cd G:\Github\BangHe\crates\ticket-core; cargo test *>&1 | Out-File -E ...
++                                         ~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ti...es\ticket-core) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.27s
+     Running unittests src\lib.rs (target\debug\deps\ticket_core-58bbf7e2307a10
+15.exe)
+
+running 14 tests
+test render::tests::display_width_counts_cjk_as_two ... ok
+test render::tests::ticket_lines_fit_the_grid ... ok
+test render::tests::barcode_emits_a_left_aligned_msb_raster ... ok
+test render::tests::glyphs_used_on_tickets_are_in_gbk ... ok
+test render::tests::half_width_yuan_survives_the_gbk_font ... ok
+test render::tests::barcode_starts_at_the_pad_left_the_frontend_computed ... ok
+test render::tests::qr_pad_becomes_half_width_spaces ... ok
+test render::tests::weight_and_money_are_grouped ... ok
+test render::tests::measured_columns_change_the_layout ... ok
+test render::tests::wrap_breaks_on_column_budget ... ok
+test render::tests::alignment_follows_the_layout_columns_not_the_head_width ... ok
+test render::tests::print_line_json_contract ... ok
+test render::tests::emitted_bytes_never_overflow_the_grid ... ok
+test render::tests::fixed_layout_tickets_never_delegate_alignment ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests ticket_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+exit=0

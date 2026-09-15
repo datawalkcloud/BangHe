@@ -21,6 +21,7 @@ import { useSlots, useVarieties, useWarehouses } from "@/hooks/useLookups";
 import { actorId } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { Button } from "@/components/ui/button";
+import { DatePicker } from "@/components/ui/date-picker";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -92,7 +93,13 @@ export function OutboundFormDialog({
   const { data: warehouses = [] } = useWarehouses();
   const { data: slots = [] } = useSlots();
   const activeWh = useMemo(() => warehouses.filter((w) => w.is_active === 1), [warehouses]);
-  const partiesQ = useQuery({ queryKey: ["parties", "outbound"], queryFn: () => api.listParties("", "all") });
+  /**
+   * 领出方候选：不限类型，第二参数一律不传。
+   * 别写 `listParties("", "all")`——"all" 是界面筛选项的兜底值，真库侧 `list_parties`
+   * 会拿它去比对 `party_type`，库里没有叫 all 的类型，查出来就是一张空表（建档页
+   * `PartiesPage` 传的是 undefined，正是这个原因）。
+   */
+  const partiesQ = useQuery({ queryKey: ["parties", "outbound"], queryFn: () => api.listParties("") });
   const parties = useMemo(() => (partiesQ.data ?? []).filter((p) => p.status === "active"), [partiesQ.data]);
 
   const [d, setD] = useState<Draft>(EMPTY);
@@ -181,7 +188,7 @@ export function OutboundFormDialog({
           </Label>
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
             业务日期
-            <Input type="date" value={d.business_date} onChange={(e) => patch({ business_date: e.target.value })} />
+            <DatePicker value={d.business_date} onChange={(v) => patch({ business_date: v })} aria-label="业务日期" />
           </Label>
 
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -191,7 +198,17 @@ export function OutboundFormDialog({
               value={d.party_id}
               onChange={(v) => patch({ party_id: v })}
               options={[
-                { value: "", label: isSale ? "请选择" : "不挂档案" },
+                {
+                  value: "",
+                  // 空表要说清是"还没加载"还是"真没有"，不然现场只当是卡住了
+                  label: partiesQ.isPending
+                    ? "档案加载中…"
+                    : parties.length === 0
+                      ? "暂无可用档案（先到往来单位建档）"
+                      : isSale
+                        ? "请选择"
+                        : "不挂档案",
+                },
                 ...parties.map((p) => ({ value: String(p.id), label: `${p.name}（${p.party_type === "company" ? "企业" : p.party_type === "broker" ? "经纪人" : "个人"}）` })),
               ]}
             />

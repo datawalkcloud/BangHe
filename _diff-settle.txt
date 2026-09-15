@@ -1,0 +1,279 @@
+﻿diff --git a/src/pages/SettlementDetailPage.tsx b/src/pages/SettlementDetailPage.tsx
+index 6c0c49a..ba2b21a 100644
+--- a/src/pages/SettlementDetailPage.tsx
++++ b/src/pages/SettlementDetailPage.tsx
+@@ -4,8 +4,15 @@
+  * 鍑虹撼鐨勪粯娆惧姩浣滃湪杩欓噷鍙戠敓锛氫竴寮犵粨绠楀崟鍙互鍒嗗嚑娆′粯锛堝啘鎴峰厛鎷跨幇閲戙€?  * 浣欎笅璧板崱鏄父鎬侊級锛屾墍浠ヤ粯娆捐〃鍗曢粯璁ら噾棰?= 鏈粯浣欓浣嗗厑璁告敼灏忥紝
+  * 姣忔鐧昏閮借拷鍔犱竴鏉?payment_record锛岀粷涓嶈鐩栧凡浠樻暟锛?1 搂F5.2锛夈€?+ *
++ * 涓夋潯涓?杩欏崟缁撴竻浜嗘病鏈?缁戝湪涓€璧风殑鍛堢幇锛?026-09-14锛夛細
++ *  - 姣忔鐧昏浠樻鎴愬姛閮?*鑷姩鍑轰竴寮犵粨绠楀嚟璇?*锛堟棤棰勮鐩存墦锛屽け璐ユ墠鍥為€€棰勮妗嗭級鈥斺€?+ *    涓庢壂鐮佺粨绠楃獥鍙ｅ悓涓€鏉?`useSilentReceiptPrint`锛屽嚭绾稿彛涔熺敱鍚屼竴浠借澶囧彴璐﹀喅瀹氾紱
++ *  - **鏈粯浣欓娓呴浂閭ｄ竴鍒伙紝銆岀櫥璁颁粯娆俱€嶅崱鐗囨暣鍧楁敹璧?*鈥斺€旂暀鐫€瀹冨彧浼氳浜哄鐫€
++ *    "鏈崟宸茬粨娓咃紝鏃犻渶鍐嶇櫥璁?閭ｈ瀛楀弽澶嶇偣锛?+ *  - 缁撴竻鐨勫崟鍦ㄣ€岀粨绠椾俊鎭€嶅彸涓嬭鍘嬩竴鏋氬ぇ鐨勩€屽叏棰濅粯娓呫€嶅嵃璁帮紝涓ょ背澶栦竴鐪煎彲杈ㄣ€?  */
+-import { useMemo, useState, type ReactNode } from "react";
++import { useCallback, useMemo, useState, type ReactNode } from "react";
+ import { Link, useParams } from "@tanstack/react-router";
+ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ import { ArrowLeftIcon, BanknoteIcon, PrinterIcon } from "lucide-react";
+@@ -27,7 +34,7 @@ import { Choose } from "@/components/business/Choose";
+ import { KeypadInput, alnumKeys, digitKeys } from "@/components/ui/keypad";
+ import { Label } from "@/components/ui/label";
+ import { Skeleton } from "@/components/ui/skeleton";
+-import type { PaymentRecord } from "@/mock/types";
++import type { PaymentRecord, Settlement } from "@/mock/types";
+ import { cn } from "cn";
+ 
+ /**
+@@ -67,6 +74,41 @@ export function SettlementDetailBody({
+     return Math.max(0, data.settlement.payable_fen - data.settlement.paid_fen);
+   }, [data]);
+ 
++  /**
++   * 鐧昏浠樻鎴愬姛鍚庤嚜鍔ㄥ嚭缁撶畻鍑瘉銆?+   *
++   * 鎵爜缁撶畻绐楀彛缁撳畬鍗冲嚭绾革紙閭ｆ槸瀹㈡埛绗竴娆℃嬁鍒伴挶鐨勬椂鍒伙級锛屽嚭绾冲湪杩欎竴椤甸€愮瑪鏍搁攢
++   * 鎸傝处鏃跺嵈浠€涔堥兘涓嶅嚭鈥斺€斿鎴风珯鍦ㄧ獥鍙ｄ笂鎷夸笉鍒板嚟鎹紝鍙兘浜嬪悗琛ユ墦銆傝繖閲岃ˉ涓婏紝
++   * 涓斾笌閭ｈ竟鍚屼竴鏉￠潤榛樼洿鎵擄紙`useSilentReceiptPrint`锛氬厛鏃犻瑙堢洿鎵擄紝鍙湁鐪熸墦涓嶅嚭鍘?+   * 鎵嶅洖閫€棰勮妗嗭級锛屽嚭绾稿彛鍚屾牱鐢辫澶囦腑蹇冨彴璐﹁В鏋愩€?+   *
++   * **绁ㄩ潰鐢ㄧ殑鏄?`recordPayment` 鐨勮繑鍥炲€硷紝涓嶆槸鎵嬩笂杩欎唤缂撳瓨**锛歚payment_add` 鍥炵殑鏄?+   * 鍐欏簱涔嬪悗閲嶆柊璇诲嚭鏉ョ殑閭ｄ竴琛岋紙`settlements.rs::record_payment` 鏈熬
++   * `load_settlement_by_id`锛夛紝宸蹭粯閲戦涓庝粯娆剧姸鎬侀兘鏄垰鐧昏瀹岀殑銆傝嫢鐓ф棫鏁版嵁鍗帮紝
++   * 绁ㄩ潰涓娿€屽凡浠樸€嶈繕鏄櫥璁板墠閭ｄ釜鏁扳€斺€旀鏄伐浣滃彴 `triggerPrint` 鐗规剰绛変竴閬嶉噸鍙栬閬垮厤鐨勪簨銆?+   *
++   * 鐢ㄦ埛瀹氱殑鍙ｅ緞锛氱エ绉嶆槸**缁撶畻鍑瘉**锛堟暣鍗曪紝涓嶆槸浠樻灏忕エ锛夛紝涓?*姣忔鐧昏浠樻閮藉嚭**
++   * 鈥斺€斿垎娆′粯娆炬椂姣忕瑪閮芥湁涓€寮犵焊锛屽啘鎴锋瘡鎷夸竴绗旈挶閮芥彙寰椾綇鍑嵁銆?+   */
++  const printVoucherAfterPayment = useCallback(
++    async (paid: Settlement) => {
++      // 娌℃湁鍑虹エ鏉冨氨鍘嬫牴涓嶈鍑虹焊锛堥〉澶撮偅鏋氥€屾墦鍗板嚟璇併€嶅悓鏍锋槸绂佺敤鐨勶級
++      if (!can("print")) return;
++      if (!station) {
++        toast.warning("缁撶畻鍑瘉娌¤兘鍑虹焊锛氱珯鐐逛俊鎭皻鏈浇鍏ワ紝璇峰湪椤靛ご鐐广€屾墦鍗板嚟璇併€嶈ˉ涓€寮?);
++        return;
++      }
++      await printReceipt({
++        scenario: "settlement_voucher",
++        docNo: paid.settle_no,
++        // 杩欎竴鍗曞湪銆岀櫥璁颁粯娆俱€嶈繖鏉¤矾涓婄殑棣栨鍑虹エ锛屼笉鏄ˉ鎵?+        isReprint: false,
++        context: { station, names, settlement: paid },
++      });
++    },
++    [can, station, names, printReceipt],
++  );
++
+   const pay = useMutation({
+     mutationFn: () =>
+       api.recordPayment({
+@@ -90,6 +132,7 @@ export function SettlementDetailBody({
+       void queryClient.invalidateQueries({ queryKey: ["credits"] });
+       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+       void queryClient.invalidateQueries({ queryKey: ["orders"] });
++      void printVoucherAfterPayment(s);
+     },
+     onError: (e) => toast.error(e instanceof Error && e.message ? e.message : "鐧昏澶辫触锛岃閲嶈瘯"),
+   });
+@@ -140,6 +183,13 @@ export function SettlementDetailBody({
+ 
+   const { settlement: s, orders, payments } = data;
+ 
++  /** 鏈粯浣欓娓呴浂 = 杩欎竴鍗曠粨娓呬簡 */
++  const fullyPaid = unpaidFen === 0;
++  /** 鎾ら攢鐨勫崟涓嶇洊"鍏ㄩ浠樻竻"鍗板瓙锛氶偅鏋氬嵃瀛愪細鎶?宸叉挙閿€"杩欎釜浜嬪疄鐩栦綇 */
++  const showPaidStamp = fullyPaid && s.status === "normal";
++  /** 鏈€鍚庝竴绗斾粯娆剧殑鏃堕棿锛歚paid_at` 灏辨槸 ISO 涓诧紝鐩存帴姣斿ぇ灏忓彇鏈€澶э紝涓嶄緷璧栨湇鍔＄缁欑殑鎺掑簭 */
++  const lastPaidAt = payments.reduce<string | null>((acc, p) => (acc == null || p.paid_at > acc ? p.paid_at : acc), null);
++
+   const orderCols: Column<(typeof orders)[number]>[] = [
+     { key: "order_no", header: "纾呭崟鍙?, cell: (o) => <span className="tnum font-medium">{o.order_no}</span> },
+     { key: "date", header: "涓氬姟鏃ユ湡", cell: (o) => <span className="tnum">{o.business_date}</span> },
+@@ -226,9 +276,10 @@ export function SettlementDetailBody({
+ 
+           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)]">
+             <div className="flex min-w-0 flex-col gap-4">
+-              <section className="border bg-card">
++              <section className="relative border bg-card">
+                 <header className="border-b px-3 py-2 text-sm font-semibold">缁撶畻淇℃伅</header>
+-                <div className="p-3">
++                {/* 鐩栦簡鍗板瓙灏卞緱缁欏嵃瀛愯吘鍦版柟锛屽惁鍒欐渶鍚庝竴琛岋紙澶囨敞锛変細琚帇浣?*/}
++                <div className={cn("p-3", showPaidStamp && "pb-20")}>
+                   <InfoGrid
+                     cols={2}
+                     items={[
+@@ -249,6 +300,7 @@ export function SettlementDetailBody({
+                     ]}
+                   />
+                 </div>
++                {showPaidStamp && <PaidStamp paidFen={s.paid_fen} paidAt={lastPaidAt} />}
+               </section>
+ 
+               <section className="border bg-card">
+@@ -296,27 +348,35 @@ export function SettlementDetailBody({
+                 </div>
+               </section>
+ 
+-              <section className={cn("border bg-card", !can("pay.record") && "opacity-70")}>
+-                <header className="border-b px-3 py-2 text-sm font-semibold">鐧昏浠樻</header>
+-                <div className="flex flex-col gap-3 p-3">
+-                  <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+-                    <span>鏈閲戦锛堝厓锛?/span>
+-                    <KeypadInput
+-                      aria-label="鏈浠樻閲戦"
+-                      aria-invalid={amountErr ? true : undefined}
+-                      value={amountYuan}
+-                      onChangeValue={setAmountYuan}
+-                      keys={digitKeys({ decimalPoint: true })}
+-                      columns={6}
+-                      maxLength={12}
+-                      toggleLabel="鏁板瓧"
+-                      inputMode="decimal"
+-                      autoComplete="off"
+-                      placeholder={unpaidFen ? String(unpaidFen / 100) : "0"}
+-                      inputClassName="tnum text-base"
+-                    />
+-                    {!!amountErr && <span className="text-destructive">{amountErr}</span>}
+-                    {unpaidFen > 0 && (
++              {/*
++                銆岀櫥璁颁粯娆俱€嶆暣鍧楀彧鍦?*鏈粯浣欓杩樻湁閽?*鏃堕湶鍑烘潵銆傜粨娓呬箣鍚庤繖寮犲崱鐗囧敮涓€鑳藉仛鐨勪簨
++                灏辨槸鏄剧ず"鏈崟宸茬粨娓咃紝鏃犻渶鍐嶇櫥璁?鈥斺€旂暀鐫€瀹冭浜哄鐫€閭ｉ鐏版寜閽弽澶嶇偣锛?+                鏀惰捣鐨勭悊鐢变笌缁撴灉鐢便€岀粨绠椾俊鎭€嶅彸涓嬭閭ｆ灇銆屽叏棰濅粯娓呫€嶅嵃瀛愪氦浠ｃ€?+
++                鍥犳鍧楀唴鐨?浣欓涓?0"鍒嗘敮鍏ㄦ槸涓嶅彲杈剧殑锛岃繖閲屼竴骞跺幓鎺夛紙涓嶅啀鍐?`unpaidFen === 0`
++                閭ｇ瀹堢潃涓嶅彲鑳藉彂鐢熺殑鍒ゆ柇锛夛紝鍏嶅緱鍚庝汉浠ヤ负闆朵綑棰濇椂杩樹細娓叉煋鍒拌繖閲屻€?+              */}
++              {!fullyPaid && (
++                <section className={cn("border bg-card", !can("pay.record") && "opacity-70")}>
++                  <header className="border-b px-3 py-2 text-sm font-semibold">鐧昏浠樻</header>
++                  <div className="flex flex-col gap-3 p-3">
++                    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
++                      <span>鏈閲戦锛堝厓锛?/span>
++                      <KeypadInput
++                        aria-label="鏈浠樻閲戦"
++                        aria-invalid={amountErr ? true : undefined}
++                        value={amountYuan}
++                        onChangeValue={setAmountYuan}
++                        keys={digitKeys({ decimalPoint: true })}
++                        columns={6}
++                        maxLength={12}
++                        toggleLabel="鏁板瓧"
++                        inputMode="decimal"
++                        autoComplete="off"
++                        placeholder={String(unpaidFen / 100)}
++                        inputClassName="tnum text-base"
++                      />
++                      {!!amountErr && <span className="text-destructive">{amountErr}</span>}
+                       <Button
+                         type="button"
+                         variant="outline"
+@@ -325,54 +385,48 @@ export function SettlementDetailBody({
+                       >
+                         鍏ㄩ浠樻竻 {money(unpaidFen)}
+                       </Button>
+-                    )}
++                    </div>
++                    <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
++                      浠樻鏂瑰紡
++                      <Choose
++                        aria-label="浠樻鏂瑰紡"
++                        value={method}
++                        onChange={(v) => setMethod(v as PaymentMethod)}
++                        options={(Object.keys(PAYMENT_METHOD) as PaymentMethod[]).map((k) => ({
++                          value: k,
++                          label: PAYMENT_METHOD[k],
++                          // 鎸傝处鏍搁攢鍙敱璐㈠姟娴佺▼浜х敓锛屼笉鍦ㄨ繖閲屾墜宸ラ€?+                          disabled: k === "credit_writeoff",
++                        }))}
++                      />
++                    </Label>
++                    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
++                      <span>浜ゆ槗娴佹按鍙?/ 鍑瘉鍙?/span>
++                      <KeypadInput
++                        aria-label="浜ゆ槗娴佹按鍙?
++                        aria-invalid={tradeErr ? true : undefined}
++                        value={tradeNo}
++                        onChangeValue={setTradeNo}
++                        keys={alnumKeys()}
++                        columns={9}
++                        maxLength={32}
++                        toggleLabel="閿洏"
++                        autoComplete="off"
++                        placeholder="鐜伴噾鍙笉濉?
++                        inputClassName="tnum text-sm"
++                      />
++                      {!!tradeErr && <span className="text-destructive">{tradeErr}</span>}
++                    </div>
++                    <Button size="sm" disabled={payHasErr || pay.isPending} onClick={() => pay.mutate()}>
++                      <BanknoteIcon />
++                      {pay.isPending ? "鐧昏涓€? : "纭浠樻"}
++                    </Button>
++                    <p className="text-xs text-muted-foreground">
++                      姣忔鐧昏浠樻閮戒細鑷姩鎵撲竴寮犵粨绠楀嚟璇侊細鍑瘉鑱斾氦缁欏敭绮汉浣滀负鏀舵渚濇嵁锛屽瓨鏍硅仈璐㈠姟鐣欏瓨銆傛病鍑虹焊浼氬脊棰勮妗嗭紝鎵嬪姩琛ユ墦鍗冲彲銆?+                    </p>
+                   </div>
+-                  <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+-                    浠樻鏂瑰紡
+-                    <Choose
+-                      aria-label="浠樻鏂瑰紡"
+-                      value={method}
+-                      onChange={(v) => setMethod(v as PaymentMethod)}
+-                      options={(Object.keys(PAYMENT_METHOD) as PaymentMethod[]).map((k) => ({
+-                        value: k,
+-                        label: PAYMENT_METHOD[k],
+-                        // 鎸傝处鏍搁攢鍙敱璐㈠姟娴佺▼浜х敓锛屼笉鍦ㄨ繖閲屾墜宸ラ€?-                        disabled: k === "credit_writeoff",
+-                      }))}
+-                    />
+-                  </Label>
+-                  <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+-                    <span>浜ゆ槗娴佹按鍙?/ 鍑瘉鍙?/span>
+-                    <KeypadInput
+-                      aria-label="浜ゆ槗娴佹按鍙?
+-                      aria-invalid={tradeErr ? true : undefined}
+-                      value={tradeNo}
+-                      onChangeValue={setTradeNo}
+-                      keys={alnumKeys()}
+-                      columns={9}
+-                      maxLength={32}
+-                      toggleLabel="閿洏"
+-                      autoComplete="off"
+-                      placeholder="鐜伴噾鍙笉濉?
+-                      inputClassName="tnum text-sm"
+-                    />
+-                    {!!tradeErr && <span className="text-destructive">{tradeErr}</span>}
+-                  </div>
+-                  <Button
+-                    size="sm"
+-                    disabled={payHasErr || pay.isPending || unpaidFen === 0}
+-                    onClick={() => pay.mutate()}
+-                  >
+-                    <BanknoteIcon />
+-                    {pay.isPending ? "鐧昏涓€? : "纭浠樻"}
+-                  </Button>
+-                  <p className="text-xs text-muted-foreground">
+-                    {unpaidFen === 0
+-                      ? "鏈崟宸茬粨娓咃紝鏃犻渶鍐嶇櫥璁般€?
+-                      : "浠樻鍚庢墦鍗扮殑鍑瘉鑱斾氦缁欏敭绮汉浣滀负鏀舵渚濇嵁锛屽瓨鏍硅仈璐㈠姟鐣欏瓨銆?}
+-                  </p>
+-                </div>
+-              </section>
++                </section>
++              )}
+             </div>
+           </div>
+         </div>
+@@ -399,3 +453,33 @@ export function SettlementDetailPage() {
+     />
+   );
+ }
++
++/* ------------------------------------------------------------------ 銆屽叏棰濅粯娓呫€嶅嵃璁?*/
++
++/**
++ * 缁撴竻鍗拌锛堝帇鍦ㄣ€岀粨绠椾俊鎭€嶅崱鐗囧彸涓嬭锛夈€?+ *
++ * 鏈粯浣欓娓呴浂涔嬪悗锛岃繖涓€椤垫渶璇ヨ涓€鐪肩湅瑙佺殑浜嬪疄鏄?杩欏崟浠樺畬浜?鈥斺€斿師鍏堝彧鏈夐〉澶撮偅鏋氬皬寰界珷
++ * 涓庨噾棰濇眹鎬婚噷涓€琛?0锛屽嚭绾崇珯鍦ㄤ袱绫冲鐪嬩笉鍑鸿繖寮犲崟鍜屽埆鐨勬湁浠€涔堜笉鍚岋紝瀹㈡埛浼告墜闂?鎴戣繖閽辩粨娓呮病鏈?
++ * 鏃跺緱鍑戝埌灞忓墠璇绘暟瀛椼€傛墍浠ュ仛鎴愪竴鏋氱洊涓婂幓鐨勫嵃瀛愶細澶у瓧銆佸弻绾挎銆佽交寰€炬枩銆?+ *
++ * 鍗板湪绾镐笂鐨勮€佽鐭╂槸"绔犺鍘嬪湪鍐呭涓?锛屼絾杩欓噷鏄睆骞曪細缁濆瀹氫綅鍘嬩綇鐨勬槸**澶囨敞閭ｄ竴琛?*锛?+ * 鎵€浠ョ埗鍗＄墖鍦ㄧ洊鍗版椂鎶婂唴瀹瑰鍣ㄧ殑涓嬪唴杈硅窛鏀惧ぇ锛坄pb-20`锛夛紝缁欏嵃瀛愯吘鍑轰竴鍧椾笉閲嶅彔鐨勫湴鏂广€?+ *
++ * `aria-hidden`锛氱函瑙嗚寮鸿皟锛岃涔夊凡鐢遍〉澶寸殑浠樻鐘舵€佸窘绔犱笌銆屽凡浠橀噾棰?/ 鏈粯浣欓銆嶄袱琛屾壙杞斤紝
++ * 璇诲睆鍐嶅康涓€閬嶅彧鏄櫔闊筹紱閲戦涓庢渶鍚庝竴绗斾粯娆炬椂闂翠粛瀹炲悕鍗颁笂锛屼究浜庝汉宸ユ牳瀵广€?+ */
++function PaidStamp({ paidFen, paidAt }: { paidFen: number; paidAt: string | null }) {
++  return (
++    <div className="pointer-events-none absolute right-3 bottom-3 select-none text-success" aria-hidden>
++      <div className="-rotate-6 border-2 border-current px-3 py-1 text-center opacity-80">
++        {/* 瀛楅棿璺濅細鍦ㄦ湯瀛楀悗鐣欏嚭鍚屾牱鐨勭┖闅欙紝琛ヤ竴涓瓑閲忓乏鍐呰竟璺濇墠鐪熸灞呬腑 */}
++        <p className="pl-[0.2em] text-xl font-bold tracking-[0.2em]">鍏ㄩ浠樻竻</p>
++        <p className="tnum mt-0.5 text-[10px]">
++          宸蹭粯 {money(paidFen)}
++          {paidAt ? ` 路 ${dateTime(paidAt)}` : ""}
++        </p>
++      </div>
++    </div>
++  );
++}

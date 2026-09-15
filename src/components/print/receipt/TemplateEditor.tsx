@@ -197,7 +197,9 @@ export function ReceiptTemplateEditor() {
     }
     setPrinting("test");
     try {
-      const res = await nativePrinter.receipt(receiptLines(draft, sample), {
+      // 测试票按票面纸型出：它要证明的是"这一版在大纸上长这样"，
+      // 现场那台机器装的是哪卷纸是另一回事（那由设备台账说了算，业务出票时才参与）
+      const res = await nativePrinter.receipt(receiptLines(draft, sample, { machinePaper: draft.paper }), {
         paper: toNativePaper(draft.paper),
         cols: thermalCols ?? undefined,
         copies: 1,
@@ -627,7 +629,7 @@ function CodeEditor({
         <p className="text-[10px] text-muted-foreground">
           {[
             qrMm != null ? `二维码约 ${qrMm.toFixed(1)}mm 见方` : null,
-            bar ? `条码约 ${bar.widthMm.toFixed(1)}mm 宽${bar.shrunk ? `（${PAPER[paper]}放不下，已压到 ${bar.dots} 点/模块）` : ""}` : null,
+            bar ? `条码约 ${bar.widthMm.toFixed(1)}mm 宽${bar.shrunk ? `（${PAPER[paper]}放不下，已压到 ${bar.dots.toFixed(2)} 点/模块）` : ""}` : null,
           ]
             .filter(Boolean)
             .join(" · ")}
@@ -637,12 +639,16 @@ function CodeEditor({
         </p>
       )}
       <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-        码下方印单号
+        码下方印码内容
         <span className="flex h-8 items-center gap-2">
           <Switch checked={sec.qrCaption === true} onCheckedChange={(v) => onPatch({ qrCaption: v })} />
           <span className="text-xs">{sec.qrCaption ? "印（晒白了还能手输）" : "不印"}</span>
         </span>
       </Label>
+      <p className="text-[10px] text-muted-foreground">
+        「码下方印码内容」出厂就是开的，它印的是码里装的原文，不是旁边那行单号——纸面晒白、码被磨花或打印头缺针时，
+        这是票上唯一还认得出是哪张单的东西。想省纸才关它。
+      </p>
       <p className="text-[10px] text-muted-foreground">
         有些扫描枪（尤其老的激光枪）只认一维条码、扫二维码靠模拟图像勉强凑合。结算窗口那台枪扫不动二维码时，把这里切成
         「二维码 + 条码都打」，客户递上来的票两种枪都能读；载荷完全不变。

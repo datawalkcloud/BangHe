@@ -32,13 +32,24 @@ function buildQr(m: string): { size: number; data: ArrayLike<number> } | null {
 }
 
 /**
+ * 载荷编成二维码后的边长（点，含静区）。
+ *
+ * 热敏那一路算"码在纸上落在第几个点"要用它（见 `code-size.ts::codeOffsetDots`）：
+ * 二维码由固件自己排点，我们唯一能控制的只有让它从哪个位置开始排。
+ */
+export function qrSideDots(text: string, scale: CodeScale): number | null {
+  const built = buildQr(text.trim());
+  if (!built) return null;
+  return (built.size + QUIET * 2) * CODE_SCALE_DOTS[scale];
+}
+
+/**
  * 载荷编成二维码后的物理边长（mm，含静区）。编辑器用它报"这一档实际多大"，
  * 与这里画 SVG 用的是同一个式子——写进说明里的数字必须和票面上量得出来的一致。
  */
 export function qrSideMm(text: string, scale: CodeScale): number | null {
-  const built = buildQr(text.trim());
-  if (!built) return null;
-  return (built.size + QUIET * 2) * CODE_SCALE_DOTS[scale] * DOT_MM;
+  const dots = qrSideDots(text, scale);
+  return dots == null ? null : dots * DOT_MM;
 }
 
 export function QrGraphic({

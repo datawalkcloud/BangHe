@@ -30,6 +30,7 @@ import {
   weight,
 } from "@/lib/format";
 import { encodeDocCode } from "@/lib/ticket-code";
+import { settlePreview, type SettlePreview } from "@/lib/settle-defaults";
 import type {
   DailyReport,
   LedgerRow,
@@ -268,6 +269,23 @@ function indicatorValue(qc: QcReport | null | undefined, code: string): number |
 
 /* ----------------------------------------------------------- 场景 1：过磅单 */
 
+/**
+ * 票面「结算前 / 结算后」两种读法：结算后印磅单上落定的值，结算前印预估值并**一律挂上「（预估）」**。
+ *
+ * 02 §F1.4 允许码单印预估应付，但明写"必须标明是预估"——票是给客户看的，不标清楚就是拿一个
+ * 还没算定的数当承诺。后缀挂在**值本身**上而不是靠票面某处的一句说明：说明可以被模板编辑器删掉，
+ * 后缀删不掉，客户手里的那张纸永远自证。
+ *
+ * 判据用 `payable_amount_fen` 是否为 null（结算那一条 UPDATE 会连它一起写），与
+ * `settlePreview` 里"磅单还没记＝未结算"读的是同一件事。
+ */
+const EST_SUFFIX = "（预估）";
+function settledOrPreview(o: WeighOrder, qc: QcReport | null | undefined, settled: string, preview: (p: SettlePreview) => string): string {
+  if (o.payable_amount_fen != null) return settled;
+  const p = settlePreview(o, qc);
+  return p == null ? settled : `${preview(p)}${EST_SUFFIX}`;
+}
+
 const WEIGH_FIELDS: FieldDef[] = [
   mk("party_name", "售粮人", "售粮人", "text"),
   mk("id_card_masked", "身份证号(脱敏)", "售粮人", "text"),
@@ -496,21 +514,28 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "gross_weight": return weight(o.gross_weight_01kg);
       case "tare_weight": return weight(o.tare_weight_01kg);
       case "net_weight": return weight(o.net_weight_01kg);
+      // 袋重与其他扣没有第二个来源（结算那一刻由人当场填），票面照磅单现值印，不标预估
       case "package_deduct": return weight(o.package_deduct_01kg);
-      case "moisture_deduct": return weight(o.moisture_deduct_01kg);
-      case "impurity_deduct": return weight(o.impurity_deduct_01kg);
+      // 扣水/扣杂在未结算时磅单那两列还是 0，而真实会扣的是**化验建议**（`settleDefaults` 的
+      // 兜底顺序就是"磅单值优先、化验建议其次"）。若不印化验建议，票面会出现"扣水 0.0kg
+      // 却按 12.5kg 扣了钱"——预估应付与扣重栏当场自相矛盾，所以整组一起走预估。
+      case "moisture_deduct": return settledOrPreview(o, qc, weight(o.moisture_deduct_01kg), (p) => weight(p.moisture_deduct_01kg));
+      case "impurity_deduct": return settledOrPreview(o, qc, weight(o.impurity_deduct_01kg), (p) => weight(p.impurity_deduct_01kg));
       case "other_deduct": return weight(o.other_deduct_01kg);
-      case "deduct_total": return weight(o.deduct_total_01kg);
-      case "settlement_weight": return weight(o.settlement_weight_01kg);
-      case "settlement_weight_ton": return ton(o.settlement_weight_01kg);
+      case "deduct_total": return settledOrPreview(o, qc, weight(o.deduct_total_01kg), (p) => weight(p.deduct_total_01kg));
+      case "settlement_weight": return settledOrPreview(o, qc, weight(o.settlement_weight_01kg), (p) => weight(p.settlement_weight_01kg));
+      case "settlement_weight_ton": return settledOrPreview(o, qc, ton(o.settlement_weight_01kg), (p) => ton(p.settlement_weight_01kg));
+      // 单价是**确定值**：制单那一刻就按价目表落过价，磅房事后改的也落在这同一列上
+      // （见 `orders.rs::create_order` / `set_price`）。所以票面这一栏不再是"—"。
       case "price_per_kg": return price(o.price_fen_per_ton);
-      case "goods_amount": return money(o.goods_amount_fen);
+      case "goods_amount": return settledOrPreview(o, qc, money(o.goods_amount_fen), (p) => money(p.goods_amount_fen));
       case "deduction_fee": return money(o.deduction_fee_fen);
       case "advance_fee": return money(o.advance_fee_fen);
-      case "payable_amount": return money(o.payable_amount_fen);
+      case "payable_amount": return settledOrPreview(o, qc, money(o.payable_amount_fen), (p) => money(p.payable_amount_fen));
       case "paid_amount": return money(o.paid_amount_fen);
-      case "payable_upper": return rmbUpper(o.payable_amount_fen);
-      case "payment_status_label": return PAYMENT_STATUS[o.payment_status].label;
+      case "payable_upper": return settledOrPreview(o, qc, rmbUpper(o.payable_amount_fen), (p) => rmbUpper(p.payable_amount_fen));
+      // 未结算的单印"无需付款"是错的（客户正是要来领钱）；它此刻的真实状态就是"待结算"
+      case "payment_status_label": return o.payable_amount_fen == null ? "待结算" : PAYMENT_STATUS[o.payment_status].label;
       case "payment_method_label": return o.payment_method ? PAYMENT_METHOD[o.payment_method] : "—";
       case "price_override_reason": return o.price_override_reason ?? "—";
       case "registered_at": return dateTime(o.registered_at);

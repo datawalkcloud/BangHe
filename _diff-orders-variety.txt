@@ -1,0 +1,60 @@
+﻿diff --git a/src-tauri/src/orders.rs b/src-tauri/src/orders.rs
+index 090e222..e04a251 100644
+--- a/src-tauri/src/orders.rs
++++ b/src-tauri/src/orders.rs
+@@ -1601,8 +1601,10 @@ pub(crate) fn resolve_destination(conn: &Connection, warehouse_id: Option<i64>,
+ #[derive(Debug, Deserialize)]
+ pub struct CreateOrderInput {
+     pub party_id: i64,
+-    /// 鏀惰喘鍝佺锛氬彲绌恒€傚埗鍗曞彧璁ゃ€屽崱 + 鍞伯浜恒€嶏紙06 搂4.0锛夛紝鍝佺鐣欏埌缁撶畻/鍖栭獙鍓嶅啀瀹氾紙0017锛夈€?-    /// 濉簡灏卞繀椤绘槸鍚敤涓殑鍝佺锛屾病濉垯涓嶆牎楠屸€斺€旂┖鐫€涓嶆槸閿欒锛屾槸杩欎竴姝ョ殑姝ｅ父鐘舵€併€?+    /// 鏀惰喘鍝佺锛?*鍒跺崟蹇呭～**銆傚搧绉嶆槸杩欎竴鍗曞線鍚庝竴鍒囩殑閿氣€斺€旂粨绠楃殑鍗曚环瑕佸鍥炰环鐩〃銆?+    /// 鍖栭獙鐨勬寚鏍囬泦涓庢墸閲忓熀鍑嗗叏鏉ヨ嚜鍝佺妗ｆ锛岀┖鐫€鍙栧彿绛変簬鎶婅繖涓や欢浜嬮兘寰€鍚庢嫋锛?+    /// 鎷栧埌缁撶畻閭ｄ竴鍒绘墠鍙戠幇娌″搧绉嶏紝杞﹀凡缁忓嵏瀹屻€佷环鏍间篃閿欒繃浜嗕竴娆″鐓с€?+    /// 鎵€浠ラ椄闂ㄥ氨璁惧湪鍙栧彿杩欎竴鍒伙紝蹇呴』鏄惎鐢ㄤ腑涓旀湭鍒犻櫎鐨勫搧绉嶃€?     pub variety_id: Option<i64>,
+     pub vehicle_no: Option<String>,
+     pub warehouse_id: Option<i64>,
+@@ -1642,20 +1644,22 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
+         // 鍚堜綔绀?浼佷笟瑕佺◣鍙锋垨璇佸彿鎵嶅厑璁告寕璐﹀嚭绁ㄢ€斺€旈鐗堜竴寰嬬敤璇佸彿鍗犱綅妫€鏌?         return Err("浼佷笟/鍚堜綔绀炬。妗堝皻鏈櫥璁拌韩浠借瘉鍙凤紝璇峰埌鍐滄埛妗ｆ琛ラ綈鍚庡啀鍒跺崟".into());
+     }
+-    let variety: Option<(String, String)> = match input.variety_id {
+-        // 娌″畾鍝佺锛濊繖涓€寮犲崟鍏堟寕鐫€锛岀粨绠椾笌鍖栭獙鍓嶆湁鍚勮嚜鐨勬湇鍔＄闂搁棬鍏滅潃
+-        None => None,
+-        Some(vid) => Some(
+-            conn.query_row(
+-                "SELECT code, name FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
+-                params![vid],
+-                |r| Ok((r.get(0)?, r.get(1)?)),
+-            )
+-            .optional()
+-            .map_err(|e| format!("妫€鏌ュ搧绉嶅け璐ワ細{e}"))?
+-            .ok_or_else(|| "鎵€閫夊搧绉嶄笉瀛樺湪鎴栧凡鍋滅敤锛岃閲嶆柊閫夋嫨".to_string())?,
+-        ),
+-    };
++    // 鍝佺鏄繀濉」锛堜笉鏄?濉簡灏辨煡"锛夛細闂搁棬涓庡敭绮汉鍚岀骇锛岄兘鎺掑湪鍙栧彿涔嬪墠銆?+    // 娉ㄦ剰 weigh_order.variety_id 杩欎竴鍒楀湪搴撻噷浠嶇劧鏄彲绌虹殑鈥斺€斿瓨閲忓崟锛堜互鍙婁簨鍚?+    // `order_set_variety` 娓呯┖鐨勯偅绫伙級鐓ф棫瑕佽寰楀嚭鏉ワ紝鎵€浠ヨ璺緞鐨?LEFT JOIN 涓嶅姩锛?+    // 鍙槸鏂板崟涓€寰嬩笉缁欑┖鐫€鎴愮珛銆?+    let variety_id = input
++        .variety_id
++        .ok_or_else(|| "杩樻病瀹氭敹璐搧绉嶏細鍒跺崟蹇呴』閫夊畾鍝佺锛岃鍏堥€夊ソ鍐嶅彇鍙峰埗鍗?.to_string())?;
++    let variety: (String, String) = conn
++        .query_row(
++            "SELECT code, name FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
++            params![variety_id],
++            |r| Ok((r.get(0)?, r.get(1)?)),
++        )
++        .optional()
++        .map_err(|e| format!("妫€鏌ュ搧绉嶅け璐ワ細{e}"))?
++        .ok_or_else(|| "鎵€閫夊搧绉嶄笉瀛樺湪鎴栧凡鍋滅敤锛岃閲嶆柊閫夋嫨".to_string())?;
+     let dest = resolve_destination(conn, input.warehouse_id, input.slot_id)?;
+ 
+     // 鍒跺崟蹇呴』鍏堝埛鍒颁竴寮犳祦杞崱锛?6 搂4.0锛夛細鍒ゅ畾鍏ㄩ儴鏀惧湪鍙栧彿涔嬪墠鈥斺€旈椄涓嶈繃鏃舵棦涓嶈鍚冩帀娴佹按鍙凤紝
+@@ -1682,7 +1686,7 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
+          VALUES (?1, (SELECT id FROM station WHERE is_active = 1 ORDER BY id LIMIT 1), ?2, 'registered',
+             ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?11)",
+         params![
+-            order_no, today(), input.party_id, input.variety_id,
++            order_no, today(), input.party_id, variety_id,
+             dest.warehouse_id, dest.slot_id,
+             input.vehicle_no.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_uppercase()),
+             party.1, // driver_name 娌跨敤 mock锛氶粯璁ゅ悓鍞伯浜?@@ -1693,7 +1697,7 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
+     .map_err(|e| format!("鍒跺崟澶辫触锛歿e}"))?;
+     // 蹇呴』绱ц窡 INSERT锛氫笅闈㈢殑 audit 鑷繁鎻掍竴琛岋紝last_insert_rowid() 灏辫鏀瑰啓璧颁簡
+     let order_id = conn.last_insert_rowid();
+-    audit(conn, actor, "order.create", "weigh_order", &order_no, Some(&format!("{} 路 {}", party.1, variety.as_ref().map(|v| v.1.as_str()).unwrap_or("鏈畾鍝佺"))), None);
++    audit(conn, actor, "order.create", "weigh_order", &order_no, Some(&format!("{} 路 {}", party.1, variety.1)), None);
+     // 缁戝崱涓庡埗鍗曞悓涓€浜嬪姟锛氬崱鏈櫥璁般€佸凡娉ㄩ攢銆佽繕鎸傜潃鍒殑鏈畬鎴愬崟锛屾暣绗斿洖婊氾紝涓嶇暀宸插彇鍙风殑瀛ゅ崟
+     if let Some(card) = card_no.as_deref() {
+         crate::cards::bind_on_create(conn, actor, order_id, &order_no, card)?;

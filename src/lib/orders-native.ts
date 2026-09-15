@@ -7,7 +7,10 @@
  *   售粮人档案（listParties / getParty / saveParty）
  *   磅单（listOrders / getOrder / openOrders / createOrder / capture）
  *   化验（listQc / saveQc）  结算（settle）  打印留痕（logPrint）
- *   事后改写磅单的定级与定种（setOrderGrade / setOrderVariety，0017 之后品种可空、结算前补定）
+ *   事后改写磅单的定级与定种（setOrderGrade / setOrderVariety；品种在制单时必填，
+ *   定种这条留给"存量单没品种"与"磅单上写错了要改判"两种事后场合）
+ *   磅单定价 / 改价（setOrderPrice）：制单时服务端已按价目表带过挂牌价，这条管化验定级后的
+ *   按级修正与现场议价；改价与"改价目表"（`masters: master_save_price`）是两件事，别混
  * 桌面端从此「建档 → 制单 → 称重 → 化验 → 结算 → 打印 → 看板/台账」整条链
  * 读写同一颗 SQLite；单号按 §3.5 走 seq_counter（BD01+年月+6 位流水）。
  *
@@ -77,6 +80,7 @@ export type SaveQcInput = Parameters<typeof mock.saveQc>[0];
 export type SettleInput = Parameters<typeof mock.settle>[0];
 export type GradeAdjustInput = Parameters<typeof mock.setOrderGrade>[0];
 export type VarietyAdjustInput = Parameters<typeof mock.setOrderVariety>[0];
+export type PriceAdjustInput = Parameters<typeof mock.setOrderPrice>[0];
 export type PrintLogInput = Parameters<typeof mock.logPrint>[0];
 
 export const ordersApi = {
@@ -108,9 +112,18 @@ export const ordersApi = {
   settle: routeSave<{ order: WeighOrder; settlement: Settlement } | null, SettleInput>("order_settle", (i) => mock.settle(i)),
   /** 调整等级：只改磅单的业务定级，化验单判定不动（Rust 侧与 settle 同在 orders.rs） */
   setOrderGrade: routeSave<WeighOrder | null, GradeAdjustInput>("order_set_grade", (i) => mock.setOrderGrade(i)),
-  /** 调整收购品种：0017 之后品种不再挡制单，制单格 / 化验区 / 结算框三处都改磅单这一列，
+  /** 调整收购品种：制单时已是必填，这条留给存量单补定与写错改判；改的都是磅单这一列，
    *  化验单上当初判定所用的品种快照不动（Rust 侧与 set_grade 同骨架、同 VOIDABLE 闸） */
   setOrderVariety: routeSave<WeighOrder | null, VarietyAdjustInput>("order_set_variety", (i) => mock.setOrderVariety(i)),
+  /**
+   * 定价 / 改价：写磅单上的 `price_fen_per_ton`（02 §F1.4）。
+   *
+   * 制单那一刻服务端已按价目表带过一次挂牌价，这条管的是**事后那两次改**——化验定级后按实际
+   * 等级修正（结算价要跟着等级走），以及现场议价。偏离价目表现行价时事由必填（不少于 4 个字）：
+   * 票面要把这个价印给客户，事后得能拿出"凭什么"。
+   * 闸门与话术在服务端（`orders.rs::set_price`），前端只管把值送上去。
+   */
+  setOrderPrice: routeSave<WeighOrder | null, PriceAdjustInput>("order_set_price", (i) => mock.setOrderPrice(i)),
 
   /* ------------------------------------------------------------ 打印留痕 */
   logPrint: (input: PrintLogInput): Promise<void> =>

@@ -7,7 +7,7 @@
  * 纸上扫不动"的来源。所以这里把点当基本单位，毫米一律由 `DOT_MM` 乘出来。
  */
 import type { PaperKind } from "@/lib/constants";
-import { PAPER_SPEC } from "./paper";
+import { isRollPaper, PAPER_SPEC } from "./paper";
 
 /** 203dpi 热敏机一个点的物理边长（mm） */
 export const DOT_MM = 0.125;
@@ -52,29 +52,114 @@ export const barcodeHeightMm = () => BARCODE_HEIGHT_DOTS * DOT_MM;
 export const dotsToMm = (dots: number) => dots * DOT_MM;
 
 /**
- * 纸面上码能打多宽（mm）。
+ * 纸面上码能打多宽（点）。
  *
  * 热敏纸取的是**机内栅格**而不是纸的标称宽度：58 纸可打 384 点、80 纸 512 点（203dpi），
  * 也就是 48 / 64mm——纸边那 5~8mm 是走纸轮压着的，码打上去就是被切掉一半的废票。
  * 定长纸（A4 / 241）反过来，页边距内都是可打区。
  */
-export function printableMm(paper: PaperKind): number {
-  if (paper === "thermal58") return dotsToMm(384);
-  if (paper === "thermal80") return dotsToMm(512);
+export function printableDots(paper: PaperKind): number {
+  if (paper === "thermal58") return 384;
+  if (paper === "thermal80") return 512;
   const m = PAPER_SPEC[paper].marginMm;
-  return PAPER_SPEC[paper].widthMm - m.left - m.right;
+  return Math.round((PAPER_SPEC[paper].widthMm - m.left - m.right) / DOT_MM);
+}
+
+/** 同上，按毫米报（编辑器里"这一档实际多大"给人的是毫米） */
+export function printableMm(paper: PaperKind): number {
+  return dotsToMm(printableDots(paper));
 }
 
 /**
- * 一维码放不进纸宽时，把模块点数压到放得下为止，最低 1 点（0.125mm，扫码枪的近距极限）。
+ * 打印头的点宽（203dpi）。这是**机身属性**，按机器装的那卷纸推：58 机 384 点（48mm）、
+ * 80 机 576 点（72mm）。
+ *
+ * 它和纸宽不是一回事，两者都可能是窄的那一方：80 纸 640 点比 576 点宽（纸边各 4mm 打不到），
+ * 58 纸 464 点比 576 点窄（机身有 10mm 宽的纸边用不上）。码的横向落点算的就是这个差。
+ */
+export function headDots(paper: PaperKind): number {
+  return paper === "thermal58" ? 384 : 576;
+}
+
+/** 卷纸的整幅点宽（含纸边那圈不可用区）：58 → 464，80 → 640。定长纸返回 0（不参与热敏落点） */
+export function rollDots(paper: PaperKind): number {
+  return isRollPaper(paper) ? Math.round(PAPER_SPEC[paper].widthMm / DOT_MM) : 0;
+}
+
+/**
+ * 码的宽度预算（点）：票面纸型的可打宽度，与机器头宽里更窄的那个。
+ *
+ * `machinePaper` = 这次出纸**告诉机器的**那张纸（`print_receipt` 的 paper 参数）。
+ * 票面按 80 排、机器却是 58 时，预算被机头压到 384 点——不改的话码按 64mm 算出来，
+ * 机器根本打不下，右半截直接消失。
+ */
+export function codeBudgetDots(paper: PaperKind, machinePaper?: PaperKind): number {
+  const base = printableDots(paper);
+  return isRollPaper(paper) && machinePaper ? Math.min(base, headDots(machinePaper)) : base;
+}
+
+/**
+ * 卷纸在机头下的左沿（头坐标，可为负 = 卷比头宽、纸从两头探出去）。
+ *
+ * 走纸机构（纸仓壁或 58mm 定心隔套）一律把卷**居中**卡在机头下，所以这条式子对两种
+ * 装态都成立：卷比头宽时纸从两边各探出一点，卷比头窄时纸缩在头的中段。
+ * 结论是那句关键的：**卷的中线与头的中线是同一条线**。
+ */
+export function rollLeftDots(paper: PaperKind, machinePaper?: PaperKind): number {
+  return (headDots(machinePaper ?? paper) - rollDots(paper)) / 2;
+}
+
+/**
+ * 码的横向落点（点，从**打印头左端**起算）。
+ *
+ * **轴就是机头宽度。** 因为卷在机头下是居中的（见 [`rollLeftDots`]），
+ * "在纸上居中"与"在机头上居中"是同一件事，落点于是恒为 `(头宽 − 码宽) / 2`。
+ *
+ * 这样定还与票上其余各行同一条轴：正文靠 `render.rs::aligned` 往 `cols` 列里补空格，
+ * 而 `cols × 12 点` 正是头宽；码下方那行可读内容也走 `aligned`。三者同轴，
+ * 码才不会和它自己的说明文字错开——从前按"卷幅"算落点，正文按头宽算，
+ * 两者在 80 机装 58 卷时差 56 点（7mm），一眼就看得出是歪的。
+ *
+ * 为什么不交给固件的 `ESC a 1`：它居中的基准是**机身认的可打宽度**，是厂商写死的数，
+ * 未必等于我们这里推出来的头宽，也不保证与正文那条轴重合。而二维码更没有别的选择
+ * ——`GS ( k` 从当前位置起排点，只能靠前导空格推。两个码因此都在这里一次算清，
+ * 机器只负责照点排（见 `escpos.ts` 与 `render.rs::barcode`）。
+ *
+ * **宽度预算（[`codeBudgetDots`]）才是"别出纸"那一半**，两者别混：预算按"票面纸型
+ * 的可打宽度 ∩ 机头宽度"收，保证码不会宽过纸；落点只管把这条已经放得下的码摆到纸中间。
+ * 2026-09-15 的现场事故就是把落点当成了第二道保险，结果 80 机装 58 卷时条码贴着纸的
+ * 左边缘（左留白 1 点、右留白 112 点），看着就是左对齐。
+ *
+ * 装态一致时（票面纸型 = 机器纸型）这个值与固件原来的行为完全相同，老站点分毫不动。
+ */
+export function codeOffsetDots(codeDots: number, paper: PaperKind, machinePaper?: PaperKind): number {
+  if (!isRollPaper(paper)) return 0; // 定长纸走打印队列，落点由驱动的可打区说了算，见 queue_print.rs
+  const head = headDots(machinePaper ?? paper);
+  return Math.max(0, Math.round((head - codeDots) / 2));
+}
+
+/** 再压也不能低于 1 点（0.125mm）：栅格画不出半个点，细于 1 点的模块会整条消失 */
+export const MIN_MODULE_DOTS = 1;
+
+/**
+ * 一维码放不进纸宽时，把模块宽度压到刚好放得下——**按实数压，不落到整数点上**。
+ *
+ * 为什么不能只压到整数点：模块数一旦超过纸宽点数的一半，整数档位之间就没有中间值了。
+ * 实测这条凭证载荷（20 字符 → 连静区 253 个模块）落在 58 纸的 384 个可打点上：
+ *   - 1 点/模块 → 条身 233 点 = 29mm，只有 58mm 纸的一半，而且细到枪读不动；
+ *   - 2 点/模块 → 466 点 = 58mm，直接顶出纸外（正是"条码超出纸张"那一次）；
+ *   - 真正该用的是 384/253 ≈ 1.52 点/模块：整条铺满可打宽度，模块宽 0.19mm，
+ *     仍然在扫码枪读得动的那一档。
+ * 也就是说，"压小"和"占满纸宽"本不该互斥——互斥是"只取整数点"这个写法造出来的。
  *
  * 这条压缩**必须**同时作用于预览和出纸，否则就退回"预览一套、纸上一套"的老坑：
  * 站长在预览里看到码放得好好的，纸上右半边被切掉，客户站在结算窗口才发现。
  * 所以它写在取码几何的那一处（`code128.ts` 的 `measureCode128`），两个渲染器都只调它。
+ *
+ * 返回值是**实数**（点/模块）：预览按它画（SVG 认小数），热敏栅格按它折算成每段整数点宽
+ * （见 `code128.ts::widthDots` 与 `render.rs::barcode`）。三处宽度因此仍是同一个数。
  */
-export function fitModuleDots(totalModules: number, paper: PaperKind, want: number): number {
-  const max = printableMm(paper);
-  let dots = want;
-  while (dots > 1 && dotsToMm(totalModules * dots) > max) dots -= 1;
-  return dots;
+export function fitModuleDots(totalModules: number, maxDots: number, want: number): number {
+  if (totalModules <= 0) return want;
+  return Math.max(MIN_MODULE_DOTS, Math.min(want, maxDots / totalModules));
 }

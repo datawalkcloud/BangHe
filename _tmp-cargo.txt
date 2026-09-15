@@ -1,0 +1,18 @@
+﻿cargo :     Blocking waiting for file lock on build directory
+所在位置 行:445 字符: 32
++ cd G:\Github\BangHe\src-tauri; cargo check --tests 2>&1 | Out-File -E ...
++                                ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Blocking wa...build directory:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Checking ticket-core v0.1.0 (G:\Github\BangHe\crates\ticket-core)
+    Checking banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+error[E0063]: missing fields `opening_01kg` and `opening_variety_id` in initializer of `WarehouseInput`
+  --> tests\masters_contract.rs:62:5
+   |
+62 |     WarehouseInput {
+   |     ^^^^^^^^^^^^^^ missing `opening_01kg` and `opening_variety_id`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `banghe` (test "masters_contract") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,19 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 153
++ ... y=$LASTEXITCODE"; cargo test --test settlements_contract 2>&1 | Out-F ...
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.93s
+     Running tests\settlements_contract.rs (target\debug\deps\settlements_contract-4961b9ee3238609b.exe)
+
+running 5 tests
+test record_payment_drives_partial_then_paid_and_leaves_trail ... ok
+test payment_does_not_flip_signature_and_rejects_bad_inputs ... ok
+test detail_assembles_settlement_orders_and_payments ... ok
+test pending_pool_groups_unsettled_orders_by_party ... ok
+test credits_lists_aging_and_excludes_settled_and_revoked ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

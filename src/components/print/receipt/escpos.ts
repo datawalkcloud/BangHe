@@ -13,12 +13,19 @@
  *  3. **一行放不下的"标签 + 数值"会拆成两行**（标签一行、数值右对齐一行），也在 Rust
  *     的 `kv` 里判断，理由同 2——放不下该怎么让，只有知道纸宽的那一侧说了算。
  *     热敏机会在边界上自己硬折，那才是"打印效果和预览不一样"的元凶。
+ *
+ * 还有一处是**只有这里才有**的：码的横向落点。预览用 flex 把码居中画在纸宽里，
+ * 那一侧不需要知道任何机身参数；热敏这边一旦交给固件的 `ESC a 1`，机器就按自己的头宽
+ * 居中，装 58 卷的 80 机会把条码推出纸外（详见 `code-size.ts::codeOffsetDots`）。
+ * 所以这里额外算出 `padLeft`（点），由 Rust 补在栅格左边。
  */
 import type { NativePrintLine } from "@/lib/native";
+import type { PaperKind } from "@/lib/constants";
 import { docMeta, kvClusters } from "./render";
 import { getSpec } from "./scenarios";
 import { measureCode128 } from "./code128";
-import { BARCODE_HEIGHT_DOTS, CODE_SCALE_DOTS, scaleOf } from "./code-size";
+import { qrSideDots } from "./QrGraphic";
+import { BARCODE_HEIGHT_DOTS, CODE_SCALE_DOTS, codeBudgetDots, codeOffsetDots, scaleOf } from "./code-size";
 import type { ReceiptContext, ReceiptTemplate } from "./types";
 
 /**
@@ -42,10 +49,20 @@ function fillText(tpl: string, resolve: (key: string) => string): string {
  * 把一张小票排成 ESC/POS 行序列。
  *
  * 只做"票面由哪些行组成"这一件事——编码、列宽、折行、切纸全在 Rust 侧。
+ *
+ * `opts.machinePaper` = 这次出纸**告诉机器的**那张纸（`print_receipt` 的 paper 参数）。
+ * 只有热敏直打会传：它决定码的宽度预算与横向落点（见 `code-size.ts` 的两个函数）。
+ * 不传 = 按票面纸型算，屏幕预览、A4/针式队列与编辑器的测试票都走这个口径
+ * （定长纸的落点由驱动的可打区说了算，`padLeft` 恒为 0）。
  */
-export function receiptLines(template: ReceiptTemplate, ctx: ReceiptContext): NativePrintLine[] {
+export function receiptLines(
+  template: ReceiptTemplate,
+  ctx: ReceiptContext,
+  opts?: { machinePaper?: PaperKind },
+): NativePrintLine[] {
   const spec = getSpec(template.scenario);
   const { docNo, dateText } = docMeta(ctx, template.scenario);
+  const machine = opts?.machinePaper;
   const out: NativePrintLine[] = [];
 
   /* ---------------------------------------------------------------- 票头 */
@@ -115,18 +132,39 @@ export function receiptLines(template: ReceiptTemplate, ctx: ReceiptContext): Na
       if (!payload) continue;
       const style = sec.codeStyle ?? "qr";
       const scale = scaleOf(sec.qrScale);
-      // 票头已经印过一行「单号」，纸上不再重复——热敏票纵向每一毫米都是钱
+      // 宽度预算按"票面纸型与机器纸型里更窄的那个"收：票面按 80 排、机器装的是 58 卷时，
+      // 码按 64mm 算出来机器根本打不下，右半截直接消失
+      const maxDots = codeBudgetDots(template.paper, machine);
+      // 横向落点自己算，不交给固件居中——理由见 code-size.ts::codeOffsetDots。
+      // 二维码与一维码共用同一条轴，两种码都打时才是上下对齐的
+      const pad = (codeDots: number) => codeOffsetDots(codeDots, template.paper, machine);
       if (style !== "barcode") {
         // 档位换算成点数一起发过去：从前这里不带 size，机器恒用默认的 4 点，
         // 站长在编辑器里把码调大，纸上却纹丝不动
-        out.push({ kind: "qr", text: payload, size: CODE_SCALE_DOTS[scale] });
+        const side = qrSideDots(payload, scale);
+        out.push({ kind: "qr", text: payload, size: CODE_SCALE_DOTS[scale], padLeft: side == null ? 0 : pad(side) });
       }
       if (style !== "qr") {
         // 条空宽度是前端算的（CODE128 不在 ESC/POS 功能 A 的七种码制里），
         // 机器只负责把这段栅格原样排点。measureCode128 与预览共用，纸宽不够时两边一起缩
-        const geo = measureCode128(payload, template.paper, scale);
-        if (geo) out.push({ kind: "barcode", runs: geo.runs, dots: geo.dots, height: BARCODE_HEIGHT_DOTS });
+        const geo = measureCode128(payload, template.paper, scale, maxDots);
+        if (geo) {
+          out.push({
+            kind: "barcode",
+            runs: geo.runs,
+            // 发整条的点宽而不是"每模块几点"：模块宽度可能是小数，栅格只认整数点
+            width: geo.widthDots,
+            height: BARCODE_HEIGHT_DOTS,
+            // 落点按条身算（静区不打进栅格，纸边那圈白纸就是静区）
+            padLeft: pad(geo.widthDots),
+          });
+        }
       }
+      // 码下方那行可读内容：码被晒白、磨花、缺针断线之后，它是票上唯一还认得出是哪张单的东西，
+      // 所以与 A4 那一侧统一——模板说印就印，不因为"热敏纸每一毫米都是钱"而省掉。
+      // （从前这里不印，理由是票头已经有一行「单号」；但票头那行是**单号**，码里装的是**载荷**
+      // `BH1:` + 单号，两者不是同一串；何况磨损的正是码本身，不是票头。）
+      if (sec.qrCaption) out.push({ kind: "text", text: payload, align: "center" });
       continue;
     }
 

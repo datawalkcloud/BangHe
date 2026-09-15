@@ -75,7 +75,9 @@ export function ReceiptPrintPreview({
       });
       return false;
     }
-    const res = await nativePrinter.receipt(receiptLines(tpl, { ...context, reprint: isReprint }), {
+    // 这里能在弹窗里临时换纸型，所以"告诉机器的纸"就是当场选的这张 p——
+    // 它与 `toNativePaper(p)` 传下去的必须是同一张，否则码的落点按另一卷纸算
+    const res = await nativePrinter.receipt(receiptLines(tpl, { ...context, reprint: isReprint }, { machinePaper: p }), {
       paper: toNativePaper(p),
       cols: thermalCols ?? undefined,
     });

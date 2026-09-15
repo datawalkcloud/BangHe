@@ -19,7 +19,7 @@
  * `scripts/receipt-code/` 把"每个码字 11 个模块、停止符 13 个模块、宽度只允许 1~4、
  * 107 个码字互不相同、校验码算法对得上规范样例"钉住。
  */
-import { CODE_SCALE_DOTS, type CodeScale, dotsToMm, fitModuleDots, scaleOf } from "./code-size";
+import { CODE_SCALE_DOTS, type CodeScale, dotsToMm, fitModuleDots, printableDots, scaleOf } from "./code-size";
 import type { PaperKind } from "@/lib/constants";
 
 /** 码值 → 条空宽度（从左到右，第一个元素一定是条）。索引即码值 */
@@ -137,11 +137,23 @@ export function code128Runs(data: string): number[] | null {
 export interface BarcodeGeometry {
   /** 条空宽度序列（模块） */
   runs: number[];
-  /** 一个模块占几个点（203dpi，1 点 = 0.125mm）—— 放不进纸宽时已在此处压过 */
+  /**
+   * 一个模块占几个点（203dpi，1 点 = 0.125mm）—— 放不下时已在此处压过。
+   *
+   * **可能是小数**：纸窄到"整数档之间没有中间值"时只能按实数压，
+   * 否则整条码会从"铺满纸宽"直接掉到"只占半张纸"（见 `fitModuleDots` 的注释）。
+   */
   dots: number;
+  /**
+   * 条身的**整数**点宽（不含左右静区）。
+   *
+   * 热敏栅格与横向落点只认这个数：`GS v 0` 按点排，落点也得落在点上，
+   * 所以小数那一份在这里一次折好，Rust 那边不再自己乘（见 `render.rs::barcode`）。
+   */
+  widthDots: number;
   /** 总宽（模块），含左右静区 */
   modules: number;
-  /** 总宽（mm） */
+  /** 总宽（mm），含左右静区——预览按它给 SVG 定宽，与纸上占的地方是同一个数 */
   widthMm: number;
   /** 用户原本想要的档位被压过 = 纸太窄，界面要如实说出来 */
   shrunk: boolean;
@@ -152,13 +164,29 @@ export interface BarcodeGeometry {
  *
  * 预览与出纸都只调这个函数，两边看到的 `dots` 必然是同一个数。
  * 载荷含非 ASCII 时返回 null（画不出、也不该打）。
+ *
+ * `maxDots` 只有热敏直打那一路会传：那台机器装的纸可能比票面声明的更窄，
+ * 宽度预算得跟着收（见 `code-size.ts::codeBudgetDots`）。不传 = 按票面纸型算，
+ * 屏幕预览与 A4/针式队列都走这个口径。
  */
-export function measureCode128(data: string, paper: PaperKind, scale: CodeScale | unknown): BarcodeGeometry | null {
+export function measureCode128(
+  data: string,
+  paper: PaperKind,
+  scale: CodeScale | unknown,
+  maxDots?: number,
+): BarcodeGeometry | null {
   const runs = code128Runs(data);
   if (!runs) return null;
   const body = runs.reduce((a, b) => a + b, 0);
   const modules = body + CODE128_QUIET_MODULES * 2;
   const want = CODE_SCALE_DOTS[scaleOf(scale)];
-  const dots = fitModuleDots(modules, paper, want);
-  return { runs, dots, modules, widthMm: dotsToMm(modules * dots), shrunk: dots !== want };
+  const dots = fitModuleDots(modules, maxDots ?? printableDots(paper), want);
+  return {
+    runs,
+    dots,
+    widthDots: Math.round(body * dots),
+    modules,
+    widthMm: dotsToMm(modules * dots),
+    shrunk: dots < want - 1e-9,
+  };
 }

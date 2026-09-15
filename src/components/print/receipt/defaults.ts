@@ -57,7 +57,10 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
             qrCaption: true,
             required: true,
           },
-          { id: uid(), kind: "text", text: "结算：凭本票右下角的码到结算窗口扫码算价付款，无需重新过磅；票面丢失请到磅房补打。" },
+          // 价已经在票上了（制单那一刻就按价目表带过挂牌价，见 `orders.rs::create_order`），
+          // 所以窗口那一步是"核对扣项、确认金额、领款"，不再说"算价"——票面与话术得对得上，
+          // 客户照着票念的时候不能出现票上有的东西窗口却说没有
+          { id: uid(), kind: "text", text: "结算：凭本票右下角的码到结算窗口确认扣项与金额后领款，无需重新过磅；票面标「预估」的金额以窗口确认的为准；票面丢失请到磅房补打。" },
           { id: uid(), kind: "sign", signers: ["磅员", "化验员", "结算员", "售粮人签字"] },
         ],
       };
@@ -106,7 +109,12 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
             ],
           },
           { id: uid(), kind: "table", title: "结算磅单明细", dataset: "orders", columns: ["order_no", "settlement_weight", "price", "goods_amount"] },
-          { id: uid(), kind: "qr", title: "凭单码（挂账核销时扫）", text: "{{settle_code}}", qrCaption: true },
+          // 出厂就出**一维码**，与过磅单那枚凭票码（只出二维码）刻意不同：
+          // 这张凭证的归宿是结算窗口的扫码枪，而现场那支多半是几十块的键盘口激光枪，
+          // 解不动二维码；挂账的客户把凭证再递回来核销时，扫不出来就得让人手敲单号。
+          // 纸型是 A4（210mm 可打 182mm），一条 CODE128 连静区约 60mm，放得下不必压。
+          // 老模板没有 codeStyle 字段，缺省仍是 "qr"（见 types.ts）——已经打顺了的站点不受影响。
+          { id: uid(), kind: "qr", title: "凭单码（挂账核销时扫）", text: "{{settle_code}}", codeStyle: "barcode", qrCaption: true },
           { id: uid(), kind: "sign", signers: ["收款人签字", "出纳", "站长"] },
         ],
       };
@@ -170,29 +178,46 @@ export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
 }
 
 /**
- * 把模板里缺少的「流程必备区块」按出厂默认的位置补回来。
- *
- * 为什么必须有这一步：用户自定义模板存在本机 localStorage 里，而「凭票二维码」是后来才
- * 加进默认模板的——一个早就保存过码单版式的站点，它的覆盖模板里天生没有这个码。
- * 只在 `defaultTemplate` 里加码等于什么也没做：`store.ts` 的取值规则是"用户改过就以用户的为准"。
- * 与其要求站长逐个场景点一次「恢复默认」（会连带丢掉他自己调好的版式），不如在**取用模板**
- * 这一处兜底：缺什么补什么，已有的一个都不动。
- *
- * 补回的位置照着出厂默认来：插在原本就在它前面的那个区块之后；默认里的锚点区块也被删了，
- * 就退到末尾——凭票码在署名前还是在票尾，都不影响它能不能被扫出来。
+ * 码区块缺省一律「印内容」——条码被晒白、磨花、缺针断线之后，这行字是票上唯一还认得出
+ * 是哪张单的东西，所以它是现场兜底而不是版式偏好：没写过这个字段的模板按「印」算。
+ * 明确关过（`false`）的不动，那是用户自己权衡过纸宽做的决定。
  */
-export function ensureRequiredBlocks<T extends ReceiptTemplate>(template: T): T {
-  const baseline = defaultTemplate(template.scenario).sections;
-  const missing = baseline.filter((b) => b.required && !template.sections.some((s) => s.kind === b.kind && s.required));
-  if (missing.length === 0) return template;
+function withCodeCaptions(sections: ReceiptSection[]): ReceiptSection[] {
+  if (!sections.some((s) => s.kind === "qr" && s.qrCaption === undefined)) return sections;
+  return sections.map((s) => (s.kind === "qr" && s.qrCaption === undefined ? { ...s, qrCaption: true } : s));
+}
 
-  const sections = [...template.sections];
+/**
+ * 取用侧兜底：把历史模板里缺的东西补齐到「出厂该有的样子」。
+ *
+ * 为什么必须在**取用**这一侧做而不是保存这一侧：用户自定义模板存在本机 localStorage 里，
+ * 而这里的每一条都是后来才加进默认模板的——一个早就保存过码单版式的站点，它的覆盖模板里
+ * 天生没有凭票码、也没有码下方那行字。只在 `defaultTemplate` 里加等于什么也没做：
+ * `store.ts` 的取值规则是"用户改过就以用户的为准"。与其要求站长逐个场景点一次「恢复默认」
+ * （会连带丢掉他自己调好的版式），不如在取模板这一刻缺什么补什么，已有的一个都不动。
+ *
+ * 两条兜底，都不覆盖用户已经表过态的东西：
+ *  1. **流程必备区块**（凭票码）缺了就补回来。位置照着出厂默认来：插在原本就在它前面的那个
+ *     区块之后；默认里的锚点区块也被删了，就退到末尾——凭票码在署名前还是在票尾，都不影响
+ *     它能不能被扫出来。
+ *  2. **码下方那行可读内容**（`qrCaption`）缺了按「印」补齐，理由见 `withCodeCaptions`。
+ *
+ * 返回值在新旧内容一致时是**同一个引用**：`useReceiptTemplate` 直接把这个对象交给 React，
+ * 每渲染一次都换新对象会让下游白白重渲染一轮。
+ */
+export function normalizeTemplate<T extends ReceiptTemplate>(template: T): T {
+  const sections = withCodeCaptions(template.sections);
+  const baseline = defaultTemplate(template.scenario).sections;
+  const missing = baseline.filter((b) => b.required && !sections.some((s) => s.kind === b.kind && s.required));
+  if (missing.length === 0) return sections === template.sections ? template : { ...template, sections };
+
+  const next = [...sections];
   for (const block of missing) {
     const restored: ReceiptSection = { ...block, id: uid() };
     const anchorInDefault = baseline.slice(0, baseline.indexOf(block)).reverse().find((a) => !a.required);
-    const anchorIdx = anchorInDefault ? sections.findIndex((s) => s.kind === anchorInDefault.kind && s.title === anchorInDefault.title) : -1;
-    if (anchorIdx >= 0) sections.splice(anchorIdx + 1, 0, restored);
-    else sections.push(restored);
+    const anchorIdx = anchorInDefault ? next.findIndex((s) => s.kind === anchorInDefault.kind && s.title === anchorInDefault.title) : -1;
+    if (anchorIdx >= 0) next.splice(anchorIdx + 1, 0, restored);
+    else next.push(restored);
   }
-  return { ...template, sections };
+  return { ...template, sections: next };
 }

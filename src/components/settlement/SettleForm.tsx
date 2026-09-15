@@ -8,9 +8,20 @@
  *
  * 前端的数只用于即时反馈，落库一律以 `api.settle()` 返回为准（Rust 同口径重算一遍）。
  *
- * **品种也在这一环补上**（迁移 0017「制单只认卡 + 人」）：价目表的价只有"品种 + 等级"两个锚，
- * 没有品种就没有现价可言，所以结算框顶部多了一行「收购品种」——就地定/改都走 `order_set_variety`，
- * 换完按新品种重带单价与袋重。服务端在 `settle` 里同样拦一道（前端的闸门只是让人少跑一步）。
+ * **品种在制单那一刻就定了**（2026-09-14 起必填），所以这一行多数时候只是把本单品种显示出来、
+ * 供"磅单上写错了要改判"用。价目表的价只有"品种 + 等级"两个锚，没有品种就没有现价可言，
+ * 于是结算框顶部留了一行「收购品种」——就地改判走 `order_set_variety`，
+ * 换完按新品种重带单价与袋重。服务端在 `settle` 里同样拦一道（前端的闸门只是让人少跑一步），
+ * 存量单没品种时也靠它补上。
+ *
+ * **等级那一格叫「结算等级」**（不叫「等级」）：磅单上跑着两条互不相干的等级线，化验单那个是
+ * 化验员按国标的判定（`qc_report.grade`，永不改写），这里这个是"这一车按几等结钱"
+ * （`weigh_order.grade`，随结算落库）。工作台的化验区要是也写「等级」，现场就会以为同一个东西填两遍。
+ *
+ * **扣水 / 扣杂的出处同样要说在脸上**：计算单打开时按 `order.x || qc.x` 铺过初值，但
+ * `qc_report.*_deduct_01kg` 在库里只是"化验给出的建议"（见 0001_init 注释），结算只把本表的值
+ * UPDATE 进磅单、**不回写化验单**。所以两格都标出化验单的来源值，现场改动后再补一句差异说明——
+ * 否则化验员录一遍、出纳再录一遍，事后谁也说不清哪份算数。
  */
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -20,9 +31,10 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import type { GrainVariety, PriceList, QcReport, Settlement, WeighOrder } from "@/mock/types";
 import type { PaymentMethod } from "@/lib/constants";
-import { GRADES, PAYMENT_METHOD, REASON_MIN } from "@/lib/constants";
+import { GRADES, PAYMENT_METHOD } from "@/lib/constants";
 import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
+import { lookupPrice, settleDefaults } from "@/lib/settle-defaults";
 import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useQuickOptions, useVarieties } from "@/hooks/useLookups";
@@ -41,21 +53,11 @@ export interface SettleOutcome {
 }
 
 /**
- * 从价目表取现行价：先按品种+等级精确命中，命不中退回同品种最近生效的一条。
- *
- * 品种为 `null` 一律回 `null`：制单可以不带品种（迁移 0017），而价目表唯一的锚就是品种——
- * 没有品种就没有"现价"可言，界面据此走「价目表无现行价」那一支，绝不拿别的品种的价凑数。
+ * 价目表取现行价的实现已移到 `lib/settle-defaults.ts`：工作台在净重刚定那一刻的
+ * **自动挂账结算**也要用它，而自动结算与这个框必须算出同一笔钱（同一张单出现两个应付
+ * 正是红冲要收拾的现场事故）。这里原样再导出一份，老的引用路径不必跟着改。
  */
-export function lookupPrice(prices: PriceList[], varietyId: number | null, grade: string | null, date: string): PriceList | null {
-  if (varietyId == null) return null;
-  const live = prices.filter((p) => p.variety_id === varietyId && p.effective_from <= date && p.effective_to >= date);
-  if (live.length === 0) return null;
-  if (grade) {
-    const exact = live.find((p) => p.grade === grade);
-    if (exact) return exact;
-  }
-  return live.slice().sort((a, b) => (a.effective_from < b.effective_from ? 1 : -1))[0] ?? null;
-}
+export { lookupPrice };
 
 export function SettleForm({
   order,
@@ -66,6 +68,7 @@ export function SettleForm({
   onSettled,
   submitLabel = "确认结算并付款（F10）",
   submitHotkey = "f10",
+  defaultUnpaid = false,
 }: {
   order: WeighOrder;
   variety: GrainVariety | null;
@@ -78,10 +81,30 @@ export function SettleForm({
   submitLabel?: string;
   /** 提交快捷键，结算从工作台搬过来时键位一起搬；传 null 关掉 */
   submitHotkey?: string | null;
+  /**
+   * 开框时按「未付款（挂账）」起步。
+   *
+   * 只有工作台那条路会传：皮重刚捕完就把结算框弹出来，现场节奏是"过完磅就走、钱回头再算"，
+   * 默认按当场已付等于每单都要人多按一下取消，还会让人误以为这笔钱已经付出去了。
+   * 扫码窗口与补录付款保持默认（当场付清）——那是"客户递票来拿钱"的场合，勾反了是事故。
+   *
+   * 站点关掉挂账（`settlement_allow_part_pay`）时这里自动失效：那种站只能当场付清，
+   * 而那个勾选框在关着挂账时是禁用的——真按未付款起步，人会"看着不对却改不回来"。
+   */
+  defaultUnpaid?: boolean;
 }) {
   const can = useSession((s) => s.can);
   const queryClient = useQueryClient();
   const { data: allVarieties = [] } = useVarieties();
+
+  /** 真的按未付款起步吗（见上面 `defaultUnpaid` 的说明） */
+  const startUnpaid = defaultUnpaid && allowCredit;
+  /**
+   * 能不能把这张单结掉。`settle.create`（出纳/站长）含当场付款；`settle.credit` 是磅员那条
+   * ——**只能挂账、不动现金**，下面"当场已付"那一支仍然要 `pay.record`。磅员这条权只在
+   * 磅房过磅流程里用得上（皮重捕完自动推进到这一框），兑付窗口那道门由 `settle-gate.ts` 守。
+   */
+  const canSettle = can("settle.create") || can("settle.credit");
 
   const [grade, setGrade] = useState<string>("");
   const [priceFenPerTon, setPrice] = useState<number | null>(null);
@@ -90,13 +113,17 @@ export function SettleForm({
   const [impurity, setImpurity] = useState<number>(0);
   const [other, setOther] = useState<number>(0);
   const [feeFen, setFeeFen] = useState<number>(0);
-  const [method, setMethod] = useState<PaymentMethod>("cash");
-  const [payNow, setPayNow] = useState(true);
+  /**
+   * 支付方式**刻意不预选**（空串＝还没选）。原来默认停在「现金」上，等于替出纳认了一笔
+   * 付款渠道：十单里有九单照默认走，月底的付款方式分布就成了"现金"，那个统计再没人敢信。
+   * 空值只在「当场已付」那一刻是卡点（见下面 `gate`），挂账那一支这个下拉是禁用的、值本就是空，
+   * 服务端那一刻也不写这一列（`orders.rs::settle` 的值域校验同样只在不挂账时生效）。
+   */
+  const [method, setMethod] = useState<PaymentMethod | "">("");
+  const [payNow, setPayNow] = useState(!startUnpaid);
   const [signed, setSigned] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
   const { options: priceOptions } = useQuickOptions("price");
-  /** 现金付款口算找零用，只在前端活着：入库的是实付，掏了多少钱是出纳的手的事 */
-  const [tenderedFen, setTenderedFen] = useState<number | null>(null);
   /**
    * 当场实付金额（分）。`null`＝没动过＝按应付全额付清（与改造前一模一样）；
    * 填小即为部分付款，差额由服务端落成 `partial` 并进挂账台账（02 §F5.2）。
@@ -110,20 +137,25 @@ export function SettleForm({
     [prices, order.variety_id, grade, order.business_date],
   );
 
-  // 换单时把默认值铺好：等级、价目表价、品种袋重、化验单扣水扣杂
+  // 换单时把默认值铺好：等级、价目表价、品种袋重、化验单扣水扣杂。
+  // 这一组值不在本组件里现算，统一走 `settleDefaults()`——工作台在净重刚定那一刻的
+  // 自动挂账结算用的是同一个函数，两条路铺出来的必须是同一组数，否则同一张单会在
+  // "自动结掉的数"与"框里显示的数"之间打架，而钱是以后者给人看的。
   useEffect(() => {
-    const g = order.grade ?? qc?.grade ?? "";
-    setGrade(g);
-    const l = lookupPrice(prices, order.variety_id, g || null, order.business_date);
-    setPrice(order.price_fen_per_ton ?? l?.price_fen_per_ton ?? null);
-    setPkg(order.package_deduct_01kg ?? variety?.default_package_deduct_01kg ?? 0);
-    setMoisture(order.moisture_deduct_01kg || qc?.moisture_deduct_01kg || 0);
-    setImpurity(order.impurity_deduct_01kg || qc?.impurity_deduct_01kg || 0);
-    setOther(order.other_deduct_01kg ?? 0);
-    setFeeFen(order.deduction_fee_fen ?? 0);
-    setOverrideReason(order.price_override_reason ?? "");
+    const d = settleDefaults(order, variety, qc, prices);
+    setGrade(d.grade);
+    setPrice(d.price_fen_per_ton);
+    setPkg(d.package_deduct_01kg);
+    setMoisture(d.moisture_deduct_01kg);
+    setImpurity(d.impurity_deduct_01kg);
+    setOther(d.other_deduct_01kg);
+    setFeeFen(d.deduction_fee_fen);
+    setOverrideReason(d.price_override_reason);
     setSigned(order.payment_status === "paid");
-    setTenderedFen(null);
+    // 换单要连付款意图一起复位：上一单改成"挂账"的意图留着，下一单会默默挂出另一笔账
+    setPayNow(!startUnpaid);
+    // 支付方式同样不跨单带过去：上一单怎么付是上一单的事，留着等于又替下一单认了一遍
+    setMethod("");
     // 换单必清实付金额：留着上一单填的数额，下一单会莫名其妙挂一笔账
     setPaidFen(null);
     // qc 与 prices 在同一张单的生命周期内基本同步到位，不必列依赖避免反复覆盖输入
@@ -133,9 +165,10 @@ export function SettleForm({
   // 只有「现行价目原价取值」才算命中价目表；否则一律是手填价
   const matchesList = listed != null && priceFenPerTon != null && priceFenPerTon === listed.price_fen_per_ton;
   const deviates = listed != null && priceFenPerTon != null && priceFenPerTon !== listed.price_fen_per_ton;
-  // 无生效价目/偏离价目时把改价事由字段露出来提醒一句；事由已降为选填，
-  // 不再是提交闸门（与后端 settle 同口径，见 orders.rs）
-  const needsReason = priceFenPerTon != null && !matchesList;
+  // 无生效价目（`listed == null` → matchesList 为假）/偏离价目时把改价事由字段露出来。
+  // 它**不是提交闸门**：改价事由是选填（2026-09-14 起改为选填，与后端 `orders.rs::settle` 同一口径），
+  // 写了就随结算落库留痕，不写也放行——收粮结账这一刻不该因为少敲一句话就结不了。
+  const showReason = priceFenPerTon != null && !matchesList;
 
   const preview = previewSettlement({
     net_weight_01kg: order.net_weight_01kg,
@@ -167,10 +200,11 @@ export function SettleForm({
         pay_now: payNow,
         // 关着挂账时永远传 null（＝全额付清），与"部分付款"入口露不露出来是同一个开关
         paid_amount_fen: payNow && allowCredit ? payAmountFen : null,
+        // 挂账那一支这个值是空串：那一刻服务端不写这一列，值域校验也不生效（见上面的 `method`）
         payment_method: method,
         settler_id: actorId(),
         price_list_id: matchesList && listed ? listed.id : null,
-        price_override_reason: needsReason ? overrideReason.trim() : null,
+        price_override_reason: showReason ? overrideReason.trim() : null,
         party_signed: signed,
         grade: grade || null,
       }),
@@ -193,7 +227,7 @@ export function SettleForm({
       );
       onSettled(r);
     },
-    // 改价事由缺失、重复结算等闸门原因要原样送到操作员眼前，不许翻译成"操作失败"
+    // 重复结算、无品种等闸门原因要原样送到操作员眼前，不许翻译成"操作失败"
     onError: (e: Error) => {
       toast.error(`结算失败：${e.message || "请重试；已录入内容不会丢"}`);
       // 服务端原因带单号与条款（"本单已于…结算"），念出来没人听得懂，只念结论与"内容没丢"
@@ -202,7 +236,8 @@ export function SettleForm({
   });
 
   /**
-   * 就地定/改本单品种（迁移 0017 之后制单可以不带品种，结算前必须补上——这里就是那个补口）。
+   * 就地改本单品种（新单制单时已定；这里管"写错了要改判"与存量单补定，服务端 `settle`
+   * 另有一道"没品种不许结算"的硬闸兜底）。
    *
    * 换完立刻按新品种重带单价与袋重：原来那个价是"上一个品种的现价"，那个袋重是"上一个品种的
    * 默认扣量"，留着不动等于把两种粮的钱算在一张单上。这会冲掉手填过的价，所以必须出声说一句
@@ -245,34 +280,49 @@ export function SettleForm({
    * 不放行的原因，null = 可以提交。顺序即"卡在哪儿"的优先级，同一份文案也用在提交提示语音里。
    * `field` 标出这条原因卡在哪个表单项：有归属的错误直接红框+红字标在控件上，不在按钮下方重复。
    */
-  const gate: { msg: string; field?: "variety" | "price" | "payAmount" } | null =
+  const gate: { msg: string; field?: "variety" | "price" | "method" | "payAmount" } | null =
     order.variety_id == null
       ? { msg: "本单还没有定收购品种：请先在上面的「收购品种」里选定，才有价可依", field: "variety" }
       : order.net_weight_01kg == null
         ? { msg: "本单净重未确定，还没完成过磅" }
-        : !can("settle.create")
-          ? { msg: "当前岗位无权结算，需出纳或站长" }
+        : !canSettle
+          ? { msg: "当前岗位无权结算，需磅员、出纳或站长" }
           : preview.blocked
             ? { msg: preview.blocked }
             : priceFenPerTon == null
               ? { msg: "请填写单价，或点「从价目带出」", field: "price" }
-              : // 改价事由已降为选填：不拦提交，只在 submit 里软提示一次（迎检必查 → 建议填写）
-                payNow
-                ? !can("pay.record")
-                  ? { msg: "当场付款需要出纳或站长登记，当前操作员只能挂账" }
-                  : preview.payableAmountFen != null && payAmountFen > preview.payableAmountFen
-                    ? { msg: "本次实付大于应付，付款不能超过应付金额", field: "payAmount" }
-                    : preview.payableAmountFen != null && preview.payableAmountFen > 0 && payAmountFen <= 0
-                      ? { msg: "本次实付必须大于 0；一分钱都不付就取消「当场已付」改走挂账", field: "payAmount" }
-                      : null
-                : !allowCredit
-                  ? { msg: "站点参数已关闭「允许挂账」，只能当场付清" }
-                  : null;
+              : payNow
+                  ? !can("pay.record")
+                    ? { msg: "当场付款需要出纳或站长登记，当前操作员只能挂账" }
+                    : // 支付方式不预选，就必得有人真选一下：钱从哪条渠道出去是台账要认的，
+                      // 与"作废必须写清为什么"同一条道理——凡是能事后被追问的数，不许由默认值代答
+                      method === ""
+                      ? { msg: "请选择支付方式：当场付款要记明这笔钱是怎么付的", field: "method" }
+                      : preview.payableAmountFen != null && payAmountFen > preview.payableAmountFen
+                        ? { msg: "本次实付大于应付，付款不能超过应付金额", field: "payAmount" }
+                        : preview.payableAmountFen != null && preview.payableAmountFen > 0 && payAmountFen <= 0
+                          ? { msg: "本次实付必须大于 0；一分钱都不付就取消「当场已付」改走挂账", field: "payAmount" }
+                          : null
+                  : !allowCredit
+                    ? { msg: "站点参数已关闭「允许挂账」，只能当场付清" }
+                    : null;
   /** 不放行的文案（提交闸门与语音共用）；字段级的还会长在对应控件上 */
   const blocked = gate?.msg ?? null;
 
-  // 偏离价目/手工定价且没写够事由——不再是提交闸门，只作为一次软提醒
-  const missingReason = needsReason && overrideReason.trim().length < REASON_MIN;
+  /**
+   * 化验单上的扣量（"建议值"）。它不是扣重的来源，只是计算单铺初值的依据，所以只在
+   * 标签上标出出处、改动了再补一句差异——不标的话，化验区与计算单会看着像同一个字段填两遍。
+   */
+  const qcMoisture = qc?.moisture_deduct_01kg ?? null;
+  const qcImpurity = qc?.impurity_deduct_01kg ?? null;
+  /** 「扣水（化验 12.5 kg）」；化验单没这项就退回朴素标签 */
+  const withQcSource = (name: string, from: number | null) =>
+    from == null ? name : `${name}（化验 ${weight(from)}）`;
+  /** 现场改过了才提示：说明本单与化验单不同，且化验单不会被回写 */
+  const changedFromQc = (now: number, from: number | null) =>
+    from == null || now === from
+      ? undefined
+      : `已改动：化验单是 ${weight(from)}，结算与票面一律按本单算（化验单保持原值）`;
 
   /** 改等级：价目表带出的价跟着新等级走；手填/已偏离的价不动——那通常是现场议价的结果 */
   function changeGrade(next: string) {
@@ -299,23 +349,13 @@ export function SettleForm({
     announce("已带出价目表的现价", `settle-priced:${order.order_no}`);
   }
 
-  // 找零对着"本次要付的钱"算：部分付款时掏的现金只覆盖实付那一段，剩下的不是欠着不给找零
-  const change =
-    payNow && method === "cash" && tenderedFen != null && preview.payableAmountFen != null
-      ? tenderedFen - payAmountFen
-      : null;
-
-  // 光标停在改价事由、实付现金这些框里也得能按——结算这一下就是本窗口的收尾动作
+  // 光标停在改价事由、本次实付这些框里也得能按——结算这一下就是本窗口的收尾动作
   function submit() {
     if (blocked) {
       toast.error(blocked);
       // 这些原因本身就是一句人话（不带单号与金额），照整句话去重：原因换了就该重念一句
       announce(blocked);
       return;
-    }
-    // 事由选填：没写够只提醒一句，不拦结算那一下
-    if (missingReason) {
-      toast.warning("未填写改价事由，本单价格偏离价目表，建议补一句便于事后追溯");
     }
     if (!settle.isPending) settle.mutate();
   }
@@ -338,7 +378,6 @@ export function SettleForm({
             value={String(order.variety_id ?? "")}
             onChange={(v) => setVariety.mutate(v ? Number(v) : null)}
             options={[
-              { value: "", label: "未定 · 定了才能结算" },
               ...varietyPool.map((v) => ({ value: String(v.id), label: v.name })),
             ]}
           />
@@ -353,9 +392,9 @@ export function SettleForm({
 
       <div className="flex flex-col gap-0.5">
         <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-          等级（本单按此等级计价）
+          结算等级（本单按此计价）
           <Choose
-            aria-label="等级"
+            aria-label="结算等级"
             value={grade}
             onChange={changeGrade}
             options={[{ value: "", label: "未定级" }, ...GRADES.map((g) => ({ value: g, label: g }))]}
@@ -393,9 +432,9 @@ export function SettleForm({
             从价目带出
           </Button>
         </div>
-        {needsReason && (
+        {showReason && (
           <div className="flex flex-col gap-1 text-xs text-warning">
-            <span>改价事由（选填，建议写明便于追溯）</span>
+            <span>改价事由（选填，写了才随结算留痕）</span>
             <ComboBox
               aria-label="改价事由"
               presets={priceOptions}
@@ -404,15 +443,26 @@ export function SettleForm({
               placeholder="选一条常用的，或写清楚为什么改价…"
               className="h-7 border-warning/50 text-xs"
             />
-            {missingReason && <p>不填也能结算，但这一单价格偏离价目表，写一句事后好对账。</p>}
           </div>
         )}
       </div>
 
       <div className="grid grid-cols-2 gap-1 border-y py-1">
         <WeightField label="袋重（含绳网）" keypad value01kg={pkg || null} onChange={(v) => setPkg(v ?? 0)} />
-        <WeightField label="扣水（化验）" keypad value01kg={moisture || null} onChange={(v) => setMoisture(v ?? 0)} />
-        <WeightField label="扣杂" keypad value01kg={impurity || null} onChange={(v) => setImpurity(v ?? 0)} />
+        <WeightField
+          label={withQcSource("扣水", qcMoisture)}
+          keypad
+          value01kg={moisture || null}
+          onChange={(v) => setMoisture(v ?? 0)}
+          hint={changedFromQc(moisture, qcMoisture)}
+        />
+        <WeightField
+          label={withQcSource("扣杂", qcImpurity)}
+          keypad
+          value01kg={impurity || null}
+          onChange={(v) => setImpurity(v ?? 0)}
+          hint={changedFromQc(impurity, qcImpurity)}
+        />
         <WeightField label="其他扣" keypad value01kg={other || null} onChange={(v) => setOther(v ?? 0)} />
         <div className="col-span-2">
           <MoneyField label="费用扣款（卸车费、袋钱等）" keypad valueFen={feeFen} onChange={setFeeFen} />
@@ -449,9 +499,15 @@ export function SettleForm({
               value={method}
               onChange={(v) => setMethod(v)}
               disabled={!payNow}
-              options={(Object.keys(PAYMENT_METHOD) as PaymentMethod[])
-                .filter((k) => k !== "credit_writeoff")
-                .map((k) => ({ value: k, label: PAYMENT_METHOD[k] }))}
+              invalid={gate?.field === "method"}
+              options={[
+                // 未选就是一枚真选项（空串），不是"没渲染出来的值"：原生 select 找不到匹配项时
+                // 会自顾自显示第一项，那就又变成了"默认现金"
+                { value: "", label: "请选择" },
+                ...(Object.keys(PAYMENT_METHOD) as PaymentMethod[])
+                  .filter((k) => k !== "credit_writeoff")
+                  .map((k) => ({ value: k, label: PAYMENT_METHOD[k] })),
+              ]}
             />
           </Label>
           <div className="flex flex-col gap-1 pb-0.5 text-xs">
@@ -465,6 +521,8 @@ export function SettleForm({
             </Label>
           </div>
         </div>
+        {/* 支付方式是 `Choose`（原生 select），没有 MoneyField 那样的 `hint` 位，卡点就挨着它写一行 */}
+        {gate?.field === "method" && <p className="text-xs text-destructive">{gate.msg}</p>}
         {!payNow && !allowCredit && <p className="text-xs text-warning">站点参数已关闭挂账，本单必须当场付清。</p>}
         {canPartPay && preview.payableAmountFen != null && preview.payableAmountFen > 0 && (
           <div className="flex flex-col gap-0.5">
@@ -486,16 +544,6 @@ export function SettleForm({
                 </button>
               )}
             </div>
-          </div>
-        )}
-        {payNow && method === "cash" && (
-          <div className="flex items-end gap-1.5">
-            <MoneyField label="实付现金（算找零用）" valueFen={tenderedFen ?? 0} onChange={setTenderedFen} />
-            {change != null && (
-              <span className={`tnum shrink-0 pb-1 text-xs ${change < 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                {change < 0 ? `还差 ${money(-change)}` : `找零 ${money(change)}`}
-              </span>
-            )}
           </div>
         )}
       </div>

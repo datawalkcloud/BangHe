@@ -1,0 +1,16 @@
+﻿- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeS
+plitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0mnode_modules/@tauri-apps/api/event.js is dynamically imported by src/lib/sca
+le-native.ts but also statically imported by node_modules/@tauri-apps/api/webview.js, node_modules/@tauri-apps/api/webv
+iewWindow.js, node_modules/@tauri-apps/api/window.js, dynamic import will not move module into another chunk.
+[39m
+[32m鉁?built in 6.84s[39m
+[33m[33m[PLUGIN_TIMINGS] [0mPlugin hooks ran for 6.2s of this 6.8s build (91%).
+The slowest hooks, timed inside each callback (the wait before a callback starts is excluded, the time it awaits is inc
+luded):
+  - @tailwindcss/vite:generate:build transform (75%, 5.1s, 1 call)
+Additional hook time came from hooks under 1s.
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+[39m

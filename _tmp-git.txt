@@ -1,0 +1,236 @@
+﻿git : warning: in the working copy of 'crates/ticket-core/src/model.rs', CRLF w
+ill be replaced by LF the next time Git touches it
+所在位置 行:445 字符: 22
++ cd G:\Github\BangHe; git diff --stat 2>&1 | Out-File -Encoding utf8 G ...
++                      ~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: in the... Git touches it 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: in the working copy of 'crates/ticket-core/src/render.rs', CRLF will b
+e replaced by LF the next time Git touches it
+warning: in the working copy of 'src-tauri/src/lib.rs', CRLF will be replaced b
+y LF the next time Git touches it
+warning: in the working copy of 'src/components/workstation/QcPanel.tsx', CRLF 
+will be replaced by LF the next time Git touches it
+warning: in the working copy of 'src/components/workstation/WeighPanel.tsx', CR
+LF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'src/pages/SettlementDetailPage.tsx', CRLF will
+ be replaced by LF the next time Git touches it
+ .workbuddy/memory/MEMORY.md                        | 174 ++--------
+ crates/ticket-core/src/model.rs                    |  20 +-
+ crates/ticket-core/src/render.rs                   | 378 +++++++++++++++++----
+ .../dep-lib-ticket_core                            | Bin 86 -> 86 bytes
+ .../deps/libticket_core-9fe72e83b02ae43f.rlib      | Bin 1877542 -> 1879930 bytes
+ .../deps/libticket_core-9fe72e83b02ae43f.rmeta     | Bin 584242 -> 600387 bytes
+ dist-verify/assets/dist-js-BcRuyXHf.js             |   1 -
+ dist-verify/assets/index-Ci0zV4f0.js               |  70 ----
+ dist-verify/assets/index-CjCsusKA.css              |   2 -
+ dist-verify/index.html                             |   4 +-
+ ...250\241\345\235\227\350\247\204\345\210\222.md" |  49 ++-
+ ...225\260\346\215\256\346\250\241\345\236\213.md" |  15 +-
+ ...272\244\344\272\222\350\247\204\350\214\203.md" |  46 ++-
+ ...265\201\350\275\254\345\207\255\350\257\201.md" |  39 ++-
+ package-lock.json                                  |  44 +++
+ package.json                                       |   2 +
+ scripts/receipt-code/check.ts                      | 173 +++++++++-
+ src-tauri/src/lib.rs                               |   1 +
+ src-tauri/src/orders.rs                            | 314 +++++++++++++++--
+ src-tauri/src/queue_print.rs                       |  22 +-
+ src-tauri/tests/orders_contract.rs                 | 266 +++++++++++++--
+ src-tauri/tests/payments_contract.rs               |  19 ++
+ src-tauri/tests/qc_contract.rs                     |  19 ++
+ src-tauri/tests/search_contract.rs                 |  11 +
+ src-tauri/tests/settlements_contract.rs            |  19 ++
+ src/components/print/receipt/QrGraphic.tsx         |  17 +-
+ .../print/receipt/ReceiptPrintPreview.tsx          |   4 +-
+ src/components/print/receipt/TemplateEditor.tsx    |  12 +-
+ src/components/print/receipt/code-size.ts          |  93 ++++-
+ src/components/print/receipt/code128.ts            |  40 ++-
+ src/components/print/receipt/defaults.ts           |  61 +++-
+ src/components/print/receipt/escpos.ts             |  50 ++-
+ src/components/print/receipt/scenarios.tsx         |  43 ++-
+ src/components/print/receipt/silent.ts             |   8 +-
+ src/components/print/receipt/store.ts              |  11 +-
+ src/components/print/receipt/types.ts              |  16 +-
+ src/components/settlement/SettleForm.tsx           | 226 +++++++-----
+ src/components/workstation/IdentityPanel.tsx       |  97 ++++--
+ src/components/workstation/QcPanel.tsx             |  50 ++-
+ src/components/workstation/WeighPanel.tsx          | 311 +++++++++++++++--
+ src/components/workstation/layout.ts               |  46 ++-
+ src/components/workstation/useIcWorkflow.ts        |  49 ++-
+ src/hooks/useScannerCapture.ts                     |   2 +-
+ src/lib/constants.ts                               |  12 +-
+ src/lib/format.ts                                  |   2 +-
+ src/lib/native.ts                                  |  35 +-
+ src/lib/orders-native.ts                           |  17 +-
+ src/lib/settle-gate.ts                             |   5 +-
+ src/mock/analytics.ts                              |   2 +-
+ src/mock/api.ts                                    | 162 +++++++--
+ src/mock/types.ts                                  |   6 +-
+ src/pages/LoginPage.tsx                            |  32 --
+ src/pages/OrderDetailPage.tsx                      |  64 +++-
+ src/pages/QcDetailPage.tsx                         |   9 +-
+ src/pages/SettlementDetailPage.tsx                 | 228 +++++++++----
+ src/pages/WorkstationPage.tsx                      | 308 ++++++++++++++---
+ src/store/session.ts                               |  26 +-
+ 57 files changed, 2877 insertions(+), 855 deletions(-)
+ M .workbuddy/memory/MEMORY.md
+ M crates/ticket-core/src/model.rs
+ M crates/ticket-core/src/render.rs
+ M crates/ticket-core/target/debug/.fingerprint/ticket-core-9fe72e83b02ae43f/dep-lib-ticket_core
+ M crates/ticket-core/target/debug/deps/libticket_core-9fe72e83b02ae43f.rlib
+ M crates/ticket-core/target/debug/deps/libticket_core-9fe72e83b02ae43f.rmeta
+ D dist-verify/assets/dist-js-BcRuyXHf.js
+ D dist-verify/assets/index-Ci0zV4f0.js
+ D dist-verify/assets/index-CjCsusKA.css
+ M dist-verify/index.html
+ M "docs/design/02-\345\212\237\350\203\275\346\250\241\345\235\227\350\247\204\345\210\222.md"
+ M "docs/design/03-\346\212\200\346\234\257\346\236\266\346\236\204\344\270\216\346\225\260\346\215\256\346\250\241\345\236\213.md"
+ M "docs/design/05-UI\347\273\223\346\236\204\344\270\216\344\272\244\344\272\222\350\247\204\350\214\203.md"
+ M "docs/design/06-IC\345\215\241\346\265\201\350\275\254\345\207\255\350\257\201.md"
+ M package-lock.json
+ M package.json
+ M scripts/receipt-code/check.ts
+ M src-tauri/src/lib.rs
+ M src-tauri/src/orders.rs
+ M src-tauri/src/queue_print.rs
+ M src-tauri/tests/orders_contract.rs
+ M src-tauri/tests/payments_contract.rs
+ M src-tauri/tests/qc_contract.rs
+ M src-tauri/tests/search_contract.rs
+ M src-tauri/tests/settlements_contract.rs
+ M src/components/print/receipt/QrGraphic.tsx
+ M src/components/print/receipt/ReceiptPrintPreview.tsx
+ M src/components/print/receipt/TemplateEditor.tsx
+ M src/components/print/receipt/code-size.ts
+ M src/components/print/receipt/code128.ts
+ M src/components/print/receipt/defaults.ts
+ M src/components/print/receipt/escpos.ts
+ M src/components/print/receipt/scenarios.tsx
+ M src/components/print/receipt/silent.ts
+ M src/components/print/receipt/store.ts
+ M src/components/print/receipt/types.ts
+ M src/components/settlement/SettleForm.tsx
+ M src/components/workstation/IdentityPanel.tsx
+ M src/components/workstation/QcPanel.tsx
+ M src/components/workstation/WeighPanel.tsx
+ M src/components/workstation/layout.ts
+ M src/components/workstation/useIcWorkflow.ts
+ M src/hooks/useScannerCapture.ts
+ M src/lib/constants.ts
+ M src/lib/format.ts
+ M src/lib/native.ts
+ M src/lib/orders-native.ts
+ M src/lib/settle-gate.ts
+ M src/mock/analytics.ts
+ M src/mock/api.ts
+ M src/mock/types.ts
+ M src/pages/LoginPage.tsx
+ M src/pages/OrderDetailPage.tsx
+ M src/pages/QcDetailPage.tsx
+ M src/pages/SettlementDetailPage.tsx
+ M src/pages/WorkstationPage.tsx
+ M src/store/session.ts
+?? .tmp-receipt-code.cjs
+?? .workbuddy/_diff-code.txt
+?? .workbuddy/_final.txt
+?? .workbuddy/_probe-bar.cjs
+?? .workbuddy/_probe-bar.ts
+?? .workbuddy/_probe-build.txt
+?? .workbuddy/_rmcheck.txt
+?? .workbuddy/memory/2026-09-14.md
+?? .workbuddy/memory/topics/
+?? _btn-diff.txt
+?? _btn-orig.txt
+?? _build-dedup.txt
+?? _cargo-all-variety.txt
+?? _cargo-check-probe.txt
+?? _cargo-check-tauri.txt
+?? _cargo-perfile-variety.txt
+?? _cargo-ticket.txt
+?? _cargo-variety.txt
+?? _deps.txt
+?? _diff-icw-pg.txt
+?? _diff-orders-pg.txt
+?? _diff-orders-variety.txt
+?? _diff-panel-variety.txt
+?? _diff-settle.txt
+?? _diff-ticketcore.txt
+?? _diffstat-variety.txt
+?? _escpos-dir.txt
+?? _git-scratch.txt
+?? _git-settle.txt
+?? _git-status-price.txt
+?? _git-status-variety.txt
+?? _gitlog.txt
+?? _gs-pg.txt
+?? _log-lines.txt
+?? _ls-root.txt
+?? _ls-root2.txt
+?? _mem-len.txt
+?? _mem-lines.txt
+?? _mem-ls.txt
+?? _mem-stat.txt
+?? _memdir.txt
+?? _pg-files.txt
+?? _probe-ticket.txt
+?? _pw-check.txt
+?? _qa-list.txt
+?? _rc-build.txt
+?? _rc-run.txt
+?? _rdp.txt
+?? _schema9-variety.txt
+?? _shadcn-add.txt
+?? _shadcn-ver.txt
+?? _tmp-cargo-orders.txt
+?? _tmp-cargo.txt
+?? _tmp-dirs.txt
+?? _tmp-git.txt
+?? _tmp-no2.txt
+?? _tmp-price-rs.txt
+?? _tmp-tsc.txt
+?? _tsc-barcode.txt
+?? _tsc-caption.txt
+?? _tsc-dedup.txt
+?? _tsc-login.txt
+?? _tsc-paper.txt
+?? _tsc-pg-raw.txt
+?? _tsc-pg2-raw.txt
+?? _tsc-pricegate.txt
+?? _tsc-pricegate2.txt
+?? _tsc-settle.txt
+?? _tsc-variety.txt
+?? _tsc-variety2.txt
+?? _tsc-variety3.txt
+?? _vite-pg-raw.txt
+?? _vite-pg2-raw.txt
+?? _vite-pricegate.txt
+?? _vite-pricegate2.txt
+?? _vite-settle-tail.txt
+?? _vite-settle.txt
+?? _vite-variety3.txt
+?? dist-verify/assets/dist-js-B4cjsJiL.js
+?? dist-verify/assets/dist-js-C1n6q42Y.js
+?? dist-verify/assets/index-9YOtF9jV.js
+?? dist-verify/assets/index-Ur6Ft6FI.css
+?? src-tauri/_cargo-pg2-raw.txt
+?? src-tauri/_cargo-pg2.txt
+?? src-tauri/_cargo-pg3-raw.txt
+?? src-tauri/_cargo-pg3.txt
+?? src-tauri/_cargo-pg4-raw.txt
+?? src-tauri/_cargo-pg4.txt
+?? src-tauri/_cargo-pg5-raw.txt
+?? src-tauri/_cargo-pg5.txt
+?? src-tauri/_cargo-pg6-raw.txt
+?? src-tauri/_cargo-pg6.txt
+?? src-tauri/_cargo-pg7-raw.txt
+?? src-tauri/_cargo-pg7.txt
+?? src-tauri/_cargo-pricegate-raw.txt
+?? src-tauri/_cargo-pricegate.txt
+?? src/components/business/PriceDialog.tsx
+?? src/components/ui/calendar.tsx
+?? src/components/ui/popover.tsx
+?? src/lib/settle-defaults.ts
+?? src/lib/weigh-gate.ts
+?? "\351\207\215\347\275\256\345\274\200\345\217\221\345\272\223.bat"

@@ -1,0 +1,11 @@
+﻿node.exe : 
+所在位置 行:1 字符: 1
++ & "C:\Users\Sprin\.workbuddy\binaries\node\versions\22.22.2-3/node.ex ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  .tmp-receipt-code.cjs  300.3kb
+
+Done in 21ms
+0

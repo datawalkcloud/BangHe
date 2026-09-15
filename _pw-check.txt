@@ -1,0 +1,5 @@
+﻿mod_playwright=False
+mod_pwtest=False
+pw_cache=False
+chrome=True
+edge=True

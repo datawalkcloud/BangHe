@@ -1,0 +1,29 @@
+﻿331: let no2 = try_create(Some("04A21F01")).expect("挂着终态单的卡应视同空闲");
+335: assert!(card_order2.is_some() && no2 != no, "卡应换挂到刚制的这张单上");
+337: .query_row("SELECT card_no FROM weigh_order WHERE order_no = ?1", params![&no2], |r| r.get(0))
+658: let no2 = create(&conn, party, xm);
+659: capture_gross(&conn, &no2, 200000);
+660: capture_tare(&conn, &no2, 100000, None);
+662: order_no: no2.clone(), price_fen_per_ton: 250000, package_deduct_01kg: 0, moisture_deduct_01kg: 0, impurity_deduct_01kg: 0,
+673: let still_open: String = conn.query_row("SELECT status FROM weigh_order WHERE order_no=?1", params![no2], |r| r.get(0)).unwrap();
+680: let r2 = settle(
+692: assert_eq!(r2.order.paid_amount_fen, 2500000);
+693: assert_eq!(r2.order.payment_status, "paid");
+695: .query_row("SELECT pay_no, amount_fen, method FROM payment_record WHERE settlement_id=?1", params![r2.settlement.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+702: st.query_map(params![r2.settlement.settle_no, pay.0], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+1243: let r2 = settle_full(&conn, &no_part, |i| {
+1249: assert_eq!(r2.settlement.payment_status, "partial", "付不够就是部分付款");
+1250: assert_eq!(r2.settlement.paid_fen, 100_000);
+1251: assert_eq!(r2.order.payment_status, "partial");
+1252: assert!(r2.order.paid_at.is_none(), "没付清不许落 paid_at");
+1256: params![r2.settlement.settle_no],
+1267: .find(|c| c.settlement.settle_no == r2.settlement.settle_no)
+1271: .query_row("SELECT COUNT(*) FROM v_payable WHERE settle_no=?1", params![r2.settlement.settle_no], |r| r.get(0))
+1280: settle_no: r2.settlement.settle_no.clone(),
+1293: .any(|c| c.settlement.settle_no == r2.settlement.settle_no),
+1441: let no2 = create(&conn, new_party(&conn, "已结算甲", "341204199301272044"), xm_id(&conn));
+1442: capture_gross(&conn, &no2, 150000);
+1443: capture_tare(&conn, &no2, 50000, None);
+1445: settle_now(&conn, &no2, 240000, true);
+1446: let status_before = load_order_full(&conn, &no2).unwrap().unwrap().status;
+1447: let o = assign(&conn, keep, &no2, Some(wh), Some(slot)).unwrap().unwrap();

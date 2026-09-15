@@ -1,0 +1,552 @@
+diff --git a/src-tauri/src/orders.rs b/src-tauri/src/orders.rs
+index 090e222..e8d8d36 100644
+--- a/src-tauri/src/orders.rs
++++ b/src-tauri/src/orders.rs
+@@ -78,18 +78,34 @@ fn actor_with_roles(app: &AppHandle, roles: &[&str], what: &str) -> Result<AuthP
+ }
+ 
+ /// 制单 / 称重 / 建档：磅房现场岗三件套（05 §6.1 order.create、party.manage）
+ const FLOOR_ROLES: &[&str] = &["station_master", "registrar", "weigher"];
+ /// 化验录入（05 §6.1 qc.save）
+ const QC_ROLES: &[&str] = &["station_master", "inspector"];
+-/// 结算与当场付款（05 §6.1 settle.create）
++/// 结算与当场付款（05 §6.1 settle.create）：能生成结算单，也能当场收钱
+ pub(crate) const SETTLE_ROLES: &[&str] = &["station_master", "cashier"];
++/// 挂账结算（05 §6.1 settle.credit）：磅员也在这条上，**只能把单挂上账、不动现金**。
++///
++/// 两把钥匙分开的理由见 `src/store/session.ts` 里同名能力的注释：皮重刚捕完那一刻不让磅员
++/// 挂账，整条"两刷一条流"就得卡在窗口等人取钱；而把 `weigher` 并进 `SETTLE_ROLES`，
++/// 同一把钥匙也开得了"当场付款"那扇门。所以命令层按 `pay_now` 选角色集，**不取并集**。
++pub(crate) const SETTLE_CREDIT_ROLES: &[&str] = &["station_master", "cashier", "weigher"];
+ /// 补录入仓去向：值仓的活，站长兜底（02 §11 保管员 = 指定仓房货位）
+ const KEEPER_ROLES: &[&str] = &["station_master", "keeper"];
+ /// 调整等级：化验员定级、出纳结算时改判、站长兜底（02 §11；结算常按实际议价改判）
+ const GRADE_ROLES: &[&str] = &["station_master", "inspector", "cashier"];
++/// 定价 / 改价：磅房现场议价由磅员谈定即落，站长兜底（02 §F1.4）。
++///
++/// 为什么定价权要下到磅房：农户是**先问价、谈成才卸货**的，价必须在过磅出票之前就定下来，
++/// 否则票面没有价、事后无从对账。价目表只是"挂牌"起点，议价偏离必须留事由（见 `set_price`）。
++/// 这把钥匙不含"收钱"——定价与收付款是两件事，出纳那把钥匙在 `SETTLE_ROLES` 上。
++///
++/// 名沿用既有的 `price.override`：前端 `store/session.ts` 的能力点、审计动作码、
++/// `SystemPage` 的「改单价」话术三处本来就是同一个词（`tare.override` 也是这么用的），
++/// 不要另造一个 `order.price`。
++const PRICE_OVERRIDE_ROLES: &[&str] = &["station_master", "weigher"];
+ /// 调整收购品种：三个入口都改了同一列——磅员/登记员在制单格里定、化验员在化验区选（选完才有指标集）、
+ /// 出纳在结算框改（改完单价重带），站长兜底。闸门取并集，细的收口靠各自的界面。
+ const VARIETY_ROLES: &[&str] = &["station_master", "registrar", "weigher", "inspector", "cashier"];
+ 
+ /// 等级值域。与 `src/lib/constants.ts::GRADES` 逐字同源（`ledger.rs` 里那份是给报表图例排的）。
+ /// 出库单（`crate::outbound`）复用同一份，两边不许各写一套字面量。
+@@ -1598,14 +1614,16 @@ pub(crate) fn resolve_destination(conn: &Connection, warehouse_id: Option<i64>,
+ 
+ // ------------------------------------------------------------------------ 制单
+ 
+ #[derive(Debug, Deserialize)]
+ pub struct CreateOrderInput {
+     pub party_id: i64,
+-    /// 收购品种：可空。制单只认「卡 + 售粮人」（06 §4.0），品种留到结算/化验前再定（0017）。
+-    /// 填了就必须是启用中的品种，没填则不校验——空着不是错误，是这一步的正常状态。
++    /// 收购品种：**制单必填**。品种是这一单往后一切的锚——结算的单价要对回价目表、
++    /// 化验的指标集与扣量基准全来自品种档案，空着取号等于把这两件事都往后拖，
++    /// 拖到结算那一刻才发现没品种，车已经卸完、价格也错过了一次对照。
++    /// 所以闸门就设在取号这一刻，必须是启用中且未删除的品种。
+     pub variety_id: Option<i64>,
+     pub vehicle_no: Option<String>,
+     pub warehouse_id: Option<i64>,
+     pub slot_id: Option<i64>,
+     pub remark: Option<String>,
+     /// 制单时刷到的流转卡号（前端 `ic_read` 的结果，服务端不猜）。
+@@ -1621,12 +1639,55 @@ pub struct CreateOrderInput {
+ /// 参数默认值一律按"强制"走——新库装上就有这道闸，站长要放开得显式关掉。
+ pub(crate) fn card_required_on_create(conn: &Connection) -> bool {
+     setting_str(conn, "card_flow_mode", "auto") != "off"
+         && setting_bool(conn, "card_required_on_create", true)
+ }
+ 
++/// 单价的人话串（分/吨 → 元/公斤，三位小数）：只用在审计与报错话术里。
++/// 展示层那份唯一口径在 `src/lib/format.ts::price`，这里不参与任何计算。
++fn price_label(fen_per_ton: i64) -> String {
++    format!("{:.3} 元/公斤", fen_per_ton as f64 / 100_000.0)
++}
++
++/// 价目表现行价：品种 + 日期两个锚，**等级可缺**（制单那一刻还没化验，等级未定）。
++///
++/// 规则与前端 `src/lib/settle-defaults.ts::lookupPrice` 逐条同构——命中等级优先，命不中退回
++/// 同品种最近生效的一条。两处必须是同一套：制单带出来的价与结算框铺出来的价若不同，
++/// 同一张单就会出现两个价，而钱是照结算框那个走的。
++///
++/// 返回 `(price_list_id, price_fen_per_ton)`：id 要一起落库，它是"这一车按哪一版价目执行"的锚，
++/// 事后翻开能查到当时的挂牌价（价目表只追加、不改历史，所以那一行永远读得回来）。
++fn lookup_price(conn: &Connection, variety_id: i64, grade: Option<&str>, date: &str) -> Result<Option<(i64, i64)>, String> {
++    if let Some(g) = grade.map(str::trim).filter(|s| !s.is_empty()) {
++        let exact = conn
++            .query_row(
++                "SELECT id, price_fen_per_ton FROM price_list
++                 WHERE variety_id = ?1 AND grade = ?2 AND deleted_at IS NULL
++                   AND effective_from <= ?3 AND effective_to >= ?3
++                 ORDER BY effective_from DESC, id DESC LIMIT 1",
++                params![variety_id, g, date],
++                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
++            )
++            .optional()
++            .map_err(|e| format!("查询价目表失败：{e}"))?;
++        if exact.is_some() {
++            return Ok(exact);
++        }
++    }
++    conn.query_row(
++        "SELECT id, price_fen_per_ton FROM price_list
++         WHERE variety_id = ?1 AND deleted_at IS NULL
++           AND effective_from <= ?2 AND effective_to >= ?2
++         ORDER BY effective_from DESC, id DESC LIMIT 1",
++        params![variety_id, date],
++        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
++    )
++    .optional()
++    .map_err(|e| format!("查询价目表失败：{e}"))
++}
++
+ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderInput) -> Result<WeighOrder, String> {
+     if input.weight_source != "scale" && input.weight_source != "manual" {
+         return Err(format!("称重来源「{}」不在值域内", input.weight_source));
+     }
+     let party = conn
+         .query_row(
+@@ -1639,26 +1700,28 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
+         .map_err(|e| format!("检查售粮人失败：{e}"))?
+         .ok_or_else(|| "该售粮人档案不存在或已删除，请先建档".to_string())?;
+     if party.2 != "farmer" && party.3.is_empty() {
+         // 合作社/企业要税号或证号才允许挂账出票——首版一律用证号占位检查
+         return Err("企业/合作社档案尚未登记身份证号，请到农户档案补齐后再制单".into());
+     }
+-    let variety: Option<(String, String)> = match input.variety_id {
+-        // 没定品种＝这一张单先挂着，结算与化验前有各自的服务端闸门兜着
+-        None => None,
+-        Some(vid) => Some(
+-            conn.query_row(
+-                "SELECT code, name FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
+-                params![vid],
+-                |r| Ok((r.get(0)?, r.get(1)?)),
+-            )
+-            .optional()
+-            .map_err(|e| format!("检查品种失败：{e}"))?
+-            .ok_or_else(|| "所选品种不存在或已停用，请重新选择".to_string())?,
+-        ),
+-    };
++    // 品种是必填项（不是"填了就查"）：闸门与售粮人同级，都排在取号之前。
++    // 注意 weigh_order.variety_id 这一列在库里仍然是可空的——存量单（以及事后
++    // `order_set_variety` 清空的那类）照旧要读得出来，所以读路径的 LEFT JOIN 不动，
++    // 只是新单一律不给空着成立。
++    let variety_id = input
++        .variety_id
++        .ok_or_else(|| "还没定收购品种：制单必须选定品种，请先选好再取号制单".to_string())?;
++    let variety: (String, String) = conn
++        .query_row(
++            "SELECT code, name FROM grain_variety WHERE id = ?1 AND deleted_at IS NULL AND is_active = 1",
++            params![variety_id],
++            |r| Ok((r.get(0)?, r.get(1)?)),
++        )
++        .optional()
++        .map_err(|e| format!("检查品种失败：{e}"))?
++        .ok_or_else(|| "所选品种不存在或已停用，请重新选择".to_string())?;
+     let dest = resolve_destination(conn, input.warehouse_id, input.slot_id)?;
+ 
+     // 制单必须先刷到一张流转卡（06 §4.0）：判定全部放在取号之前——闸不过时既不该吃掉流水号，
+     // 也不该在库里落下没绑卡的半张单（命令层的 write_tx 回滚只是第二道保险）
+     let card_no = input
+         .card_no
+@@ -1671,32 +1734,55 @@ pub fn create_order(conn: &Connection, actor: &AuthProfile, input: CreateOrderIn
+     if let Some(card) = card_no.as_deref() {
+         crate::cards::check_card_for_create(conn, card)?;
+     }
+ 
+     let order_no = next_no(conn, "BD")?;
+     let now = now_iso();
++    // 挂牌价：取号那一刻就把该品种的现行价落到磅单上（02 §F1.4）。
++    //
++    // 为什么不等结算再定价：农户到站是先问价、谈成才卸货的，票面没有价、库里也没有价，
++    // 事后就是一笔只能靠嘴说的糊涂账。制单这一刻等级还没定（化验才有），所以先按品种取
++    // "最近生效的一条"当挂牌价；化验定级之后由磅员/站长用 `order_set_price` 按实际等级修正。
++    //
++    // 该品种在价目表里没有现行价时**不拦制单**：价是后头补得上的，号取不出来才是真卡住现场。
++    let business_date = today();
++    let listed = lookup_price(conn, variety_id, None, &business_date)?;
+     conn.execute(
+         "INSERT INTO weigh_order (
+             order_no, station_id, business_date, status, party_id, variety_id,
+             warehouse_id, slot_id, vehicle_no, driver_name, remark,
+-            weight_source, registered_by, registered_at, created_at, created_by)
++            weight_source, registered_by, registered_at, created_at, created_by,
++            price_fen_per_ton, price_list_id)
+          VALUES (?1, (SELECT id FROM station WHERE is_active = 1 ORDER BY id LIMIT 1), ?2, 'registered',
+-            ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?11)",
++            ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?11, ?13, ?14)",
+         params![
+-            order_no, today(), input.party_id, input.variety_id,
++            order_no, business_date, input.party_id, variety_id,
+             dest.warehouse_id, dest.slot_id,
+             input.vehicle_no.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|s| s.to_uppercase()),
+             party.1, // driver_name 沿用 mock：默认同售粮人
+             input.remark.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+             input.weight_source, actor.id, now,
++            listed.map(|(_, p)| p), listed.map(|(id, _)| id),
+         ],
+     )
+     .map_err(|e| format!("制单失败：{e}"))?;
+     // 必须紧跟 INSERT：下面的 audit 自己插一行，last_insert_rowid() 就被改写走了
+     let order_id = conn.last_insert_rowid();
+-    audit(conn, actor, "order.create", "weigh_order", &order_no, Some(&format!("{} · {}", party.1, variety.as_ref().map(|v| v.1.as_str()).unwrap_or("未定品种"))), None);
++    let price_note = match listed {
++        Some((_, p)) => format!(" · 挂牌价 {}", price_label(p)),
++        None => " · 品种无现行价目，待定价".to_string(),
++    };
++    audit(
++        conn,
++        actor,
++        "order.create",
++        "weigh_order",
++        &order_no,
++        Some(&format!("{} · {}{}", party.1, variety.1, price_note)),
++        None,
++    );
+     // 绑卡与制单同一事务：卡未登记、已注销、还挂着别的未完成单，整笔回滚，不留已取号的孤单
+     if let Some(card) = card_no.as_deref() {
+         crate::cards::bind_on_create(conn, actor, order_id, &order_no, card)?;
+     }
+     load_order_full(conn, &order_no)?.ok_or_else(|| "制单后读取磅单失败".to_string())
+ }
+@@ -1751,28 +1837,39 @@ pub fn capture(conn: &Connection, actor: &AuthProfile, input: CaptureInput) -> R
+     if input.source != "scale" && input.source != "manual" {
+         return Err(format!("称重来源「{}」不在值域内", input.source));
+     }
+     if input.weight_01kg <= 0 {
+         return Err("重量必须大于 0".into());
+     }
+-    type OrderHead = (i64, String, Option<i64>, Option<i64>, i64, i64);
++    type OrderHead = (i64, String, Option<i64>, Option<i64>, i64, i64, Option<i64>);
+     let head: Option<OrderHead> = conn
+         .query_row(
+-            "SELECT id, status, gross_weight_01kg, tare_weight_01kg, COALESCE((SELECT COUNT(*) FROM weigh_record WHERE order_id = wo.id), 0), party_id
++            "SELECT id, status, gross_weight_01kg, tare_weight_01kg, COALESCE((SELECT COUNT(*) FROM weigh_record WHERE order_id = wo.id), 0), party_id, price_fen_per_ton
+              FROM weigh_order wo WHERE order_no = ?1",
+             params![input.order_no],
+-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
++            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+         )
+         .optional()
+         .map_err(|e| format!("读取磅单失败：{e}"))?;
+-    let Some((order_id, status, gross, tare, seq, party_id)) = head else {
++    let Some((order_id, status, gross, tare, seq, party_id, price_fen_per_ton)) = head else {
+         return Ok(None);
+     };
+     if !WEIGHABLE.contains(&status.as_str()) {
+         return Err(format!("本单当前为「{status}」，不能再称重；如需更正请走红冲后重录"));
+     }
++    // 价闸（02 §F1.4）：毛重是"这车粮上磅"的那一刻，价必须在这之前谈定并落到单上——制单按
++    // 价目表带出的挂牌价、或磅房现场用 `order_set_price` 定的价。没有价就收粮，事后只能靠嘴对账。
++    //
++    // 为什么只拦毛重：皮重是空车多重，与这车粮值多少钱无关；而一次/二次称重顺序自由（02 §F1.2），
++    // 先捕皮重后捕毛重的车，毛重那一捕照样会撞在这道闸上。复称毛重同样算——重车再上磅，价更该定了。
++    //
++    // 前端 `lib/weigh-gate.ts`（手点 / 手录 / 刷卡三条入口共用）与 mock `api.capture` 说的是
++    // 同一句话，这里才是硬的那一道：那两处只是让人当场知道该干什么，不是唯一一道。
++    if input.weigh_type == "gross" && price_fen_per_ton.is_none() {
++        return Err("本单还没有单价：请先在称重区把单价填好（定价 / 改价），再刷卡或录入毛重".into());
++    }
+ 
+     // 皮重容差：服务端按站点参数独立复算（不信任前端有没有弹过提示）。
+     // 超容差不再拦下捕获——数据照常有效，只自动在磅单上记一条警示，
+     // 屏显醒目条、时间轴、审计与票面「皮重警示」栏都从这里出。
+     let tare_warning_text = if input.weigh_type == "tare" {
+         let mean: Option<i64> = conn
+@@ -2118,12 +2215,15 @@ pub struct SettleInput {
+     pub package_deduct_01kg: i64,
+     pub moisture_deduct_01kg: i64,
+     pub impurity_deduct_01kg: i64,
+     pub other_deduct_01kg: i64,
+     pub deduction_fee_fen: i64,
+     pub pay_now: bool,
++    /// 当场付款方式（`METHODS` 之一）。**只在 `pay_now = true` 时有意义**：结算框里这一栏
++    /// 不预选，不勾「当场已付」时那个下拉是禁用的、传上来是空串，下面两处 INSERT 也都写 NULL，
++    /// 所以值域校验只在 `pay_now` 时执行（见 `settle` 开头那道闸）。
+     pub payment_method: String,
+     /// 当场实付金额（分）。只在 `pay_now = true` 时生效：
+     /// `None`＝按应付**全额**付清（老 payload 一字不改，行为完全不变）；
+     /// `Some(v)` 且 `0 < v < 应付`＝部分付款，差额自动进挂账台账（`payment_status = 'partial'`）。
+     /// 站点关掉「允许挂账（部分付款）」时前端不给填小，命令层不重复设闸（与 `pay_now` 同口径）。
+     #[serde(default)]
+@@ -2148,13 +2248,16 @@ pub(crate) const METHODS: &[&str] = &["cash", "bank", "wechat", "alipay", "trans
+ fn amount_fen(settle_01kg: i64, price_fen_per_ton: i64) -> i64 {
+     let n = settle_01kg as i128 * price_fen_per_ton as i128;
+     ((n + 5000) / 10000) as i64
+ }
+ 
+ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Result<Option<SettleResult>, String> {
+-    if !METHODS.contains(&input.payment_method.as_str()) {
++    // 值域跟着 `pay_now` 卡：挂账那一支根本没掏钱，前端传上来的就是空串（那个下拉是禁用的），
++    // 而这一列在挂账时写的是 NULL——拿一个不会落库的空串把整单挡回去，是把界面的"没选"
++    // 当成了数据的"填错"。真掏钱那一刻的空串仍然照旧拒绝（前端也另有一道同样的闸）。
++    if input.pay_now && !METHODS.contains(&input.payment_method.as_str()) {
+         return Err(format!("付款方式「{}」不在值域内", input.payment_method));
+     }
+     if input.price_fen_per_ton <= 0 {
+         return Err("结算单价必须大于 0".into());
+     }
+     for (name, v) in [
+@@ -2171,39 +2274,64 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
+     let grade = input.grade.as_deref().map(str::trim).filter(|s| !s.is_empty());
+     if let Some(g) = grade {
+         if !GRADES.contains(&g) {
+             return Err(format!("等级「{g}」不在值域内（{}）", GRADES.join(" / ")));
+         }
+     }
+-    // 改价事由已从「必填」降为「选填」：偏离价目表或手工定价时不填也能结算，
+-    // 只在写入时留痕（有值即 trim 入库，无值落 NULL），追溯压力转到前端软提示与票面留痕。
+-    type SettleTarget = (i64, String, i64, String, String, Option<i64>, Option<i64>, Option<i64>, String, i64, Option<String>, Option<i64>);
++    // 改价事由的必填口径（02 §F1.4）：**结算价偏离价目表现行价时必填**，照价目执行的不必填。
++    //
++    // 为什么不拿"磅单上已落的价"当锚：制单带的是按品种取的挂牌价（那一刻等级还没定），
++    // 化验定级后价本该跟着等级走——出纳在结算框把等级一改、价自动跟到等级价，那是正常流程
++    // 而不是改价；拿磅单价当锚会让每一次定级都逼人写一句事由。真正的改价只有一种：
++    // 人写了一个价目表上没有的数。判据与前端 `SettleForm` 的 `matchesList` 同一套。
++    type SettleTarget = (i64, String, i64, String, String, Option<i64>, Option<i64>, Option<i64>, String, i64, Option<String>, Option<i64>, Option<i64>);
+     let head: Option<SettleTarget> = conn
+         .query_row(
+             "SELECT o.id, o.order_no, o.party_id, p.name, o.business_date, o.net_weight_01kg, o.gross_weight_01kg, o.tare_weight_01kg, o.status,
+-                    COALESCE((SELECT COUNT(*) FROM settlement_order WHERE order_id = o.id), 0), o.grade, o.variety_id
++                    COALESCE((SELECT COUNT(*) FROM settlement_order WHERE order_id = o.id), 0), o.grade, o.variety_id,
++                    o.price_list_id
+              FROM weigh_order o JOIN party p ON p.id = o.party_id WHERE o.order_no = ?1",
+             params![input.order_no],
+-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?)),
++            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?, r.get(12)?)),
+         )
+         .optional()
+         .map_err(|e| format!("读取磅单失败：{e}"))?;
+-    let Some((order_id, order_no, party_id, party_name, business_date, net, gross, tare, status, settled_cnt, old_grade, old_variety)) = head else {
++    let Some((order_id, order_no, party_id, party_name, business_date, net, gross, tare, status, settled_cnt, old_grade, old_variety, booked_list_id)) = head else {
+         return Ok(None);
+     };
+     if settled_cnt > 0 {
+         return Err(format!("磅单 {order_no} 已生成过结算单，不能重复结算（不变式 6）"));
+     }
+     if matches!(status.as_str(), "voided" | "rejected" | "settled" | "paid" | "archived" | "reversed") {
+         return Err(format!("本单当前为「{status}」，不能结算"));
+     }
+     // 品种是这一单唯一能对回价目表的锚：单价由前端送上来、服务端只判它大于 0，
+     // 没有品种，价格偏离了价目表这件事在库里没有任何一处能发现。所以这道闸必须在服务端。
+-    if old_variety.is_none() {
++    let Some(variety_id) = old_variety else {
+         return Err("本单还没有定收购品种，请先选定品种再结算".into());
++    };
++    // 改价事由：偏离价目表现行价时必须写清（含"这个品种压根没有现行价目"这种彻底的手工定价）——
++    // 票面要把这个价印给客户，库里总得有一处能解释它凭什么。四个字是底线：少于四个字写不清
++    // "按什么谈的"，与卡注销那条事由同一个门槛。
++    let reason = input.price_override_reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
++    // 本单结算后生效的等级＝送来的等级，没送就沿用磅单现值（与下面 `COALESCE(?20, grade)` 同一口径）。
++    // 价跟着等级走是正常流程，所以拿"这个等级对应的现行价"当基准，而不是拿磅单上那个挂牌价当基准。
++    let live_fen = lookup_price(conn, variety_id, grade.or(old_grade.as_deref()), &business_date)?.map(|(_, p)| p);
++    // 是否真改价：结算价与"这个等级对应的现行价"不一致。只有真改价才留事由——
++    // 照价目执行的那一遍即便前端把事由带了上来也落 NULL（0001_init.sql:217「改价后置 NULL 并填 reason」）
++    let deviates = live_fen != Some(input.price_fen_per_ton);
++    if deviates && reason.map(|s| s.chars().count() >= 4) != Some(true) {
++        return Err(match live_fen {
++            Some(p) => format!(
++                "本单结算价与价目表现行价 {} 不一致，属改价：请填写改价事由（不少于 4 个字，写明按什么谈的）",
++                price_label(p)
++            ),
++            None => "本站这个品种没有现行价目，属手工定价：请填写改价事由（不少于 4 个字，写明这个价是怎么定的）".into(),
++        });
+     }
++    let override_reason = if deviates { reason } else { None };
+     let Some(net) = net else { return Ok(None) };
+     let deduct = input
+         .package_deduct_01kg
+         .checked_add(input.moisture_deduct_01kg)
+         .and_then(|v| v.checked_add(input.impurity_deduct_01kg))
+         .and_then(|v| v.checked_add(input.other_deduct_01kg))
+@@ -2259,12 +2387,21 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
+     } else if paid >= payable {
+         "paid"
+     } else {
+         "partial"
+     };
+ 
++    // 取价来源：照价目执行就保住那一行（制单的挂牌价来自哪一版价目，是事后对账的锚，
++    // 不该因为结算框没把它带上来就被抹成 NULL）；改价则用前端带上来的行，没带即 NULL
++    // —— 0001_init.sql:217「取价来源，改价后置 NULL 并填 reason」。
++    let list_id = if live_fen == Some(input.price_fen_per_ton) {
++        input.price_list_id.or(booked_list_id)
++    } else {
++        input.price_list_id
++    };
++
+     conn.execute(
+         "UPDATE weigh_order SET
+             package_deduct_01kg = ?1, moisture_deduct_01kg = ?2, impurity_deduct_01kg = ?3, other_deduct_01kg = ?4,
+             deduct_total_01kg = ?5, settlement_weight_01kg = ?6,
+             price_fen_per_ton = ?7, price_list_id = ?8, price_override_reason = ?9,
+             goods_amount_fen = ?10, deduction_fee_fen = ?11, payable_amount_fen = ?12,
+@@ -2272,14 +2409,14 @@ pub fn settle(conn: &Connection, actor: &AuthProfile, input: SettleInput) -> Res
+             grade = COALESCE(?20, grade),
+             status = 'settled', settled_at = ?16, paid_at = ?17, updated_at = ?16, updated_by = ?18
+          WHERE id = ?19",
+         params![
+             input.package_deduct_01kg, input.moisture_deduct_01kg, input.impurity_deduct_01kg, input.other_deduct_01kg,
+             deduct, settle_weight,
+-            input.price_fen_per_ton, input.price_list_id,
+-            input.price_override_reason.as_deref().map(str::trim).filter(|s| !s.is_empty()),
++            input.price_fen_per_ton, list_id,
++            override_reason,
+             goods, input.deduction_fee_fen, payable,
+             paid,
+             pay_status,
+             if input.pay_now { Some(input.payment_method.as_str()) } else { None },
+             now,
+             if pay_status == "paid" { Some(now.as_str()) } else { None },
+@@ -2753,13 +2890,17 @@ pub async fn qc_save(app: AppHandle, input: SaveQcInput) -> Result<Option<QcRepo
+ pub async fn qc_list(app: AppHandle, opts: QcListOpts) -> Result<Vec<QcReport>, String> {
+     read_only(&app, move |conn| list_qc(conn, &opts), "化验读取").await
+ }
+ 
+ #[tauri::command]
+ pub async fn order_settle(app: AppHandle, input: SettleInput) -> Result<Option<SettleResult>, String> {
+-    write_tx(&app, move |conn, actor| settle(conn, actor, input), SETTLE_ROLES, "结算").await
++    // 角色集按"这一单要不要动现金"选，不取并集：挂账（未付款）磅员也做得，当场付款仍限出纳/站长。
++    // 判据只看 `pay_now`——`paid_amount_fen` 只在 pay_now 为真时才有意义（见 SettleInput 注释），
++    // 拿它当判据会给"pay_now=false 却带了个数"的 payload 留一条缝。
++    let roles: &[&str] = if input.pay_now { SETTLE_ROLES } else { SETTLE_CREDIT_ROLES };
++    write_tx(&app, move |conn, actor| settle(conn, actor, input), roles, "结算").await
+ }
+ 
+ #[tauri::command]
+ pub async fn print_log_add(app: AppHandle, input: PrintLogInput) -> Result<(), String> {
+     write_tx(&app, move |conn, actor| log_print(conn, actor, input), FLOOR_ROLES, "打印").await
+ }
+@@ -3077,12 +3218,125 @@ pub fn set_variety(conn: &Connection, actor: &AuthProfile, input: VarietyAdjustI
+ 
+ #[tauri::command]
+ pub async fn order_set_variety(app: AppHandle, input: VarietyAdjustInput) -> Result<Option<WeighOrder>, String> {
+     write_tx(&app, move |conn, actor| set_variety(conn, actor, input), VARIETY_ROLES, "调整品种").await
+ }
+ 
++// ---------------------------------------------------------------------- 定价 / 改价
++// 价**不是结算的产物，是成交的前提**：农户到站先问价、谈成才卸货。所以定价从结算里拆出来，
++// 变成磅单上的一个独立动作，分两步落地：
++//   ① 制单那一刻按价目表带一次挂牌价（`create_order` 里的 `lookup_price`，不用人操作）；
++//   ② 化验定级之后按实际等级修正，或现场议价 —— 都走本命令。
++// 结算那一步只把磅单上的价**带出来**，改了才要事由（见 `settle` 的改价闸）。
++//
++// 为什么磅房也要有落价权：议价就发生在磅房窗口上——车停在磅上、农户站在窗口、价谈定了才卸货。
++// 让磅员跑去叫出纳来落价，等于把成交那一刻的时间轴拉长，而票面是当场要打给客户的：
++// 价没落，票上就没价。这把钥匙不含收钱，与 `settle.credit`（只挂账、不碰现金）同一种切法。
++
++#[derive(Debug, Deserialize)]
++pub struct PriceAdjustInput {
++    pub order_no: String,
++    /// 本单定价（分/吨），必须大于 0
++    pub price_fen_per_ton: i64,
++    /// 这个价取自价目表的哪一行。手工议价时传 null；传了就必须真的是该品种现行有效的那一行
++    #[serde(default)]
++    pub price_list_id: Option<i64>,
++    /// 改价事由：**偏离价目表现行价时必填**（不少于 4 个字）。票面要印给客户，事后得能对账
++    #[serde(default)]
++    pub reason: String,
++    /// 操作人以会话为准，此字段只为与 mock 签名对齐而存在
++    #[allow(dead_code)]
++    #[serde(default)]
++    pub operator_id: Option<i64>,
++}
++
++pub fn set_price(conn: &Connection, actor: &AuthProfile, input: PriceAdjustInput) -> Result<Option<WeighOrder>, String> {
++    if input.price_fen_per_ton <= 0 {
++        return Err("单价必须大于 0".into());
++    }
++    let order: Option<WeighOrder> = conn
++        .query_row(&format!("{ORDER_SELECT} WHERE o.order_no = ?1"), params![input.order_no], map_order_row)
++        .optional()
++        .map_err(|e| format!("读取磅单失败：{e}"))?;
++    let Some(order) = order else { return Ok(None) };
++    // 闸门沿用 VOIDABLE：一旦结算，价就是货款的一部分，要改请站长走红冲（02 §F6.3），
++    // 不许在这里把已经收过的钱改掉。与 set_grade / set_variety 同一条纪律。
++    if !VOIDABLE.contains(&order.status.as_str()) {
++        return Err(match order.status.as_str() {
++            "voided" => "本单已作废，不能再定价".into(),
++            "rejected" => "本单化验拒收，不能再定价".into(),
++            other => format!("本单当前为「{other}」，已结算的单改价请先由站长红冲（02 §F6.3）"),
++        });
++    }
++    let Some(variety_id) = order.variety_id else {
++        return Err("本单还没有定收购品种：价对不回价目表，请先定品种再定价".into());
++    };
++    let reason = input.reason.trim();
++    // 判据与 `settle` 那条改价闸、前端 `SettleForm` 的 `matchesList` 是同一套：照价目执行的不问事由，
++    // 偏离（或该品种压根没有现行价目）就是一次真实议价，必须留一句能对账的话。
++    let live = lookup_price(conn, variety_id, order.grade.as_deref(), &order.business_date)?;
++    let live_fen = live.map(|(_, p)| p);
++    // 是否真改价：只有真改价才留事由；照价目执行的那一遍把事由清掉（0001_init.sql:217）
++    let deviates = live_fen != Some(input.price_fen_per_ton);
++    if deviates && reason.chars().count() < 4 {
++        return Err(match live_fen {
++            Some(p) => format!(
++                "这个价偏离了价目表现行价 {}，请填写改价事由（不少于 4 个字，写明按什么谈的、谁同意的）",
++                price_label(p)
++            ),
++            None => "本站这个品种没有现行价目，属手工定价：请填写改价事由（不少于 4 个字，写明这个价是怎么定的）".into(),
++        });
++    }
++    // 送了价目行就得真的是现行那一行：否则 `price_list_id` 变成一句随便填的备注，
++    // 事后翻开还以为"当时就是照那版价执行的"。
++    if let Some(id) = input.price_list_id {
++        if live.map(|(lid, _)| lid) != Some(id) {
++            return Err("所选取价行与这个品种的现行价目对不上，请重新从价目表取价".into());
++        }
++    }
++    // 取价来源与价一起落清：照价目执行就记那一行，议价即 NULL 并留事由
++    // —— 0001_init.sql:217「取价来源，改价后置 NULL 并填 reason」。
++    let list_id = if deviates { input.price_list_id } else { input.price_list_id.or(live.map(|(lid, _)| lid)) };
++    let stored_reason = if deviates && !reason.is_empty() { Some(reason) } else { None };
++    if order.price_fen_per_ton == Some(input.price_fen_per_ton)
++        && order.price_list_id == list_id
++        && order.price_override_reason.as_deref() == stored_reason
++    {
++        // 值没变就是没变：既不写库也不留痕，审计表里不该有"改了个寂寞"的噪音（同 set_grade）
++        return Ok(Some(order));
++    }
++    let now = now_iso();
++    conn.execute(
++        "UPDATE weigh_order SET price_fen_per_ton = ?2, price_list_id = ?3, price_override_reason = ?4,
++                updated_at = ?5, updated_by = ?6
++         WHERE id = ?1",
++        params![order.id, input.price_fen_per_ton, list_id, stored_reason, now, actor.id],
++    )
++    .map_err(|e| format!("定价失败：{e}"))?;
++    audit(
++        conn,
++        actor,
++        "price.override",
++        "weigh_order",
++        &order.order_no,
++        Some(&format!(
++            "单价 {} → {}：{}",
++            order.price_fen_per_ton.map(price_label).unwrap_or_else(|| "未定价".to_string()),
++            price_label(input.price_fen_per_ton),
++            if deviates { reason } else { "照价目表执行" },
++        )),
++        None,
++    );
++    load_order_full(conn, &order.order_no)
++}
++
++#[tauri::command]
++pub async fn order_set_price(app: AppHandle, input: PriceAdjustInput) -> Result<Option<WeighOrder>, String> {
++    write_tx(&app, move |conn, actor| set_price(conn, actor, input), PRICE_OVERRIDE_ROLES, "定价").await
++}
++
+ // --------------------------------------------------------------- 修改基本信息（车牌 / 备注）
+ // 制单只录了一次车牌/备注，现场常有"先把单取出来、车开上磅才想起没填车牌"或"备注要随过磅补充"。
+ // 这两个字段不碰钱、不碰状态机（不同于 grade——grade 一旦结算就是货款的一部分，故另设 VOIDABLE 闸），
+ // 因此过磅与结算期间都允许就地改；闸门只留会话岗位一道（与制单同一 FLOOR_ROLES：磅员/登记员/站长）。
+ // 与 set_grade 一样，值没变就直接回读、既不写库也不在审计表里留"改了个寂寞"的噪音。
+ 

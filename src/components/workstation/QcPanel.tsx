@@ -10,10 +10,17 @@
  * "复检/更正"语义（新增一张有效单、旧单保留），所以只有内容真的变了、
  * 且过了必检项闸门才会发一次写请求，不会逐键打爆化验单链。
  *
- * **化验前必须先定品种**（迁移 0017 把制单的品种改成了可空）：化验的指标集与扣量基准
- * 全部来自品种档案（`variety.enabled_indicators` / `std_*`），没有品种的化验单连"超没超基准"
- * 都无从谈起。所以这一屏在品种为空时先给一个就地品种下拉（走 `order_set_variety`），
- * 选定后指标集与基准自己回来；服务端 `qc_save` 同口径拦一道，前端只是让人少跑一步。
+ * **化验前必须先定品种**（新单在制单时就带着品种，这一行是给存量单 / 被清空的单兜底的）：
+ * 化验的指标集与扣量基准全部来自品种档案（`variety.enabled_indicators` / `std_*`），
+ * 没有品种的化验单连"超没超基准"都无从谈起。所以这一屏在品种为空时先给一个就地品种下拉
+ * （走 `order_set_variety`），选定后指标集与基准自己回来；服务端 `qc_save` 同口径拦一道，
+ * 前端只是让人少跑一步。
+ *
+ * **这一屏的数与计算单的关系要说清**（两屏都露着等级与扣水/扣杂，字面重复极易被当成同一格）：
+ *  - 「化验定级」写的是 `qc_report.grade`——化验员按国标的判定，**永不改写**；
+ *    "这一车按几等结钱"是计算单的「结算等级」（`weigh_order.grade`），两条线，别混。
+ *  - 「扣水 / 扣杂」写的是 `qc_report.*_deduct_01kg`，库里注释就是"化验给出的**建议**"：
+ *    结算真值落在磅单上（由计算单确认后 `settle` 写库），这里改完不会流过去，反之亦然。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -272,10 +279,9 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
   }, [orderNo, existing, sig, metas]);
 
   // 闸门缺哪一项，自动保存就等在哪一项（缺项期间不发请求，避免一次打字一串报错）。
-  // 不属于任何表单项的原因（未制单/无权限）走底部状态行；品种/水分/拒收原因这些字段级缺项
+  // 不属于任何表单项的原因（未制单/无权限）走底部状态行；品种/拒收原因这些字段级缺项
   // 直接红框+红字长在对应控件上，状态行不再重复（F5 手动保存时仍会把整句原因 toast 出来）。
   const needVariety = !!order && variety == null;
-  const needMoisture = metas.some((m) => m.code === "moisture") && num01Of(buf, "moisture") == null;
   const needReason = decision === "reject" && rejectReason.trim().length < REASON_MIN;
   const statusGate = !order
     ? "尚未制单，无法录入化验"
@@ -285,11 +291,9 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
   const gateMiss = statusGate
     ?? (needVariety
       ? "本单还没有定收购品种，选定品种后才会保存化验"
-      : needMoisture
-        ? "水分为必检项，填好后自动保存"
-        : needReason
-          ? `拒收需填写原因（不少于 ${REASON_MIN} 字），填好后自动保存`
-          : null);
+      : needReason
+        ? `拒收需填写原因（不少于 ${REASON_MIN} 字），填好后自动保存`
+        : null);
   const editable = !!order && can("qc.save");
   const dirty = sig !== savedSigRef.current;
 
@@ -407,8 +411,6 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
           {metas.map((m) => {
             const cmp = m.unit === "text" ? { over: 0 as const, text: null } : compare(m, num01Of(buf, m.code));
-            /** 水分为必检项而还没填：红框+红字标在这一格上（可编辑时才标，锁定时不刷红） */
-            const moistureMiss = editable && m.code === "moisture" && needMoisture;
             if (m.unit === "text") {
               return (
                 <TextIndicatorField
@@ -436,8 +438,10 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
                 }}
                 unit={m.unit === "gL" ? "g/L" : "%"}
                 decimals={m.unit === "gL" ? 0 : 2}
-                invalid={cmp.over === 1 || moistureMiss}
-                hint={cmp.text ?? (moistureMiss ? "水分为必检项，填好后自动保存" : undefined)}
+                invalid={cmp.over === 1}
+                // `cmp` 是「文本指标占位」与 `compare` 结果的联合，占位那支的 text 是 null；
+                // `hint` 只认 string | undefined，这一下是把 null 收成 undefined
+                hint={cmp.text ?? undefined}
                 disabled={!editable}
                 className={cn(cmp.over === 1 && "bg-warning-bg")}
               />
@@ -446,10 +450,13 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
-          <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-            等级
+          <Label
+            className="flex flex-col gap-0.5 text-xs text-muted-foreground"
+            title="化验员按国标的判定，写进化验单后永不改写（复检另立新单）；这一车按几等结钱在计算单的「结算等级」里定。"
+          >
+            化验定级
             <Choose
-              aria-label="等级"
+              aria-label="化验定级"
               value={grade}
               disabled={!editable}
               onChange={(v) => {
@@ -506,6 +513,13 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             }}
           />
         </div>
+
+        {/* 这一句是本屏唯一能挡住"同一件事填两遍"的地方：扣水/扣杂在计算单里还会再出现一次
+            （那才是进结算、进票面的真值）。不点明"这里是建议"，化验员与出纳就会各录一遍，
+            事后也说不清哪份算数。 */}
+        <p className="text-[11px] text-muted-foreground">
+          扣水 / 扣杂 是化验给出的<span className="text-foreground">建议值</span>：结算与票面一律按计算单里确认的那份算，两份不会互相同步。
+        </p>
 
         {decision === "reject" && (
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">

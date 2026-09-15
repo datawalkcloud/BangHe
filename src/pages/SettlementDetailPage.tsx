@@ -4,8 +4,15 @@
  * 出纳的付款动作在这里发生：一张结算单可以分几次付（农户先拿现金、
  * 余下走卡是常态），所以付款表单默认金额 = 未付余额但允许改小，
  * 每次登记都追加一条 payment_record，绝不覆盖已付数（01 §F5.2）。
+ *
+ * 三条与"这单结清了没有"绑在一起的呈现（2026-09-14）：
+ *  - 每次登记付款成功都**自动出一张结算凭证**（无预览直打，失败才回退预览框）——
+ *    与扫码结算窗口同一条 `useSilentReceiptPrint`，出纸口也由同一份设备台账决定；
+ *  - **未付余额清零那一刻，「登记付款」卡片整块收起**——留着它只会让人对着
+ *    "本单已结清，无需再登记"那行字反复点；
+ *  - 结清的单在「结算信息」右下角压一枚大的「全额付清」印记，两米外一眼可辨。
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftIcon, BanknoteIcon, PrinterIcon } from "lucide-react";
@@ -27,7 +34,7 @@ import { Choose } from "@/components/business/Choose";
 import { KeypadInput, alnumKeys, digitKeys } from "@/components/ui/keypad";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { PaymentRecord } from "@/mock/types";
+import type { PaymentRecord, Settlement } from "@/mock/types";
 import { cn } from "cn";
 
 /**
@@ -67,6 +74,41 @@ export function SettlementDetailBody({
     return Math.max(0, data.settlement.payable_fen - data.settlement.paid_fen);
   }, [data]);
 
+  /**
+   * 登记付款成功后自动出结算凭证。
+   *
+   * 扫码结算窗口结完即出纸（那是客户第一次拿到钱的时刻），出纳在这一页逐笔核销
+   * 挂账时却什么都不出——客户站在窗口上拿不到凭据，只能事后补打。这里补上，
+   * 且与那边同一条静默直打（`useSilentReceiptPrint`：先无预览直打，只有真打不出去
+   * 才回退预览框），出纸口同样由设备中心台账解析。
+   *
+   * **票面用的是 `recordPayment` 的返回值，不是手上这份缓存**：`payment_add` 回的是
+   * 写库之后重新读出来的那一行（`settlements.rs::record_payment` 末尾
+   * `load_settlement_by_id`），已付金额与付款状态都是刚登记完的。若照旧数据印，
+   * 票面上「已付」还是登记前那个数——正是工作台 `triggerPrint` 特意等一遍重取要避免的事。
+   *
+   * 用户定的口径：票种是**结算凭证**（整单，不是付款小票），且**每次登记付款都出**
+   * ——分次付款时每笔都有一张纸，农户每拿一笔钱都握得住凭据。
+   */
+  const printVoucherAfterPayment = useCallback(
+    async (paid: Settlement) => {
+      // 没有出票权就压根不该出纸（页头那枚「打印凭证」同样是禁用的）
+      if (!can("print")) return;
+      if (!station) {
+        toast.warning("结算凭证没能出纸：站点信息尚未载入，请在页头点「打印凭证」补一张");
+        return;
+      }
+      await printReceipt({
+        scenario: "settlement_voucher",
+        docNo: paid.settle_no,
+        // 这一单在「登记付款」这条路上的首次出票，不是补打
+        isReprint: false,
+        context: { station, names, settlement: paid },
+      });
+    },
+    [can, station, names, printReceipt],
+  );
+
   const pay = useMutation({
     mutationFn: () =>
       api.recordPayment({
@@ -90,6 +132,7 @@ export function SettlementDetailBody({
       void queryClient.invalidateQueries({ queryKey: ["credits"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       void queryClient.invalidateQueries({ queryKey: ["orders"] });
+      void printVoucherAfterPayment(s);
     },
     onError: (e) => toast.error(e instanceof Error && e.message ? e.message : "登记失败，请重试"),
   });
@@ -139,6 +182,13 @@ export function SettlementDetailBody({
   }
 
   const { settlement: s, orders, payments } = data;
+
+  /** 未付余额清零 = 这一单结清了 */
+  const fullyPaid = unpaidFen === 0;
+  /** 撤销的单不盖"全额付清"印子：那枚印子会把"已撤销"这个事实盖住 */
+  const showPaidStamp = fullyPaid && s.status === "normal";
+  /** 最后一笔付款的时间：`paid_at` 就是 ISO 串，直接比大小取最大，不依赖服务端给的排序 */
+  const lastPaidAt = payments.reduce<string | null>((acc, p) => (acc == null || p.paid_at > acc ? p.paid_at : acc), null);
 
   const orderCols: Column<(typeof orders)[number]>[] = [
     { key: "order_no", header: "磅单号", cell: (o) => <span className="tnum font-medium">{o.order_no}</span> },
@@ -226,9 +276,10 @@ export function SettlementDetailBody({
 
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)]">
             <div className="flex min-w-0 flex-col gap-4">
-              <section className="border bg-card">
+              <section className="relative border bg-card">
                 <header className="border-b px-3 py-2 text-sm font-semibold">结算信息</header>
-                <div className="p-3">
+                {/* 盖了印子就得给印子腾地方，否则最后一行（备注）会被压住 */}
+                <div className={cn("p-3", showPaidStamp && "pb-20")}>
                   <InfoGrid
                     cols={2}
                     items={[
@@ -249,6 +300,7 @@ export function SettlementDetailBody({
                     ]}
                   />
                 </div>
+                {showPaidStamp && <PaidStamp paidFen={s.paid_fen} paidAt={lastPaidAt} />}
               </section>
 
               <section className="border bg-card">
@@ -296,27 +348,35 @@ export function SettlementDetailBody({
                 </div>
               </section>
 
-              <section className={cn("border bg-card", !can("pay.record") && "opacity-70")}>
-                <header className="border-b px-3 py-2 text-sm font-semibold">登记付款</header>
-                <div className="flex flex-col gap-3 p-3">
-                  <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    <span>本次金额（元）</span>
-                    <KeypadInput
-                      aria-label="本次付款金额"
-                      aria-invalid={amountErr ? true : undefined}
-                      value={amountYuan}
-                      onChangeValue={setAmountYuan}
-                      keys={digitKeys({ decimalPoint: true })}
-                      columns={6}
-                      maxLength={12}
-                      toggleLabel="数字"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      placeholder={unpaidFen ? String(unpaidFen / 100) : "0"}
-                      inputClassName="tnum text-base"
-                    />
-                    {!!amountErr && <span className="text-destructive">{amountErr}</span>}
-                    {unpaidFen > 0 && (
+              {/*
+                「登记付款」整块只在**未付余额还有钱**时露出来。结清之后这张卡片唯一能做的事
+                就是显示"本单已结清，无需再登记"——留着它让人对着那颗灰按钮反复点，
+                收起的理由与结果由「结算信息」右下角那枚「全额付清」印子交代。
+
+                因此块内的"余额为 0"分支全是不可达的，这里一并去掉（不再写 `unpaidFen === 0`
+                那种守着不可能发生的判断），免得后人以为零余额时还会渲染到这里。
+              */}
+              {!fullyPaid && (
+                <section className={cn("border bg-card", !can("pay.record") && "opacity-70")}>
+                  <header className="border-b px-3 py-2 text-sm font-semibold">登记付款</header>
+                  <div className="flex flex-col gap-3 p-3">
+                    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      <span>本次金额（元）</span>
+                      <KeypadInput
+                        aria-label="本次付款金额"
+                        aria-invalid={amountErr ? true : undefined}
+                        value={amountYuan}
+                        onChangeValue={setAmountYuan}
+                        keys={digitKeys({ decimalPoint: true })}
+                        columns={6}
+                        maxLength={12}
+                        toggleLabel="数字"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        placeholder={String(unpaidFen / 100)}
+                        inputClassName="tnum text-base"
+                      />
+                      {!!amountErr && <span className="text-destructive">{amountErr}</span>}
                       <Button
                         type="button"
                         variant="outline"
@@ -325,54 +385,48 @@ export function SettlementDetailBody({
                       >
                         全额付清 {money(unpaidFen)}
                       </Button>
-                    )}
+                    </div>
+                    <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      付款方式
+                      <Choose
+                        aria-label="付款方式"
+                        value={method}
+                        onChange={(v) => setMethod(v as PaymentMethod)}
+                        options={(Object.keys(PAYMENT_METHOD) as PaymentMethod[]).map((k) => ({
+                          value: k,
+                          label: PAYMENT_METHOD[k],
+                          // 挂账核销只由财务流程产生，不在这里手工选
+                          disabled: k === "credit_writeoff",
+                        }))}
+                      />
+                    </Label>
+                    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      <span>交易流水号 / 凭证号</span>
+                      <KeypadInput
+                        aria-label="交易流水号"
+                        aria-invalid={tradeErr ? true : undefined}
+                        value={tradeNo}
+                        onChangeValue={setTradeNo}
+                        keys={alnumKeys()}
+                        columns={9}
+                        maxLength={32}
+                        toggleLabel="键盘"
+                        autoComplete="off"
+                        placeholder="现金可不填"
+                        inputClassName="tnum text-sm"
+                      />
+                      {!!tradeErr && <span className="text-destructive">{tradeErr}</span>}
+                    </div>
+                    <Button size="sm" disabled={payHasErr || pay.isPending} onClick={() => pay.mutate()}>
+                      <BanknoteIcon />
+                      {pay.isPending ? "登记中…" : "确认付款"}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      每次登记付款都会自动打一张结算凭证：凭证联交给售粮人作为收款依据，存根联财务留存。没出纸会弹预览框，手动补打即可。
+                    </p>
                   </div>
-                  <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    付款方式
-                    <Choose
-                      aria-label="付款方式"
-                      value={method}
-                      onChange={(v) => setMethod(v as PaymentMethod)}
-                      options={(Object.keys(PAYMENT_METHOD) as PaymentMethod[]).map((k) => ({
-                        value: k,
-                        label: PAYMENT_METHOD[k],
-                        // 挂账核销只由财务流程产生，不在这里手工选
-                        disabled: k === "credit_writeoff",
-                      }))}
-                    />
-                  </Label>
-                  <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    <span>交易流水号 / 凭证号</span>
-                    <KeypadInput
-                      aria-label="交易流水号"
-                      aria-invalid={tradeErr ? true : undefined}
-                      value={tradeNo}
-                      onChangeValue={setTradeNo}
-                      keys={alnumKeys()}
-                      columns={9}
-                      maxLength={32}
-                      toggleLabel="键盘"
-                      autoComplete="off"
-                      placeholder="现金可不填"
-                      inputClassName="tnum text-sm"
-                    />
-                    {!!tradeErr && <span className="text-destructive">{tradeErr}</span>}
-                  </div>
-                  <Button
-                    size="sm"
-                    disabled={payHasErr || pay.isPending || unpaidFen === 0}
-                    onClick={() => pay.mutate()}
-                  >
-                    <BanknoteIcon />
-                    {pay.isPending ? "登记中…" : "确认付款"}
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    {unpaidFen === 0
-                      ? "本单已结清，无需再登记。"
-                      : "付款后打印的凭证联交给售粮人作为收款依据，存根联财务留存。"}
-                  </p>
-                </div>
-              </section>
+                </section>
+              )}
             </div>
           </div>
         </div>
@@ -397,5 +451,35 @@ export function SettlementDetailPage() {
         </Button>
       }
     />
+  );
+}
+
+/* ------------------------------------------------------------------ 「全额付清」印记 */
+
+/**
+ * 结清印记（压在「结算信息」卡片右下角）。
+ *
+ * 未付余额清零之后，这一页最该被一眼看见的事实是"这单付完了"——原先只有页头那枚小徽章
+ * 与金额汇总里一行 0，出纳站在两米外看不出这张单和别的有什么不同，客户伸手问"我这钱结清没有"
+ * 时得凑到屏前读数字。所以做成一枚盖上去的印子：大字、双线框、轻微倾斜。
+ *
+ * 印在纸上的老规矩是"章要压在内容上"，但这里是屏幕：绝对定位压住的是**备注那一行**，
+ * 所以父卡片在盖印时把内容容器的下内边距放大（`pb-20`），给印子腾出一块不重叠的地方。
+ *
+ * `aria-hidden`：纯视觉强调，语义已由页头的付款状态徽章与「已付金额 / 未付余额」两行承载，
+ * 读屏再念一遍只是噪音；金额与最后一笔付款时间仍实名印上，便于人工核对。
+ */
+function PaidStamp({ paidFen, paidAt }: { paidFen: number; paidAt: string | null }) {
+  return (
+    <div className="pointer-events-none absolute right-3 bottom-3 select-none text-success" aria-hidden>
+      <div className="-rotate-6 border-2 border-current px-3 py-1 text-center opacity-80">
+        {/* 字间距会在末字后留出同样的空隙，补一个等量左内边距才真正居中 */}
+        <p className="pl-[0.2em] text-xl font-bold tracking-[0.2em]">全额付清</p>
+        <p className="tnum mt-0.5 text-[10px]">
+          已付 {money(paidFen)}
+          {paidAt ? ` · ${dateTime(paidAt)}` : ""}
+        </p>
+      </div>
+    </div>
   );
 }

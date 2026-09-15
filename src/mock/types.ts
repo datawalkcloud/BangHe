@@ -214,7 +214,11 @@ export interface WeighOrder {
   party_name: string;
   party_type: PartyType;
   id_card_no: string;
-  /** 收购品种：制单可空（迁移 0017），结算与录化验前必填。空值界面一律显「未定品种」 */
+  /**
+   * 收购品种：制单起必填（2026-09-14），这一列本身仍可空——存量单、以及事后被
+   * `setOrderVariety` 清空的那类都在库里，空值界面一律显「未定品种」。
+   * 结算与录化验前必填这两道闸也一条没撤。
+   */
   variety_id: ID | null;
   variety_code: string | null;
   variety_name: string | null;

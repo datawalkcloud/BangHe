@@ -17,8 +17,6 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, KeyRoundIcon, LogInIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { BOOTSTRAP_HINT, type LoginOutcome } from "@/lib/auth";
-import { ROLE } from "@/lib/constants";
-import { useStaff } from "@/hooks/useLookups";
 import { useSession } from "@/store/session";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -76,14 +74,8 @@ export function LoginPage() {
   const firstField = useRef<HTMLInputElement>(null);
 
   const { data: station } = useQuery({ queryKey: ["station"], queryFn: () => api.station(), staleTime: Infinity });
-  const { data: staff = [] } = useStaff();
   const lockedLeft = useCountdown(result?.lockedUntil ?? null);
   const passwordField = useRef<HTMLInputElement>(null);
-
-  /** 在册员工按"最近登录过"排：常来的那两三个必然在最前，点一次就选到自己 */
-  const activeStaff = staff
-    .filter((u) => u.is_active === 1)
-    .sort((a, b) => (b.last_login_at ?? "").localeCompare(a.last_login_at ?? ""));
 
   const mustSetup = !!session.session?.actor.mustChangePwd;
   const mode: "signin" | "setup" = mustSetup || result?.needsPasswordSetup === true ? "setup" : "signin";
@@ -231,30 +223,6 @@ export function LoginPage() {
               <AlertTitle>设置未完成</AlertTitle>
               <AlertDescription>{result.error}</AlertDescription>
             </Alert>
-          )}
-
-          {mode === "signin" && activeStaff.length > 1 && (
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">先点你本人（不必打登录名）</span>
-              <div className="flex flex-wrap gap-1.5">
-                {activeStaff.map((u) => (
-                  <Button
-                    key={u.id}
-                    type="button"
-                    size="sm"
-                    variant={username.trim() === u.username ? "default" : "outline"}
-                    className="h-9 text-sm"
-                    onClick={() => {
-                      setUsername(u.username);
-                      window.setTimeout(() => passwordField.current?.focus(), 0);
-                    }}
-                  >
-                    {u.display_name}
-                    <span className="text-[11px] opacity-70">{ROLE[u.role]}</span>
-                  </Button>
-                ))}
-              </div>
-            </div>
           )}
 
           {mode === "signin" ? (

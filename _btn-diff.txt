@@ -1,0 +1,16 @@
+﻿ src/components/ui/button.tsx | 3 ---
+ 1 file changed, 3 deletions(-)
+diff --git a/src/components/ui/button.tsx b/src/components/ui/button.tsx
+index d629763..0b67b44 100644
+--- a/src/components/ui/button.tsx
++++ b/src/components/ui/button.tsx
+@@ -47,9 +47,6 @@ function Button({
+     <ButtonPrimitive
+       data-slot="button"
+       className={cn(buttonVariants({ variant, size, className }))}
+-      // 鐢?render 鎶婅Е鍙戝厓绱犳崲鎴?<a> / <Link> 鏃讹紝base-ui 榛樿鐨?nativeButton=true 浼氭牎楠屽け璐ュ苟鍛婅锛?-      // 杩欓噷闆嗕腑鎸?render 鏄惁瀛樺湪鎺ㄥ锛岃皟鐢ㄦ柟浠嶅彲鏄惧紡瑕嗙洊銆?-      nativeButton={props.render ? false : true}
+       {...props}
+     />
+   )
+True
+True

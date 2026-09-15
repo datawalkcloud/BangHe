@@ -55,7 +55,10 @@ export function settleGateOf(
     return {
       tone: "danger",
       title: "当前岗位不能在这个窗口结算",
-      body: "结算需要出纳或站长权限（05 §5）。请换当班出纳的账号登录；磅员只负责出票，不负认定价。",
+      // 这句话在三个入口上都要站得住：`/scan-settle`（兑付窗口，磅员不在）、工作台扫票（同上）、
+      // 称重区那个「去结算」（磅房那条路上磅员确实有一条挂账权）。所以不写"磅员只负责出票"，
+      // 而是把两条路的边界说清楚——岗位拦下的事必须让人明白自己该换谁来。
+      body: "结算需要出纳或站长权限（05 §5）；磅员在磅房那条路上只有「只挂账、不碰现金」的那一条，替客户算钱仍要出纳或站长。请换当班出纳或站长的账号登录。",
     };
   }
   if (order.status === "voided" || order.status === "rejected" || order.status === "reversed" || order.status === "archived") {

@@ -1,0 +1,27 @@
+﻿cargo :     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s
+所在位置 行:445 字符: 42
++ ... \src-tauri; cargo test --test schema_contract doc_section9 -- --nocap ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `t...get(s) in 0.67s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+     Running tests\schema_contract.rs (target\debug\deps\schema_contract-e4ab23a0700c29ce.exe)
+
+running 2 tests
+test doc_section9_table_set_matches_database ... ok
+
+thread 'doc_section9_columns_match_database' (27148) panicked at tests\schema_contract.rs:426:5:
+
+搂9 琛ㄧ粨鏋?鈫?瀹為檯缁撴瀯锛? 澶勪笉涓€鑷?  路 stock_movement.is_opening锛氬簱閲屾湁璇ュ垪锛屄? 娌℃湁锛堟枃妗ｆ病鍚屾锛屾垨鑴氭湰澶氬啓浜嗭級
+淇硶鏄銆屾枃妗?/ 寤鸿〃鑴氭湰 / 鍓嶇甯搁噺銆嶄笁鑰呭榻愶紝涓嶈鍗曠嫭鏀惧鏌愪竴椤广€?note: run with `RUST_BACKTRACE=1` environment variable to display 
+a backtrace
+test doc_section9_columns_match_database ... FAILED
+
+failures:
+
+failures:
+    doc_section9_columns_match_database
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 5.82s
+
+error: test failed, to rerun pass `--test schema_contract`

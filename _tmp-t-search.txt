@@ -1,0 +1,21 @@
+﻿cargo :    Compiling banghe v0.1.0 (G:\Github\BangHe\src-tauri)
+所在位置 行:445 字符: 390
++ ... t; "qc=$LASTEXITCODE"; cargo test --test search_contract 2>&1 | Out-F ...
++                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ba...ngHe\src-tauri):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.57s
+     Running tests\search_contract.rs (target\debug\deps\search_contract-b540b26e7e312a81.exe)
+
+running 7 tests
+test blank_keyword_returns_three_empty_groups_without_touching_the_database ... ok
+test payload_matches_the_frontend_contract_without_detail_buckets ... ok
+test soft_deleted_party_leaves_the_results ... ok
+test orders_come_newest_first_and_party_name_hits_outrank_field_hits ... ok
+test order_hits_cover_no_name_vehicle_and_last_four_id_digits ... ok
+test wildcard_characters_in_keyword_are_matched_literally ... ok
+test each_group_is_capped_in_sql_at_8_6_6 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
