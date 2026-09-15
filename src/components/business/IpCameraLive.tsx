@@ -133,8 +133,9 @@ export function IpCameraLive({ spec, className, meta }: { spec: IpCamSpec; class
 
   return (
     <div className={cn("absolute inset-0", className)}>
-      {/* 旧帧留在 DOM 里当底：换帧只是改 src，重连那一小段不会闪成一块空框 */}
-      {frame && <img src={frame.dataUrl} alt="" className="size-full object-cover" />}
+      {/* 旧帧留在 DOM 里当底：换帧只是改 src，重连那一小段不会闪成一块空框。
+          contain 保完整画幅——格子不是 16:9 时宁可留信箱，也不裁掉磅员要看的边角。 */}
+      {frame && <img src={frame.dataUrl} alt="" className="size-full object-contain" />}
       {!frame && (
         <div className="absolute inset-0 flex items-center justify-center px-2 text-center">
           <p className="flex flex-col items-center gap-0.5 text-[11px] leading-tight text-muted-foreground">

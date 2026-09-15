@@ -157,7 +157,9 @@ export function CameraPanel({
         </CardAction>
       </CardHeader>
 
-      <CardContent className="flex flex-col gap-1 p-2">
+      {/* 整卡高度都让给画面：内容区撑满格子（ws-tile 那条 CSS 已给 card-content flex-1），
+          画面网格 flex-1 吃掉剩余高度——把面板拖大画面就跟着变大，不再固定 130 px 裁掉上下。 */}
+      <CardContent className="flex h-full min-h-0 flex-col gap-1 p-2">
         {cameras.length === 0 ? (
           <div className="flex h-[80px] items-center justify-center border bg-muted/60 text-[11px] text-muted-foreground">
             <p className="flex flex-col items-center gap-0.5">
@@ -171,7 +173,7 @@ export function CameraPanel({
           </div>
         ) : (
           <div
-            className="grid gap-1"
+            className="grid min-h-0 flex-1 gap-1"
             style={{
               // 容器宽 → 相机自动横排；面板被拖窄 → 自动换行竖排。每格保持同样板高，
               // 用 minmax(min(...,100%),1fr) 防止一格也撑破容器（老 grid 溢出坑）。
@@ -194,7 +196,7 @@ export function CameraPanel({
         )}
 
         {photos.length > 0 ? (
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <span className="shrink-0 text-[10px] text-muted-foreground">本单抓拍 {photos.length} 张</span>
             {photos.map((p) => (
               <Button
@@ -212,7 +214,7 @@ export function CameraPanel({
             ))}
           </div>
         ) : (
-          <p className="text-[10px] text-muted-foreground">
+          <p className="shrink-0 text-[10px] text-muted-foreground">
             本单暂无抓拍{order ? "：捕获毛/皮重时自动取图；摄像机离线只标记，不拦作业。" : "：先取号制单后才会触发。"}
           </p>
         )}
@@ -286,8 +288,11 @@ function CameraTile({
   return (
     <div
       className={cn(
-        "group relative w-full overflow-hidden border bg-muted/60 transition-all",
-        compact ? "h-[56px]" : "h-[130px]",
+        "group relative w-full overflow-hidden border transition-all",
+        // 高度跟着面板走：非紧凑态只保底 130 px，往上由 grid 行拉伸填满（画面是 object-contain，
+        // 拉多高都不会裁掉上下）；黑底让 16:9 之外的留影像播放器信箱，而不是灰块。
+        compact ? "h-[56px]" : "min-h-[130px]",
+        spec != null || ip != null ? "bg-black" : "bg-muted/60",
         !online && "border-destructive/40",
       )}
     >

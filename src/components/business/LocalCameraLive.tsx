@@ -67,7 +67,7 @@ export function LocalCameraLive({ spec, className }: { spec: LocalCamSpec; class
         muted
         playsInline
         autoPlay
-        className={cn("size-full object-cover", status !== "live" && "invisible")}
+        className={cn("size-full object-contain", status !== "live" && "invisible")}
       />
       {status !== "live" && (
         <div className="absolute inset-0 flex items-center justify-center px-2 text-center">
