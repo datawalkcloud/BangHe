@@ -41,11 +41,19 @@
 码是最后两个漏网的。
 
 - 落点**只在 `code-size.ts::codeOffsetDots(codeDots, paper, machinePaper?)` 算一份**：
-  `axis = min(纸卷整幅点宽, 机头点宽)`，`offset = (axis - codeDots) / 2`；定长纸恒 0
-  （那是打印队列的地盘，落点归驱动）。宽度预算同理只在 `codeBudgetDots()`。
+  **轴 = 机头点宽**，`offset = (head - codeDots) / 2`；定长纸恒 0（那是打印队列的地盘，
+  落点归驱动）。宽度预算同理只在 `codeBudgetDots()`。
   两个辅助函数：`headDots()`（58 机 384 / 80 机 576）、`rollDots()`（58 卷 464 / 80 卷 640）。
-  轴取 min 的理由：装态一致时它**恰好退回固件原来那个数**（80 纸对 576 点 → 576；58 卷对 384 点
-  → 384），所以**80 装 80、58 装 58 的站点分毫不动**，只有"票面纸型 ≠ 机器纸型"才生效。
+  轴取头宽的理由：**卷在机头下是居中卡着的**（纸仓壁 / 58mm 定心隔套），所以
+  **卷的中线与头的中线是同一条线**，"在纸上居中"="在机头上居中"。而且它与正文同轴——
+  `render.rs::aligned` 是往 `cols` 列里补空格，`cols × 12 点` 正是头宽；码下方那行说明文字
+  也走 `aligned`。三者同轴，票面才齐。
+- **别把轴取成 `min(卷幅, 机头)`**——2026-09-15 的"条码是左对齐的"就是这么来的：80 机装 58 卷时
+  轴成了卷幅 464，落点只有 57 点，而卷的左沿在**头坐标 56**（不是 0）→ 左留白 1 点、右留白 112 点，
+  条码紧贴纸的左边缘。落点是**头坐标**，量"在纸上偏没偏"必须先减掉 `rollLeftDots()`；
+  自检里 H5 这条回归锚自己写的时候也踩了同一个坑（右留白少加了卷左沿）。
+- 装态一致时（票面纸型 = 机器纸型）这个值与固件原来的行为完全相同，**80 装 80、58 装 58 的站点
+  分毫不动**，只有"票面纸型 ≠ 机器纸型"才生效（实测：58 卷 + 80 机，落点 57 → 113，留白 1/112 → 57/56）。
 - **`machinePaper` 必须传**：它是这次出纸**告诉机器的**那张纸（`print_receipt` 的 paper 参数），
   与票面 `template.paper` 可能不同（模板按 80 存、机器装 58）。三个调用点在
   `silent.ts`（热敏 → `target.paper`）/ `ReceiptPrintPreview.tsx`（框里选的那张）/ `TemplateEditor.tsx`。
@@ -58,8 +66,9 @@
   （`qrcode` 库、纠错 H、含 4 模块静区）估一个，**估宽了是安全的**（落点更靠左、仍在纸内），
   估窄了才有风险；所以写死版式的两张老票（`write_weigh_ticket` / `write_self_test`）一律传 **0**，
   贴可打区左端起排。回归在 `render.rs::fixed_layout_tickets_never_delegate_alignment`。
-- 自检脚本 H1–H12 在 `scripts/receipt-code/check.ts`。**改 `render.rs` 之后要真的 `cargo test`**，
-  见 `toolchain.md`。
+- 自检脚本 H1–H13 在 `scripts/receipt-code/check.ts`（**H13 是最要紧的那条**：四种装态下
+  "码的中线 = 机头中线 = 卷的中线"，它不依赖卷宽这个建模，蒙不过去）。
+  **改 `render.rs` 之后要真的 `cargo test`**，见 `toolchain.md`。
 
 ## 列宽：判据不手写码表，直接问 GBK（2026-09-14 新增规则）
 `render.rs::char_width` 原来用一张手写 Unicode 区段表判全角，**漏一块就破相**：`—`(U+2014)、

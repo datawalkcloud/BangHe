@@ -145,10 +145,17 @@ pub enum TextAlign {
 /// 翻成 ESC/POS 指令。于是"改版式不动 Rust"这条承诺才成立——新增一种票据、
 /// 勾掉一个字段，变的都只是这个行序列。
 ///
-/// 字段名一律用单词（text / label / value / …），serde 只重命名 variant；
-/// 这样前后端不必为 camelCase 还是 snake_case 互猜，也对齐 `WeighTicket` 的既有约定。
+/// 字段名一律用单词（text / label / value / …），前后端同形。
+///
+/// **`rename_all_fields` 不能省。** `#[serde(rename_all = "camelCase")]` 用在 enum 上
+/// 只重命名 **variant**（`Barcode` → `barcode`），**字段一个都不动**——字段要 `rename_all_fields`
+/// 才跟着改。2026-09-15 就是漏了它：前端 `escpos.ts` 发的是 `padLeft`，Rust 认的是
+/// `pad_left`，serde 把不认识的字段**静默丢掉**（`#[serde(default)]` 于是补 0），
+/// 于是码的落点恒为 0 —— 条码一直贴着纸的左边缘，而改落点算法在机器上毫无变化。
+/// 整个 enum 里 `pad_left` 是唯一的多词字段，所以别的字段全都正常，只有它悄悄死了。
+/// 加新字段时记住：**多词字段必须能被前端的 camelCase 拼法认出来**。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PrintLine {
     /// 整行文本。样式只作用于这一行——`write_lines` 打完立即复位，不串到下一行去
     Text {

@@ -77,12 +77,12 @@ export function printableMm(paper: PaperKind): number {
  * 它和纸宽不是一回事，两者都可能是窄的那一方：80 纸 640 点比 576 点宽（纸边各 4mm 打不到），
  * 58 纸 464 点比 576 点窄（机身有 10mm 宽的纸边用不上）。码的横向落点算的就是这个差。
  */
-function headDots(paper: PaperKind): number {
+export function headDots(paper: PaperKind): number {
   return paper === "thermal58" ? 384 : 576;
 }
 
 /** 卷纸的整幅点宽（含纸边那圈不可用区）：58 → 464，80 → 640。定长纸返回 0（不参与热敏落点） */
-function rollDots(paper: PaperKind): number {
+export function rollDots(paper: PaperKind): number {
   return isRollPaper(paper) ? Math.round(PAPER_SPEC[paper].widthMm / DOT_MM) : 0;
 }
 
@@ -99,27 +99,43 @@ export function codeBudgetDots(paper: PaperKind, machinePaper?: PaperKind): numb
 }
 
 /**
+ * 卷纸在机头下的左沿（头坐标，可为负 = 卷比头宽、纸从两头探出去）。
+ *
+ * 走纸机构（纸仓壁或 58mm 定心隔套）一律把卷**居中**卡在机头下，所以这条式子对两种
+ * 装态都成立：卷比头宽时纸从两边各探出一点，卷比头窄时纸缩在头的中段。
+ * 结论是那句关键的：**卷的中线与头的中线是同一条线**。
+ */
+export function rollLeftDots(paper: PaperKind, machinePaper?: PaperKind): number {
+  return (headDots(machinePaper ?? paper) - rollDots(paper)) / 2;
+}
+
+/**
  * 码的横向落点（点，从**打印头左端**起算）。
  *
- * 为什么不让固件居中：`ESC a 1` 按**打印机自己认的可打宽度**居中，而那个数只跟机身有关、
- * 与这卷纸无关。80 机装 58 卷时机身仍按 576 点（72mm）居中，48mm 宽的条码就落在 12~60mm，
- * 而纸只有 58mm——右端连着停止符一起被切在纸外，票看着打出来了，扫码枪却读不出来。
- * 正文早就按这条原则办了（`render.rs::aligned` 用前导空格补齐，不交给 `ESC a`），
- * 码是最后两个漏网的；现在落点在这里一次算清，机器只负责照点排（见 `escpos.ts` 与
- * `render.rs::barcode`）。
+ * **轴就是机头宽度。** 因为卷在机头下是居中的（见 [`rollLeftDots`]），
+ * "在纸上居中"与"在机头上居中"是同一件事，落点于是恒为 `(头宽 − 码宽) / 2`。
  *
- * 轴取"纸"与"头"里更窄的那个，理由是纸在机身上的装法只有两种：
- *  - 纸比头窄（58 卷装在 80 机上）——卷贴着头的左端，于是"在卷上居中"就是"在这个更窄的轴里居中"；
- *  - 纸比头宽（80 纸对 576 点头）——卷在头下面居中，量到卷心的距离恰好就是头宽本身。
- * 后一种正是固件一直在用的轴，于是**装态一致的站点（票面纸型 = 机器纸型）这一改分毫不动**。
+ * 这样定还与票上其余各行同一条轴：正文靠 `render.rs::aligned` 往 `cols` 列里补空格，
+ * 而 `cols × 12 点` 正是头宽；码下方那行可读内容也走 `aligned`。三者同轴，
+ * 码才不会和它自己的说明文字错开——从前按"卷幅"算落点，正文按头宽算，
+ * 两者在 80 机装 58 卷时差 56 点（7mm），一眼就看得出是歪的。
  *
- * 与预览的关系：预览把码居中画在纸宽里，所以这里的落点也按纸算，两边才重合。
+ * 为什么不交给固件的 `ESC a 1`：它居中的基准是**机身认的可打宽度**，是厂商写死的数，
+ * 未必等于我们这里推出来的头宽，也不保证与正文那条轴重合。而二维码更没有别的选择
+ * ——`GS ( k` 从当前位置起排点，只能靠前导空格推。两个码因此都在这里一次算清，
+ * 机器只负责照点排（见 `escpos.ts` 与 `render.rs::barcode`）。
+ *
+ * **宽度预算（[`codeBudgetDots`]）才是"别出纸"那一半**，两者别混：预算按"票面纸型
+ * 的可打宽度 ∩ 机头宽度"收，保证码不会宽过纸；落点只管把这条已经放得下的码摆到纸中间。
+ * 2026-09-15 的现场事故就是把落点当成了第二道保险，结果 80 机装 58 卷时条码贴着纸的
+ * 左边缘（左留白 1 点、右留白 112 点），看着就是左对齐。
+ *
+ * 装态一致时（票面纸型 = 机器纸型）这个值与固件原来的行为完全相同，老站点分毫不动。
  */
 export function codeOffsetDots(codeDots: number, paper: PaperKind, machinePaper?: PaperKind): number {
-  const roll = rollDots(paper);
-  if (roll === 0) return 0; // 定长纸走打印队列，落点由驱动的可打区说了算，见 queue_print.rs
-  const axis = Math.min(roll, headDots(machinePaper ?? paper));
-  return Math.max(0, Math.round((axis - codeDots) / 2));
+  if (!isRollPaper(paper)) return 0; // 定长纸走打印队列，落点由驱动的可打区说了算，见 queue_print.rs
+  const head = headDots(machinePaper ?? paper);
+  return Math.max(0, Math.round((head - codeDots) / 2));
 }
 
 /** 再压也不能低于 1 点（0.125mm）：栅格画不出半个点，细于 1 点的模块会整条消失 */

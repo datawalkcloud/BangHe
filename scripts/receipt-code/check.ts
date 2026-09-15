@@ -14,7 +14,7 @@
  * 覆盖的是纯函数那一层（`code-size` / `code128` / `render.kvClusters` / `escpos.receiptLines`）：
  * 不碰 DOM、不碰设备，所以不需要任何 stub。
  */
-import { BARCODE_HEIGHT_DOTS, CODE_SCALE_DOTS, DOT_MM, codeBudgetDots, codeOffsetDots, fitModuleDots, printableDots, printableMm, scaleOf } from "../../src/components/print/receipt/code-size";
+import { BARCODE_HEIGHT_DOTS, CODE_SCALE_DOTS, DOT_MM, codeBudgetDots, codeOffsetDots, fitModuleDots, headDots, printableDots, printableMm, rollDots, rollLeftDots, scaleOf } from "../../src/components/print/receipt/code-size";
 import { CODE128_QUIET_MODULES, code128Runs, encodeCode128, measureCode128 } from "../../src/components/print/receipt/code128";
 import { kvClusters } from "../../src/components/print/receipt/render";
 import { qrSideDots } from "../../src/components/print/receipt/QrGraphic";
@@ -95,13 +95,16 @@ ok("C10 压过之后仍然铺满可打宽度（不是掉到整数档只占半张
   return { paper: p, dots: g?.dots, footprint: g ? mm1(g.modules * g.dots * DOT_MM) : 0, bars: g ? mm1(g.widthDots * DOT_MM) : 0, max: printableMm(p) };
 }));
 // 铺满不等于突破：条身 + 落点仍要落在卷内（超出就是"条码超出纸张"那一次）。
-// 落点的轴是 min(卷幅, 机头)，所以判据就是卷幅本身——与 H3 同一条，这里按真实载荷再走一遍。
+// 落点是**头坐标**，卷心与头心重合，所以判据是"左右留白都不为负"——直接拿点数比卷幅
+// 会漏掉 80 机装 58 卷那一档（卷的左沿在头坐标 56，不在 0）。
 ok("C11 铺满之后整条仍在卷内", (["thermal58", "thermal80"] as const).every((p) => {
   const roll = p === "thermal58" ? 464 : 640;
   for (const m of [undefined, "thermal58", "thermal80"] as const) {
     const g = measureCode128(TICKET, p, 5, m ? codeBudgetDots(p, m) : undefined);
     if (!g) return false;
-    if (codeOffsetDots(g.widthDots, p, m) + g.widthDots > roll) return false;
+    const left = rollLeftDots(p, m);
+    const pad = codeOffsetDots(g.widthDots, p, m);
+    if (pad - left < 0 || left + roll - (pad + g.widthDots) < 0) return false;
   }
   return true;
 }));
@@ -218,31 +221,50 @@ ok(
   ),
 );
 
-/* ---------------- H. 码的横向落点（"80 机装 58 卷，条码跑出纸外"那条现场投诉） */
-// 故障机制：固件的 `ESC a 1` 是按**机身头宽**居中的，与这卷纸无关。80 机装 58 卷时它仍按
-// 576 点（72mm）居中，48mm 宽的条码就落在 12~60mm，而纸只有 58mm——右端连着停止符一起出纸外，
-// 票看着打出来了，扫码枪读不出来。落点因此由前端算：见 `code-size.ts::codeOffsetDots`。
-const FULL58 = 464; // 58 卷整幅 = 58mm / 0.125mm
+/* ---------------- H. 码的横向落点（“80 机装 58 卷”连着两次现场投诉） */
+// 同一处故障报了两回，第二回是修第一回时修歪的：
+//  ① 条码超出纸张——宽度预算按 80 纸的 64mm 算，条身 58mm，58 卷只有 464 点，装不下；
+//  ② 条码左对齐  ——修①时把落点的轴取成了 min(卷幅, 机头)：80 机装 58 卷时轴成了卷幅 464，
+//     落点只有 57 点。可卷在机头下是**居中**卡着的（左沿在头坐标 56），于是左留白 1 点、
+//     右留白 112 点——条码紧贴纸的左边缘，右边空出 14mm。
+// 两回的根是同一个：这条轴只有同时知道"头宽"与"卷宽"的那一侧才定得下来。现在的口径是
+//   · 落点的轴 = **机头宽度**（卷在头下居中，卷心与头心是同一条线）；
+//   · 宽度预算 = 票面可打宽 ∩ 机头宽（这一半才负责"别出纸"）。
+// 与正文同一条轴：正文靠 `render.rs::aligned` 往 `cols` 列里补空格，而 cols × 12 点正是头宽。
+// 落点是**头坐标**，要量"在纸上偏没偏"得先减掉 `rollLeftDots`——混着比正是漏掉②的原因。
+const FULL58 = rollDots("thermal58"); // 58 卷整幅 = 464 点
+const FULL80 = rollDots("thermal80"); // 80 卷整幅 = 640 点
+const HEAD58 = headDots("thermal58");
+const HEAD80 = headDots("thermal80");
 const hBar = measureCode128(TICKET, "thermal58", 4);
-const hBw = (hBar?.modules ?? 0) * (hBar?.dots ?? 0);
+// 落点按**条身**算（静区不进栅格），所以这里必须用 widthDots，不能用 modules × dots
+const hBw = hBar?.widthDots ?? 0;
 
 // 一致装态（票面纸型 = 机器纸型）必须**分毫不动**：这是"老站点不出问题"的前提。
-// 80 纸比头宽，卷在头下面居中，量到卷心的距离正好就是头宽——与固件一直在用的轴重合。
-ok("H1 80 机 80 纸：落点就是固件原来那个（按头宽居中）", codeOffsetDots(hBw, "thermal80", "thermal80") === Math.round((576 - hBw) / 2), codeOffsetDots(hBw, "thermal80", "thermal80"));
-ok("H2 58 机 58 纸：同样分毫不动", codeOffsetDots(hBw, "thermal58", "thermal58") === Math.round((384 - hBw) / 2));
+ok(
+  "H1 80 机 80 纸：落点就是固件原来那个（按头宽居中）",
+  codeOffsetDots(hBw, "thermal80", "thermal80") === Math.round((HEAD80 - hBw) / 2),
+  codeOffsetDots(hBw, "thermal80", "thermal80"),
+);
+ok("H2 58 机 58 纸：同样分毫不动", codeOffsetDots(hBw, "thermal58", "thermal58") === Math.round((HEAD58 - hBw) / 2));
 
 // 投诉那一幕：58 卷装在 80 机上
 const hPad = codeOffsetDots(hBw, "thermal58", "thermal80");
-ok("H3 80 机装 58 卷：整条码落在纸内", hPad + hBw <= FULL58, { pad: hPad, bw: hBw, full: FULL58 });
-ok("H4 且是在卷上居中（左右留白相等）", Math.abs(FULL58 - hBw - 2 * hPad) <= 1, { pad: hPad, bw: hBw });
-// 改前的位置是固件按 576 点居中 → 右端 = (576 + W) / 2。58 卷只有 464 点，
-// 于是**只要码宽超过 352 点（44mm）右端就出纸**，而这张纸允许的宽度是 384 点（48mm）：
-// 48mm 那一档必然被切掉最后 2mm——停止符和静区都在那儿，票印得出来、扫不出来。
-const oldRight = (w: number) => Math.round((576 - w) / 2) + w;
+const hLeft = rollLeftDots("thermal58", "thermal80"); // 卷在机头下的左沿 = (576-464)/2 = 56
+ok("H3 80 机装 58 卷：轴是机头宽度，不是卷幅", hPad === Math.round((HEAD80 - hBw) / 2), { pad: hPad, bw: hBw });
 ok(
-  "H5 回归锚：改前的位置在 44mm 以上必然出纸（48mm 那档正是被切的那一档）",
-  oldRight(384) > FULL58 && oldRight(352) <= FULL58,
-  { w384: oldRight(384), w352: oldRight(352), full: FULL58 },
+  "H4 且在卷上居中（左右留白相等，都在纸内）",
+  hPad - hLeft >= 0 && hLeft + FULL58 - (hPad + hBw) >= 0 && Math.abs(FULL58 - hBw - 2 * (hPad - hLeft)) <= 1,
+  { 左留白: hPad - hLeft, 右留白: hLeft + FULL58 - (hPad + hBw) },
+);
+// 改前的落点按卷幅算（轴 464），可卷的左沿在头坐标 56 而不是 0 —— 落点少算了 56 点（7mm），
+// 条码于是顶到纸的左沿上：左留白 1 点、右留白 112 点。这就是"条码是左对齐的"那一幕。
+// （右留白同样要减掉卷的左沿——写这条锚的时候自己也踩了同一个坐标坑，被它抓出来了）
+const oldPad = Math.round((FULL58 - hBw) / 2);
+ok(
+  "H5 回归锚：按卷幅算落点会把条码顶到纸的左沿（左留白 ≤2 点、右留白 ≥100 点）",
+  oldPad - hLeft <= 2 && hLeft + FULL58 - (oldPad + hBw) >= 100,
+  { 改前落点: oldPad, 左留白: oldPad - hLeft, 右留白: hLeft + FULL58 - (oldPad + hBw) },
 );
 
 // 反向那种装态：票面按 80 排、机器是 58 机 —— 预算必须被机头压下来，不许再按 64mm 算
@@ -263,9 +285,19 @@ const t58Tpl = { ...settleTpl, paper: "thermal58" as const };
 const t58Lines = receiptLines(t58Tpl, settleCtx, { machinePaper: "thermal80" });
 const t58Bar = t58Lines.find((l) => l.kind === "barcode") as Extract<NativePrintLine, { kind: "barcode" }> | undefined;
 ok(
-  "H10 58 卷 + 80 机出票：条码整条落在纸内（落点真的挂到了行上）",
-  !!t58Bar && (t58Bar.padLeft ?? 0) + t58Bar.width <= FULL58,
-  t58Bar && { pad: t58Bar.padLeft, 条身点宽: t58Bar.width, 整条: (t58Bar.padLeft ?? 0) + t58Bar.width, full: FULL58 },
+  "H10 58 卷 + 80 机出票：条码在纸上居中（落点真的挂到了行上）",
+  !!t58Bar &&
+    (() => {
+      const left = (t58Bar.padLeft ?? 0) - rollLeftDots("thermal58", "thermal80");
+      const right = rollLeftDots("thermal58", "thermal80") + FULL58 - ((t58Bar.padLeft ?? 0) + t58Bar.width);
+      return left >= 0 && right >= 0 && Math.abs(left - right) <= 1;
+    })(),
+  t58Bar && {
+    pad: t58Bar.padLeft,
+    条身点宽: t58Bar.width,
+    左留白: (t58Bar.padLeft ?? 0) - rollLeftDots("thermal58", "thermal80"),
+    右留白: rollLeftDots("thermal58", "thermal80") + FULL58 - ((t58Bar.padLeft ?? 0) + t58Bar.width),
+  },
 );
 ok(
   "H11 同一张票排给 80 纸时，落点按 80 算（不是抄上一张纸的数）",
@@ -278,6 +310,21 @@ ok(
   })(),
 );
 ok("H12 A4 / 针式那一侧不带落点（落点归驱动）", receiptLines(settleTpl, settleCtx).every((l) => (l.kind === "barcode" || l.kind === "qr" ? (l.padLeft ?? 0) === 0 : true)));
+
+// 最要紧的那条不变量，四种装态各验一遍：**码的中线与机头中线重合**。
+// 它不依赖"卷有多宽"这个建模，也就不会被某一档装态的特殊值蒙过去——
+// 正文、码、码下方那行说明文字都落在这条中线上，票面才是齐的。
+ok(
+  "H13 四种装态：码的中线就是机头中线（也是卷的中线）",
+  ([["thermal58", undefined], ["thermal58", "thermal58"], ["thermal58", "thermal80"], ["thermal80", "thermal58"], ["thermal80", "thermal80"]] as const).every(([p, m]) => {
+    const g = measureCode128(TICKET, p, 4, codeBudgetDots(p, m));
+    if (!g) return false;
+    const head = headDots(m ?? p); // 不传机器纸型 = 按票面纸型算
+    const mid = codeOffsetDots(g.widthDots, p, m) + g.widthDots / 2;
+    // 卷心与头心重合：卷的左沿 + 半个卷幅 = 头宽的一半
+    return Math.abs(mid - head / 2) <= 1 && Math.abs(rollLeftDots(p, m) + rollDots(p) / 2 - head / 2) <= 1;
+  }),
+);
 
 console.log(fails === 0 ? "\n全部通过" : `\n${fails} 条不通过`);
 process.exit(fails === 0 ? 0 : 1);
