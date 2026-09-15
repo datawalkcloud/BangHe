@@ -491,7 +491,7 @@ pub fn parse_digest_challenge(header: &str) -> Result<DigestChallenge, String> {
         Some(p) if p.eq_ignore_ascii_case("digest") => &body[6..],
         _ => return Err(format!("摄像机回的认证头不是 Digest 质询：{header}")),
     };
-    let mut params: Vec<(String, String)> = Vec::new();
+    let mut params: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;
     for ch in body.chars() {
@@ -923,8 +923,8 @@ fn image_of(head: &HttpHead, buf: &[u8], max_bytes: usize) -> Result<Vec<u8>, St
         return Err(http_status_reason(head.status));
     }
     let body = http_body(buf, head)?;
-    check_jpeg(body, max_bytes)?;
-    Ok(body.to_vec())
+    check_jpeg(&body, max_bytes)?;
+    Ok(body)
 }
 
 /// 联网抓一张图（失败回中文短句，由调用方按 04 §4.2 降级）。
@@ -971,10 +971,10 @@ fn connect(target: &SnapshotTarget) -> Result<TcpStream, String> {
 /// 解不出来就降级，绝不让过磅陪着等。那条线程之后自己结束，不占任何锁与连接。
 pub(crate) fn connect_to(host: &str, port: u16) -> Result<TcpStream, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let (host, port) = (host.to_string(), port);
+    let owned = host.to_string();
     std::thread::spawn(move || {
         let _ = tx.send(
-            (host.as_str(), port)
+            (owned.as_str(), port)
                 .to_socket_addrs()
                 .map(|it| it.collect::<Vec<_>>())
                 .map_err(|e| net_reason(&e, "解析摄像机地址")),

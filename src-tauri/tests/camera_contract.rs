@@ -304,8 +304,8 @@ fn md5_matches_the_rfc_1321_suite() {
     assert_eq!(md5_hex(b"message digest"), "f96b697d7cb7938d525a2f31aaf161d0");
     assert_eq!(
         md5_hex(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"),
-        "d174ab98d277d9f102245b4c78068b07",
-        "正好 64 字节：补位必须新开一块"
+        "d174ab98d277d9f5a5611c2c9f419d9f",
+        "62 字节：补位放不下，必须新开一块"
     );
     assert_eq!(
         md5_hex(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"),
@@ -365,8 +365,14 @@ fn digest_answer_reproduces_the_rfc_2617_example() {
     .unwrap();
     let h = digest_authorization(&t, &ch).expect("应答组得出来");
 
-    assert_eq!(md5_hex(b"Mufasa:testrealm@host.com:Circle Of Life"), "939e7578ed9e3c518a452effe46c3c14", "RFC 钉死的 HA1");
-    assert_eq!(md5_hex(b"GET:/dir/index.html"), "39aff3a2bab6126f332b942af96d3366", "RFC 钉死的 HA2");
+    assert_eq!(md5_hex(b"Mufasa:testrealm@host.com:Circle Of Life"), "939e7578ed9e3c518a452acee763bce9", "RFC 2617 §3.5 例子的 HA1");
+    assert_eq!(md5_hex(b"GET:/dir/index.html"), "39aff3a2bab6126f332b942af96d3366", "同例的 HA2");
+    // 拿标准自己的 cnonce 把上面两条串起来复算，必须等于 RFC 公布的那条 response
+    assert_eq!(
+        md5_hex(b"939e7578ed9e3c518a452acee763bce9:dcd98b7102dd2f0e8b11d0f600bfb0c093:00000001:0a4f113b:auth:39aff3a2bab6126f332b942af96d3366"),
+        "6629fae49393a05397450978507c4ef1",
+        "RFC 2617 §3.5 公布的 response"
+    );
     for want in [
         "username=\"Mufasa\"",
         "realm=\"testrealm@host.com\"",
@@ -752,15 +758,15 @@ fn bad_config_surfaces_as_error_and_is_written_back_to_the_device() {
     assert_eq!(last.as_deref(), Some(err.as_str()), "设备中心里要看到同一句话");
     assert_eq!(count_files(&tmp.path).len(), 0);
 
-    // Digest 是"配置合法但本轮做不到"：降级，不阻断过磅
-    conn.execute("UPDATE device_config SET config_json = '{\"host\":\"192.168.1.64\",\"user\":\"weigh\",\"auth\":\"digest\",\"snapshotUrl\":\"/snap.jpg\"}' WHERE id = ?1", params![dev]).unwrap();
+    // 配置合法但对端连不上：设备层降级，不阻断过磅（Digest 已经接上，不再是"认证方式没接"）
+    conn.execute("UPDATE device_config SET config_json = '{\"host\":\"127.0.0.1\",\"port\":1,\"user\":\"weigh\",\"password\":\"local-test\",\"auth\":\"digest\",\"snapshotUrl\":\"/snap.jpg\"}' WHERE id = ?1", params![dev]).unwrap();
     assert_eq!(banghe_lib::camera::capture_snapshot(&conn, &tmp.path, &ctx).unwrap(), None);
     let (status, count, last): (String, i64, Option<String>) = conn
         .query_row("SELECT last_status, err_count, last_error FROM device_config WHERE id = ?1", params![dev], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .unwrap();
     assert_eq!(count, 2, "降级同样计入设备错误数");
     assert_eq!(status, "error");
-    assert!(last.unwrap().contains("Digest"), "要说明是认证方式没接");
+    assert!(last.unwrap().contains("连接摄像机"), "要说是这台连不上，别赖认证方式");
 }
 
 #[test]

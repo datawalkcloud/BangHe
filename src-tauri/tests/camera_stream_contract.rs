@@ -138,7 +138,7 @@ fn interleaved_frame_survives_being_cut_in_half() {
 fn several_frames_in_one_read_come_out_in_order() {
     let a = interleaved(0, &rtp_packet(96, 1, 1000, false, &nal(7, &[0])));
     let b = interleaved(0, &rtp_packet(96, 2, 1000, true, &nal(8, &[0])));
-    let c = interleaved(2, b"x".as_bytes()); // 另一路（RTCP 或音频）也照序出来，由 Player 过滤
+    let c = interleaved(2, b"x"); // 另一路（RTCP 或音频）也照序出来，由 Player 过滤
     let mut buf = Vec::new();
     buf.extend_from_slice(&a);
     buf.extend_from_slice(&b);

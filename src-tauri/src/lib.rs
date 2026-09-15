@@ -122,7 +122,6 @@ pub fn run() {
             printer::print_receipt,
             queue_print::print_receipt_queue,
             camera::camera_list_local,
-            // 实时画面不再"一秒问一次"：Rust 开一条 RTSP 会话、软解 H.264，帧由事件推给界面
             camera_stream::camera_stream_start,
             camera_stream::camera_stream_stop,
             camera_stream::camera_stream_status,

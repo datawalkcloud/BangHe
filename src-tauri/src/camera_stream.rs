@@ -490,8 +490,15 @@ pub fn join_control(base_uri: &str, control: &str) -> Result<String, String> {
     if c.contains('@') {
         return Err("SDP 的轨道地址里带了登录口令，预览不接受".into());
     }
-    let sep = if c.starts_with('/') { "" } else { "/" };
-    Ok(format!("{}{}{}", base_uri.trim_end_matches('/'), sep, c))
+    // 以 `/` 开头的是**从根算起**的路径（RFC 3986 §5.3）：只留 base 的协议与主机，路径整个换掉。
+    // 当成相对路径拼会得到 `<会话路径>/xxx`，海康回 404，现场只表现为"连上了却没画面"。
+    if let Some(rest) = c.strip_prefix('/') {
+        if let Some((scheme, after)) = base_uri.split_once("://") {
+            let origin = format!("{}://{}", scheme, after.split('/').next().unwrap_or(after));
+            return Ok(format!("{origin}/{rest}"));
+        }
+    }
+    Ok(format!("{}/{}", base_uri.trim_end_matches('/'), c))
 }
 
 /// `rtsp://host:554/a/b` → `host:554`。
@@ -1353,7 +1360,7 @@ fn touch(live: &Arc<Mutex<StreamStatus>>, f: impl FnOnce(&mut StreamStatus)) {
 fn publish_status(live: &Arc<Mutex<StreamStatus>>) {
     let snap = lock(live).clone();
     // 事件在锁外发：持锁 emit 等于让 JS 侧的同步回调有机会反过来抢同一把锁
-    if let Some(app) = APP.get() {
+    if let Some(app) = APP.with(|slot| slot.borrow().clone()) {
         let _ = app.emit(CAMERA_STATUS_EVENT, &snap);
     }
 }
@@ -1475,7 +1482,8 @@ impl CameraStreamHub {
                 live: live.clone(),
             },
         );
-        Ok(lock(&live).clone())
+        let snap = lock(&live).clone();
+        Ok(snap)
     }
 
     /// 退订一路。引用归零才停线程并**等它退出**：RTSP 会话留在摄像机侧不管，
