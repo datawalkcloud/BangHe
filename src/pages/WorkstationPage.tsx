@@ -38,6 +38,7 @@ import { QcPanel } from "@/components/workstation/QcPanel";
 import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
 import { CameraPanel } from "@/components/workstation/CameraPanel";
 import { localCameraSpec } from "@/lib/local-camera";
+import { ipCameraSpec } from "@/components/business/IpCameraLive";
 import { PanelTile, WorkstationGrid } from "@/components/workstation/WorkstationGrid";
 import { useWorkstationLayout } from "@/components/workstation/layout";
 import type { PanelId } from "@/components/workstation/layout";
@@ -126,8 +127,12 @@ export function WorkstationPage() {
   const regHolding = useDeviceStore((s) => s.regHolding);
   // 常驻面板自己弹读卡/绑卡框时占用共用读卡器：只让后台 IC 常听让位，不换占位卡（否则连带卸载开框的面板本身）
   const panelHolding = useDeviceStore((s) => s.panelHolding);
-  // 抓拍机（04 §4）：本机 USB 摄像头的可用性＝WebView2 能不能开那条流，不由台账的探活状态决定；
-  // IP 摄像机仍认 last_status。必须在 useIcWorkflow 之前算出来——捕获瞬间的取帧回传归它管。
+  // 抓拍机（04 §4）：可用性判据与 CameraPanel「这格能不能出画面」逐字对齐——本机 USB 摄像头看
+  // WebView2 能不能开那条流（localCameraSpec），内网 IP 机看台账里 host 有没有填（ipCameraSpec，
+  // Mock 档已在里面排除），二者都不成立时退回 last_status 兜底。
+  // 三条都不能少：只认 last_status 会把「海康自动检测没跑联机测试」的活机误判成离线（RTSP 画面
+  // 明明在动，服务端却跳过抓拍，两次捕获都无照片）；只认 config.host 又会让 Mock 档被拉去等 3 秒。
+  // 必须在 useIcWorkflow 之前算出来——捕获瞬间的取帧回传归它管。
   // 参与过磅抓拍的是台账里勾了 `config.captureOnWeigh` 的相机，最多 3 台（默认优先、按 id 序，
   // 与真库 `camera::list_capture_cameras` 同口径）；CameraPanel 的画面墙仍按全部启用相机显示。
   const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
@@ -140,7 +145,9 @@ export function WorkstationPage() {
         .slice(0, 3),
     [cameras],
   );
-  const anyCamOnline = captureCams.some((c) => localCameraSpec(c) != null || c.last_status === "online");
+  const anyCamOnline = captureCams.some(
+    (c) => localCameraSpec(c) != null || ipCameraSpec(c) != null || c.last_status === "online",
+  );
   useIcWorkflow({
     paused: regOpen || settleNo != null || regHolding || panelHolding,
     captureCams,
