@@ -15,10 +15,12 @@
 //! `scale::probe_once` 一次性开端口读三帧再归还。其余一律 `ok:false` + 一句人话，
 //! 耗时用 `Instant::now()` 实测：把"没探"演成"探过了"是 mock 时代的病，不带来真库。
 //!
-//! `secret_json`：**当前无口令类字段，本模块对它不写也不合并**。`DEVICE_SPEC` 七类设备
-//! 表单里只有串口 / 波特率 / 帧族 / 地址 / 登录用户 / VID / PID / 纸型（见
-//! `src/pages/DevicesPage.tsx` 的 fields 与 `src/mock/masters.ts` 的种子），连摄像头也只填
-//! `user` 不填 password。等口令真进表单，再补"写时拆进 secret_json、读时合回 config"这一层。
+//! `secret_json`：**本模块仍不写它**。海康 / 大华登记表现在会带一个登录口令（见
+//! `src/pages/DevicesPage.tsx` 的 `networkCameraFields`），它随其余参数一起进
+//! `config_json`——`camera.rs::target_from_config` 读口令的主路径就是这里。库里存的是
+//! 抓图要用的真值，但 `audit_log` 全岗位可筛看，所以两条写配置的留痕都用 `masked_config_json`
+//! 把口令类键打成 `***` 再入审计。等 secret_json 的加密基建落地，再补"写时拆进去、读时合回
+//! config"这一层；届时只有 camera.rs 的读取处跟着改。
 //!
 //! 与 mock 的**有意差异**（都是真库才立得住、或页面本来就需要的口径）：
 //!  - `test_device` 不再拿 `last_status` 反推一个"看起来测过"的结果，探不到就说探不到。
@@ -140,6 +142,23 @@ fn config_json(config: &HashMap<String, serde_json::Value>) -> String {
     serde_json::to_string(&sorted).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// 口令类字段名（与 `camera.rs::target_from_config` 读的键名同源）。
+const SECRET_KEYS: &[&str] = &["password", "pass", "pwd", "secret"];
+
+/// 审计专用的配置快照：口令键的值一律换成 `***`，键名照旧保留。
+/// `device_config.config_json` 里存的是抓图要用的真值，但 `audit.detail` 全岗位可筛看，
+/// 把摄像机口令明文抄进留痕等于对全站广播——掩码只发生在这一份文本上，不改库里的真配置。
+fn masked_config_json(config: &HashMap<String, serde_json::Value>) -> String {
+    let sorted: BTreeMap<&str, serde_json::Value> = config
+        .iter()
+        .map(|(k, v)| {
+            let masked = SECRET_KEYS.iter().any(|s| k.eq_ignore_ascii_case(s));
+            (k.as_str(), if masked { serde_json::Value::String("***".into()) } else { v.clone() })
+        })
+        .collect();
+    serde_json::to_string(&sorted).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// 台账全表（与 mock.listDevices 同返回）。真库每次查库都是新对象，
 /// 不存在 mock 那种"同一批引用交给 react-query 比对不出变化"的问题。
 pub fn list_devices(conn: &Connection) -> Result<Vec<DeviceConfig>, String> {
@@ -254,7 +273,6 @@ pub fn update_device_config(conn: &Connection, actor: &AuthProfile, input: Updat
         return Err(format!("联机测试未通过，配置未保存：{}", input.verify.message));
     }
 
-    let old = config_json(&d.config);
     let mut next = d.config.clone();
     for (k, v) in &input.config {
         next.insert(k.clone(), v.clone());
@@ -280,7 +298,12 @@ pub fn update_device_config(conn: &Connection, actor: &AuthProfile, input: Updat
         "device.update",
         "device_config",
         &d.code,
-        Some(&format!("{old} → {new}{}", if input.verify.verified() { "" } else { "（未经真机验证）" })),
+        Some(&format!(
+            "{} → {}{}",
+            masked_config_json(&d.config),
+            masked_config_json(&next),
+            if input.verify.verified() { "" } else { "（未经真机验证）" }
+        )),
         None,
     );
     load_device(conn, d.id)?.ok_or_else(|| "设备配置保存失败：改动后读不到该行".to_string())
@@ -534,7 +557,7 @@ pub fn update_device(conn: &Connection, actor: &AuthProfile, input: UpdateDevice
         diff.push(format!("驱动 {} → {}", d.driver, driver));
     }
     if cfg_changed {
-        diff.push(format!("配置 {old_cfg} → {new_cfg}"));
+        diff.push(format!("配置 {} → {}", masked_config_json(&d.config), masked_config_json(&next)));
     }
     if input.is_default && d.is_default != 1 {
         diff.push("设为默认".into());
@@ -612,6 +635,12 @@ pub enum ProbePlan {
     IdCard,
     /// 地磅：本机通道就是那条串口读数流（正在收数即在线；没在流时一次性开端口试读几帧）
     Scale,
+    /// 内网摄像机：按台账端点真抓一次图（与过磅抓拍、工作台预览同一条 `grab` 通道，
+    /// 测过就等于出得来图）。`max_bytes` 是这次读台账时算出的单图上限。
+    Camera {
+        target: crate::camera::SnapshotTarget,
+        max_bytes: usize,
+    },
     /// 本机没有这条驱动对应的探测通道
     NotWired { message: String },
     /// 台账里没有这个编码（与 mock 一致：回 ok=false，不抛错）
@@ -667,6 +696,42 @@ pub fn probe_plan(conn: &Connection, code: &str) -> Result<ProbePlan, String> {
             });
         }
         return Ok(ProbePlan::Scale);
+    }
+    // 内网摄像机：探的就是抓拍与工作台预览那条 HTTP 通道，测过＝磅单出得来图、画面看得见。
+    // Mock / 停用 / 本机 USB 三条**绝不开口**：本机机的探测通道只存在于 WebView2 里
+    // （`src/lib/local-camera.ts` 的 probeLocalCamera 真开一次流），服务端去抓它只会
+    // 拿一句"未配置 host"，把一台好机器报成故障。
+    if d.kind == "camera" {
+        if d.is_mock == 1 || d.driver == "mock" {
+            return Ok(ProbePlan::NotWired {
+                message: format!("这台摄像机「{}」在台账里是 Mock，不出真画面，不做真机探测", d.name),
+            });
+        }
+        if d.is_enabled == 0 {
+            return Ok(ProbePlan::NotWired {
+                message: format!("这台摄像机「{}」在台账里已停用，先在设备中心启用再做联机测试", d.name),
+            });
+        }
+        let cfg = config_json(&d.config);
+        if crate::camera::is_local_camera(&cfg) {
+            return Ok(ProbePlan::NotWired {
+                message: "本机 USB 摄像头由工作台直接开流显示，服务端不探测：设备中心的「联机测试」会真开一次流取一帧".to_string(),
+            });
+        }
+        // 口令在 `secret_json` 那一列（展示用的 DTO 特意不带它），探测要拿真口令所以单独读
+        let secret = conn
+            .query_row("SELECT secret_json FROM device_config WHERE id = ?1", params![d.id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .unwrap_or(None);
+        return match crate::camera::target_from_config(d.id, &d.code, &cfg, secret.as_deref()) {
+            Ok(target) => Ok(ProbePlan::Camera {
+                target,
+                max_bytes: crate::camera::max_snapshot_bytes(conn),
+            }),
+            // 配置非法不是"探测失败"而是"没配好"：回话要指向设备中心那几个输入框，而不是记一次网络故障
+            Err(reason) => Ok(ProbePlan::NotWired { message: reason }),
+        };
     }
     Ok(ProbePlan::NotWired { message: format!("该驱动（{}）暂未接入本机探测通道，请在设备面板按指引验证", d.driver) })
 }
@@ -804,6 +869,13 @@ pub async fn device_test(app: AppHandle, code: String) -> Result<DeviceTestOutco
                     }
                 }
             }
+        }
+        ProbePlan::Camera { target, max_bytes } => {
+            // 一次 HTTP 往返最长 3 秒（Digest 是两趟，最坏 6 秒），丢给一次性线程去等，
+            // 别占住 async 运行时那几条工作线程——同屏还有磅的读数与别的命令要用它。
+            tauri::async_runtime::spawn_blocking(move || crate::camera::probe_snapshot(&target, max_bytes))
+                .await
+                .map_err(|e| format!("摄像机自检任务失败：{e}"))?
         }
     };
     Ok(DeviceTestOutcome { ok, message, elapsed_ms: started.elapsed().as_millis() as u64 })

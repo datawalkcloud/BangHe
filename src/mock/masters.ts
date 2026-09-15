@@ -318,12 +318,26 @@ export const devices: DeviceConfig[] = [
     id: 4, code: "cam1", name: "磅区抓拍（海康 ISAPI）", kind: "camera", driver: "hikvision_isapi",
     // captureOnWeigh：这台勾了「过磅抓拍」——每次过磅（毛/皮各一捕）由它拍一张（04 §4）。
     // 与升级迁移 0019 对老库的处理一致：只把原来那台默认相机自动勾上，其余相机默认不勾。
-    config: { host: "192.168.1.64", user: "weigh", snapshotUrl: "/ISAPI/Streaming/channels/101/picture", captureOnWeigh: true },
+    // 两条码流分工：snapshotUrl 指主码流 101（原图清楚，一张一张地拿），previewUrl 指子码流 102
+    // （工作台常驻画面走 RTSP 拉它，见 camera_stream.rs）——RTSP 路径由 previewUrl 的通道号推出来，不必再填。
+    config: {
+      host: "192.168.1.64",
+      user: "weigh",
+      snapshotUrl: "/ISAPI/Streaming/channels/101/picture",
+      previewUrl: "/ISAPI/Streaming/channels/102/picture",
+      captureOnWeigh: true,
+    },
     is_enabled: 1, is_mock: 0, is_default: 1, last_status: "online", last_ok_at: "1 分钟前", last_error: null, err_count: 0,
   },
   {
     id: 5, code: "cam2", name: "卸粮口（大华 CGI）", kind: "camera", driver: "dahua_cgi",
-    config: { host: "192.168.1.65", user: "admin", snapshotUrl: "/cgi-bin/snapshot.cgi?channel=1" },
+    // 大华的抓图路径里没有通道号可推（channel=1 是镜头号不是码流号），所以预览要人填 rtspUrl：subtype=1 是它的子码流。
+    config: {
+      host: "192.168.1.65",
+      user: "admin",
+      snapshotUrl: "/cgi-bin/snapshot.cgi?channel=1",
+      rtspUrl: "/cam/realmonitor?channel=1&subtype=1",
+    },
     is_enabled: 1, is_mock: 0, is_default: 0, last_status: "error", last_ok_at: "昨天 17:20", last_error: "HTTP 401 密码已变更", err_count: 7,
   },
   {

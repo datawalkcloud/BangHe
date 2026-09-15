@@ -1,9 +1,11 @@
 //! 设备台账的行为守卫（03 §9.20 `device_config`、02 §M9；页面 `src/pages/DevicesPage.tsx`）
 //!
 //! 守的是"接上 SQLite 才会犯、纸面 review 看不出来"的六件事：
-//!  1. **自检不许假装成功**：`probe_plan` 只放行本机真有通道的三类——ESC/POS 小票机、
-//!     精伦读卡器、地磅（读数流 / 一次性试读），针式与窗口预览打印机必须落到
-//!     "未接入探测通道"，台账里标成 Mock 或已停用的磅也绝不许去开 COM 口；
+//!  1. **自检不许假装成功**：`probe_plan` 只放行本机真有通道的四类——ESC/POS 小票机、
+//!     精伦读卡器、地磅（读数流 / 一次性试读）、内网摄像机（与过磅抓拍、工作台预览同一条
+//!     HTTP 抓图通道），针式与窗口预览打印机必须落到
+//!     "未接入探测通道"，台账里标成 Mock 或已停用的磅/摄像机绝不许去开口，本机 USB 摄像头
+//!     更是留给 WebView2 探测（服务端压根没有那条通道）；
 //!     VID/PID 还得从 `"0x0483"` 这种手写十六进制里解析出来——解析错了就是拿另一台机器的应答糊弄。
 //!  2. **默认设备互斥**：`uk_dev_default` 是部分唯一索引，登记第二台默认机时
 //!     不在同事务里降级就撞 UNIQUE；降级只能同 `kind`，跨类不能误伤。
@@ -23,8 +25,8 @@ use banghe_lib::auth::AuthProfile;
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::devices::{
     create_device, list_devices, probe_plan, report_device_probe, scale_verdict_from_probe, scale_verdict_from_stream,
-    set_device_enabled, set_device_mock, update_device_config,
-    CreateDeviceInput, DeviceConfig, ProbePlan, ProbeResult, PrintVerify, UpdateDeviceConfigInput,
+    set_device_enabled, set_device_mock, update_device, update_device_config,
+    CreateDeviceInput, DeviceConfig, ProbePlan, ProbeResult, PrintVerify, UpdateDeviceConfigInput, UpdateDeviceInput,
 };
 
 fn db() -> Connection {
@@ -160,6 +162,51 @@ fn probe_plan_refuses_to_open_a_port_for_mock_or_disabled_scale() {
         let plan = probe_plan(&conn, code).unwrap();
         let ProbePlan::NotWired { message } = plan else { panic!("{code} 不该被派发到串口：{plan:?}") };
         assert!(message.contains(expect), "{code} 的拒绝原因要说清「{expect}」：{message}");
+    }
+}
+
+/// 摄像机的本机通道就是那条抓图 HTTP：配全了地址的必须派发到 `Camera`，
+/// 且 `target` 要原样带上 host/port/path/口令与认证方式——自检抓不到图却报绿标，
+/// 比"未接入探测通道"更坏（02 §M9：配置必须验过才存）。
+#[test]
+fn probe_plan_routes_a_network_camera_to_the_snapshot_channel() {
+    use banghe_lib::camera::AuthKind;
+
+    let conn = db();
+    insert_device(
+        &conn,
+        "cam_hik",
+        "camera",
+        "hikvision_isapi",
+        r#"{"host":"192.168.10.199","port":80,"path":"/ISAPI/Streaming/channels/101/picture","user":"admin","auth":"digest"}"#,
+    );
+    conn.execute("UPDATE device_config SET secret_json = ?1 WHERE code = 'cam_hik'", params![r#"{"password":"p@ss-word"}"#]).unwrap();
+
+    let plan = probe_plan(&conn, "cam_hik").unwrap();
+    let ProbePlan::Camera { target, max_bytes } = plan else {
+        panic!("配全了地址的网络摄像机该走抓图通道，不该落到「未接入探测」：{plan:?}")
+    };
+    assert_eq!(target.host, "192.168.10.199");
+    assert_eq!(target.port, 80);
+    assert_eq!(target.path, "/ISAPI/Streaming/channels/101/picture");
+    assert_eq!(target.user.as_deref(), Some("admin"));
+    assert_eq!(target.password.as_deref(), Some("p@ss-word"), "口令得从 secret_json 取回来，否则 Digest 永远算不对");
+    assert_eq!(target.auth, AuthKind::Digest);
+    assert!((64 * 1024..=32 * 1024 * 1024).contains(&max_bytes), "帧大小上限该在合理量级：{max_bytes}");
+
+    // Mock / 停用 / 本机 USB / 少填地址：一律不许去开 HTTP
+    insert_device(&conn, "cam_mock", "camera", "mock", r#"{"host":"10.0.0.9","path":"/snap"}"#);
+    conn.execute("UPDATE device_config SET is_mock = 1 WHERE code = 'cam_mock'", []).unwrap();
+    insert_device(&conn, "cam_off", "camera", "hikvision_isapi", r#"{"host":"10.0.0.8","path":"/snap"}"#);
+    conn.execute("UPDATE device_config SET is_enabled = 0 WHERE code = 'cam_off'", []).unwrap();
+    insert_device(&conn, "cam_uvc", "camera", "local_uvc", r#"{"transport":"local","deviceId":"video0"}"#);
+    insert_device(&conn, "cam_half", "camera", "hikvision_isapi", r#"{"path":"/ISAPI/Streaming/channels/101/picture"}"#);
+
+    for (code, expect) in [("cam_mock", "Mock"), ("cam_off", "已停用"), ("cam_uvc", "本机"), ("cam_half", "地址")] {
+        let plan = probe_plan(&conn, code).unwrap();
+        let ProbePlan::NotWired { message } = plan else { panic!("{code} 不该被派发到抓图通道：{plan:?}") };
+        assert!(message.contains(expect), "{code} 的拒绝原因要说清「{expect}」：{message}");
+        assert!(!message.contains("p@ss-word"), "拒绝文案里不许带出口令：{message}");
     }
 }
 
@@ -445,4 +492,53 @@ fn enable_toggle_moves_the_light_and_mock_toggle_does_not() {
 
     assert_eq!(set_device_enabled(&conn, &a, "nope", true).unwrap_err(), "设备不存在");
     assert_eq!(set_device_mock(&conn, &a, "nope", true).unwrap_err(), "设备不存在");
+}
+
+// -------------------------------------------------- 口令：库里留真值，留痕必须掩码
+
+/// 海康 / 大华的抓图口令就落在 `config_json.password`（`camera.rs::target_from_config` 的读取主路径），
+/// 库里那份不能掩码——动了摄像机就抓不到图。但 `audit_log` 全岗位可筛看，两条写配置的
+/// 留痕路径都必须把口令换成 `***`，否则一次改机等于把摄像机口令广播给全站。
+#[test]
+fn camera_password_stays_real_in_config_and_masked_in_audit() {
+    let conn = db();
+    let a = master(&conn);
+    insert_device(&conn, "cam1", "camera", "hikvision_isapi", r#"{"host":"192.168.10.199","password":"old-pass"}"#);
+
+    let mut cfg = std::collections::HashMap::new();
+    cfg.insert("password".to_string(), serde_json::json!("new-pass"));
+    let saved = update_device(
+        &conn,
+        &a,
+        UpdateDeviceInput {
+            code: "cam1".into(),
+            name: "磅区相机".into(),
+            kind: "camera".into(),
+            driver: "hikvision_isapi".into(),
+            config: cfg,
+            is_default: false,
+            operator_id: Some(999),
+        },
+    )
+    .expect("编辑已登记的相机要存得动");
+    assert_eq!(saved.config.get("password").unwrap().as_str().unwrap(), "new-pass", "抓图要用的真口令不能被掩码写进库");
+
+    let reason = audit_reason(&conn, "device.update", "cam1");
+    assert!(!reason.contains("old-pass") && !reason.contains("new-pass"), "审计里不许出现明文口令：{reason}");
+    assert!(reason.contains(r#""password":"***""), "口令键要留名换值，否则看不出改的是哪一栏：{reason}");
+    assert!(reason.contains("192.168.10.199"), "非口令键照旧逐字可比对：{reason}");
+
+    // 联机验证那条路同理：不掩码的话一次"保存配置"就把口令抄进审计
+    let mut again = std::collections::HashMap::new();
+    again.insert("password".to_string(), serde_json::json!("third-pass"));
+    update_device_config(&conn, &a, UpdateDeviceConfigInput {
+        code: "cam1".into(),
+        config: again,
+        operator_id: None,
+        verify: verify("none", false, "浏览器预览没有原生通道，本次配置未经真机验证"),
+    })
+    .expect("浏览器预览该存得动配置");
+    let reason = audit_reason(&conn, "device.update", "cam1");
+    assert!(!reason.contains("new-pass") && !reason.contains("third-pass"), "改配置的留痕同样不许带口令：{reason}");
+    assert_eq!(device(&conn, "cam1").config.get("password").unwrap().as_str().unwrap(), "third-pass");
 }

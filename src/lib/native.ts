@@ -56,6 +56,16 @@ export interface NativeLocalCamera {
   deviceId: string;
 }
 
+/**
+ * 与 Rust `camera::CameraDetect` 对齐（camelCase）。添加海康相机时，现场只填
+ * IP + 登录用户 + 口令，其余（HTTP 端口、认证方式、抓拍/预览路径、RTSP 地址与端口）
+ * 由后端探测回填到 `config`；`message` 是给现场看的一句结论（型号、走的是哪个口）。
+ */
+export interface NativeCameraDetect {
+  config: Record<string, string>;
+  message: string;
+}
+
 /** 与 Rust `printer::PrintOutcome` 对齐 */
 export interface NativePrintOutcome {
   ok: boolean;
@@ -352,6 +362,18 @@ export const nativeIdcard = {
 export const nativeCamera = {
   /** 本机接的摄像头列表（添加设备表单「扫描本机摄像头」的数据源） */
   listLocal: () => call<NativeLocalCamera[]>("camera_list_local"),
+
+  /**
+   * 探测内网海康摄像机：只给 IP +（可选）端口 + 登录用户 + 口令，其余自动判定。
+   * 只在桌面端有原生通道时可用；浏览器预览回 `available:false`，界面据此退回手填。
+   */
+  detect: (input: { host: string; port?: string; user?: string; password?: string }) =>
+    call<NativeCameraDetect>("camera_detect", {
+      host: input.host,
+      port: input.port?.trim() ? Number(input.port.trim()) : null,
+      user: input.user ?? null,
+      password: input.password ?? null,
+    }),
 };
 
 /* ------------------------------------------------------------------ *

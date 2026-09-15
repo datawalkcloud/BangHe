@@ -6,6 +6,7 @@ mod queue_print;
 pub mod auth;
 pub mod attachment;
 pub mod camera;
+pub mod camera_stream;
 pub mod cards;
 pub mod codes;
 pub mod dashboard;
@@ -91,6 +92,9 @@ pub fn run() {
                     app.manage(auth::AuthState::default());
                     // 地磅读线程的归宿：start/stop/status 三个命令共用这一个通道句柄
                     app.manage(scale::ScaleHub::default());
+                    // 实时画面的归宿：一台机**一条** RTSP 会话（引用计数订户共用），
+                    // start/stop/status 三个命令与两个推帧事件都挂在这一个句柄上。
+                    app.manage(camera_stream::CameraStreamHub::default());
                     // 自动备份线程必须在上面几个 manage 之后起：它第一轮就要取 `Db` 与
                     // 备份目录，早一步只会拿到"数据库尚未就绪"然后整天空转。
                     system::spawn_auto_backup(app.handle().clone());
@@ -118,6 +122,10 @@ pub fn run() {
             printer::print_receipt,
             queue_print::print_receipt_queue,
             camera::camera_list_local,
+            camera::camera_detect,
+            camera_stream::camera_stream_start,
+            camera_stream::camera_stream_stop,
+            camera_stream::camera_stream_status,
             auth::auth_login,
             auth::auth_session,
             auth::auth_touch,
@@ -246,6 +254,11 @@ pub fn run() {
         }
         // §7 WAL 收尾：退出时收敛 -wal 文件并更新统计，防止它无限增长
         tauri::RunEvent::Exit => {
+            // 画面线程先收：它们各握着一条 RTSP 会话，退出前 TEARDOWN 得发得出去，
+            // 否则摄像机侧要等满会话超时才肯放掉这条连接。
+            if let Some(hub) = app_handle.try_state::<camera_stream::CameraStreamHub>() {
+                hub.shutdown();
+            }
             // 串口先还回去：读线程不退，进程就带着开着的 COM 口消失，
             // 下次接上仪表可能直接报"端口被占用"。
             if let Some(hub) = app_handle.try_state::<scale::ScaleHub>() {

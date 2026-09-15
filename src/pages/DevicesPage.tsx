@@ -27,6 +27,7 @@ import { api } from "@/lib/api";
 import { nativeCamera, nativeIdcard, nativePrinter, nativeSerial, runningInTauri, toNativePaper, type NativeLocalCamera, type NativePaper, type NativePrinterDevice, type NativePrinterStatus, type NativeReaderStatus, type NativeWindowsPrinter } from "@/lib/native";
 import { localCameraSpec, probeLocalCamera } from "@/lib/local-camera";
 import { LocalCameraLive } from "@/components/business/LocalCameraLive";
+import { IpCameraLive, ipCameraSpec } from "@/components/business/IpCameraLive";
 import { MEDIUM, READER_DRIVER_IDS, readerFields, readerSpec } from "@/lib/card-reader";
 import { ESCPOS_DRIVERS, PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import type { DeviceConfig } from "@/mock/types";
@@ -67,13 +68,14 @@ const KIND_ICON: Record<DeviceKind, typeof UsbIcon> = {
 
 /* ---------------------------------------------------------- 新增设备表单 */
 
-/** 一栏关键参数：options 存在则渲染下拉，否则渲染文本框 */
+/** 一栏关键参数：options 存在则渲染下拉，否则渲染文本框；input="password" 走掩码输入框 */
 interface FieldSpec {
   key: string;
   label: string;
   placeholder?: string;
   options?: string[];
   required?: boolean;
+  input?: "text" | "password";
 }
 
 /**
@@ -101,6 +103,7 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
     prefix: "cam",
     // local_uvc = 本机 USB / 内置摄像头（Media Foundation 扫描回填）；hikvision_isapi / dahua_cgi 走内网 IP
     drivers: ["local_uvc", "hikvision_isapi", "dahua_cgi", "mock"],
+    // mock 驱动走这份兜底；真机网络（海康 / 大华）的字段由 networkCameraFields 按驱动给
     fields: [
       { key: "host", label: "地址（IP）", placeholder: "192.168.1.64", required: true },
       { key: "user", label: "登录用户", placeholder: "weigh" },
@@ -143,10 +146,72 @@ function paperOptionsFor(driver: string): string[] {
   return ["A4"];
 }
 
+/**
+ * 内网摄像机（非本机 USB）按驱动给出的默认端点，逐字对齐 camera.rs `target_from_config`
+ * 认的 `snapshotUrl` 键与海康 / 大华的实际端点，免得现场还要照文档抄一栏。
+ *  - `snapshot`：过磅抓拍走的主码流整图；
+ *  - `preview`：子码流的 HTTP 抓图——联机测试用它，`rtspUrl` 留空时实时画面的轨道号也是从这里的通道号推出来的；
+ *  - `rtsp`：工作台实时画面拉的那条**子码流**轨道（`camera_stream.rs` 读 `rtspUrl`）。
+ *    海康不填也能推出来（从 `channels/<数字>` 抄同一个通道号），大华推不出、必须填。
+ */
+const CAMERA_NET: Record<string, { snapshot?: string; preview?: string; rtsp?: string }> = {
+  hikvision_isapi: {
+    snapshot: "/ISAPI/Streaming/channels/101/picture",
+    preview: "/ISAPI/Streaming/channels/102/picture",
+    rtsp: "/Streaming/Channels/102",
+  },
+  dahua_cgi: { snapshot: "/cgi-bin/snapshot.cgi?channel=1", rtsp: "/cam/realmonitor?channel=1&subtype=1" },
+};
+
+/**
+ * 内网摄像机的登记字段。
+ *
+ * 海康 ISAPI（`hikvision_isapi`）默认**只露 IP + 登录用户 + 口令**：HTTP 端口、认证方式、
+ * 抓拍/预览路径、RTSP 地址与端口都由 `camera_detect` 探测回填（见「自动检测参数」按钮），
+ * 现场不必照文档抄一栏。`advanced` 打开时才把这些项逐项摆出来，供特殊情况手改。
+ * 大华 CGI（`dahua_cgi`）本轮没有可靠的自动探测，端口/路径/认证仍全程手填。
+ */
+function networkCameraFields(driver: string, advanced: boolean): FieldSpec[] {
+  const net = CAMERA_NET[driver];
+  const base: FieldSpec[] = [
+    { key: "host", label: "地址（IP）", placeholder: "192.168.10.199", required: true },
+    { key: "user", label: "登录用户", placeholder: "admin" },
+    { key: "password", label: "登录密码", placeholder: "留空＝匿名", input: "password" },
+  ];
+  // 海康探测回填的这几项：折叠时不进表单，但仍在 buildSubmitConfig 里从 cfg 带出去落库
+  const hikAdvanced: FieldSpec[] = [
+    { key: "snapshotUrl", label: "抓图路径", placeholder: net?.snapshot ?? "/ISAPI/Streaming/channels/101/picture" },
+    { key: "previewUrl", label: "预览路径", placeholder: net?.preview ?? "/ISAPI/Streaming/channels/102/picture" },
+    { key: "rtspUrl", label: "RTSP 地址", placeholder: net?.rtsp ?? "/Streaming/Channels/102" },
+    { key: "rtspPort", label: "RTSP 端口", placeholder: "554" },
+    { key: "port", label: "HTTP 端口", placeholder: "80" },
+    { key: "auth", label: "认证方式", options: ["digest", "basic", "none"] },
+  ];
+  if (driver !== "hikvision_isapi") {
+    // 大华：地址 + 三条路径 + 两个端口 + 用户口令 + 认证，全程手填（口令排在中段，与旧表单一致）
+    return [
+      base[0],
+      { key: "snapshotUrl", label: "抓图路径", placeholder: net?.snapshot ?? "/cgi-bin/snapshot.cgi?channel=1", required: true },
+      { key: "previewUrl", label: "预览路径（可留空）", placeholder: net?.preview ?? "" },
+      { key: "rtspUrl", label: "RTSP 地址", placeholder: net?.rtsp ?? "/cam/realmonitor?channel=1&subtype=1" },
+      { key: "rtspPort", label: "RTSP 端口（默认 554）", placeholder: "554" },
+      { key: "port", label: "端口（默认 80）", placeholder: "80" },
+      base[1],
+      base[2],
+      { key: "auth", label: "认证方式", options: ["digest", "basic"] },
+    ];
+  }
+  return advanced ? [...base, ...hikAdvanced] : base;
+}
+
 /** 一栏关键参数随驱动动态化：打印机纸型、本机摄像头靠扫描回填（无需手填 host），其余照 DEVICE_SPEC 原样 */
-function fieldsFor(kind: DeviceKind, driver: string): FieldSpec[] {
+function fieldsFor(kind: DeviceKind, driver: string, camAdvanced: boolean): FieldSpec[] {
   if (kind === "printer") return [{ key: "paper", label: "纸型", options: paperOptionsFor(driver), required: true }];
-  if (kind === "camera") return driver === "local_uvc" ? [] : DEVICE_SPEC.camera.fields;
+  if (kind === "camera") {
+    if (driver === "local_uvc") return [];
+    if (driver === "mock") return DEVICE_SPEC.camera.fields;
+    return networkCameraFields(driver, camAdvanced);
+  }
   return DEVICE_SPEC[kind].fields;
 }
 
@@ -226,6 +291,11 @@ export function DevicesPage() {
   const [camScanState, setCamScanState] = useState<"idle" | "running" | "done">("idle");
   const [camHint, setCamHint] = useState<string | null>(null);
 
+  /** 海康自动检测：状态 + 结论一句话；camAdvanced＝是否展开高级参数手改（默认折叠只填 IP+账号密码） */
+  const [camDetectState, setCamDetectState] = useState<"idle" | "running" | "done">("idle");
+  const [camDetectMsg, setCamDetectMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [camAdvanced, setCamAdvanced] = useState(false);
+
   /** 本机串口列表（地磅登记表单「串口」下拉的数据源） */
   const [serialScan, setSerialScan] = useState<string[] | null>(null);
   const [serialScanState, setSerialScanState] = useState<"idle" | "running" | "done">("idle");
@@ -242,6 +312,8 @@ export function DevicesPage() {
     setCameraScan(null);
     setCamScanState("idle");
     setCamHint(null);
+    setCamDetectState("idle");
+    setCamDetectMsg(null);
     setSerialScan(null);
     setSerialScanState("idle");
     setSerialHint(null);
@@ -294,6 +366,11 @@ export function DevicesPage() {
 
   /** 换驱动时把纸型收敛到该驱动合法值：旧纸型不在新候选里就清掉，交给 fieldValue 回填驱动默认纸型 */
   function patchDriver(driver: string) {
+    // 驱动一换，上一轮的自动检测结论就不再作数（海康 ↔ 大华 ↔ 本机是三套寻址）
+    if (form.kind === "camera") {
+      setCamDetectState("idle");
+      setCamDetectMsg(null);
+    }
     setForm((f) => {
       const cfg = { ...f.cfg };
       if (f.kind === "printer" && cfg.paper && !paperOptionsFor(driver).includes(cfg.paper)) delete cfg.paper;
@@ -306,6 +383,13 @@ export function DevicesPage() {
           delete cfg.transport;
           delete cfg.deviceName;
           delete cfg.deviceId;
+          // 内网机：抓图 / 预览 / 拉流三条路径预填成该驱动默认值，但已手填过的不动（现场换驱动不该丢掉自己配的通道号）
+          const snap = CAMERA_NET[driver]?.snapshot;
+          const preview = CAMERA_NET[driver]?.preview;
+          const rtsp = CAMERA_NET[driver]?.rtsp;
+          if (snap && !cfg.snapshotUrl) cfg.snapshotUrl = snap;
+          if (preview && !cfg.previewUrl) cfg.previewUrl = preview;
+          if (rtsp && !cfg.rtspUrl) cfg.rtspUrl = rtsp;
         }
       }
       return { ...f, driver, cfg };
@@ -313,7 +397,55 @@ export function DevicesPage() {
   }
 
   function patchCfg(key: string, v: string) {
+    // 改了寻址三要素（IP / 用户 / 口令），之前的自动检测结论就作废：把状态打回未检测，
+    // 提示现场重新检测，而不是拿一份对不上当前输入的旧配置去存。
+    if ((key === "host" || key === "user" || key === "password") && form.kind === "camera") {
+      setCamDetectState("idle");
+      setCamDetectMsg(null);
+    }
     setForm((f) => ({ ...f, cfg: { ...f.cfg, [key]: v } }));
+  }
+
+  /**
+   * 海康「自动检测参数」：拿已填的 IP +（可选）端口 + 用户 + 口令去探一次，
+   * 成功就把 HTTP 端口、认证方式、抓拍/预览路径、RTSP 地址与端口回填进配置，
+   * 现场不用自己填。浏览器预览没有原生通道，明说一句并保留驱动默认路径（之后联机测试再验）。
+   */
+  async function runCameraDetect() {
+    const host = (form.cfg.host ?? "").trim();
+    if (!host) {
+      setCamDetectMsg({ ok: false, text: "先填摄像机 IP 地址，再自动检测。" });
+      return;
+    }
+    if (!runningInTauri()) {
+      setCamDetectState("done");
+      setCamDetectMsg({ ok: false, text: "浏览器预览探测不到内网摄像机。已按海康默认路径填好，请用桌面端（npm run tauri dev）自动检测，或在「高级参数」里手填后保存。" });
+      return;
+    }
+    setCamDetectState("running");
+    setCamDetectMsg(null);
+    const r = await nativeCamera.detect({
+      host,
+      port: form.cfg.port,
+      user: form.cfg.user,
+      password: form.cfg.password,
+    });
+    setCamDetectState("done");
+    if (!r.available) {
+      setCamDetectMsg({ ok: false, text: r.error ?? "没有原生设备通道，无法探测" });
+      return;
+    }
+    if (r.error) {
+      setCamDetectMsg({ ok: false, text: `检测失败：${r.error}` });
+      return;
+    }
+    const detected = r.data;
+    if (!detected) {
+      setCamDetectMsg({ ok: false, text: "检测没有返回结果，请在「高级参数」里手填。" });
+      return;
+    }
+    setForm((f) => ({ ...f, cfg: { ...f.cfg, ...detected.config } }));
+    setCamDetectMsg({ ok: true, text: detected.message });
   }
 
   /** 下拉字段未手动改过时以第一项为准，避免"界面显示了值、校验却说必填缺失" */
@@ -539,7 +671,7 @@ export function DevicesPage() {
     return "";
   }, [printScan, form.driver, form.cfg]);
 
-  const addFields = fieldsFor(form.kind, form.driver);
+  const addFields = fieldsFor(form.kind, form.driver, camAdvanced);
   // 校验错误按字段归位：红框 + 紧贴控件的红字标在出错的表单项上，不在抽屉底部聚合清单
   const trimmedCode = form.code.trim();
   const nameErr = !form.name.trim() ? "名称必填" : "";
@@ -582,6 +714,14 @@ export function DevicesPage() {
       for (const k of ["transport", "deviceName", "deviceId"]) {
         const v = (form.cfg[k] ?? "").trim();
         if (v) config[k] = v;
+      }
+      // 海康默认折叠、由自动检测回填的这几项不在 addFields 里，但必须照样落库——
+      // 否则「只填 IP+账号密码」检出来的端口/路径/认证会在提交时被静默抹掉。
+      if (form.driver === "hikvision_isapi") {
+        for (const k of ["port", "snapshotUrl", "previewUrl", "rtspUrl", "rtspPort", "auth"]) {
+          const v = (form.cfg[k] ?? "").trim();
+          if (v) config[k] = v;
+        }
       }
       // 「过磅抓拍」以布尔落库（与迁移 0019、真库 `camera::capture_on_weigh_enabled` 同形）：
       // 勾了写 true，没勾就不写这个键——config 整体替换，取消勾选即从库里消失。
@@ -802,7 +942,7 @@ export function DevicesPage() {
 
             <div className="flex min-w-0 flex-col gap-3 border bg-card p-3 xl:sticky xl:top-4">
               {active ? (
-                <TestPanel d={active} />
+                <TestPanel key={active.code} d={active} />
               ) : (
                 <EmptyState
                   title="还没有登记任何设备"
@@ -973,6 +1113,40 @@ export function DevicesPage() {
                   选中本机摄像机会把驱动定为 <span className="font-mono">local_uvc</span> 并记 <span className="font-mono">deviceId</span>；
                   要登记内网 IP 摄像机，选上面「手动填」项后在下方填地址与登录用户。
                 </p>
+                {/* 海康 ISAPI：填完 IP + 登录用户 + 口令后，剩下的端口/路径/认证/RTSP 全部自动检测回填。 */}
+                {form.driver === "hikvision_isapi" && (
+                  <div className="flex flex-col gap-1.5 border-t pt-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">海康参数自动检测（填好上方地址与登录信息后点一下）</span>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => void runCameraDetect()}
+                        disabled={camDetectState === "running" || !(form.cfg.host ?? "").trim()}
+                      >
+                        {camDetectState === "running" ? "检测中…" : "自动检测参数"}
+                      </Button>
+                    </div>
+                    {camDetectState === "running" ? (
+                      <p className="text-xs text-muted-foreground">正在探测地址、认证方式、抓拍/预览路径与 RTSP 端口…</p>
+                    ) : camDetectMsg ? (
+                      <div className={cn("flex flex-col gap-0.5 border p-2 text-xs", TONE_BOX[camDetectMsg.ok ? "success" : "danger"])}>
+                        <span className={cn("font-medium", TONE_TEXT[camDetectMsg.ok ? "success" : "danger"])}>
+                          {camDetectMsg.ok ? "检测成功，已回填参数" : "未能自动检测"}
+                        </span>
+                        <span className="text-muted-foreground">{camDetectMsg.text}</span>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        端口、认证方式、抓拍 / 预览路径与 RTSP 地址都由系统探测填写，无需手填。
+                      </p>
+                    )}
+                    <Label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Switch checked={camAdvanced} onCheckedChange={setCamAdvanced} aria-label="展开海康高级参数" />
+                      高级参数（仅在自动检测不适用时手动改）
+                    </Label>
+                  </div>
+                )}
                 {/* 过磅抓拍：这台相机要不要在每次过磅（毛/皮各一捕）时拍一张。本机 USB 与内网 IP 可混着勾，一次最多 3 台。 */}
                 <div className="flex flex-col gap-1 border-t pt-1.5">
                   <Label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1049,6 +1223,7 @@ export function DevicesPage() {
                   />
                 ) : (
                   <Input
+                    type={f.input === "password" ? "password" : "text"}
                     value={form.cfg[f.key] ?? ""}
                     onChange={(e) => patchCfg(f.key, e.target.value)}
                     placeholder={f.placeholder}
@@ -1360,7 +1535,7 @@ function TestPanel({ d }: { d: DeviceConfig }) {
 
       {d.kind === "scale" && <ScalePanel key={d.code} d={d} />}
       {d.kind === "idcard" && <CardReaderPanel key={d.code} d={d} />}
-      {d.kind === "camera" && <CameraPanel d={d} />}
+      {d.kind === "camera" && <CameraPanel d={d} live={result?.ok === true} />}
       {d.kind === "printer" && <PrinterPanel key={d.code} d={d} />}
     </>
   );
@@ -1748,26 +1923,36 @@ function IcMedium({ d }: { d: DeviceConfig }) {
 
 /* ------------------------------------------------------------ 摄像机 */
 
-function CameraPanel({ d }: { d: DeviceConfig }) {
-  const camera = useDeviceStore((s) => s.camera);
-  // Mock 档不碰真机（与联机测试同一闸门）：演示机上这块画面不该悄悄把摄像头打开
-  const spec = d.is_mock === 0 ? localCameraSpec(d) : null;
+function CameraPanel({ d, live }: { d: DeviceConfig; live: boolean }) {
+  // Mock 档不碰真机（与联机测试同一闸门）：演示机上这块画面不该悄悄把摄像头/网络打开
+  const localSpec = d.is_mock === 0 ? localCameraSpec(d) : null;
+  const netSpec = d.is_mock === 0 ? ipCameraSpec(d) : null;
+  const showingLive = !!netSpec && live;
   return (
     <div className="flex flex-col gap-2">
-      <SectionTitle>抓图</SectionTitle>
+      <SectionTitle extra={netSpec && !localSpec ? <span className="text-xs text-muted-foreground">子码流 RTSP · 只预览不落库</span> : undefined}>
+        {showingLive || localSpec ? "实时画面" : "抓图"}
+      </SectionTitle>
       <div className="relative flex aspect-video min-w-0 items-center justify-center overflow-hidden border bg-muted/40">
-        {spec ? (
-          <LocalCameraLive spec={spec} />
+        {localSpec ? (
+          <LocalCameraLive spec={localSpec} />
+        ) : showingLive && netSpec ? (
+          <IpCameraLive spec={netSpec} meta />
         ) : (
-          <p className="text-xs text-muted-foreground">
-            {camera.busy ? "正在抓图…" : camera.lastCaptureAt ? `上次抓图 ${camera.lastCaptureAt}` : "尚无抓图记录"}
+          <p className="px-2 text-center text-xs text-muted-foreground">
+            {netSpec
+              ? "点上方「联机测试」通过后，这里显示这台 IP 摄像机的实时画面"
+              : d.is_mock === 1
+                ? "这台是 Mock 模拟档，不出真画面"
+                : "填好地址并通过联机测试后显示实时画面"}
           </p>
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        真实抓拍发生在工作台捕获读数的瞬间（触发时机 triggerOn=capture），图片随磅单入附件表。
-        这里不单独发起落库，是为了避免产生没有单据归属的野图；本机 USB 摄像头可用上方「联机测试」
-        真开一次流取一帧验通不通（只测不存），IP 摄像机则看台账地址能否被工作台抓到。
+        本机 USB 摄像头这里直接开 WebView2 的流；IP 摄像机在「联机测试」通过后走服务端那条
+        RTSP 子码流（H.264 软解、一帧一张推屏），与工作台过磅画面同源，只预览、不落库。
+        真实抓拍仍发生在工作台捕获读数的瞬间（触发时机 triggerOn=capture），图片随磅单入附件表——
+        这里不单独发起落库，是为了避免产生没有单据归属的野图。
       </p>
     </div>
   );

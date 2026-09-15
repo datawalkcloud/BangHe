@@ -39,6 +39,14 @@ chrono = "0.4.45"
 strum = { version = "0.28.0", features = ["derive"] }
 argon2 = { version = "0.6.0", features = ["rand_core"] }
 serialport = "4.10.1"
+# 工作台「过磅画面」的第二条通道（camera_stream.rs）：Rust 拉 RTSP/TCP 子码流、软解 H.264、
+# 一帧一张 JPEG 推给界面。为什么不走 WebView 播流：那要引 ffmpeg 或厂商 SDK，而这条路的
+# 依赖只有下面这两个纯计算库，运行时不多带一个 exe/dll。
+# openh264 的默认 `source` 特性会把 Cisco 的 C 源码编进来（所以**构建机需要 C 编译器**；
+# 装了 nasm 会快很多，但不是必需），关掉它就连 `Decoder::new` 都不存在，因此按默认开。
+openh264 = "0.9.8"
+# 纯 Rust 压 JPEG，负责把解出来的 RGB 变成 `<img>` 能直接吃的 dataURL。
+jpeg-encoder = "0.6.1"
 
 # 添加设备表单要「自动扫描本机连接的打印机」：热敏直连小票机走 ticket-core 的 usbprint 枚举，
 # A4 / 针式这类打印队列打印机则用系统 EnumPrintersW 按名字挑机。复用锁文件里 tauri 已带进来的
@@ -58,8 +66,22 @@ qrcode = { version = "0.14", default-features = false }
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# `unwind` 不是随手写的：camera_stream.rs 用 `catch_unwind` 把第三方解码库的 assert
+# （`write_rgb8` 的尺寸/格式检查）圈在**那一格画面**里。`panic = "abort"` 下 catch_unwind
+# 是空转——一次坏流就会把整个磅房程序带走，而 release 装机正是有坏流的那一侧。
+# 代价是包体略大（Tauri 的体积指南估 5–10%），换的是"画面崩不拦称重"。
+panic = "unwind"
 strip = true
+
+# 相机预览的「解码 + 压 JPEG」是纯计算热点。dev 默认 -O0 下，纯 Rust 的 jpeg-encoder
+# 与 openh264 编进来的 Cisco C 源码都会慢一个数量级——实测一帧 768×432 要 ~120ms，
+# 把 `tauri dev` 的实时画面死死摁在 8fps，而这完全不代表 release（本来就 -O3）的真实帧率。
+# 只给这两个包在 dev 下也开 -O3：openh264 的 build.rs 会据此把 C 源码按 -O3 编，
+# jpeg-encoder 的泛型也才展开得动。不动整个 crate，主程序增量编译速度基本不受影响。
+[profile.dev.package.jpeg-encoder]
+opt-level = 3
+[profile.dev.package.openh264]
+opt-level = 3
 
 [dev-dependencies]
 regex = "1.13.1"
