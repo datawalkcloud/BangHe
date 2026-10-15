@@ -1,0 +1,215 @@
+name: Release
+
+# 自动为 BangHe 构建 Windows NSIS 安装包并（打 tag 时）发布到 GitHub Releases。
+# 结构照搬 daro 的 .github/workflows/release.yml：meta 解析版本 → 平台 job 构建上传
+# → tag 触发时汇总成正式 Release，正文含下载表 + 提交清单，并校验正文链接与实际产物一致。
+#
+# 触发方式：
+#   1) 打 tag `v*`（如 v26.10.8）→ 构建安装包 + 建正式 Release 并上传产物
+#   2) 手动 workflow_dispatch → 只构建并上传 artifacts（不发 Release），用于试跑
+#
+# 版本号唯一数据源是 package.json 的 `version`（tauri.conf.json / Cargo.toml 须与其同步，
+# meta job 会交叉校验，不一致直接失败——历史上三份手动改漏过）。tag 只决定是否发布 Release。
+#
+# 交付物只有主安装包（2026-10-11 决定）：
+#   - 主包 banghe-<ver>-windows-x64-setup.exe（~7 MB，webviewInstallMode 为
+#     downloadBootstrapper，首次启动联网拉 WebView2）。
+#   - WebView2 离线运行库**不随 Release 上传**（曾试自动拉微软 fwlink，204 MB 挂在
+#     每次发布上没有意义）：正文里只链接微软官方下载页，无外网的磅房机自行取一次
+#     带着走（见 gen_release_notes.py 的 OFFLINE_NOTE）。
+#   别为"离线可用"把 webviewInstallMode 改回 offlineInstaller（那会让主包回到 211 MB）。
+#
+# 应用内更新通道（「关于 → 检查更新」，2026-10-14 加入）：
+#   - 构建期以 --config 注入 createUpdaterArtifacts，NSIS 主包旁多出同名 .sig
+#     （minisign 分离签名）。签名私钥只存在于 GitHub Secrets 的
+#     TAURI_SIGNING_PRIVATE_KEY（生成时未设口令，且只存在签发机的用户目录下，
+#     不进仓库）；它与 tauri.conf.json plugins.updater.pubkey 里的公钥配对——
+#     私钥一换，已装出去的老客户端验签即拒装。没配私钥，构建这步直接红。
+#   - release job 把版本 + 签名 + 安装包下载地址拼成 latest.json 随 Release 上传
+#     （scripts/release-notes/gen_updater_manifest.py）；客户端按 plugins.updater
+#     .endpoints 拉 releases/latest/download/latest.json（gh-proxy 镜像优先）。
+#   - latest.json 对客户端可见的前提是 Release **已发布**（Draft 拉不到）：本流水线
+#     直接建正式 Release（draft: false），推 tag 后应用内「检查更新」即可生效。
+#   - 分发面（2026-10-15 单仓化）：源码与发布产物同仓——安装包、.sig、latest.json
+#     都挂在本仓库自己的 GitHub Release 上，磅房机匿名可达；不再维护独立的公开发版仓
+#     datawalkcloud/BangHe-releases，也不再需要跨仓凭据 RELEASES_REPO_TOKEN。
+#
+# 其他说明：
+#   - 只构建 Windows：本程序是粮站单机软件（地磅串口/读卡器/打印机），无 mac/linux 用户。
+#   - 产物名从 NSIS 默认的中文产品名（磅禾粮站收粮系统_<ver>_x64-setup.exe）改成 ASCII，
+#     避免 Release asset 链接的 URL 编码问题。
+#   - 未做代码签名（certificateThumbprint: null），用户首启会遇 SmartScreen 提示。
+#   - Release 正文由 scripts/release-notes/gen_release_notes.py 生成，本地可预览
+#     （产物表格里的大小/SHA 会显示为占位 —）：
+#     python scripts/release-notes/gen_release_notes.py --tag v26.10.8 --version 26.10.8 \
+#       --repo datawalkcloud/BangHe --output .scratch/release_body.md
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./package.json').version")"
+          t="$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")"
+          c="$(node -p "require('fs').readFileSync('src-tauri/Cargo.toml','utf8').match(/^version = \"([^\"]+)\"/m)[1]")"
+          if [ "$v" != "$t" ] || [ "$v" != "$c" ]; then
+            echo "版本三处不同步: package.json=$v tauri.conf.json=$t Cargo.toml=$c"; exit 1
+          fi
+          if [[ "${{ github.ref_type }}" == "tag" && "${{ github.ref_name }}" != "v$v" ]]; then
+            echo "tag ${{ github.ref_name }} 与版本 v$v 不一致，请对齐后重新打 tag"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "版本号: $v"
+
+  build-windows:
+    name: Windows x64 NSIS 安装包
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: 依赖安装
+        run: npm ci
+
+      # 走与本地完全一致的路径：tauri build 自带 beforeBuildCommand (tsc && vite build)，
+      # 产物落 src-tauri/target/release/bundle/nsis/磅禾粮站收粮系统_<ver>_x64-setup.exe。
+      # 与本地唯一的差别是 --config 注入 createUpdaterArtifacts：构建期给 NSIS 主包出
+      # minisign 分离签名（应用内「检查更新」的验签依据）。
+      - name: Tauri 构建（前端 + Release 二进制 + NSIS 打包 + 更新包签名）
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # 密钥生成时未设口令：显式给空串，避免 bundler 转 prompt（CI 里没人应答）
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      - name: 校验并规整产物名
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.meta.outputs.version }}"
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter "*_x64-setup.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "bundle/nsis 下未找到 *-x64-setup.exe"; exit 1 }
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item $exe.FullName "release/banghe-$ver-windows-x64-setup.exe"
+          $sig = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter "*_x64-setup.exe.sig" | Select-Object -First 1
+          if (-not $sig) { Write-Error "未找到更新包签名 *_x64-setup.exe.sig——TAURI_SIGNING_PRIVATE_KEY 没配或 createUpdaterArtifacts 没开"; exit 1 }
+          Copy-Item $sig.FullName "release/banghe-$ver-windows-x64-setup.exe.sig"
+          $out = Get-Item "release/banghe-$ver-windows-x64-setup.exe"
+          "打包完成: $($out.Name) ($([math]::Round($out.Length/1MB,1)) MB) + 签名 $($sig.Name)  [源文件: $($exe.Name)]"
+          # 主包应是 MB 量级；若哪天体积回到 200MB 说明 webviewInstallMode 被改回
+          # offlineInstaller（拆包决定被推翻），这里直接失败提醒，而不是无声发个大包。
+          if ($out.Length -gt 60MB) { Write-Error "主包体积异常 ($([math]::Round($out.Length/1MB)) MB)，检查 tauri.conf.json 的 webviewInstallMode"; exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: banghe-windows-x64
+          # 主包与同名 .sig 一起走（release job 拿 .sig 拼 latest.json）
+          path: release/banghe-*
+          if-no-files-found: error
+
+  release:
+    name: 发布 GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [meta, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      # 生成提交清单要读「上一个 tag → 当前 tag」的完整历史，浅克隆拿不到。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: banghe-*
+          path: artifacts
+          merge-multiple: true
+
+      # 应用内「检查更新」的更新源：版本 + minisign 签名 + 安装包下载地址拼成
+      # latest.json。源码与产物同仓，清单与安装包都挂在本仓库自己的 Release 上，
+      # 磅房机匿名可达（gh-proxy 镜像优先），端点即 releases/latest/download/latest.json。
+      - name: 生成更新清单 latest.json
+        run: |
+          python3 scripts/release-notes/gen_updater_manifest.py \
+            --version "${{ needs.meta.outputs.version }}" \
+            --tag "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --sig-file "artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe.sig" \
+            --output artifacts/latest.json
+          echo "----- latest.json -----"
+          cat artifacts/latest.json
+
+      # 正文的链接校验只认 releases/download/ 域名，微软官方页链接不在校验范围。
+
+      - name: 生成 Release 正文（下载表格 + 提交清单）
+        run: |
+          python3 scripts/release-notes/gen_release_notes.py \
+            --tag "${{ github.ref_name }}" \
+            --version "${{ needs.meta.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --artifacts-dir artifacts \
+            --output release_body.md
+          echo "----- release_body.md -----"
+          cat release_body.md
+
+      # 正文里的下载链接是按约定拼的，不是从 artifacts 列出来的；产物改名/漏传时链接会 404。
+      # 这里逐个比对正文文件名与实际产物，不合格就中断发布。
+      - name: 校验正文里的下载链接
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r name; do
+            [ -z "$name" ] && continue
+            if [ ! -f "artifacts/$name" ]; then
+              echo "::error::$name 出现在正文里，但 artifacts 中没有这个文件"
+              missing=1
+            else
+              echo "OK  $name"
+            fi
+          done < <(grep -oE 'releases/download/[^/]+/[A-Za-z0-9._-]+' release_body.md | sed 's|.*/||' | sort -u)
+          if [ "$missing" -ne 0 ]; then
+            echo "正文与实际产物不一致：产物改名后需同步 scripts/release-notes/gen_release_notes.py 的 DOWNLOAD_FILES。"
+            exit 1
+          fi
+
+      # 单仓发布：安装包 + .sig + latest.json（artifacts/*）一起挂到本仓库这个正式
+      # Release 上。draft: false 是应用内「检查更新」能匿名拉到
+      # releases/latest/download/latest.json 的前提——Draft 对匿名客户端不可见。
+      - name: 发布正式 GitHub Release（含安装包与更新清单）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}
+          body_path: release_body.md
+          draft: false
+          prerelease: false
+          files: artifacts/*

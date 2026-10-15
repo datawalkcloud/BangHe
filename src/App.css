@@ -1,0 +1,632 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+/* 工作台自定义布局的网格样式（05 §4.1）。引在这里而不是 main.tsx：
+   排到本文件自己的规则之前，下面 .ws-grid* 对占位色与缩放手柄的覆盖才压得住。 */
+@import "react-grid-layout/css/styles.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    /* Inter 不含 CJK 字形，必须显式补充中文回退，否则中文与数字混排基线不一致 */
+    --font-sans: 'Inter Variable', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-active-fg: var(--sidebar-active-fg);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* 出厂默认色板 = neutral 基础色板 + 磅禾绿主题色。
+   theme.ts 对默认色板刻意不注入样式，所以这一段的值必须与 DEFAULT_PALETTE 解析出来的结果逐值一致。 */
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.515 0.105 151);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.62 0.11 151);
+    --chart-1: oklch(0.871 0.15 154.449);
+    --chart-2: oklch(0.723 0.219 149.579);
+    --chart-3: oklch(0.627 0.194 149.214);
+    --chart-4: oklch(0.527 0.154 150.069);
+    --chart-5: oklch(0.448 0.119 151.328);
+    --radius: 0;
+    --component-shadow: none;
+    --component-surface: transparent;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.515 0.105 151);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.90 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-active-fg: var(--sidebar-primary);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.75 0.11 151);
+    --primary-foreground: oklch(0.24 0.06 151);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.62 0.11 151);
+    --chart-1: oklch(0.871 0.15 154.449);
+    --chart-2: oklch(0.723 0.219 149.579);
+    --chart-3: oklch(0.627 0.194 149.214);
+    --chart-4: oklch(0.527 0.154 150.069);
+    --chart-5: oklch(0.448 0.119 151.328);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.55 0.13 151);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-active-fg: var(--sidebar-accent-foreground);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+}
+
+:root {
+    /* 业务语义色：粮食行业需要区分 接收/待处理/警告/拒收，灰阶主题不够用 */
+    --success: oklch(0.62 0.16 150);
+    --success-bg: oklch(0.62 0.16 150 / 12%);
+    --info: oklch(0.58 0.14 250);
+    --info-bg: oklch(0.58 0.14 250 / 12%);
+    --warning: oklch(0.72 0.15 75);
+    --warning-bg: oklch(0.72 0.15 75 / 14%);
+    --chart-color-1: oklch(0.70 0.14 75);
+    --chart-color-2: oklch(0.62 0.16 150);
+    --chart-color-3: oklch(0.58 0.14 250);
+    --chart-color-4: oklch(0.66 0.17 20);
+    --chart-color-5: oklch(0.55 0.10 300);
+}
+
+@theme inline {
+    --color-success: var(--success);
+    --color-success-bg: var(--success-bg);
+    --color-info: var(--info);
+    --color-info-bg: var(--info-bg);
+    --color-warning: var(--warning);
+    --color-warning-bg: var(--warning-bg);
+    --color-input-placeholder: var(--input-placeholder);
+    --color-chart-1: var(--chart-color-1);
+    --color-chart-2: var(--chart-color-2);
+    --color-chart-3: var(--chart-color-3);
+    --color-chart-4: var(--chart-color-4);
+    --color-chart-5: var(--chart-color-5);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+/* ============================================================ 全局滚动条：默认不显示，滚了才浮现 */
+
+/* 系统里所有滚动区都是原生 overflow 滚动（页面主体、工作台卡片、下拉与弹层一律 overflow-y-auto），
+   所以这件事只在滚动条伪元素上做，不改任何组件结构：
+   - 轨道恒宽 12px（比 Windows 默认的 17px 细），显隐不换宽度，内容不会横向抖动；
+   - 滑块默认全透明 = 看不见。容器正在滚动时由 lib/scrollbar.ts 挂上 .is-scrolling 让它浮现，
+     指针停在容器上也浮现——否则谁也够不着一根看不见的滑块，滚到一半就抓不住了；
+   - 细与宽在同一根 12px 轨道里靠「透明描边 + background-clip: padding-box」抠出来：
+     描边 4px → 可见 4px 细条；指针压到滑块上描边 1px → 可见 10px 粗条（戴手套也点得中）。
+     轨道必须比粗条更宽是硬约束——滑块宽不出轨道，所以轨道取 12px 而不是更细。
+   - 圆角跟主题令牌 --radius 走（本工程 base-maia 直角体系，出厂 --radius 固定 0，见 05 §7.2；
+     theme.ts 只在主题面板显式选了"无/小/中/大"档时才覆盖它，"默认"档不注入，与本文件保持一致）。注意描边会把圆角"啃小"：
+     可见区是 padding box，它的圆角 = 外圆角 − 描边宽，所以外圆角要写成 calc(--radius + 描边宽)，
+     看得见的部分才正好等于 --radius。
+   需要彻底没有滚动条的地方（侧栏）继续用 Tailwind 的 no-scrollbar，本节的规则不覆盖它的 display: none。 */
+:root {
+    --scrollbar-size: 12px;
+    --scrollbar-inset: 4px;
+    --scrollbar-inset-hover: 1px;
+    --scrollbar-thumb: color-mix(in oklab, var(--foreground) 26%, transparent);
+    --scrollbar-thumb-hover: color-mix(in oklab, var(--foreground) 42%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none; /* 不要上下箭头，轨道宽度全留给滑块 */
+}
+::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  background-clip: padding-box;
+  border: var(--scrollbar-inset) solid transparent;
+  border-radius: calc(var(--radius) + var(--scrollbar-inset));
+  transition: background-color 160ms ease, border-width 160ms ease, border-radius 160ms ease;
+}
+/* 滚动中 / 指针在容器上 → 细条显形 */
+.is-scrolling::-webkit-scrollbar-thumb,
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+/* 指针压到滑块本体 → 加宽到 10px、加深（放最后，与上一条同特异性时以它为准） */
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+  border-width: var(--scrollbar-inset-hover);
+  border-radius: calc(var(--radius) + var(--scrollbar-inset-hover));
+}
+
+/* Firefox 一类非 WebKit 内核没有滚动条伪元素，降级成"细轨道 + 显隐换色"，宽度变化做不到 */
+@supports not selector(::-webkit-scrollbar) {
+  *:not(.no-scrollbar) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 160ms ease;
+  }
+  .is-scrolling:not(.no-scrollbar),
+  :hover:not(.no-scrollbar) {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+
+@layer utilities {
+  /* 重量与金额必须等宽对齐，见 05 文档 §6.1 */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+}
+
+/* 日历的日期格（CalendarDayButton）也是 <Button>，带 data-day，但它是网格单元不是控件：
+   带投影的组件风格下不排外的话，整片日期会变成一颗颗浮起的小按钮。
+   弹层里的翻页箭头是 react-day-picker 自己渲染的裸 button，没有 data-slot，本来就不命中。
+   ghost / link 两个变体同理要排掉：它们本来就没有表面（透明底，hover 才上色），描投影会把
+   每个文字按钮、每个行内图标按钮都变成一颗浮起的小卡片。 */
+button[data-slot="button"]:not([data-day]):not([data-variant="ghost"]):not([data-variant="link"]),
+input[data-slot="input"],
+textarea[data-slot="textarea"] {
+  box-shadow: var(--component-shadow);
+}
+
+/* Tabs 的「凸起表面」只该给选中那一段（官方口径：轨道平、滑块浮）。
+   这条原先与按钮 / 输入框并排、命中所有 tabs-trigger，于是 Vega / Nova 这类带阴影的组件风格下
+   一排标签变成一排各自带投影的独立按钮，看不出它们同属一条轨道。
+   下划线（line）变体整条都没有表面，一个都不描。 */
+[data-slot="tabs-list"]:not([data-variant="line"]) [data-slot="tabs-trigger"][data-active] {
+  box-shadow: var(--component-shadow);
+}
+
+input[data-slot="input"],
+textarea[data-slot="textarea"] {
+  background-color: var(--component-surface);
+}
+
+/* 录入文字的颜色必须钉死在 --foreground 上，不能让输入框从祖先继承。
+   Tailwind 的 preflight 给 input/textarea/select 写了 color: inherit，而本工程的字段容器
+   （MastersPage 的 Field 等）是 `<Label class="text-xs text-muted-foreground">` 把控件整个包住
+   ——于是"已经填进去的字"跟着标签一起变成 muted 灰，和占位符只差一档，占位符调多浅都没用
+   （深色模式下实测：正文 #a1a1a1 vs 占位符 #606060）。
+   放在层外：任何祖先的颜色都只是"继承"，继承永远输给元素自身的声明，所以这一条能盖全项目，
+   以后新增的字段包装器不管写什么文字色都影响不到录入内容。 */
+input[data-slot="input"],
+input[data-slot="input-group-control"],
+textarea[data-slot="textarea"],
+/* 原 native-select 时代这条规则钉的就是下拉的文字色；换成官方 Select 后触发器是 button，
+   同样会被 muted 色的 Label 祖先带偏，选择器换到 select-trigger 上把原语义续下来。
+   但空值那档要放行：触发器带 data-placeholder 时里面是提示语，官方用 data-placeholder:text-muted-foreground
+   标灰，这条不分层的声明会把它压成"看起来已经选过值"。 */
+[data-slot="select-trigger"]:not([data-placeholder]) {
+  color: var(--foreground);
+}
+
+/* ============================================================ 输入框占位符（05 §6.4） */
+
+/* 占位符单独一个令牌，不复用 --muted-foreground。muted-foreground 同时承担字段标签、
+   说明文字、表格次要列，和正文前景只差 0.41 明度（0.145 → 0.556）；磅房界面字段密、
+   字号只有 text-xs/sm，这点差距在视觉上几乎抹平，"这张空单还没填"和"这张单已经填了"
+   看不出区别——填错单就是这么来的。占位符是提示不是内容，所以要再退一档。
+   值从 --foreground 按透明度混合派生，而不是写死一个灰：浅色模式压成淡灰、深色模式
+   自然变成暗灰，两档共用同一个百分比；同时保留 --foreground 自带的色相，
+   七套基础色板（stone/zinc/mauve…）换色板时不会只剩一层死灰。
+   32% 是量出来的：再浅强光下就看不清（05 §1 白天棚内），再深就又回到"和正文一个色"。 */
+:root {
+    --input-placeholder: color-mix(in oklab, var(--foreground) 32%, transparent);
+}
+
+/* 故意写在层外（不在 @layer base / utilities 里）：未分层的声明压过分层后的任何 Tailwind 工具类，
+   所以以后从 shadcn 复制新组件、或有人直接写裸 <input>（全局搜索框 cmdk 就是），
+   哪怕组件上挂着把占位符指回 muted 色板的工具类，也不会偷偷把颜色拉回去。
+   （这里刻意不把那个类名原样写出来：Tailwind 会把本文件也当扫描源，注释里的类名会生成一条没人用的规则。）
+   opacity: 1 是必须的——Firefox 的 UA 样式在 ::placeholder 上还叠了 0.54 透明度，
+   不抹掉的话同一份令牌在两个内核下深浅不一致。 */
+input::placeholder,
+textarea::placeholder {
+  color: var(--input-placeholder);
+  opacity: 1;
+}
+
+/* ============================================================ 台账冻结列（05 §3 磅单中心末列「操作」） */
+
+/* 列多到要横向滚动时，把末列钉在右缘不跟着走——磅员找「详情」不该先拖滚动条。
+   钉住的代价是底下滚过去的正文会从它身上透出来，所以它的底绝不能是半透明色，
+   这与上面表头那条是同一个坑。麻烦在于行本身的底色偏偏就是半透明的：常态是透明
+   （让页面底色透出来）、hover 是 muted/50、手录行是 14% 的淡黄，整行照抄过来照样透字。
+   这里把底色拆成两层：--dt-pin-base 铺一层不透明基色，--dt-pin-tint 再用渐变叠同一档淡色。
+   两层合成出来的颜色与整行逐像素一致，指针划过时最右那一格才不会赖在原来的色上不动。 */
+.dt-pin-right {
+  position: sticky;
+  right: 0;
+  /* 层序：正文冻结列 1 < 合计行 6 < 表头 10（两个 10/6 在 data-table.tsx 上写死）。
+     横竖都滚到位时那一格露出谁，必须有唯一答案。 */
+  z-index: 1;
+  background-color: var(--dt-pin-base);
+  background-image: linear-gradient(var(--dt-pin-tint, transparent), var(--dt-pin-tint, transparent));
+}
+
+/* 冻结列与正文的分界。不能写 border-left：preflight 给 table 定了 border-collapse: collapse，
+   收缩模型里 sticky 单元格自己的边框根本不渲染，横向一滚这条线就凭空消失。
+   改成贴在格子左沿的绝对定位伪元素——伪元素属于这个 sticky 盒子，跟着一起走，线不会断。 */
+.dt-pin-right::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1px;
+  width: 1px;
+  background-color: var(--color-border);
+}
+
+/* 基色 = 这张表实际压在哪个面上。台账直接铺在页面上，所以是 --color-background；
+   哪天把 DataTable 挪进 Card，在容器上覆盖这个变量即可，
+   否则深色主题下冻结列会比整行亮一档（--card 0.205 vs --background 0.145）。 */
+[data-slot="table-container"] {
+  --dt-pin-base: var(--color-background);
+}
+/* 表头整行本来就是实色 muted（它自己也要 sticky 顶格），冻结格跟着同一个色、不再叠淡色；
+   合计行的实底是压在 tfoot 上的 muted/50，这里用同一档淡色层把它复刻出来。 */
+[data-slot="table-header"] {
+  --dt-pin-base: var(--color-muted);
+  --dt-pin-tint: transparent;
+}
+[data-slot="table-footer"] {
+  --dt-pin-tint: color-mix(in oklab, var(--color-muted) 50%, transparent);
+}
+/* 合计行的实底也照"基色 + 淡色层"这一套来（压掉 vendored TableFooter 的 bg-muted/50）：
+   半透明的合计行压在正文上，纵向滚到底时上一行的文字会整片透上来跟合计数挤在一起
+   ——与表头当年那个坑同源，只是台账的表体比屏幕长才看得到。合成出来的颜色与原来一致。 */
+[data-slot="table-footer"].dt-footer {
+  background-color: var(--dt-pin-base);
+  background-image: linear-gradient(var(--dt-pin-tint), var(--dt-pin-tint));
+}
+/* 整行 hover 时 muted/50 会把行色盖掉（含手录行的淡黄——Tailwind 的 hover 变体特异性更高），
+   冻结格只跟着 tbody 的行盖：合计行自己写了 hover:bg-transparent，指针划过不该变色。 */
+[data-slot="table-body"] [data-slot="table-row"]:hover > .dt-pin-right {
+  --dt-pin-tint: color-mix(in oklab, var(--color-muted) 50%, transparent);
+}
+
+/* 手录来源的行（05 §6.2 整行淡黄 + 徽章）：整行底色与冻结列的淡色层必须同一份口径，
+   所以做成一个类，不让调用方在两处各写一遍、以后各改各的。
+   放 utilities 层里，好让上面 hover 那一档按原有顺序仍然盖得住它。 */
+@layer utilities {
+  .dt-row-manual {
+    background-color: var(--color-warning-bg);
+    --dt-pin-tint: var(--color-warning-bg);
+  }
+}
+
+/* 纸张（#print-root）在屏幕上给个投影：看到边界，就大致是"纸上会有这么多" */
+.receipt-paper {
+  background: #fff;
+  box-shadow:
+    0 0 0 1px var(--color-border),
+    0 10px 30px rgb(0 0 0 / 0.16);
+}
+
+/* 小票模板编辑器：点左栏某个区块 → 票面上那一格描一圈，回答"我点的到底是纸上的哪一块"。
+   outline 不占版面（不会把票面挤高），底色只到刚好看得出。两者都不是票面内容，
+   @media print 里一起抹掉；空区块的占位行更要藏——它在流程里占一行高，
+   热敏卷纸是"先量后打"，藏不干净就会多拖出一截空白纸。 */
+.receipt-sec-active {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+  background: color-mix(in oklab, var(--primary) 7%, transparent);
+}
+.receipt-sec-empty {
+  border: 1px dashed var(--color-border);
+  padding: 1px 4px;
+  text-align: center;
+}
+@media print {
+  .receipt-sec-active {
+    outline: none !important;
+    background: transparent !important;
+  }
+  .receipt-sec-empty {
+    display: none !important;
+  }
+}
+
+/* 打印：只保留 #print-root（纸张本体），其余全部隐藏。
+   纸张自带 mm 宽与 mm 内边距，这里把它从屏幕上的"适应宽度缩放 + 投影"还原成真实毫米，保证 1:1 出纸。
+
+   注意：正常出纸走 `printPage.ts` 的离屏 iframe 通道，那份打印文档里除了纸没有别的东西，
+   @page 尺寸由它实测后注入。下面这套规则只服务**兜底**（iframe 不可用时退回 window.print()），
+   所以必须与那条通道的结论保持一致：定长纸的页边距由 @page margin 出，纸面自身不留白。 */
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #print-root,
+  #print-root * {
+    visibility: visible;
+  }
+  #print-root {
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: 0;
+    box-shadow: none !important;
+  }
+  /* 定长纸：页边距已在 @page 上，纸面再留白就是双倍边距 */
+  #print-root[data-page-fixed="1"] {
+    padding: 0 !important;
+    width: auto !important;
+    min-height: 0 !important;
+  }
+  /* 虚线分隔、二维码这些是真要印出来的，别被"省墨"策略抹掉 */
+  #print-root,
+  #print-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* 纸张托架只服务屏幕：纸上不能带 transform / 裁剪高度 / 居中留白 */
+  .receipt-fit-host,
+  .receipt-fit {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+  }
+  .receipt-fit-inner {
+    transform: none !important;
+  }
+}
+
+/* ============================================================ 工作台自定义布局（05 §4.1） */
+
+/* 库给 .react-grid-item 挂了 200 ms 的 transform/width/height 过渡、给容器挂了 height 过渡。
+   只在编辑态要：拖拽时邻居被挤开，这段动画是"谁被挪走了"的反馈。
+   日常界面反过来——磅房一屏应该"说是什么位置就是什么位置"，任何一次重排（从顶栏放出收起的
+   面板、开发期热更新重注入整张样式表）都不该让整张桌子滑一下，那在磅员眼里就是闪。 */
+.ws-grid:not(.ws-grid-edit),
+.ws-grid:not(.ws-grid-edit) .react-grid-item {
+  transition: none;
+}
+
+/* 拖拽落点占位：库默认是红色，换成主色半透明，跟主题一起变深浅 */
+.ws-grid .react-grid-placeholder {
+  background-color: color-mix(in oklab, var(--primary) 22%, transparent);
+  border-radius: var(--radius);
+  opacity: 1;
+}
+
+/* 面板本体不知道自己在网格里：由这一层把 Card 撑满整格，内容超出时卡片自己滚，
+   于是"把结算区拖小两格"不会把整页顶出滚动条，也不会把按钮挤没。 */
+.ws-tile {
+  position: relative; /* 把手是绝对定位的，不管库用 transform 还是 top/left 铺格子，都得有个依附的盒子 */
+  min-width: 0;
+}
+/* 窄屏堆叠时格子几何不生效，就别摆出可拖的样子（收起走顶栏「面板」，提示条会说明） */
+.ws-stacked .ws-grip {
+  display: none;
+}
+.ws-grid .ws-tile > [data-slot="card"] {
+  height: 100%;
+  min-height: 0;
+}
+.ws-grid .ws-tile > [data-slot="card"] > [data-slot="card-content"] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 紧凑标题条（磅房工作台各面板的 CardHeader）。这些卡片是"自己不留白"的密排样式
+   （Card 上写 py-0 gap-0），但 vendored shadcn 的 CardHeader 里有两条按标准卡片写的规则会把标题顶偏：
+   ① [.border-b]:pb-(--card-spacing)——那是给 Card 顶部 gap 做上下对称补偿的，紧凑卡没 gap 可补偿，
+      结果上 4px、下 16px，文字贴着上沿、下面空一大截；
+   ② CardAction 的 row-span-2——它是为 card-description 预留的第二行，单行标题时撑出一条 0 高隐式行
+      外加 8px 行距的死空间，标题在这块虚高里居中，比右侧动作条还高半截。
+   两条一起收回：上下对称一个 spacing、去掉行距、动作条只占自己那一行。 */
+.card-header-compact {
+  align-items: center;
+  padding-block: var(--spacing);
+  row-gap: 0;
+}
+.card-header-compact > [data-slot="card-action"] {
+  align-self: center;
+  grid-row: span 1;
+}
+
+/* 编辑态覆在卡片标题上的把手条：拖它换位，点右端 × 收起这块 */
+.ws-grip {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 25px;
+  padding: 0 3px 0 8px;
+  border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+  background-color: color-mix(in oklab, var(--accent) 92%, transparent);
+  color: var(--accent-foreground);
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.ws-grip-hide {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.75;
+}
+.ws-grip-hide:hover {
+  opacity: 1;
+  background-color: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+.ws-tile-edit {
+  outline: 1px dashed color-mix(in oklab, var(--primary) 55%, transparent);
+  outline-offset: 1px;
+}
+
+/* 缩放手柄。库自带的是"悬停才显形"的 20 px 角标，而且只在 se 一个轴上给了可视标记：
+   一个角标压在卡片角上、离邻居只剩格缝那点距离，看不准是拽哪一块，磅房里戴手套更够不着。
+   编辑态改成右缘 / 下缘 / 右下角三条常驻抓取条，各自外扩 6 px 伸进 12 px 的格缝（GRID_MARGIN），
+   于是"往哪儿拽"不要求指针先落准。z-index 抬到卡片之上：手柄压在邻居的那几像素，
+   不该反过来被邻居的卡盖住。非编辑态库会挂 react-resizable-hide，三条整块 display:none，不留点击死角。 */
+.ws-grid-edit .react-grid-item > .react-resizable-handle {
+  z-index: 6;
+  opacity: 1;
+}
+
+/* 右下角：唯一带库那种 L 形标记的轴，放大到 28 px 并把标记推到外沿，指向"往这个方向拽" */
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se {
+  right: -6px;
+  bottom: -6px;
+  width: 28px;
+  height: 28px;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid color-mix(in oklab, var(--primary) 65%, transparent);
+  border-bottom: 2px solid color-mix(in oklab, var(--primary) 65%, transparent);
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se:hover::after {
+  border-color: var(--primary);
+}
+
+/* 右缘 / 下缘：整条边都能拽。库把这两轴也套了同一条 L 形标记，靠 rotate 摆方向——
+   铺在长条上会歪到卡外去，所以这里既撤掉它的 rotate，也改用一条居中的小杠当提示。 */
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e {
+  top: 0;
+  right: -6px;
+  margin-top: 0;
+  width: 18px;
+  height: 100%;
+  transform: none;
+  cursor: ew-resize;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s {
+  left: 0;
+  bottom: -6px;
+  margin-left: 0;
+  width: 100%;
+  height: 18px;
+  transform: none;
+  cursor: ns-resize;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e::after,
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s::after {
+  display: none;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e::before,
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  background-color: color-mix(in oklab, var(--primary) 45%, transparent);
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e::before {
+  width: 4px;
+  height: 28px;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s::before {
+  width: 28px;
+  height: 4px;
+}
+.ws-grid-edit .react-grid-item > .react-resizable-handle:hover::before {
+  background-color: var(--primary);
+}

@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>农产品收购发票 · 进项凭证链 · 设计简报（待拍板）</title>
+<style>
+  :root{
+    --ink:#16191d; --ink2:#4b5563; --ink3:#8a929c;
+    --line:#dfe3e8; --line2:#eceff3; --bg:#ffffff; --wash:#f6f8fa;
+    --ok:#0f7a3d; --warn:#9a5b00; --no:#b42318; --key:#1d4ed8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.62 -apple-system,"Segoe UI","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:34px 30px 72px}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:.2px}
+  h2{font-size:15.5px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line);letter-spacing:.3px}
+  h2 .no{color:var(--ink3);font-weight:600;margin-right:7px}
+  h3{font-size:13.5px;margin:18px 0 6px}
+  p{margin:8px 0}
+  code{font:12.5px/1.5 ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;background:var(--wash);padding:1px 4px;border:1px solid var(--line2)}
+  .meta{color:var(--ink3);font-size:12.5px;margin-bottom:2px}
+  .lede{border-left:3px solid var(--key);background:var(--wash);padding:11px 14px;margin:16px 0 0}
+  .lede b{color:var(--key)}
+  table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+  th,td{border-bottom:1px solid var(--line2);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--wash);font-weight:600;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+  .mono{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:12.5px}
+  .sub{color:var(--ink2)}
+  .tiny{font-size:12.3px;color:var(--ink3)}
+  ul{margin:6px 0 6px;padding-left:21px}
+  li{margin:3px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:2px;background:var(--wash);color:var(--ink2);white-space:nowrap}
+  .tag.key{border-color:#b9cbfa;background:#eef3ff;color:var(--key)}
+  .tag.ok{border-color:#b7dcc3;background:#eef8f1;color:var(--ok)}
+  .tag.warn{border-color:#e6d3ae;background:#fdf7ea;color:var(--warn)}
+  .tag.no{border-color:#e8c2be;background:#fdf0ef;color:var(--no)}
+  .c-yes{color:var(--ok);font-weight:600}
+  .c-no{color:var(--no);font-weight:600}
+  .c-part{color:var(--warn);font-weight:600}
+  .card{border:1px solid var(--line);border-radius:3px;padding:13px 15px;margin:11px 0}
+  .card > .hd{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;margin-bottom:5px}
+  .card > .hd b{font-size:13.8px}
+  .quote{border-left:3px solid var(--ink3);background:var(--wash);padding:9px 13px;margin:9px 0;font-size:13px}
+  .foot{margin-top:38px;padding-top:12px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.3px}
+  @media print{body{font-size:11.5px}.wrap{padding:0;max-width:none}h2{break-after:avoid}.card,table,.quote{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>农产品收购发票 · 进项凭证链 · 设计简报</h1>
+<p class="meta">BangHe 收粮计量结算系统 &nbsp;·&nbsp; 2026-10-10 &nbsp;·&nbsp; 状态：<b>待拍板</b>（D1–D8）&nbsp;·&nbsp; 归属：<code>02 §M12 财务深化</code> 现挂在暂缓表，暂缓理由「需财务口径确认」——本轮要确认的就是那一句</p>
+
+<div class="lede">
+<p style="margin:0"><b>一句话主张：</b>系统开不了票，也不该去开票。收购发票是在主管税务机关核定票种后、由粮站在电子税务局自开的<b>数电票票种</b>；票能不能开、敢不敢开，取决于三件事——<b>卖粮的是不是本人、粮是不是他自产的、粮款有没有付到他本人手上</b>——而这三件事恰好都是这套系统已经在记的。<b>本轮只做一件事：给每一笔收购打上「凭证类型」，把可开收购发票的明细与备查证据链一次导出，并让票面金额和付款流水互相校验得住。</b>算进项、做转出、报税，一律留在财务系统。</p>
+<p class="tiny" style="margin:6px 0 0">为什么不是"在系统里加一个开票按钮"：那需要乐企或税局接口资质（2026 年新出现的银行侧「支付即开票」通道挂在邮储「易企营」，不在我们可控范围内），而真正的风险面根本不在开票动作上——<b>在于我们提供的数据能不能证明这笔收购是真的</b>。</p>
+</div>
+
+<h2><span class="no">1</span>政策口径：七条已核实的事实（2026-10-10 现行文本）</h2>
+<table>
+<thead><tr><th>事实</th><th>依据</th><th>对本系统的意义</th></tr></thead>
+<tbody>
+<tr>
+<td><b>① 收购发票是"反向开票"：由收购方开给自己作进项凭证。</b>农业生产者销售自产农产品免征增值税、免税项目不得开专用发票，所以票面只注明<b>买价</b>，税额是<b>算出来的</b>，不是票上写的。</td>
+<td class="mono">《增值税法》免税项目列举<br>中国税务报 2026-08-05《进一步完善农产品收购发票管理》（"免税项目不能开具专用发票"）</td>
+<td class="c-part">开票主体是粮站，<b>数据责任也全在粮站</b>。票面每一个字段都来自我们的库。</td>
+</tr>
+<tr>
+<td><b>② 边界收紧：这张票只适用于收购"农业生产者的自产农产品"。</b>同一篇点名三处问题：自产边界易错、买方举证难、<b>错向经纪人开</b>——而"农产品经纪人不是农业生产者"。</td>
+<td class="mono">中国税务报 2026-08-05</td>
+<td class="c-no"><code>party_type='broker'</code> 必须是硬闸门，不是提示。<b>这条是本轮唯一会导致虚开责任的分流</b>。</td>
+</tr>
+<tr>
+<td><b>③ 扣除率一律 9%，加计 1% 已停。</b>旧口径下购进用于生产/委托加工 13% 税率货物的农产品可在领用环节加计到 10%；2026 年起领用环节<b>不能再加计那 1%</b>。</td>
+<td class="mono">财政部 税务总局公告 2026年第10号 第五条（二）<br>（原财税〔2017〕37号、2019年39号那套衔接后停）</td>
+<td class="c-no">代码与文档里<b>任何 10% / 加计常量都是错的</b>。示例：买价 10,000 元 → 进项 900 元、成本入账 9,100 元。</td>
+</tr>
+<tr>
+<td><b>④ 凭证类型决定"基数"，不决定"税率"。</b>9% 这个扣除率是统一的（③），但<b>乘在什么上面</b>有两种：取得（开具）销售发票或收购发票 → <b>买价 × 9%</b>；从小规模纳税人取得 3% 专票 → <b>金额 × 9%</b>；而取得<b>专用发票或海关缴款书</b> → <b>按票面注明的税额抵，不乘 9%</b>；从农民专业合作社购进免税农产品 → 9% 扣除率。</td>
+<td class="mono">财政部 税务总局公告 2026年第10号<br>12366 答疑（固镇县政府网 2026-07 转发）</td>
+<td class="c-yes">这就是 §2 那张分流表的列定义。<b>系统必须能区分一笔收购拿的是哪种凭证</b>，否则连小计都对不上。</td>
+</tr>
+<tr>
+<td><b>⑤ 免税项目对应的进项不得抵扣；分不清的按占比逐期算，年底再清算一次。</b></td>
+<td class="quote mono" style="margin:4px 0">《增值税法实施条例》（国务院令第826号）第二十三条：一般纳税人购进货物（不含固定资产）、服务，用于简易计税方法计税项目、免征增值税项目和不得抵扣非应税交易而<b>无法划分</b>不得抵扣的进项税额的，应当按照<b>销售额或者收入占比逐期计算</b>当期不得抵扣的进项税额，并于<b>次年1月的纳税申报期内进行全年汇总清算</b>。</td>
+<td class="c-part">你们销项免税与应税并存（D0 已确认），所以收购发票的可抵额天生是<b>"先按票面抵、再按占比转出"</b>两段。转出公式需要"不含税销售额 + 无票收入 + 视同销售"作分母——<b>这套数据不在收粮系统里</b>。见 D8。</td>
+</tr>
+<tr>
+<td><b>⑥ 开票有前置资格，不是装软件就能开。</b>收购方需向主管税务机关申请、被归类为"农产品收购企业"并核定该票种；地方执行"<b>先备案后放票，不备案不放票</b>"，备案要核收购场所、设备、业务真实性。</td>
+<td class="mono">12366 留言答复（农产品收购数电票需到主管税务机关申请）<br>国家税务总局江苏省税务局 2026-08-13《涟水税务破解夏粮收购开票难题》</td>
+<td class="sub">前置动作由会计去办，<b>系统代替不了</b>；但备案要交的材料（场所、设备、真实性）正是本系统能出的一部分。</td>
+</tr>
+<tr>
+<td><b>⑦ 举证与资金流是核查主战场。</b>核查中企业通常被要求提供<b>农民土地承包文件、产能证明</b>；小额散农方向上建议凭<b>村委会自产证明</b>开票。另一侧，2026-09 邮储银行上线乐企联用<b>"支付即开票"</b>：农户在手机银行授权并<b>上传自产证明</b>、企业付款<b>实时到账</b>、支付完成的瞬间联动乐企自动开数电票（货物流/资金流/发票流三流合一）。</td>
+<td class="mono">中国税务报 2026-08-05<br>邮储银行乐企联用报道 2026-09-23</td>
+<td class="c-no"><b>"粮款付到售粮人本人账户"正在从好习惯变成事实门槛</b>。<code>payment_record.method='cash'</code> 的那部分无法自证资金流——见 D6。</td>
+</tr>
+</tbody>
+</table>
+<p class="tiny"><b>诚实边界：</b>上面 ①②③④⑤ 是全国性依据；⑥⑦ 的<b>执行细节各地差异极大</b>（江苏按耕种亩数 500 亩 / 年收购 3000 吨分档引导登记、海南与宁夏各自发正负面清单）。凡标 <span class="tag warn">需主管税务机关确认</span> 的三条见 §5 末尾，不要拿本页当备案依据。</p>
+
+<h2><span class="no">2</span>凭证分流表（唯一事实源，其余各节不得与此冲突）</h2>
+<p class="sub">值域直接取 <code>party.party_type</code> 的 CHECK 约束（<span class="mono">0001_init.sql:83-84</span>，五值：farmer / large_grower / broker / cooperative / company），不新造枚举。中文映射已在 <span class="mono">src/lib/constants.ts:220-226</span> 与 <span class="mono">orders.rs:1324</span> 同源。</p>
+<table>
+<thead><tr><th><code>party_type</code></th><th>业务对象</th><th>允许的进项凭证</th><th>进项怎么算</th><th>系统闸门（硬拒 / 标记）</th></tr></thead>
+<tbody>
+<tr>
+<td class="mono">farmer</td><td>农户（自产）</td>
+<td><span class="tag ok">可</span> 我方自开<b>农产品收购发票</b></td>
+<td class="mono">票面买价 × 9%</td>
+<td class="c-part">标记：证号为空或 <code>id_card_verified=0</code> → 见 D5</td>
+</tr>
+<tr>
+<td class="mono">large_grower</td><td>种粮大户 / 家庭农场</td>
+<td><b>二选一</b>：未办税务登记 → 我方开<b>收购发票</b>；已登记（有 <code>tax_no</code>）→ 对方自开<b>免税农产品销售发票</b></td>
+<td class="mono">两种都是 票面买价 × 9%</td>
+<td class="c-part">分叉依据 = <code>party.tax_no</code> 是否为空。<b>该列现在是死列，必须先启用</b>（§4 第 4 行）</td>
+</tr>
+<tr>
+<td class="mono">broker</td><td>粮食经纪人 / 粮贩</td>
+<td><span class="tag no">禁止</span> 不得开收购发票（经纪人不是农业生产者）。只能取<b>对方自开或税务机关代开的发票</b></td>
+<td class="mono">专票按注明税额；<br>3% 专票 金额 × 9%；<br>免税销售发票 买价 × 9%</td>
+<td class="c-no"><b>硬拒</b>：整批落到「不可开收购发票」桶</td>
+</tr>
+<tr>
+<td class="mono">cooperative</td><td>合作社</td>
+<td><span class="tag warn">对方开</span> 免税农产品销售发票（或专票）</td>
+<td class="mono">免税票 买价 × 9%；<br>专票 按注明税额</td>
+<td class="c-no"><b>硬拒</b>开收购发票（对方不是"农业生产者个人"）；无 <code>tax_no</code> 标记</td>
+</tr>
+<tr>
+<td class="mono">company</td><td>企业（含贸易公司）</td>
+<td><span class="tag warn">对方开</span> 增值税专用发票 / 普通发票</td>
+<td class="mono">专票按注明税额；<br>3% 专票 金额 × 9%</td>
+<td class="c-no"><b>硬拒</b>开收购发票；无 <code>tax_no</code> 标记</td>
+</tr>
+</tbody>
+</table>
+<div class="card">
+<p style="margin:2px 0"><b>全表只有一条能自开收购发票</b>：<code>party_type='farmer'</code>，加上<code>party_type='large_grower' AND tax_no IS NULL</code>。这一句就是 §4 里 <code>voucher_class_of()</code> 判定函数的全部业务定义，§6 的一致性守卫测的就是它和这张表不许分叉。</p>
+<p class="tiny" style="margin:6px 0 0">唯一的例外出口：<b>经纪人拼车代售</b>时，票开给<b>实际种粮户</b>而不是经纪人——江苏涟水对年收购 3000 吨以下小微经纪人的代收代付就是这么定的（"由收购企业直接向种粮户个人开具收购发票"）。走这条必须有<b>代售农户清单</b>，而那张表<b>今天不存在</b> → 这是 D1，也是本轮唯一可能需要新迁移的一项。</p>
+</div>
+
+<h2><span class="no">3</span>票面数据从哪来：一条取数铁律 + 三条不变式</h2>
+
+<h3>3.1 行源只能是结算快照，不能是磅单</h3>
+<table>
+<thead><tr><th>候选行源</th><th>证据</th><th>判定</th></tr></thead>
+<tbody>
+<tr>
+<td><code>settlement_order</code>（结算时点快照）</td>
+<td class="mono">0001_init.sql:399-407 — 结算时把 <code>goods_amount_fen</code> / <code>price_fen_per_ton</code> / <code>settlement_weight_01kg</code> 三项<b>快照</b>进明细</td>
+<td class="c-yes"><b>用它。</b>票面要的就是"成交那一刻算出来的钱"，价格与重量都不会事后漂移。</td>
+</tr>
+<tr>
+<td><code>weigh_order</code> + <code>ORDER_SELECT</code>（磅单实时取数）</td>
+<td class="mono">orders.rs:629-645 — <code>COALESCE(CAST(p.id_card_no_enc AS TEXT),'')</code> 来自 <code>JOIN party p</code>，<b>live join 非快照</b></td>
+<td class="c-no"><b>禁用为行源。</b>同一户档案后来改一个证号，会把<b>全部历史磅单行</b>跟着改写。用它出票，等于让"今天的一次录入错误"倒写"去年的已开发票"。</td>
+</tr>
+<tr>
+<td><code>weigh_order</code> 用于对账</td>
+<td class="mono">settlement 主表 :363-394 有 <code>period_from/period_to</code> 与四个合计列</td>
+<td class="sub">可以，但只作"磅单 ↔ 结算单"差异核对，不进票面列。</td>
+</tr>
+</tbody>
+</table>
+
+<h3>3.2 买价取哪一列（本轮最大的一个数值分歧）</h3>
+<p><code>weigh_order</code> / <code>settlement_order</code> 上有三个金额候选：<code>goods_amount_fen</code>（货款）、<code>payable_amount_fen</code>（应付）、<code>paid_amount_fen</code>（已付），另有 <code>deduction_fee_fen</code>、<code>advance_fee_fen</code> 两列扣/垫项（<span class="mono">0001_init.sql:219-224</span>）。票面"买价"应等于<b>实际支付给农业生产者的粮款</b>，所以：</p>
+<div class="card">
+<p style="margin:2px 0"><b>本轮倾向：</b>票面买价 = <code>goods_amount_fen</code>；凡是从农户身上扣掉的钱（<code>deduction_fee_fen</code> / <code>advance_fee_fen</code>）一律<b>减掉</b>后才是买价，凡不是粮款的钱（运费、装卸、我方自付的耗材）一律<b>加不进来</b>。</p>
+<p class="c-no" style="margin:6px 0 0"><b>未核实项（必须先读代码再动）：</b><code>payable_amount_fen</code> 与 <code>goods_amount_fen</code>、两列扣项之间的<b>确切加减关系本轮没有核实</b>——我只确认了四列都存在且语义如注释所述。动手前要先读 <span class="mono">orders.rs</span> 里 payable 的算式，把"扣项到底进没进货款"钉死，否则票面买价会系统性偏高或偏低。列入 §5 前置输入 P2。</p>
+</div>
+
+<h3>3.3 三条不变式（可证伪，直接进 §6 守门测试）</h3>
+<table>
+<thead><tr><th>#</th><th>不变式</th><th>破了会怎样</th></tr></thead>
+<tbody>
+<tr><td><b>I1</b></td><td>票面每一行的<b>证号、姓名、金额</b>一经生成就冻结——取 <code>settlement_order</code> 快照（§3.1），不随档案改写。</td><td>补录一个错号，历史票全部对不上原票，且我们<b>说不清哪版是真</b>。</td></tr>
+<tr><td><b>I2</b></td><td><b>票面买价合计 == 同一结算单下 <code>payment_record.amount_fen</code> 合计</b>（<span class="mono">:417 CHECK amount_fen &gt; 0</span>）。差额非零的行必须单列"资金流缺口"，不许静默通过；挂账（<code>method='credit_writeoff'</code>）与 <code>payment_status ∈ {unpaid, partial}</code> 天然会产生缺口，那是要<b>报出来</b>、不是藏起来。</td><td>这是核查时最省事的一条问话："票上写了收 5 万，钱呢？"对不上就是虚开的形状。</td></tr>
+<tr><td><b>I3</b></td><td><b>同一 <code>id_card_no_fp</code> 全生命周期只对应一户。</b>后端写入口必须过 GB11643 校验位；差一位即两档（SHA-256 精确相等，<span class="mono">orders.rs:1326-1335</span>）。</td><td>同一人被拆成多档、单档金额压低——<b>收购发票虚开的标准手法</b>，和"证号录错"在数据上是同一个洞，唯一索引与"已建档"提示同时失效。</td></tr>
+</tbody>
+</table>
+<p class="tiny">I3 的落点很具体：校验位算法今天<b>只在前端</b>（<span class="mono">src/lib/format.ts:245-253</span> <code>validateIdCard</code>，调用点 <span class="mono">PartiesPage.tsx:388</span>、<span class="mono">QuickPartyDialog.tsx:94</span>），后端 <code>save_party</code> 对证号<b>零格式校验</b>——只 <code>trim().to_uppercase()</code>（<span class="mono">orders.rs:1483</span>）后做指纹。<code>party_save</code> 通道能完全绕开前端。见 D7。</p>
+
+<h2><span class="no">4</span>字段清单与接线点</h2>
+<table>
+<thead><tr><th>层</th><th>位置</th><th>现状</th><th>本轮动作</th></tr></thead>
+<tbody>
+<tr><td>库 · 枚举</td><td class="mono">party.party_type<br>0001_init.sql:83-84</td><td>五值 CHECK 齐全</td><td class="c-yes">不动，直接作 §2 分流输入</td></tr>
+<tr><td>库 · 闸门输入</td><td class="mono">party.id_card_verified :87<br>party.id_card_no_fp :86 + idx_party_fp :109</td><td>1=读卡核验 / 0=手工录入；指纹部分唯一</td><td class="c-yes">不动，升格为"能不能进收购发票明细"的判据（D5）</td></tr>
+<tr><td>库 · <b>死列要启用</b></td><td class="mono">party.tax_no :93</td><td><code>station.tax_no</code>(:30) 与 <code>party.tax_no</code> 都<b>全无读写</b>——<code>save_party</code> 的 INSERT 列清单里根本没有它（<span class="mono">orders.rs:1507-1524</span>）</td><td class="c-part"><b>启用</b>：写入口 + 表单 + 取数。它是 large_grower 分叉（§2 第 2 行）与"对方开票抬头"的唯一依据。<b>列已在，不需要迁移</b></td></tr>
+<tr><td>库 · <b>死列正好用</b></td><td class="mono">payment_record.voucher_no :425</td><td>注释就写着"凭证号（财务深化期用）"，两条 INSERT 都不写（<span class="mono">settlements.rs:265-273</span>、<span class="mono">orders.rs:2863</span>），只在四处展示</td><td class="c-part"><b>回填发票号</b>的现成位置。同样不需要迁移。启用后 I2 才闭环（票 ↔ 款 双向可查）</td></tr>
+<tr><td>库 · 资金流</td><td class="mono">payment_record.method :418-419<br>trade_no :420 · paid_at :423 · reversed :426</td><td>六值 CHECK：cash/bank/wechat/alipay/transfer/credit_writeoff；非现金必填 <code>trade_no</code>（<span class="mono">settlements.rs:237-240</span>）</td><td class="c-yes">不动，作导出里的"资金流"列（D6）</td></tr>
+<tr><td>库 · 唯一新表？</td><td class="mono">代售农户清单</td><td><b>未建表、无列</b>。仅 <span class="mono">docs/design/02:257-262</span>（F3.4，P1 未实现）；现场只有备注预设"司机代售"（<span class="mono">0015_quick_option.sql:63</span>、<span class="mono">constants.ts:165</span>）</td><td class="c-no">若 D1 选拆票 → 新建 <code>0033_party_consignment.sql</code>（下一号已排到 0033）。<b>本轮唯一可能需要迁移的一项</b></td></tr>
+<tr><td>取数 SQL</td><td class="mono">ledger.rs LedgerRow :83-118<br>build_ledger :120-203<br>report_ledger :551</td><td>收购明细台账已含 <code>id_card_no</code> 全号、<code>party_type</code>、<code>address</code>、水分杂质（qc_indicator 快照 :105-106），已剔 <code>voided/rejected</code>(:149)，seq 应用层连编(:195-202)</td><td class="c-part"><b>复用同一套 JOIN 与剔除口径</b>，勿另写一条 SQL 造成两套台账口径分叉</td></tr>
+<tr><td>判定函数</td><td class="mono">新建 src/lib/voucher-class.ts</td><td>无</td><td class="c-part"><code>voucher_class_of(party)</code> → 五值枚举 + 一个 <code>'blocked'</code>，是 §2 表的<b>唯一代码化载体</b>，被 §6 守卫测住</td></tr>
+<tr><td>导出出口</td><td class="mono">csv.ts toCsv :54 / EXCEL_WOULD_REWRITE :36 / esc :38-47<br>export-csv.tsx :32-83<br>system.rs export_write :1808（:1831 pii.read 审计）</td><td>整套现成，含防 Excel 把证号改成科学计数的处理和 PII 落盘留痕</td><td class="c-yes"><b>整套复用，零新代码</b>。证号列必须走 <code>esc</code>，票面证号错一位即另一个人</td></tr>
+<tr><td>界面</td><td class="mono">ReportsPage.tsx:222 LedgerReport<br>固定监管列序 docs/design/02:352（F7.1，20 列）<br>现导出表头 :316（29 列）</td><td>监管台账是<b>固定列序</b>，已被文档钉死</td><td class="c-part">D4：加页还是加列。<b>不建议往监管台账里塞发票列</b>——那是迎检模板，混列等于自毁口径</td></tr>
+<tr><td>命令接线</td><td class="mono">lib.rs:184-190 档案簇<br>command_wiring_contract.rs:91 正则</td><td>四点接线强制（Rust 壳 / lib.rs 登记 / mock 同名 / native 覆盖），<code>STILL_MOCK</code> 为空数组无豁免</td><td class="c-part">若加 <code>party_tax_no_set</code> 或 <code>report_purchase_invoice</code>，必须四点同轮落地，且泛型参数里不能有圆括号或换行</td></tr>
+<tr><td>DTO 列集</td><td class="mono">PARTY_SELECT（orders.rs:1138 附近）<br>search_contract.rs:367 钉死键集合</td><td>列集列序被合同测钉住，且被 orders / search / settlements 三方共享位置映射</td><td class="c-no">加 <code>tax_no</code> 到列表<b>必然红</b> <code>search_contract</code> → 要么同轮改 :367，要么只在详情页单取（<b>倾向后者</b>，见 D3）</td></tr>
+<tr><td>审计话术</td><td class="mono">SystemPage.tsx:438-465 AUDIT_ACTION</td><td>已有 <code>party.verify</code>/<code>order.update</code> 补录先例</td><td class="c-part">新导出/新写入口都要补人话，否则审计页吐机器码</td></tr>
+<tr><td>权限岗位</td><td class="mono">orders.rs:81 FLOOR_ROLES<br>= station_master / registrar / weigher</td><td>建档与核验同岗</td><td class="c-yes"><code>tax_no</code> 维护沿用 FLOOR_ROLES；<b>发票明细导出不给磅房岗</b>——它一次导出整季全部农户证号，建议出纳/站长（<code>SETTLE_ROLES</code> <span class="mono">:85</span> 口径）</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">5</span>需要拍板的决策</h2>
+
+<div class="card"><div class="hd"><b>D1</b><span class="tag key">推荐 A</span><span class="tag">虚开红线</span></div>
+<p style="margin:2px 0"><b>经纪人拼车代售的粮，票怎么落？</b>现状只有备注预设"司机代售"（<span class="mono">0015:63</span>），无结构化清单。</p>
+<ul>
+<li><b>A. 建代售农户清单，票开给实际种粮户。</b><span class="c-yes">推荐</span>——涟水口径明文：小微经纪人走代收代付时"由收购企业<b>直接向种粮户个人</b>开具收购发票"。这也顺带把 <code>02:257-262</code> 那条 P1 未实现的 F3.4 补上，一举两得（它本身也是"代售清单"迎检重点）。代价：磅房要多录一层（谁代售、替哪几户、各多少），是本轮唯一的迁移与唯一的新界面。</li>
+<li><b>B. 一律不开收购发票</b>，经纪人的粮进「无进项凭证」桶，只作成本。<span class="c-part">最省，但</span>若经纪人供货占比高，等于自愿放弃这一大块抵扣，会计那边过不了。</li>
+<li><b>C. 照现状开给经纪人。</b><span class="c-no">虚开。</span>税务报公开点名"农产品经纪人不是农业生产者"，不做。</li>
+</ul>
+</div>
+
+<div class="card"><div class="hd"><b>D2</b><span class="tag key">推荐 A</span><span class="tag">YAGNI / Phase-1</span></div>
+<p style="margin:2px 0"><b>要不要建"开票台账"表，在系统里管开票状态？</b></p>
+<ul>
+<li><b>A. 不建表。</b>Phase-1 只做<b>可开收购发票明细导出</b>（CSV，交会计在电子税务局开），开完把发票号<b>回填 <code>payment_record.voucher_no</code></b>（死列现成）。<span class="c-yes">推荐</span>——开票动作不在我们这边，建状态机就是凭空造一套和税局永远对不上的假状态。</li>
+<li><b>B. 建 <code>purchase_invoice</code> + 明细表，含"草稿/已开/已红冲"。</b><span class="c-part">代价</span>：红冲在税局侧发生，我们无法感知，状态必然漂移。留 Phase-2（等接了乐企或税局下载再建）。</li>
+</ul>
+</div>
+
+<div class="card"><div class="hd"><b>D3</b><span class="tag key">推荐 A</span><span class="tag">票面正确性</span></div>
+<p style="margin:2px 0"><b>证号、户名、地址要不要进票面？进的话从哪取？</b></p>
+<ul>
+<li><b>A. 进，且详情页单取（不动 <code>PARTY_SELECT</code>）。</b><span class="c-yes">推荐</span>——收购发票销售方必填姓名 + 证号，数电票还需可核验的身份要素。<code>tax_no</code> 用一条窄查询按 id 取，避开 <span class="mono">search_contract.rs:367</span> 与三方共享位置映射的连锁改动。</li>
+<li><b>B. 把 <code>tax_no</code> 加进 <code>PARTY_SELECT</code>。</b><span class="c-no">不值：</span>要同步改合同测和三个消费方的位置映射，为一个详情页字段动全局列集。</li>
+<li>C. 票面只留姓名 + 证号、地址留空。<span class="c-part">看主管税务机关要求，列 P3。</span></li>
+</ul>
+</div>
+
+<div class="card"><div class="hd"><b>D4</b><span class="tag key">推荐 A</span><span class="tag">信息架构</span></div>
+<p style="margin:2px 0"><b>报表落点：并入现有台账还是新开一页？</b></p>
+<ul>
+<li><b>A. 新开一页 <code>/reports/purchase-invoice</code>。</b><span class="c-yes">推荐</span>——监管台账是<b>固定 20 列列序</b>（<code>02 §F7.1</code>），现导出 29 列；发票明细要的列（买价、扣除率、可抵额、凭证类型、资金流缺口）与它<b>只有前半段重合</b>。混列会同时毁掉两个口径：迎检模板不再可信，发票清单又不完整。</li>
+<li><b>B. 在 LedgerReport 加列 + 一个"仅收购发票"筛选。</b><span class="c-part">省一页</span>，但筛选一开，列集就和 F7.1 分叉，那份文档要跟着改。</li>
+</ul>
+</div>
+
+<div class="card"><div class="hd"><b>D5</b><span class="tag key">推荐 A</span><span class="tag">闸门强度</span></div>
+<p style="margin:2px 0"><b><code>id_card_verified=0</code>（手工录入、没刷过卡）或证号为空的农户，能不能进收购发票明细？</b>存量里"有电话无证号"的档案是合法存在的（<span class="mono">orders.rs:1490-1492</span> 只要求"证号与电话至少一个"，且 :1519 对无证档案强制 <code>verified=0</code>）。</p>
+<ul>
+<li><b>A. 能进，但整行标 <code>缺实名核验</code>，并在表头汇总"其中 X 行证号未经读卡核验 / Y 行无有效身份证依据，开票前须补"。</b><span class="c-yes">推荐</span>——收粮现场先过磅后补证是常态，直接排除会让人<b>改数据去绕过闸门</b>（把别人证号填上），那比缺核验糟得多。</li>
+<li><b>B. 硬排除，不进导出。</b><span class="c-no">风险：</span>磅房为把粮款结出去而去凑证号，恰好制造 I3 那个洞。且"消失的行"没有任何提示。</li>
+</ul>
+<p class="tiny">复用的是 <code>src/lib/party-verify.ts</code> 已定下的三条闸门判据（已核验空操作 / <code>!card.real</code> 演示卡一律不盖章 / 证号比对由后端重算），<b>不要另写一套"已核实"定义</b>。</p>
+</div>
+
+<div class="card"><div class="hd"><b>D6</b><span class="tag key">推荐 A（但 B 更治本）</span><span class="tag">要不要夹带</span></div>
+<p style="margin:2px 0"><b>现金结算的粮款怎么处理？</b><code>payment_record.method='cash'</code> 在值域里是合法一等公民，现场也确实大量用现金。</p>
+<ul>
+<li><b>A. 本轮不改结算闸门，只在导出里单列"资金流"列 + 顶部汇总"现金占比 %、涉及金额"。</b><span class="c-yes">推荐</span>——把判断交给会计和主管税务机关。<b>注意别说过头</b>：现行全国层面<b>没有</b>"现金支付不得抵扣"的明文（税务报那篇也确认"付款可追溯"属其未提及之列），但银行侧"支付即开票"通道事实要求农户本人账户，现金最脆弱。</li>
+<li><b>B. 超阈值现金结算拒绝 / 强制改转账。</b><span class="c-part">诚实说 B 才治本</span>，但要碰 <code>settle-gate.ts:66-107</code> 四道闸与 <code>creditPayGate</code>(:124-154)，那是收粮闭环的主链路，混进来会让本轮 diff 从"一个报表 + 两个死列启用"变成改结算。</li>
+</ul>
+</div>
+
+<div class="card"><div class="hd"><b>D7</b><span class="tag key">推荐 A</span><span class="tag">补上周的尾巴</span></div>
+<p style="margin:2px 0"><b>后端补齐 GB11643 校验位，本轮做不做？</b>现在校验只在前端（<span class="mono">format.ts:245-253</span>），<code>party_save</code> 后端零校验（<span class="mono">orders.rs:1483</span>），前端一绕即存脏号。</p>
+<ul>
+<li><b>A. 本轮补，范围只到两条写入口</b>（<code>party_save</code>、<code>set_party_verified</code>）：证号非空即必须过校验位。<span class="c-yes">推荐</span>——进项票要的就是证号正确性，这是 I3 的技术前提；且 GB11643 权重全是 11 的非零剩余类，<b>单字符错录与相邻换位必然过不了校验位</b>，可零误报指认档案侧错。</li>
+<li><b>B. 另开一轮。</b><span class="c-part">代价</span>：中间这段时间导出的票面证号仍可能是错的，而<b>错号发票是我们自己开的</b>。</li>
+<li>存量脏号（<span class="mono">2026-09-14 提交 35cadc9 之前</span>产生的）<b>只报表、不清洗</b>，与上周结论一致。</li>
+</ul>
+</div>
+
+<div class="card"><div class="hd"><b>D8</b><span class="tag key">推荐 A</span><span class="tag">职责边界</span></div>
+<p style="margin:2px 0"><b>免税/应税并存下的进项转出，系统算不算？</b>（D0 你已确认"两种以上并存/还在定"）</p>
+<ul>
+<li><b>A. 不算。</b>本系统只按 §2 的 <code>voucher_class</code> 分组出<b>买价小计</b>与<b>按 9% 计算的可抵额小计</b>，明确标注"未扣除免税项目应转出的部分"。<span class="c-yes">推荐</span>——实施条例第二十三条的分母是"不含税销售额 + 无票收入 + 视同销售"，出口免税与即征即退另有归入规则，<b>这些销售额数据压根不在这套系统里</b>（我们只有 <code>outbound_order</code> 出库单）。自己拼一个缺分母的公式，等于造一套看起来能算、实际一定错的账。</li>
+<li><b>B. 让会计把当年"免税销售额占比"作为一个数录进来，系统乘一下。</b><span class="c-part">能做但危险</span>：那要求逐期算 + 次年 1 月清算<b>两套</b>口径都存，还引出"占比该按季还是按月"的新问题——一旦录入口开了，转出就成了我们该对结果负责的事。</li>
+</ul>
+</div>
+
+<h3 style="margin-top:26px">本轮无法自行确定、必须外部给的东西</h3>
+<table>
+<thead><tr><th>#</th><th>要什么</th><th>找谁</th><th>不给的后果</th></tr></thead>
+<tbody>
+<tr><td>P1</td><td><b>收购企业资格与票种核定</b>是否已办、核定给的是哪个票种、有无单户/单月限额</td><td class="c-no"><span class="tag warn">需主管税务机关确认</span> 会计办税人</td><td>没核定就没有票可开，本轮导出功能只能当对账表用</td></tr>
+<tr><td>P2</td><td><b>买价口径</b>确认（§3.2）+ <code>payable_amount_fen</code> 的确切算式</td><td>会计 + 先读 <span class="mono">orders.rs</span> 算式</td><td>票面金额系统性偏差，I2 一定不平</td></tr>
+<tr><td>P3</td><td><b>经纪人 / 大户 / 合作社三种情形的地方执行口径</b>（是否要求登记、代开走不走电子税务局、地址是否必填）</td><td class="c-no"><span class="tag warn">需主管税务机关确认</span></td><td>§2 后三行的闸门强度可能要改</td></tr>
+<tr><td>P4</td><td>自产证明的<b>可获取形式</b>（土地承包文件？村委会证明？农户 APP 上传？）——决定是否要建附件类型</td><td class="c-no"><span class="tag warn">需主管税务机关确认</span> 会计 + 村委</td><td>只能复用 <code>attachment</code>(<span class="mono">:340-341</span> <code>biz_type='id_card_photo'</code>) 现成链路，证据链缺最硬一环</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">6</span>守门测试与验证</h2>
+<table>
+<thead><tr><th>命令</th><th>盯什么</th></tr></thead>
+<tbody>
+<tr><td class="mono">新增 contracts：§2 表 ↔ voucher_class_of()</td><td><b>本轮最重要的一条。</b>五值全覆盖，漏一个即红；<code>broker/cooperative/company</code> 三值必须判为不可自开；<code>large_grower</code> 仅在 <code>tax_no</code> 为空时可自开。策略表和代码分叉是这类模块唯一的静默失效方式。</td></tr>
+<tr><td class="mono">cd src-tauri; cargo test orders_contract</td><td>三条不变式各一条：I2 票面合计==付款合计（含挂账与 partial 缺口被报出）；I3 后端拒非 GB11643 证号、且拒的文案点名哪一位；I1 档案改证号后<b>历史发票明细不随之改写</b>。参照 <span class="mono">:742-810</span> 与 <span class="mono">card_verify_*</span> 的写法。</td></tr>
+<tr><td class="mono">cd src-tauri; cargo test search_contract</td><td>若 D3 选 A，应当<b>保持全绿</b>——绿了才证明没顺手改 <code>PARTY_SELECT</code> 列集。若红，说明有人走了 B。</td></tr>
+<tr><td class="mono">cd src-tauri; cargo test schema_contract</td><td>D1 选 A 时 <code>MIGRATIONS.len()</code> 与 <code>schema_snapshot.sql</code> 要同步（memory：三处写死计数已改成按 <code>MIGRATIONS.len()</code> 推导，勿写回字面量）；D1 选 B 时应当<b>全绿不动</b>。</td></tr>
+<tr><td class="mono">cd src-tauri; cargo test command_wiring / mock_coverage</td><td>新命令四点接线少任一点即红；<code>every_registered_command_is_called_by_the_frontend</code> 要求真有人调 → <b>UI 与命令必须同轮落地</b>，不能先提后端。</td></tr>
+<tr><td class="mono">npx tsc --noEmit --incremental false -p tsconfig.json</td><td>必须 <code>--incremental false</code>，否则吃 tsbuildinfo 假绿。</td></tr>
+<tr><td class="mono">npx vite build --outDir .scratch/dist-verify --emptyOutDir</td><td>产物落 <code>.scratch/</code>，别清 <code>dist/</code>。判绿别用 <code>|tail</code>（吞码假绿）。</td></tr>
+<tr><td class="mono">人工比对（唯一能验"对不对"的一步）</td><td>拿<b>一张真实已开的农产品收购发票</b> + 该户在库里的磅单/结算/付款，逐列对导出 CSV：买价、扣除额、数量单位（吨 vs 01kg）、姓名证号地址、备注列。<b>这一步的输入得你投喂</b>，我没有真票样本，票面版式与必填项全靠猜是不成立的。</td></tr>
+</tbody>
+</table>
+<p class="tiny">跑全量 <code>cargo test</code> 带 <code>--no-fail-fast</code>；判回归前先 <code>git status</code> 分锅（同一工作树可能有第二个会话在改 <code>orders.rs</code>——上周那轮 33 个未提交文件全在档案与磅房链路上，本轮动的正是同一批）。</p>
+
+<h2><span class="no">7</span>本轮明确不动的东西</h2>
+<table>
+<thead><tr><th>不动</th><th>为什么</th></tr></thead>
+<tbody>
+<tr><td><b>接乐企 / 税局接口自动开票</b></td><td>无资质、无接口文档，2026 年这条通道挂在银行侧（邮储"易企营"↔乐企总对总）。这不是工程量问题，是没有我们的位置。</td></tr>
+<tr><td><b>产能 / 亩数 / 单户限额校验</b></td><td>系统里<b>没有任何真实来源</b>能给出"这户今年该产多少粮"。硬编一个阈值报警等于造一个假指标，还会被现场当噪音。</td></tr>
+<tr><td><b>销项、应纳税额、进项转出计算</b></td><td>见 D8。分母不在这套系统里。</td></tr>
+<tr><td><b>M12 其余项</b>（收购成本、销售毛利、往来对账、费用归集、银行代付回单）</td><td>本轮只把"凭证类型"这一根轴立起来。<code>02:477</code> 那行 M12 描述要改的是<b>拆出进项凭证链</b>，不是整块开工。</td></tr>
+<tr><td><b>个人所得税代扣</b></td><td>农业生产者自产农产品所得的个税口径<b>本页不宣称</b>，与 P3 一并问主管税务机关。</td></tr>
+<tr><td><b>存量重复档案与错号清洗</b></td><td>沿用上周结论：只报不清。洗数据要逐户确认，且会倒改历史磅单显示（<code>ORDER_SELECT</code> 是 live join）。</td></tr>
+<tr><td><b>磅单打印模板</b>（<code>receipt/scenarios.tsx</code>）</td><td>农户手里那张码单要不要印发票号是另一件事——印了也不改变抵扣，却会让现场拿码单当票用。</td></tr>
+<tr><td><b><code>phone_enc</code> / <code>id_card_no_enc</code> 真上 AES-GCM</b></td><td>仍是明文过渡态（<span class="mono">orders.rs:20-26</span>、<span class="mono">0013:19-21</span>）。一旦随机 IV 密文不可比，唯一性要迁到指纹列——独立专项，别和发票混。</td></tr>
+</tbody>
+</table>
+
+<div class="foot">
+<p>本页只回答"票从哪来、我们这一侧要产出什么、哪几处要拍板"，不含代码。行号与列名取自 <code>master@ea14308</code>（2026-10-10）；<code>payable_amount_fen</code> 的算式与代售清单两处<b>本轮明确未核实</b>，已在 §3.2 / §4 标出。</p>
+<p>政策依据截至 2026-10-10 的公开文本：《增值税法》及《实施条例》（国务院令第826号，2026-01-01 施行）第二十三条、财政部 税务总局公告 2026年第10号、中国税务报 2026-08-05《进一步完善农产品收购发票管理》、江苏税务 2026-08-13 涟水做法、邮储银行乐企联用 2026-09-23。<b>其中标 <span class="tag warn">需主管税务机关确认</span> 的三条（P1/P3/P4）不可作为备案依据。</b></p>
+</div>
+
+</div>
+</body>
+</html>

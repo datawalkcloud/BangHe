@@ -1,0 +1,199 @@
+/**
+ * 顶部工具条（原「文件/业务/报表/档案/设备/帮助」菜单的落点）。
+ *
+ * 菜单里的跳转类能力侧栏与页内 tab 已经全覆盖，这里只留真正的全局动作：
+ * 新建过磅单（弹制单框，与工作台「制单」同一张）、全局检索、折叠侧栏、对外大屏、
+ * 显示模式、快捷键一览与「关于」。会改数据的动作在命令层还有二次权限校验，
+ * 工具条不做唯一防线（05 §5 末尾要求）。
+ */
+import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ArrowLeftIcon,
+  HelpCircleIcon,
+  InfoIcon,
+  KeyboardIcon,
+  MonitorIcon,
+  MoonIcon,
+  PanelLeftIcon,
+  PlusIcon,
+  SearchIcon,
+  SunIcon,
+  SunMoonIcon,
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { AppBreadcrumb } from "@/components/layout/AppBreadcrumb";
+import { Kbd } from "@/components/business/layout";
+import { ShortcutHelpDialog } from "@/components/business/ShortcutHelpDialog";
+import { AboutDialog } from "@/components/business/AboutDialog";
+import { RegistrationDialog } from "@/components/workstation/RegistrationDialog";
+import { api } from "@/lib/api";
+import { useVarieties, useWarehouses, useSlots } from "@/hooks/useLookups";
+import { useDeviceStore } from "@/store/device";
+import { useThemeConfig } from "@/hooks/useThemeConfig";
+import { useHotkey } from "@/hooks/useHotkey";
+import { THEME_MODES, type ThemeMode } from "@/lib/theme";
+// 版本号单源：以前这里是写死的 "0.1.0"，升版本没人回头改它——界面一直在报上一个版本。
+// package.json 与 tauri.conf.json / Cargo.toml / Cargo.lock 四处必须一致，
+// 由 tests/schema_contract.rs 的 app_version_is_single_sourced 钉住（漏改一处即红）。
+import pkg from "../../../package.json";
+
+const MODE_ICONS: Record<ThemeMode, typeof SunIcon> = {
+  light: SunIcon,
+  dark: MoonIcon,
+  system: SunMoonIcon,
+};
+
+export function AppTopbar({
+  onToggleSidebar,
+  onOpenSearch,
+  onToggleDisplay,
+}: {
+  onToggleSidebar: () => void;
+  onOpenSearch: () => void;
+  onToggleDisplay: () => void;
+}) {
+  const navigate = useNavigate();
+  const [helpOpen, setHelpOpen] = useState(false);
+  /** 「关于」：品牌、版本、仓库地址的展示位，字段单源见 AboutDialog 头注 */
+  const [aboutOpen, setAboutOpen] = useState(false);
+  /** 新建过磅单：与工作台「制单」同一张 RegistrationDialog，任何页面都能直接开单 */
+  const [regOpen, setRegOpen] = useState(false);
+  const { data: parties = [] } = useQuery({ queryKey: ["parties", ""], queryFn: () => api.listParties("") });
+  const { data: varieties = [] } = useVarieties();
+  const { data: warehouses = [] } = useWarehouses();
+  const { data: slots = [] } = useSlots();
+  const { mode, setMode } = useThemeConfig();
+  const ModeIcon = MODE_ICONS[mode];
+  const modeLabel = THEME_MODES.find((m) => m.value === mode)?.label ?? "显示模式";
+
+  // 快捷键一览原先只在菜单里可点，F1 一直没绑上；移到工具条时顺手补绑。
+  // F7 原先只绑在工作台页，顶栏按钮既然弹同一张制单框，也收成全局键；
+  // 已有弹窗开着（工作台的或本工具条的）就不重开，避免叠出两层。
+  useHotkey("f1", () => setHelpOpen(true));
+  useHotkey("f7", () => {
+    if (!useDeviceStore.getState().regHolding) setRegOpen(true);
+  });
+
+  return (
+    <>
+      <header className="flex h-9 shrink-0 items-center gap-1 border-b bg-background px-2 select-none">
+        <Button variant="ghost" size="icon-sm" onClick={onToggleSidebar} title="折叠 / 展开侧栏 (Ctrl+B)" aria-label="折叠 / 展开侧栏">
+          <PanelLeftIcon />
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => window.history.back()}
+          title="返回上一页 (Alt+←)"
+          aria-label="返回上一页"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeftIcon className="size-3.5" />
+          <span>返回</span>
+        </Button>
+        <Separator orientation="vertical" className="mx-1 my-auto h-4" />
+        <AppBreadcrumb />
+
+        <div className="ml-auto flex items-center gap-1">
+          <Button variant="outline" size="xs" onClick={() => setRegOpen(true)}>
+            <PlusIcon />
+            新建过磅单
+            <Kbd>F7</Kbd>
+          </Button>
+          <Button variant="ghost" size="xs" onClick={onOpenSearch} className="text-muted-foreground">
+            <SearchIcon />
+            全局检索
+            <Kbd>Ctrl+K</Kbd>
+          </Button>
+
+          <Button variant="ghost" size="xs" onClick={onToggleDisplay} className="text-muted-foreground">
+            <MonitorIcon />
+            对外大屏
+            <Kbd>F2</Kbd>
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="xs" className="text-muted-foreground" />}>
+              <ModeIcon />
+              {modeLabel}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>显示模式</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setMode(v as ThemeMode)}>
+                  {THEME_MODES.map((m) => (
+                    <DropdownMenuRadioItem key={m.value} value={m.value}>
+                      {m.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => void navigate({ to: "/system/$section", params: { section: "appearance" } })}>
+                外观与主题…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="xs" className="text-muted-foreground" />}>
+              <HelpCircleIcon />
+              帮助
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuGroup>
+                <DropdownMenuItem onClick={() => setHelpOpen(true)}>
+                  <KeyboardIcon />
+                  快捷键一览
+                  <DropdownMenuShortcut>F1</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void navigate({ to: "/system/$section", params: { section: "audit" } })}>
+                  操作审计
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              {/* 版本脚注升级成了「关于」弹窗：版本与仓库地址以 pkg（这份守卫钉住的导入）传入，
+                  产品名/版权/标识取自 tauri.conf.json，详情弹窗里看 */}
+              <DropdownMenuItem onClick={() => setAboutOpen(true)}>
+                <InfoIcon />
+                关于磅禾粮站收粮系统…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+
+      {/* 新建过磅单：与工作台「制单」同一张弹窗（05 §4.0）；制完单落到工作台那张新单上继续过磅。
+          没有工作台的"当前单"上下文，品种默认值带不出上一张，从空开始选 */}
+      <RegistrationDialog
+        open={regOpen}
+        onOpenChange={setRegOpen}
+        parties={parties}
+        varieties={varieties}
+        warehouses={warehouses}
+        slots={slots}
+        lastVarietyId={null}
+        onCreated={(no) => void navigate({ to: "/workstation", search: { orderNo: no } })}
+      />
+
+      <ShortcutHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
+
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} version={pkg.version} repoUrl={pkg.repository.url} />
+    </>
+  );
+}

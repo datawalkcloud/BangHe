@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>刷证时识别「疑似同人」旧档 · 设计简报（待拍板）</title>
+<style>
+  :root{
+    --ink:#16191d; --ink2:#4b5563; --ink3:#8a929c;
+    --line:#dfe3e8; --line2:#eceff3; --bg:#ffffff; --wash:#f6f8fa;
+    --ok:#0f7a3d; --warn:#9a5b00; --no:#b42318; --key:#1d4ed8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.62 -apple-system,"Segoe UI","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:34px 30px 72px}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:.2px}
+  h2{font-size:15.5px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line);letter-spacing:.3px}
+  h2 .no{color:var(--ink3);font-weight:600;margin-right:7px}
+  h3{font-size:13.5px;margin:18px 0 6px}
+  p{margin:8px 0}
+  code{font:12.5px/1.5 ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;background:var(--wash);padding:1px 4px;border:1px solid var(--line2)}
+  .meta{color:var(--ink3);font-size:12.5px;margin-bottom:2px}
+  .lede{border-left:3px solid var(--key);background:var(--wash);padding:11px 14px;margin:16px 0 0}
+  .lede b{color:var(--key)}
+  table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+  th,td{border-bottom:1px solid var(--line2);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--wash);font-weight:600;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+  .mono{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:12.5px}
+  .sub{color:var(--ink2)}
+  .tiny{font-size:12.3px;color:var(--ink3)}
+  ul{margin:6px 0 6px;padding-left:21px}
+  li{margin:3px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:2px;background:var(--wash);color:var(--ink2);white-space:nowrap}
+  .tag.key{border-color:#b9cbfa;background:#eef3ff;color:var(--key)}
+  .tag.ok{border-color:#b7dcc3;background:#eef8f1;color:var(--ok)}
+  .tag.warn{border-color:#e6d3ae;background:#fdf7ea;color:var(--warn)}
+  .tag.no{border-color:#e8c2be;background:#fdf0ef;color:var(--no)}
+  .c-yes{color:var(--ok);font-weight:600}
+  .c-no{color:var(--no);font-weight:600}
+  .c-part{color:var(--warn);font-weight:600}
+  .card{border:1px solid var(--line);border-radius:3px;padding:13px 15px;margin:11px 0}
+  .card > .hd{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;margin-bottom:5px}
+  .card > .hd b{font-size:13.8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 26px}
+  .strike{text-decoration:line-through;color:var(--ink3)}
+  .foot{margin-top:38px;padding-top:12px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.3px}
+  .diff{color:var(--no);font-weight:700}
+  .mock{border:1px solid var(--line);border-radius:3px;padding:0;margin:0;background:#fff;font-size:12.5px}
+  .mock .mh{padding:7px 10px;border-bottom:1px solid var(--line2);font-weight:600;font-size:12px;color:var(--ink2)}
+  .mock .mb{padding:9px 10px}
+  .mock .box{border:1px solid var(--line);background:var(--wash);padding:7px 8px}
+  .mock .nm{font-weight:600;font-size:13px}
+  .mock .gd{color:var(--ink3);font-size:11.5px}
+  .mock .row{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+  .mock .fake{border:1px solid var(--line);background:#fff;padding:3px 6px;color:var(--ink3);font-size:11.5px;margin-top:4px}
+  .mock .hi{border:1.5px solid var(--key);background:#eef3ff;padding:4px 6px;margin-top:5px;color:var(--ink)}
+  .mock .lbl{color:var(--ink2);font-size:11.5px}
+  .mock .act{color:var(--key);font-size:11.5px;white-space:nowrap}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  @media print{body{font-size:11.5px}.wrap{padding:0;max-width:none}h2{break-after:avoid}.card,table,.mock{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>刷证时识别「疑似同人」旧档 · 设计简报</h1>
+<p class="meta">BangHe 收粮计量结算系统 &nbsp;·&nbsp; 2026-10-10 &nbsp;·&nbsp; 状态：<b>待拍板</b>（D1–D7 见 §6）</p>
+
+<div class="lede">
+<p style="margin:0"><b>一句话主张：</b>今天刷卡认人只认<b>逐字全等</b>那一条。一张当年手录时把「李福来」敲成「李福莱」、或把证号末位敲错一位的老档案，刷卡时<b>永远命中不了</b>——系统会当场再建一张新档案，同一个人从此两份余额、两段磅单，而且全程不报一句错。<b>把「差一点就是同一张证」这件事在刷卡那一屏说出来，由人点一下确认，再把错的那一格改对</b>，重复建档就失去了成因。<b>不自动合并、不自动改字段、不引拼音库、不加迁移。</b></p>
+<p class="tiny" style="margin:6px 0 0">为什么不是"让磅员去档案页搜一遍"：农户一手拿证一手拿卡站在窗口前，后面还排着车。认人这一步今天已经做到零按键，回头要求人工先做一次模糊检索，等于把省下来的点击换成"漏做就出错"的暗坑。</p>
+</div>
+
+<h2><span class="no">1</span>现状：九个已核实的事实（含三处"闸门看着在、其实管不住"）</h2>
+<table>
+  <tr><th style="width:26px">#</th><th>事实</th><th style="width:32%">证据</th></tr>
+  <tr><td>F1</td><td>刷卡唯一那条认人判据是<b>证号逐字全等</b>；查不到就照卡面静默建档</td><td class="mono">IdentityPanel.tsx:222（find）→ :242-244（无命中即 enrollFromCard）</td></tr>
+  <tr><td>F2</td><td>「是否是同一人」的候选<b>窄到只覆盖"同名且证号那一格为空"</b>。差一字、差一位一律不进候选</td><td class="mono">IdentityPanel.tsx:231-233、:466-472 <span class="sub">（文件头自称"判据只有一条，且刻意收得很窄"）</span></td></tr>
+  <tr><td>F3</td><td><span class="c-no">闸门①</span> 后端一人一档靠 <b>SHA-256 指纹精确相等</b>：证号差一位就是完全不同的哈希，唯一索引与"已建档"提示<b>同时失效</b>，所以重复档案建得下去且不报错</td><td class="mono">orders.rs:1326-1334 <span class="mono">id_card_fp</span>、:1493-1500、:1394-1404</td></tr>
+  <tr><td>F4</td><td><span class="c-no">闸门②</span> GB 11643 校验位<b>只在前端表单里挡</b>（<span class="mono">PartiesPage:397</span> + <span class="mono">:779 disabled=hasErr</span>），<b>后端 <span class="mono">save_party</span> 零校验</b>：只 trim + 转大写。这道闸门 2026-09-14 才落地，之前的存量、以及任何绕过表单的写入都管不住</td><td class="mono">orders.rs:1483-1491（只有必填）· <span class="mono">35cadc9</span> 2026-09-14 提交</td></tr>
+  <tr><td>F5</td><td><span class="c-no">闸门③</span> 档案页的<b>撞号红字提示要求"格式先对"</b>（<span class="mono">idDup = code &amp;&amp; idOk ? …</span>）——一张证号本身就录错的档案，恰恰<b>永远不参与撞号提示</b>：最需要被认出来的那一类，界面上最沉默</td><td class="mono">PartiesPage.tsx:402</td></tr>
+  <tr><td>F6</td><td>姓名<b>至今零校验</b>（只判非空）→ "差一字"不是历史遗留，<b>今天还在继续产生</b></td><td class="mono">PartiesPage.tsx:394 <span class="mono">nameErr</span>（只判 <span class="mono">!form.name.trim()</span>）</td></tr>
+  <tr><td>F7</td><td>磅单上的证号是 <b>live join</b>，不是制单快照：<span class="mono">create_order</span> 只存 <span class="mono">party_id</span>，票面/详情显示的证号每次现从 <span class="mono">party</span> 取。<b>改档案的证号＝改写这张档案全部历史磅单的屏幕显示</b>（已打印的码单不会跟着变）</td><td class="mono">orders.rs:629-645（ORDER_SELECT）、:2126-2130（INSERT 无证号列）</td></tr>
+  <tr><td>F8</td><td>读卡结果里能拿到的远不止姓名证号：<b>出生日期、性别、民族、住址</b>都在芯片里，全部可读</td><td class="mono">store/device.ts:105-120 <span class="mono">IdCardResult</span></td></tr>
+  <tr><td>F9</td><td>昨天刚上线的"读卡命中即升级已核验"<b>只在证号全等时触发</b> → 一张证号录错的档案<b>永远不会被任何一次刷卡升级</b>，会长期顶着「未核验」。这条既是症状，也是 §7 现成的普查信号</td><td class="mono">src/lib/party-verify.ts（闸门 1）</td></tr>
+  <tr><td>F10</td><td><b>全仓没有任何一处把「卡面姓名」与「档案姓名」比过</b>。命中判据只看证号那一条 <span class="mono">find</span>，姓名全程不参与：证号录对、名字录错的档案，刷卡时<b>照样命中、照样制单、连一句提示都没有</b>——而且 toast 与身份卡格子上念的都是<b>档案里那个错名</b>，磅员听到的正是"命中了"，不会起疑。设计文档里也<b>从没写过</b>"姓名一致／人证一致"这条要求，所以这不是实现漏了，是需求缺一半</td><td class="mono">IdentityPanel.tsx:219-223（注释原话"一律以证号为准"，<span class="mono">find</span> 里除证号外无第二个条件）· <span class="mono">card.name</span> 全仓仅 3 处用途（建档写入、同名筛选、弹窗文案）· <span class="mono">docs/design/*.md</span> 检索"人证一致／姓名一致"<b>零命中</b></td></tr>
+</table>
+<p class="tiny">另一处相邻缺陷，本轮不修但要登记：软删档仍占 <span class="mono">idx_party_fp</span> 唯一位（<span class="mono">0001_init.sql:109</span> 的索引<b>没有</b> <span class="mono">WHERE deleted_at IS NULL</span>），而 Rust 侧友好闸门会跳过软删行 → 撞上已删档的号时报的是裸 SQLite 错（<span class="mono">"档案保存失败：{e}"</span>），现场看不懂。停用（未删）档也照样占位。</p>
+
+<h2><span class="no">2</span>口径：做四件，不做四件</h2>
+<div class="grid2">
+<div>
+<h3>做</h3>
+<ul>
+  <li>刷卡<b>无精确命中</b>时，多跑一轮"疑似同人"识别，把候选端到人眼前，<b>差异逐字标出来</b>；</li>
+  <li>人点「是本人 · 按卡面更正」后，<b>只改卡面读得出、且与档案不一致的那一两格</b>（证号、姓名），并留一条说得出来源的审计；</li>
+  <li>纠错之后<b>照旧把这单制掉</b>——粮车不会因为档案有瑕疵而卡在窗口；</li>
+  <li>一次性<b>存量普查</b>：把校验位不过的档案、两两只差 1–2 位的档案对、同名不同号的档案组列成清单，交给登记员去核（§7）。</li>
+</ul>
+</div>
+<div>
+<h3>不做</h3>
+<ul>
+  <li><b>不自动合并、不自动改任何字段。</b>认错人等于把两个农户的挂账合成一个余额（这条判据仓库里已经写过一次，见 <span class="mono">SamePartyDialog</span> 那段），模糊匹配只会放大它，不会消除它；</li>
+  <li>不做<b>两张已重复档案的账本合并</b>（磅单从 B 迁到 A、停用 B、余额与挂账并账）——那是 Phase-3，风险与工作量都比本轮大一个量级；</li>
+  <li>不引拼音库 / 第三方相似度库。同音不同字（李福<b>来</b>／李福<b>莱</b>）用"等长差一位"就已经抓得住；</li>
+  <li>不碰 <span class="mono">party_save</span> 的必填与唯一闸门，不动 04 §403 那一轮（证号密文化）的范围。</li>
+</ul>
+</div>
+</div>
+
+<h2><span class="no">3</span>判据：三档信号，不引库、可证伪</h2>
+<p>核心不是"猜得像不像"，而是<b>中国身份证自带结构</b>：前 6 位区划码、7–14 位出生日期、15–17 位顺序码、第 18 位是 GB 11643 校验位。手录错号的形状是"抄错一位两位"，<b>抄不动结构段</b>。于是校验位本身就是一台免费的错误定位仪：</p>
+<div class="card">
+<div class="hd"><b>关键推论（可证伪，已算过）</b><span class="tag ok">单字符错录 100% 过不了校验位</span></div>
+<p style="margin:4px 0">权重表 <span class="mono">[7,9,10,5,8,4,2,1,6,3,7,9,10,5,8,4,2]</span> 全为 11 的非零剩余类，任意一位改动、或相邻两位换位，加权和必变 → <b>要求的校验字符必变</b>。所以"档案里那个号过不了校验位、卡面这个号过了"＝<b>档案那一侧是错的</b>，不是"两个人各有一个合法号"。两位改动约有 <b>1/11</b> 概率蒙混过关，那一档才需要旁证。</p>
+<p class="mono tiny" style="margin:6px 0 0">实测：契约测试自己用的 <b>34120419930127202<span class="diff">0</span></b> 就不是合法号——正确校验位是 <b>3</b>（<span class="mono">orders_contract.rs:765</span>）。后端不校验，所以连测试数据都带着错号活了很久。</p>
+</div>
+<table>
+  <tr><th>档</th><th>条件（全部 AND）</th><th style="width:14%">误报预期</th><th>处置</th></tr>
+  <tr><td><b>A</b> 强</td><td>姓名<b>全等</b> ＋ 证号与卡面差 <b>1 个字符</b> ＋ <b>档案侧校验位不过、卡面侧过</b></td><td class="c-yes">≈ 0</td><td>进候选，按钮写「是本人 · 按卡面更正证号」</td></tr>
+  <tr><td><b>A′</b> 强</td><td>证号<b>全等</b> ＋ 姓名等长差 1 字（含同音不同字）</td><td class="c-yes">≈ 0</td><td><b>今天这条会直接精确命中并制单</b>，只是没人发现名字录错。本轮加一条"命中后附带提示"，见 D3-③</td></tr>
+  <tr><td><b>B</b> 中</td><td>姓名<b>等长差 1 字</b> ＋ 证号差 2 字符 ＋ <b>前 6 位区划码一致</b> ＋ <b>7–14 位出生日期一致</b></td><td class="c-part">低</td><td>进候选。区划段与生日段一致是"同一个人抄错"，不一致则降级到 E</td></tr>
+  <tr><td><b>C</b> 中</td><td>姓名全等 ＋ 证号<b>结构完全不同</b> ＋ <b>卡面出生日期与档案号里的 7–14 位一致</b> ＋ 住址前缀一致</td><td class="c-part">中</td><td>进候选，但排在 A/B 之后（同村重名 + 生日撞车的概率不高，但存在）</td></tr>
+  <tr><td><b>E</b> 弱</td><td>只满足"姓名差 1 字"或"住址像"</td><td class="c-no">高</td><td><b>刷卡时不弹</b>，只进 §7 的普查清单</td></tr>
+</table>
+<p class="tiny"><b>距离怎么算（不需要 DP，也不需要库）</b>：证号定长 18，用 <b>Hamming（逐位不等计数）＋ 相邻换位一次检测</b>，阈值 ≤2；姓名用"等长且差 1 位"或"长度差 1 且删掉一位后相同"（处理漏字／多字）。全表扫描是 <b>O(n)</b> 一次刷卡，<span class="mono">["parties",""]</span> 那一份<b>已经常驻内存且不带条数上限</b>（<span class="mono">WorkstationPage.tsx:102</span>），后端注释自陈档案量级是"百级"（<span class="mono">orders.rs:1227</span>），几百行乘 18 次比较是微秒级——<b>性能不是这条决策的理由，明文依赖才是</b>（见 D1）。</p>
+<p class="tiny"><b>三条噪声闸门</b>：① 只在<b>没有精确命中</b>时跑（今天那条快路一字不动）；② 候选<b>上限 3 条</b>、按档位再按建档时间倒序；③ <b>停用与软删档案不进候选</b>（<span class="mono">party_list</span> 连停用的一起回，<span class="mono">orders.rs:1205-1215</span>，消费方必须自己滤——今天的 <span class="mono">twinCandidates</span> 就是这么做的），④ 读到的是<b>演示卡</b>（<span class="mono">card.real === false</span>）一律不跑，拿假数据猜人比不猜更坏。</p>
+
+<div class="card">
+<div class="hd"><b>姓名这条维度天生比证号弱：没有校验位，而且有"字辈"</b></div>
+<p>证号错录有一台免费的定位仪，<b>姓名什么都没有</b>——"差一个字"在数据上无法区分"当年抄错了"与"本来就是两个人"。而农村姓名偏偏是<b>最容易只差一个字的地方</b>：同族兄弟按字辈取名，「李福<span class="diff">来</span>／李福<span class="diff">德</span>／李福<span class="diff">海</span>」三兄弟排队卖粮是常态，不是异常。所以姓名只能当<b>旁证</b>用，<b>永远不许单独成档</b>——上面那张表里 A／A′／B／C 每一档都必须再绑一条证号段或生日段的硬旁证，正是这个理由；只"姓名像"的那一类全部压在 E 档、刷卡不弹。</p>
+<p><b>抓得到的错法</b>：同音不同字（李福<span class="diff">来</span>／李福<span class="diff">莱</span>）、形近字（未／末、己／已、日／曰）、漏字多字（张三／张三发）、名字前后颠倒（等长时加一次相邻换位检测）。<b>同音不需要拼音库</b>——音近在手抄里就表现为"只差一个字"，距离天然是 1；拼音库只有在"差两个字且都不同字"时才有用。</p>
+<p><b>抓不到、本轮如实列明不覆盖</b>：① <b>乳名／小名 vs 大名</b>（当年按"李三娃"录，卡上是"李福来"）——编辑距离救不了，唯一的桥是证号或生日段旁证，而它俩常常一起录错；② 同音但<b>差两个字</b>（张三丰／张山峰）；③ 号与名都错。这三类一律进 §7 普查清单，交给人，不交给算法。</p>
+<p class="tiny">还有一条<b>免费的旁证</b>可以压误报：证号第 17 位奇偶即性别（奇男偶女，GB 11643），而读卡结果里本来就带 <span class="mono">sex</span>（<span class="mono">store/device.ts:105-120</span>）。B／C 档拿它做<b>一票否决</b>——档案里那个号推出的性别与卡面不符，直接降级到 E。同一族结构旁证还有 7–14 位出生日期段。</p>
+</div>
+
+<div class="card">
+<div class="hd"><b>顺手要修的一处既有形状：姓名归一化</b><span class="tag warn">现状只 trim 两端</span></div>
+<p>今天判"同名"用的是 <span class="mono">p.name.trim() === card.name.trim()</span>（<span class="mono">IdentityPanel.tsx:232</span>、<span class="mono">:469</span>）——<b>名字中间夹一个空格就算不同名</b>。「李 福来」（手录时顺手敲的空格）、全角空格、少数民族姓名的 <span class="mono">·</span>／<span class="mono">．</span>／<span class="mono">.</span> 分隔符变体，今天全部判成两个人，然后当场静默建出第二张档案。<b>本轮把姓名与证号都先过一份归一化再比</b>：去掉所有空白（含全角）、全角转半角、点号族统一、证号去空白转大写（后半截 <span class="mono">party_save</span> 入库时已经在做，比对侧跟上即可）。</p>
+<p class="tiny">这一条与模糊匹配无关，是<b>精确匹配今天就该对得上却对不上</b>的缺陷，也是本轮最小的那块底座：先让它归一化相等，再谈差一字。</p>
+</div>
+
+<h2><span class="no">4</span>界面：改前 / 改后</h2>
+<div class="grid2">
+<div>
+<h3>改前（今天）</h3>
+<div class="mock">
+  <div class="mh">① 身份与制单</div>
+  <div class="mb">
+    <div class="box"><div class="row"><span class="lbl">尚未确定售粮人：请把身份证放到感应区</span></div></div>
+    <div class="fake">刷「李福莱」那张证 →</div>
+    <div class="hi">toast：<b>已按身份证建档：李福来（P0318）</b><div class="gd">读卡读不出电话，得空到「农户与单位」补一下。</div></div>
+    <div class="fake">库里从此多一张档案。老的那张「李福莱」P0044 还带着 6 张历史磅单和 1,240 元挂账，谁也不会再想起它。</div>
+  </div>
+</div>
+<p class="tiny">全程零提示、零确认、可回退成本为零——因为它把错误做成了"看起来成功"。</p>
+</div>
+<div>
+<h3>改后（本轮）</h3>
+<div class="mock">
+  <div class="mh">是否是同一人（扩展 <span class="mono">SamePartyDialog</span>）</div>
+  <div class="mb">
+    <div class="box">
+      <div class="row"><span class="nm">李福<span class="diff">莱</span></span><span class="gd">P0044 · 农户 · 建档 2024/03/11</span></div>
+      <div class="gd mono">证号 3412041993012720<span class="diff">0</span> · 卡面 …2720<span class="diff">3</span>（档案那个号<b>校验位不通过</b>）</div>
+      <div class="gd">住址 三合镇柳湾村 · 电话 138…</div>
+      <div class="row" style="margin-top:5px"><span class="act">是本人 · 按卡面更正</span><span class="gd">改证号末位 0→3</span></div>
+    </div>
+    <div class="fake">差在哪里逐字标红；点下去改<b>哪几格</b>写在按钮旁边，不让人猜</div>
+    <div class="row" style="margin-top:6px"><span class="gd">先不处理</span><span class="act">都不是 · 另建一张</span></div>
+  </div>
+</div>
+<p class="tiny">喇叭沿用今天那句不带姓名的合规话术（<span class="mono">IdentityPanel.tsx:237</span> 同一条线）：<span class="mono">"系统里有相似的档案，请在屏幕上确认是否是同一个人"</span>。</p>
+</div>
+</div>
+
+<h2><span class="no">5</span>接线点</h2>
+<table>
+  <tr><th style="width:11%">层</th><th style="width:30%">文件</th><th>动作</th></tr>
+  <tr><td>判据</td><td class="mono">落点见 <b>D1</b></td><td>一个纯函数 <span class="mono">nearMatches(card, parties) → {party, tier, diff}[]</span>。<b>判据只许有一份</b>：档案页读卡、工作台读卡、普查脚本三处共用（与 <span class="mono">lib/party-photo.ts</span>、<span class="mono">lib/party-verify.ts</span> 同一条纪律）</td></tr>
+  <tr><td>工作台</td><td class="mono">IdentityPanel.tsx:231-244</td><td>在 <span class="mono">if (!hit)</span> 分支里、<b>现有 twins 判定之后、静默建档之前</b>插一次查询。查不到／查询本身失败 → <b>一律照旧回落建档</b>，绝不因为"疑似识别没跑通"把制单卡住</td></tr>
+  <tr><td>弹窗</td><td class="mono">SamePartyDialog.tsx</td><td>扩成两态还是新写一只，见 <b>D3</b>。今天它的 <span class="mono">candidates</span> 语义是"同名且证号为空"，加进来的是"证号不为空但有 N 处不一致"，<b>按钮文案与要改的格子都不一样</b></td></tr>
+  <tr><td>写入</td><td class="mono">orders.rs · party_save</td><td>改号这条路<b>已经通</b>（:1431-1434 会同时重写 <span class="mono">id_card_no_enc</span> 与 <span class="mono">id_card_no_fp</span>），但审计只有一句 <span class="mono">party.update</span> 且 <span class="mono">reason=None</span>（:1478）。要不要开窄命令，见 <b>D5</b></td></tr>
+  <tr><td>档案页</td><td class="mono">PartiesPage.tsx:240-290</td><td>读卡命中那条快路一字不动；<b>未命中的预填分支</b>顺手挂上同一份判据，让登记员在建档表单里也看得见"这张很像已经存在"</td></tr>
+  <tr><td>普查</td><td class="mono">scripts/party-census/（新）</td><td>只读，产物落 <span class="mono">.scratch/</span>，双击 <span class="mono">.bat</span>。见 §7</td></tr>
+  <tr><td>测试</td><td class="mono">orders_contract.rs / 判据单测</td><td>A/A′/B/C/E 各钉一条<b>正例 + 反例</b>（"两个人各有合法号且只差 2 位"必须<b>不</b>被 A 档抓住）；现有一条 <span class="mono">party_id_card_fingerprint_merges_and_blocks_duplicates</span> 顺手把测试证号换成合法号，否则它永远在测一个畸形输入</td></tr>
+</table>
+
+<h2><span class="no">6</span>需要拍板的决策</h2>
+
+<div class="card">
+<div class="hd"><b>D1 · 判据放前端还是后端</b><span class="tag key">推荐 B：后端一条只读命令</span></div>
+<p><b>A. 前端算</b>（<span class="mono">parties</span> 内存里那一整份明文）。零后端改动、当天能落地。<b>代价：</b>它是对 DTO 明文证号的<b>第四处</b>依赖——04 §403 已经把"密文化之前必须先解掉三处明文依赖"写成一轮独立任务，并点名了 <span class="mono">IdentityPanel</span> 那句全等比对。再压一处上去，那一轮的工作量与风险同步变大，而且<b>证号一旦真加密，本功能会当场静默失效</b>（拿到的是密文 BLOB，比对全落空、候选恒为空，不报错）。</p>
+<p><b>B. 后端算</b>（新增只读 <span class="mono">party_near_matches(card_name, card_id_no, born)</span>，在 Rust 侧解密后按档位返回 <span class="mono">[{party, tier, diff}]</span>）。多一条命令 + 一份契约测试，<span class="mono">mock_coverage_contract.rs</span> 会逼着 mock 同名实现一起写。<b>换来：</b>密文化后功能不死（解密点在 <span class="mono">party_id_card</span> 那一族已经有的位置）；阈值只有一份，档案页／工作台／普查脚本三处共用；返回体里可以只给<b>脱敏后的差异</b>（<span class="mono">maskIdCard</span> 两端 + 差异位下标），前端压根不必再拿全号。</p>
+<p class="tiny">成本参考：<span class="mono">list_parties</span> 今天就是<b>全表取回后在 Rust 里 substring 过滤</b>（:1226-1244），再加一轮两两比较不是新的性能台阶。</p>
+</div>
+
+<div class="card">
+<div class="hd"><b>D2 · 档位与阈值</b><span class="tag key">推荐 A：A／A′／B／C 四档都弹，E 只进普查</span></div>
+<p>要收紧的选项是"只弹 A 档（姓名全等 + 差 1 位且校验位指向档案错）"——几乎零误报，但<b>抓不住用户点名的"名字差一个字"</b>。放宽的选项是"E 档也弹"——同村两个 20 岁的农户能弹出一串，队伍就堵在这儿。<b>需要拍：候选上限（建议 3）、C 档要不要留、以及 B 档要不要再要求住址前缀一致。</b></p>
+</div>
+
+<div class="card">
+<div class="hd"><b>D3 · 点「是本人」之后改哪几格</b><span class="tag key">推荐 A：只改卡面读得出且不一致的那一两格</span></div>
+<p><b>① 证号</b>（卡面为准）——A/B 档必改。<b>② 姓名</b>（卡面为准）——A′ 档与 B 档改。<b>③ 住址</b>——照旧<b>只补缺、不覆盖</b>（人会搬家，补证号不等于顺手换住址，02 §F3.1 已有这条纪律）。<b>④ 电话／额度／身份类型／默认仓房／启用状态</b>——一律不动（卡面上没有，机器不替站点猜）。</p>
+<p class="tiny"><b>这一档不在上面五档里，且最便宜：证号全等、姓名不一致（A′）。</b>它<b>不需要任何模糊匹配</b>——号已经全等了，档案就是这个人，"名字对不上"是一条<b>确定事实</b>而不是概率判断，所以误报恒为 0。而 §7 的普查<b>抓不到它</b>（库里没有"卡面真值"可比），<b>只有他本人来刷一次卡的那一瞬才暴露</b>。今天这条路上<b>什么都不提示</b>（F10），磅员听到的那句 toast 念的还是档案里那个错名。详见下面 <b>D3-③</b>。</p>
+</div>
+
+<div class="card">
+<div class="hd"><b>D3-③ · 命中之后，卡面姓名与档案姓名不一致，要不要提示纠正</b><span class="tag key">推荐 A：提示，但只提示不挡路</span></div>
+<p><b>这就是"能刷到本人、档案里名字是错的"那一类</b>（当年抄错字、同音不同字、形近字）。选 A 的形状：命中照常命中，号照常取，<b>不弹框、不二次确认、不让粮车等</b>；只在①身份卡那一格里把<b>两个名字并排摆出来</b>（档案 <span class="mono">李福莱</span> ／ 卡面 <span class="mono">李福来</span>，差异字标红），下面挂一颗「按卡面更正姓名」。摘要态（已制单）那一格同样留着这颗——制单后发现名字不对是现场常态，与车牌、电话就地改同一条理由。</p>
+<p class="tiny"><b>为什么不自动改</b>：改档案名会<b>连带改写这张档案全部历史磅单的票面显示</b>（F7，live join），已打印的码单不会跟着变——"票面与系统不一致"必须让人知道并点一次头，不能由一次刷卡悄悄决定。<b>为什么仍值得单独提出来</b>：这是本轮误报率为 0 的唯一一条，工程量约等于「一处比对 + 一格并排 + 一颗按钮 + 一条窄命令」，比 B／C 档那套档位判据小一个量级，<b>可以砍掉其余全部档位、只留这一条先上</b>。</p>
+<p class="tiny">喇叭沿用不含姓名的合规话术（07 H12 同一条线）：<span class="mono">"卡面姓名与档案不一致，请核对"</span>。演示卡一律不比（假姓名比出真红字更糟）。</p>
+<p class="tiny"><b>反过来问一遍，别自相矛盾：</b>"证号全等"算不算核验通过？<b>算</b>——昨天的 <span class="mono">party-verify</span> 已经会因此升级「已核验」。所以会出现"这张档案已核验，可名字是错的"这一屏，D3-③ 的并排显示正是为了让这句话看得见，两处话术别互相打架。</p>
+</div>
+
+<div class="card">
+<div class="hd"><b>D4 · 纠完错要不要照样把这单制掉</b><span class="tag key">推荐 A：要</span></div>
+<p>沿用今天 <span class="mono">SamePartyDialog.onPick</span> 那条链：认下来 → 更正 → 定人 → <span class="mono">autoCreate</span>。粮车不会因为档案有瑕疵而卡在窗口。<b>反过来，更正失败（撞号、库锁、无权）时也不能崩</b>：把服务端那句人话顶到眼前，退化成"这一刷只定了人、档案一寸未动"，磅员想不想另建一张由他决定。</p>
+</div>
+
+<div class="card">
+<div class="hd"><b>D5 · 留痕怎么写</b><span class="tag key">推荐 B：一条窄命令 <span class="mono">party_correct_from_card</span>，一次可更正「证号＋姓名」两格</span></div>
+<p><b>A.</b> 复用 <span class="mono">party_save</span>：零新代码，但审计只有一句 <span class="mono">party.update</span>、<span class="mono">reason=None</span>——事后翻审计问不出"这个号是谁在哪天从哪个改成哪个的"。<b>这与刚做完的 <span class="mono">party_verify_set</span>、<span class="mono">party_phone_set</span> 是同一个判断，它们为此各开了窄命令。</b>另一个硬理由：<span class="mono">party_save</span> 按整张表单回写，<span class="mono">party-auto-register.ts</span> 的头注已经警告过"更新分支对 <span class="mono">name/party_type/phone</span> 是你给了就覆盖，漏一项就把人家原有电话抹成空"——磅员只想改个名字，不该冒带回一整张表单的风险。</p>
+<p><b>B.</b> 窄命令 <span class="mono">party_correct_from_card({party_id, id_card_no?, name?})</span>，<b>只允许改卡面上读得出的那两格</b>，后端重算比对后才写。reason 两格分开写：<span class="mono">"读卡更正：姓名「李福莱」→「李福来」"</span> ／ <span class="mono">"读卡更正：证号 341204********2020 → 341204********2023"</span>——<b>姓名明文、证号两端脱敏</b>。这里与电话那条（写明文新旧）刻意不同：电话撞号比的是号本身，而证号撞号比的是"是不是同一个人"，档案 <span class="mono">code</span> 已经足够点名是谁，<b>全号进 <span class="mono">audit_log</span> 等于把这轮 PII 治理的方向反着走一遍</b>（04 §403 那一轮的方向是"不点就取不到"）。</p>
+<p class="tiny">留痕必须同时回答"历史磅单跟着变了"这件事（F7）：更正那一条审计的 reason 里补一句"该档案 N 张历史磅单显示的证号随之变更"，磅单本身不写快照（那是另一轮）。</p>
+</div>
+
+<div class="card">
+<div class="hd"><b>D6 · 先普查，还是先做识别</b><span class="tag key">推荐 A：先普查（半天），拿真实存量定阈值</span></div>
+<p>§3 那套档位是我从代码与国标推的，<b>阈值宽严只有你们站的真实数据能定</b>：差 1 位的到底有几对、差 2 位的有几对、同名差一字的有几组。跑一遍 §7 的脚本，如果 A 档只有 2 条、E 档有 300 条，那这套判据就该收紧成"A 档弹窗 + 其余全进普查"，本轮工程量能砍掉一半。</p>
+</div>
+
+<div class="card">
+<div class="hd"><b>D7 · 后端补不补 <span class="mono">validateIdCard</span> 强校验</b><span class="tag warn">推荐 C：本轮不加，普查后再定</span></div>
+<p>看起来最"正确"的做法（后端也校验，脏数据进不来）有个致命副作用：<b>存量库里那些过不了校验位的档案，登记员从此改不动</b>——只要在表单里带上原号保存就被拦，等于把要修的对象锁在门外。三条路：<b>A</b> 一律强校验（上线即挡存量）；<b>B</b> 加站点参数（多一个键、多一条迁移、多一处话术）；<b>C</b> 本轮不碰，只在前端把"这个号校验位不通过"从<b>拦保存</b>改成<b>红字警示但放行</b>（让纠错写得进去），把强校验留到普查之后。</p>
+<p class="tiny">注意这条与 F5 打架：今天 <span class="mono">PartiesPage:397,402</span> 的"格式不过 → 不拦撞号提示也拦保存"，正是"想把错号改对却改不动"的成因。选 C 要一并把 <span class="mono">idDup</span> 的 <span class="mono">&amp;&amp; idOk</span> 去掉，让<b>错号档案也参与撞号提示</b>。</p>
+</div>
+
+<h2><span class="no">7</span>存量普查（D6 的取证，只读）</h2>
+<p>SQLite 里没有 mod-11 函数，校验位与两两距离都算不进 SQL，所以给一条一次性脚本，不进业务链路：</p>
+<table>
+  <tr><th style="width:16%">项</th><th>口径</th></tr>
+  <tr><td>位置</td><td class="mono">scripts/party-census/census.mjs + 重置开发库.bat 同级的双击入口 <span class="sub">（仓里已有 scripts/tare-ref、scripts/receipt-code 这种"一条命令跑一个判据"的先例）</span></td></tr>
+  <tr><td>读法</td><td>Node <span class="mono">v22.20</span> 内置 <span class="mono">node:sqlite</span>（实测可用，带 experimental 警告），先把 <span class="mono">%APPDATA%\cn.datawalk.bh\banghe.db</span> <b>整份拷到 <span class="mono">.scratch/</span> 再打开</b>——绝不在程序开着库的时候碰原文件，也<b>绝不写回</b>（AGENTS 那条闪退教训只针对覆盖，但只读拷贝更稳）</td></tr>
+  <tr><td>产出</td><td>① <b>校验位不通过</b>的档案数与清单（含建档时间、有没有磅单）；② <b>两两 Hamming ≤2 且区划段一致</b>的档案对；③ <b>同名不同号</b>的档案组；④ <b>长期顶「未核验」但已经有多张磅单</b>的档案（F9 那条症状的直接产物，最可能是"号录错了所以永远刷不中"）；⑤ <b>姓名差 1 字、或归一化后才相等（中间夹空格／点号变体）</b>的档案组——含 §3 判定为"抓不到"的乳名／大名那一类，只出清单不自动处理</td></tr>
+  <tr><td>落盘</td><td><span class="mono">.scratch/party-census-YYYYMMDD.md</span>（按 AGENTS：带用途名，只进 <span class="mono">.scratch</span>）</td></tr>
+</table>
+<p class="tiny">这一遍跑出来的数，直接决定 §3 的档位要不要砍到只剩 A 档。<b>它也是唯一能回答"这套功能值不值得做"的证据</b>——如果全站只有 1 对差一位的档案，那本轮就该退化成"改档案页那句红字提示"（F5 一行的事）。</p>
+
+<h2><span class="no">8</span>风险与验证</h2>
+<table>
+  <tr><th style="width:24%">风险</th><th>为什么它排在这儿，以及怎么挡住</th></tr>
+  <tr><td><b>认错人</b></td><td>两个农户的挂账合成一个余额，是这仓里所有 UI 判断里排第一的那条。<b>挡住它的是"不自动"</b>：机器只负责把"像"端出来，改哪一格必须人点，且差异逐字标红在按钮上方。这也是为什么 E 档宁可不弹。</td></tr>
+  <tr><td><b>改证号改写历史票面</b></td><td>F7 的既成事实。<b>本轮不新增这个风险</b>（今天去档案页改号就已经这样），但会让它<b>更多发生</b>，所以 D5 要求留痕里写清"历史磅单随之变更"，并且这是 05 那张"当时印出去的码单"与系统显示不一致的唯一来源——迎检要能答得出。</td></tr>
+  <tr><td><b>噪声拖慢制单</b></td><td>四道闸门：只在无精确命中时跑、候选 ≤3、停用/软删不参选、演示卡不跑。识别查询失败一律回落成今天的静默建档，<b>最坏情况等于今天</b>。</td></tr>
+  <tr><td><b>撞上已删档的号</b></td><td>F9 那条相邻缺陷：改号时若目标号被软删档占着，会拿到裸 SQLite 错。本轮至少把它翻译成一句人话（"这个号曾被档案 P00xx 使用并已删除，请先处理那张档案"），别现场猜。</td></tr>
+  <tr><td>验证</td><td class="mono">npx tsc --noEmit --incremental false -p tsconfig.json · npx vite build --outDir .scratch/dist-verify --emptyOutDir · cd src-tauri; cargo test · scripts/* 布局守卫 ALL PASS · 手动：拿一张真证压在一张只差 1 位的老档上走完整条流，确认改对后<b>再刷第二次不弹</b>（已全等）且磅单历史显示跟着变</td></tr>
+</table>
+
+<h2><span class="no">9</span>本轮明确不动的东西</h2>
+<ul>
+  <li>两张已重复档案的<b>并账</b>（磅单迁移、余额相加、其中一张停用）——Phase-3，且必须先有普查知道有几对；</li>
+  <li><b>人脸／活体比对</b>：芯片里那张人像今天只用来<b>补档案照片</b>，不参与"是不是本人"的判断（04 §3.2 只做了取图与解码）。要拿它比现场摄像头是另一整轮（硬件、隐私、光线误拒），本轮不碰；</li>
+  <li>磅单证号改成<b>制单快照</b>（那是票据口径的改动，牵动打印与 04 §4.2 的码单，独立一轮）；</li>
+  <li>人脸／指纹比对、住址 OCR、任何需要新硬件的核验；</li>
+  <li>04 §403 那一轮（证号密文化）的既有范围——本轮只保证<b>不再新增对明文的依赖</b>（D1-B），不去替它解已有的三处；</li>
+  <li><span class="mono">idx_party_fp</span> 索引形状（改它要动迁移、要重建索引，与本轮无关）。</li>
+</ul>
+
+<p class="foot">本轮若按推荐落定：新增 1 条只读命令（或 1 个前端纯函数，取决于 D1）、1 条窄写命令（D5-B）、1 只弹窗的两态扩展、1 份普查脚本；<b>零迁移、零新依赖、零新表</b>。拍板项 D1–D7 全部落在纸面上，回一句"按推荐"就能开工。</p>
+
+</div>
+</body>
+</html>

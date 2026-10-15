@@ -1,0 +1,140 @@
+[package]
+name = "banghe"
+version = "1.0.0"
+description = "磅禾粮站收粮系统 — 单机版粮站收粮过磅（Tauri 桌面端）"
+authors = ["datawalkcloud"]
+license = "Apache-2.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "banghe_lib"
+# **故意不写 crate-type**（默认 rlib）。Tauri 模板原本带的是
+# `crate-type = ["staticlib", "cdylib", "rlib"]`，但那行和"要不要打安卓包"无关：
+# crate-type 是"这个 lib 目标要出几份产物"的清单，只要写着，即使 `tauri build` 已经只发
+# `cargo build --bins --release`，编译 banghe_lib 这一步也会按 fat LTO 的结果各出一份
+# `banghe_lib.lib`(staticlib) 与 `banghe_lib.dll`+`.exp`+`.dll.lib`(cdylib)，
+# 而 `banghe.exe` 真正吃的只有 rlib 那一份——等于每次构建白烧两遍整程序优化。
+# 将来真要 `tauri android/ios`（安卓要 .so、iOS 要 .a 进 XCFramework）时再把那两个加回来。
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `tray-icon`：主窗口可以被设成"关闭时藏进系统托盘"（系统 → 窗口），托盘是那条唯一的回路。
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+# 备份页「从其它位置导入副本」要弹系统文件选择框去挑 U 盘/移动硬盘上的 .db。
+# 插件只提供选路，路径清洗与落盘全在 system.rs::import_backup（只认绝对路径）。
+tauri-plugin-dialog = "2"
+# 「关于 → 检查更新」：拉 tauri.conf.json plugins.updater.endpoints 里的 latest.json
+# （GitHub Releases，gh-proxy 镜像优先），minisign 验签（公钥即 plugins.updater.pubkey，
+# 私钥只放 GitHub Secrets 的 TAURI_SIGNING_PRIVATE_KEY，本机不落盘）后静默安装 NSIS。
+# 签名产物由发版工作流以 --config 注入 createUpdaterArtifacts 开启，本地 tauri build 无感。
+tauri-plugin-updater = "2"
+# 进程单实例：一台磅房机同时只许跑一份程序。地磅的 COM 口、身份证阅读器（进程内单实例且非
+# 线程安全）、UVC 摄像头、以及站点库本身都是独占资源，第二个进程只会跟第一个抢。
+# 接线见 lib.rs（必须排在所有插件最前面），具体版本由 Cargo.lock 钉住。
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 小票机（斯普瑞特 SPRT 80mm）走 ESC/POS RAW：设备访问与票面排版都在 ticket-core，
+# 与 tools/escpos-probe 共用同一份实现，避免"工装能打对、软件打错"这类无法归因的分叉
+ticket-core = { path = "../crates/ticket-core" }
+# 精伦(Routon) iDR 身份证 / Mifare IC 卡读卡器封装（零依赖，加载 32/64 位 Sdtapi.dll）。
+# BangHe 是 64 位 Tauri 应用，加载 64 位版 Sdtapi.dll（见 resources/sdtapi/），in-process 直调。
+routon-idr = "0.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+sha2 = "0.11.0"
+thiserror = "2.0.20"
+chrono = "0.4.45"
+strum = { version = "0.28.0", features = ["derive"] }
+argon2 = { version = "0.6.0", features = ["rand_core"] }
+serialport = "4.10.1"
+# 工作台「过磅画面」的第二条通道（camera_stream.rs）：Rust 拉 RTSP/TCP 子码流、软解 H.264、
+# 一帧一张 JPEG 推给界面。为什么不走 WebView 播流：那要引 ffmpeg 或厂商 SDK，而这条路的
+# 依赖只有下面这两个纯计算库，运行时不多带一个 exe/dll。
+# openh264 的默认 `source` 特性会把 Cisco 的 C 源码编进来（所以**构建机需要 C 编译器**；
+# 装了 nasm 会快很多，但不是必需），关掉它就连 `Decoder::new` 都不存在，因此按默认开。
+openh264 = "0.9.8"
+# 纯 Rust 压 JPEG，负责把解出来的 RGB 变成 `<img>` 能直接吃的 dataURL。
+jpeg-encoder = "0.6.1"
+# 抓拍超上限时的**解码**端（04 §4.2 的压缩链路）：与上面 `jpeg-encoder` 配成一对——
+# 解出 RGB → 面积平均缩到长边 1600 → 交回 `jpeg-encoder` 逐级降质重编。
+# `default-features = false` 是刻意的：默认的 `rayon` 会拖进 crossbeam / num_cpus 一整串
+# 依赖，还会在磅房这台机器上悄悄起一个全局线程池（一次超限抓拍要编到 7 轮，线程池的常驻
+# 成本比它省下的那点时间贵）。关掉之后它是一个零依赖的纯 Rust crate，运行时不多带 dll。
+# 不用 `image` 全家桶同理：那要为这一条路捎上 png/webp/tiff 的解码门面与色彩管理。
+jpeg-decoder = { version = "0.3.2", default-features = false }
+
+# 添加设备表单要「自动扫描本机连接的打印机」：热敏直连小票机走 ticket-core 的 usbprint 枚举，
+# A4 / 针式这类打印队列打印机则用系统 EnumPrintersW 按名字挑机。复用锁文件里 tauri 已带进来的
+# windows 0.61，只在 Windows 目标下编译（代码里以 #[cfg(target_os = "windows")] 兜住非 Windows）。
+# `Win32_Graphics_Dwm` 另给 titlebar.rs 用：Tauri 自带的 set_theme 在 Windows 上只设 WebView2 的
+# preferred color scheme（wry 里就是一句 SetPreferredColorScheme），原生标题栏深浅必须自己调
+# DwmSetWindowAttribute。
+# `Win32_UI_Input_Ime` 给 ime.rs 用：扫码枪是一支键盘，窗口聚焦时要把输入法切回英文态，
+# 否则中文输入法会把票面码开头的字母当拼音合成、把版本位 `1` 当候选项序号键吞掉。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Storage_Xps", "Win32_Security", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_UI_Input_Ime"] }
+# 队列直打（queue_print）要在 GDI 上画出票面二维码：纯 Rust、只取模块矩阵自己涂方块，
+# 不引图像编解码。热敏侧不需要它（ESC/POS 打印机固件自带 QR 指令）。
+qrcode = { version = "0.14", default-features = false }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+# `unwind` 不是随手写的：camera_stream.rs 用 `catch_unwind` 把第三方解码库的 assert
+# （`write_rgb8` 的尺寸/格式检查）圈在**那一格画面**里。`panic = "abort"` 下 catch_unwind
+# 是空转——一次坏流就会把整个磅房程序带走，而 release 装机正是有坏流的那一侧。
+# 代价是包体略大（Tauri 的体积指南估 5–10%），换的是"画面崩不拦称重"。
+panic = "unwind"
+strip = true
+
+# 日常迭代（改 UI / 业务逻辑、只要一个能跑的 exe 去接硬件试）用这一档：`npm run build:fast`。
+# 与 release 的差别只有两处：关掉跨编译单元优化（`lto = false`）+ 允许 16 路并行代码生成
+# （`codegen-units = 16`，本机 16 逻辑核）。`-O3`、`strip`、`panic = "unwind"` 全继承，
+# 所以 `catch_unwind` 拦坏流那条语义与发货包一致，差的只是体积和一点跨编译单元内联。
+#
+# 为什么单独立一个 profile，而不是构建时临时设 `CARGO_PROFILE_RELEASE_LTO` /
+# `CARGO_PROFILE_RELEASE_CODEGEN_UNITS`：profile 参数属于依赖指纹的一部分，一覆盖就把
+# 508 个依赖全打回重编（实测每次冷编译 6~8 分钟），来回切两次比省下的时间还亏。自定义
+# profile 有自己的 `target/release-fast/` 目录，和 `target/release/` 各存一份缓存。
+# **release 这档不要动**，它专门留给出发货包（`npm run tauri build`）。
+#
+# 本机实测（每组只 `touch src/lib.rs`，只重跑最后一环，不含前端 26s 与 NSIS 打包）：
+#   A 模板三件 crate-type + release     774s   19.78 MB   ← 当年"卡几分钟"的那档
+#   B 只 rlib      + release           628s   19.78 MB   ← 删 crate-type：省 146s，体积零变化
+#   C 只 rlib      + thin LTO/16        359s   22.01 MB
+#   D 只 rlib      + 关 LTO/16          332s   21.70 MB   ← 当前这档
+# 结论：B→C 才是大头，而 C→D 只差 27s，说明最后一环的瓶颈**不是 LTO**，而是 banghe_lib
+# 自身在 -O3 下的代码生成加 MSVC 链接（只重编 1 个 unit 也要 5 分半）。要再快只能动
+# `incremental`/`opt-level`，或干脆用 `tauri dev` 迭代、只在需要真 exe 时才走这一档。
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+
+# 相机预览的「解码 + 压 JPEG」是纯计算热点。dev 默认 -O0 下，纯 Rust 的 jpeg-encoder
+# 与 openh264 编进来的 Cisco C 源码都会慢一个数量级——实测一帧 768×432 要 ~120ms，
+# 把 `tauri dev` 的实时画面死死摁在 8fps，而这完全不代表 release（本来就 -O3）的真实帧率。
+# 只给这几个包在 dev 下也开 -O3：openh264 的 build.rs 会据此把 C 源码按 -O3 编，
+# jpeg-encoder / jpeg-decoder 的泛型也才展开得动。不动整个 crate，主程序增量编译速度基本不受影响。
+# jpeg-decoder 是抓拍压缩链路（04 §4.2 `fit_to_budget`）那一侧：它和 jpeg-encoder 同量级，
+# 一次超限抓拍要解一遍、最多编七遍，dev 下不开 -O3 会让"改参数看看压得进吗"卡成幻灯片。
+[profile.dev.package.jpeg-encoder]
+opt-level = 3
+[profile.dev.package.jpeg-decoder]
+opt-level = 3
+[profile.dev.package.openh264]
+opt-level = 3
+
+[dev-dependencies]
+regex = "1.13.1"

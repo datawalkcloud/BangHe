@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>单号方案 v2（纯数字）· 设计简报（待拍板）</title>
+<style>
+  :root{
+    --ink:#16191d; --ink2:#4b5563; --ink3:#8a929c;
+    --line:#dfe3e8; --line2:#eceff3; --bg:#ffffff; --wash:#f6f8fa;
+    --ok:#0f7a3d; --warn:#9a5b00; --no:#b42318; --key:#1d4ed8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.62 -apple-system,"Segoe UI","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:34px 30px 72px}
+  h1{font-size:23px;margin:0 0 4px;letter-spacing:.2px}
+  h2{font-size:15.5px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line);letter-spacing:.3px}
+  h2 .no{color:var(--ink3);font-weight:600;margin-right:7px}
+  h3{font-size:13.5px;margin:18px 0 6px}
+  p{margin:8px 0}
+  code{font:12.5px/1.5 ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;background:var(--wash);padding:1px 4px;border:1px solid var(--line2)}
+  .meta{color:var(--ink3);font-size:12.5px;margin-bottom:2px}
+  .lede{border-left:3px solid var(--key);background:var(--wash);padding:11px 14px;margin:16px 0 0}
+  .lede b{color:var(--key)}
+  table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+  th,td{border-bottom:1px solid var(--line2);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--wash);font-weight:600;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .mono{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:12.5px}
+  .sub{color:var(--ink2)}
+  .tiny{font-size:12.3px;color:var(--ink3)}
+  ul{margin:6px 0 6px;padding-left:21px}
+  li{margin:3px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:2px;background:var(--wash);color:var(--ink2);white-space:nowrap}
+  .c-yes{color:var(--ok);font-weight:600;white-space:nowrap}
+  .c-no{color:var(--no);font-weight:600;white-space:nowrap}
+  .c-part{color:var(--warn);font-weight:600;white-space:nowrap}
+  .tag.key{border-color:#b9cbfa;background:#eef3ff;color:var(--key)}
+  .tag.ok{border-color:#b7dcc3;background:#eef8f1;color:var(--ok)}
+  .tag.warn{border-color:#e6d3ae;background:#fdf7ea;color:var(--warn)}
+  .tag.no{border-color:#e8c2be;background:#fdf0ef;color:var(--no)}
+  .card{border:1px solid var(--line);border-radius:3px;padding:13px 15px;margin:11px 0}
+  .card > .hd{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;margin-bottom:5px}
+  .card > .hd b{font-size:13.8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 26px}
+  .strike{text-decoration:line-through;color:var(--ink3)}
+  .foot{margin-top:38px;padding-top:12px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.3px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  @media print{body{font-size:11.5px}.wrap{padding:0;max-width:none}h2{break-after:avoid}.card,table{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>单号方案 v2（纯数字）· 设计简报</h1>
+<p class="meta">BangHe 收粮计量结算系统 &nbsp;·&nbsp; 2026-10-08 &nbsp;·&nbsp; 状态：<b>已拍板并已实施</b>（结论已并入 <span class="mono">docs/design/03 §3.5 §9.3.1</span>、<span class="mono">02 §F1.4</span>、<span class="mono">04 §5.6</span>、<span class="mono">05 §4⑥b §5 §9</span>，本文留作决策记录）</p>
+<p class="tiny" style="margin:6px 0 0"><b>拍板结果：</b>D1 选 (a)——票种码<b>不进</b>单号，票面与库里都是 14 位纯数字 <span class="mono">01202610000053</span>；D2 选 (a)——载荷保留版本位，共 16 位；D3——只做"载荷纯数字"这一件，输入法层不再另加加固（没有字母就没有可拼的合成串，剩下的那一类本来也救不回来）；D4 选 (a)——<span class="mono">doc_no_seq_len</span> 留着，解析按变长写；D5 <b>取消</b>——查过 <span class="mono">masters.rs:1261</span>，站点码在应用里根本没有写入口（只有站名可改），那条校验没有对象。<b>补充一条实施期才出现的事实：</b>0025（样品号/留样号纳入统一取号）随行为 <span class="mono">doc_no_prefix_YP</span> / <span class="mono">_LY</span> 两枚新键，它们<b>不在</b>本次退役之列——那两枚号贴在样袋与留样瓶上给人肉眼认，从来不上扫码枪。</p>
+
+<div class="lede">
+<p style="margin:0"><b>一句话主张：</b>把「单据种类」从<b>英文字母</b>改成<b>一位数字</b>，并且只放在二维码/条码的载荷里——票面与库里的单号变成 <code>站码2+年4+月2+流水6</code> 的 14 位纯数字，<code>doc_no_prefix_*</code> 五个参数键连同设置页那五行一起退役。载荷也全数字化，中文输入法就没有可以开始拼拼音的字母，吞键这一类故障从根上不再复发。</p>
+<p class="tiny" style="margin:6px 0 0">依据（现场实测，已两次）：票面印 <code>BH1:BD01202610000053</code>，枪打进来是 <code>BH：BD1202610000053</code>（<span class="mono">src/lib/ticket-code.ts:77-88</span>）；另一台更狠，只剩 <code>D01202610000069</code>（<span class="mono">src/hooks/useScannerCapture.ts:83-86</span>）。机制是 <code>B</code>/<code>H</code> 落进拼音合成串、紧跟的 <code>1</code> 被当成候选项序号键吃掉、冒号折成全角。<b>现有三道防线都救不回被吞的数字</b>：解析侧只放宽版本位、捕获侧只能事后说破"请切英文"、<span class="mono">src-tauri/src/ime.rs</span> 只在窗口聚焦那一刻翻一次开关。字母是这件事的必要条件——载荷里没有字母，合成串就起不来。</p>
+</div>
+
+<h2><span class="no">1</span>范围</h2>
+<div class="grid2">
+<div>
+<h3 style="margin-top:4px">做</h3>
+<ul>
+<li>取号改形：<code>next_no()</code> 不再读 <code>doc_no_prefix_*</code>，单号 = <code>站码2 + 年4 + 月2 + 流水N</code>（纯数字）</li>
+<li>票面码载荷改形：<code>BH1:</code> + 带字母的单号 → <b>16 位纯数字</b>（版本位 + 票种位 + 单号）</li>
+<li>解析侧双轨永久兼容：新数字载荷 + 旧 <code>BH1:</code> / <code>BH:</code> 载荷都认，旧载荷的解析结果<b>逐字不变</b>（存量库里的单号本来就带字母）</li>
+<li>五个 <code>doc_no_prefix_BD/ZJ/JS/FK/CK</code> 参数键退役：新增 <code>0025</code> 迁移 <code>DELETE</code>、参数目录删五行、03 §9.3.1 删五行</li>
+<li>捕获层的"这是枪不是人"判据从 <code>BH1</code> 前缀改成数字载荷结构；<code>ime.rs</code> 的翻开关时机加固</li>
+<li>话术与文档同步：<code>settle-gate.ts</code> 里"收购码单（BD）"这类字样、<code>ScanTestBar</code> 的示例、02 §F1.4 / 03 §3.5 / 04 §5.6 / 05 §4⑥b</li>
+<li>把 <code>parseScannedCode</code> 钉成可跑的断言（<b>全仓现在一条都没有</b>），并把 <code>receipt-code/check.ts</code> 的载荷常量与码宽基准换到新号形</li>
+</ul>
+</div>
+<div>
+<h3 style="margin-top:4px">不做</h3>
+<ul>
+<li><b>不改写任何存量单号。</b>库里 <code>BD01202610000053</code> 照旧，已发出去的纸质票照扫。同一票种同一月的流水共用 <code>seq_counter</code> 的 <code>&lt;doc&gt;:&lt;站码&gt;:&lt;YYYYMM&gt;</code> 键，新号从存量号后面接着排，<b>纯数字号与字母号不会在同一月内撞车</b></li>
+<li>不动 <code>weigh_order.order_no</code> 等列的类型、长度与唯一约束（<code>TEXT</code> 存数字串，零 DDL）</li>
+<li>不碰读卡器那条链：IC 卡 UID（<code>normalize_card_no</code>，<span class="mono">cards.rs:42</span>）走读卡器不经键盘，不受输入法影响，保持十六进制大写</li>
+<li>不碰不进码的编号：设备编码 <code>cam1/prn2</code>、品种 <code>YM/XM</code>、样品号 <code>YP…</code>、留样号 <code>LY…</code>、手工凭证号 <code>PZ-…</code>——都是档案手输或票面文本，没有一处被扫</li>
+<li>红冲关联单 <code>HC</code> 只在 mock 里存在（Rust 用 <code>reversed_order_id</code> 关联），本期不为它占票种码，预留位说明写进文档即可</li>
+</ul>
+</div>
+</div>
+
+<h2><span class="no">2</span>新号形：两段结构，谁在哪儿</h2>
+
+<h3>2.1 单号本体（票面印的、库里存的、界面显示的、搜索的）</h3>
+<table>
+<thead><tr><th>段</th><th>位</th><th>取值</th><th>来源</th><th>例</th></tr></thead>
+<tbody>
+<tr><td>站点码</td><td class="num">2</td><td>数字，装机时定的 <code>station.code</code></td><td><span class="mono">orders.rs:235 station_code()</span></td><td class="mono">01</td></tr>
+<tr><td>年</td><td class="num">4</td><td>本地时区 <code>%Y</code></td><td rowspan="2"><span class="mono">orders.rs:193 Local::now()</span></td><td class="mono">2026</td></tr>
+<tr><td>月</td><td class="num">2</td><td><code>%m</code></td><td class="mono">10</td></tr>
+<tr><td>流水</td><td class="num">N（默认 6）</td><td>按 票种+站码+年月 归零，作废号占位不复用</td><td><span class="mono">seq_counter</span> + <code>doc_no_seq_len</code></td><td class="mono">000053</td></tr>
+</tbody>
+</table>
+<p class="mono" style="font-size:13.5px">磅单 = 结算单 = 付款单 = <b>01202610000053</b>（14 位，票面与库里都是这一串，不再有任何字母）</p>
+<p class="tiny">与今天比只少了两位字母：<code>BD01202610000053</code> → <code>01202610000053</code>。<code>seq_counter.prefix_key</code> 用的是 <code>doc</code> 名（<code>BD:01:202610</code>）而不是前缀值，<b>取号器与月内归零逻辑一个字都不用改</b>，流水不会重排也不会跳号。</p>
+
+<h3>2.2 票面码载荷（二维码 / CODE128 里那串，也是码下方那行可读字）</h3>
+<table>
+<thead><tr><th>段</th><th>位</th><th>取值</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td>版本位</td><td class="num">1</td><td><code>1</code> = 本方案首版。将来<b>只能新增 2…9</b>，旧版永久只读兼容（沿用 <code>BH1→BH2</code> 那条老规矩，只是换成数字）</td><td>方案换代时让解析器同时认两种</td></tr>
+<tr><td>票种位</td><td class="num">1</td><td><code>1</code> 收购码单 · <code>2</code> 质检单 · <code>3</code> 结算凭证 · <code>4</code> 付款凭证 · <code>5</code> 出库单 · <code>6-9</code> 预留</td><td><b>取代 <code>DOC_PREFIX</code> 的"前两字母判类"</b>，结算/补付分流靠它</td></tr>
+<tr><td>单号</td><td class="num">12-20</td><td>就是 2.1 那一串</td><td>定位到库里的行</td></tr>
+</tbody>
+</table>
+<p class="mono" style="font-size:13.5px">扫一张 53 号磅单 = <b>1101202610000053</b> &nbsp;·&nbsp; 扫它的结算凭证 = <b>1301202610000053</b>（今天：BH1:BD01202610000053 / BH1:JS01202610000053）</p>
+<p class="tiny"><b>为什么票种位必须在载荷里：</b>磅单与结算单各自从 1 号排起，同一站点同一月必然出现同号（<code>seq_counter</code> 是按票种分开计数的，<span class="mono">orders.rs:196</span>）。若载荷只放 14 位纯数字，扫进来就无法区分"来结算的码单"与"来付尾款的结算凭证"——<span class="mono">WorkstationPage.tsx:450/469</span> 那两条路会互相开错框，这是钱的事，不能靠"先查磅单再查结算单"的顺序赌。</p>
+<p class="tiny"><b>为什么版本位也要留着：</b>它承担今天 <code>BH1:</code> 那两个职责——① 一眼认定"这是我们自己打的码"，与外来条码（EAN-13 是 13 位、身份证 18 位、IC 卡 UID 8 位十六进制）在长度与结构上都对不上；② 让"裸 14 位单号"与"扫到的票面码"可区分（<code>ScannedCode.prefixed</code> 这个字段还在用，<span class="mono">WorkstationPage.tsx:463</span> 那句"没扫到票面码，可能是手输或旧版票"靠它）。</p>
+
+<h3>2.3 认与不认（取代 <code>DOC_NO_RE</code> 那把只认字母的闸）</h3>
+<table>
+<thead><tr><th>串</th><th>结论</th><th>依据</th></tr></thead>
+<tbody>
+<tr><td class="mono">1101202610000053</td><td class="c-yes">认：磅单 01202610000053</td><td>版本 1 + 票种 1 + 站码等于本机在用站码 + 年月合法 + 流水 ≥ 4 位</td></tr>
+<tr><td class="mono">BH1:BD01202610000053</td><td class="c-yes">认（存量票）</td><td>旧路径原样保留，解析结果与今天逐字一致；<code>docNo</code> 带字母，正好等于存量库里的单号</td></tr>
+<tr><td class="mono">BH:BD01202610000053 / BH1BD…</td><td class="c-yes">认（吞键容错）</td><td><code>TOLERANT_HEAD</code> 只放宽版本位那条不动</td></tr>
+<tr><td class="mono">01202610000053</td><td class="c-part">认，但标"裸单号"</td><td>14 位纯数字＝手输/旧版无头。种类按"先磅单后结算单"查库判，并在话术里点破是手输</td></tr>
+<tr><td class="mono">D01202610000069</td><td class="c-no">拒 + 回显原文</td><td>长度与结构都不合。<code>scanEcho</code>（<span class="mono">settle-gate.ts:187</span>）那串证据保留</td></tr>
+<tr><td class="mono">1234567890123456 / 42010100001234</td><td class="c-no">拒</td><td>站码不是本站、或年月不合法（年超出 2020…次年、月不在 01-12）</td></tr>
+<tr><td class="mono">130120261000005（半截）</td><td class="c-no">拒</td><td>流水不足 4 位。<b>不做任何模糊匹配</b>这条纪律原样继承</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">3</span>接线点（改哪里、改成什么）</h2>
+<h3>Rust 侧</h3>
+<table>
+<thead><tr><th>文件</th><th>现状</th><th>之后</th></tr></thead>
+<tbody>
+<tr><td class="mono">orders.rs:189-205 next_no()</td><td><code>let prefix = setting_str("doc_no_prefix_{doc}", doc)</code>，<code>format!("{prefix}{code}{ym}{:0len$}")</code></td><td>删掉 <code>prefix</code> 这一行，返回 <code>{code}{ym}{:0len$}</code>。签名 <code>next_no(conn, doc)</code> 不变，五处调用点（<span class="mono">orders.rs:1742/2093/2422/2470</span>、<span class="mono">outbound.rs:353</span>、<span class="mono">settlements.rs:264</span>）零改动</td></tr>
+<tr><td class="mono">orders.rs:149 setting_str()</td><td>只被 <code>next_no</code> 用</td><td>删（不留没人读的死函数）</td></tr>
+<tr><td class="mono">db/migrations/0025_*.sql</td><td>—</td><td>新建，照 <code>0011_retire_print_channel.sql</code> 的先例：文件头写清"为什么退役"，末尾 <code>DELETE FROM app_setting WHERE key IN ('doc_no_prefix_BD','_ZJ','_JS','_FK','_CK')</code>。<b>0002 / 0020 的历史种子一字不改</b>（迁移按已应用哈希校验，改历史即拒启，<span class="mono">migrate.rs:37-48</span>）</td></tr>
+<tr><td class="mono">db/migrate.rs MIGRATIONS</td><td>登记到 0024</td><td>+ 0025。<code>schema_contract</code> 里三处写死计数早已按 <code>MIGRATIONS.len()</code> 推导，不用改字面量</td></tr>
+<tr><td class="mono">ime.rs / lib.rs:130,282</td><td>只在窗口 <code>Focus</code> 事件里翻一次开关</td><td>见 D3</td></tr>
+</tbody>
+</table>
+<h3>前端侧</h3>
+<table>
+<thead><tr><th>文件</th><th>现状</th><th>之后</th></tr></thead>
+<tbody>
+<tr><td class="mono">lib/ticket-code.ts</td><td><code>DOC_PREFIX</code> 两字母表（:41）、<code>DOC_NO_RE=/^[A-Z]{2}[A-Z0-9-]{4,22}$/</code>（:61）、<code>encodeDocCode(no)=BH1:+no</code>（:70）</td><td>核心重写：<code>DOC_KIND_CODE</code>（1↔order…5↔outbound 双向表）+ <code>encodeDocCode(kind, no)</code> 出 16 位数字 + <code>parseScannedCode</code> 走"新数字轨 / 旧 BH1 轨"两条路径。文件头那三条设计约束与"只加版本位"的规矩照抄，只把字母换成数字</td></tr>
+<tr><td class="mono">print/receipt/scenarios.tsx:552,619</td><td><code>encodeDocCode(o.order_no)</code> / <code>encodeDocCode(s.settle_no)</code>，种类隐含在号里</td><td>各传自己的票种码（<code>ticket_code</code>→1、<code>settle_code</code>→3）。这两个字段是<b>载荷的唯一出口</b>，付款小票/质检单/出库单出厂不带码区块（<span class="mono">defaults.ts:54-56,117</span>）</td></tr>
+<tr><td class="mono">hooks/useScannerCapture.ts:41,50</td><td>1500ms 慢枪豁免挂在 <code>couldBeTicketBurst()</code>（判 <code>B</code>/<code>BH</code>/<code>BH1:</code>）</td><td>判据换成"这串还可能是数字载荷的开头"（首两位 ∈ 版本×票种，或旧 <code>BH</code> 路径），裸单号仍不豁免——那条口子是刻意撤掉的（02 §F1.4 行 142）</td></tr>
+<tr><td class="mono">lib/settings-catalog.ts:51-54</td><td>四行 <code>doc_no_prefix_*</code>（demo "BD"…）</td><td>删四行。<code>CK</code> 本来不在目录里（现在渲染在最后一组"库里新增、目录还没补"），删键后自然消失</td></tr>
+<tr><td class="mono">lib/settle-gate.ts:166-175</td><td>话术硬写"收购码单（BD）""结算凭证（JS）"</td><td>去掉括号里的字母（种类由 <code>kind</code> 给中文名，字母已不在号上，写了反而对不上票）</td></tr>
+<tr><td class="mono">workstation/ScanTestBar.tsx:50</td><td>placeholder 写死 <code>BH1:BD…/BH1:JS…</code></td><td>换成新载荷示例</td></tr>
+<tr><td class="mono">mock/masters.ts:418 docNo()</td><td>与 Rust 同形状（带字母）</td><td>同步改纯数字，否则浏览器演示与装机看到的号不是一种形状（这份 mock 与库是"同一个参数的两处事实"，前面已经为这类漂移吃过对键的亏）</td></tr>
+<tr><td class="mono">mock/orders.ts:539 <code>docNo("HC")</code></td><td>红冲单只有 mock 有</td><td>改成与真库同构的纯数字（票种位留空即"红冲不改号，按 <code>reversed_order_id</code> 关联"）</td></tr>
+</tbody>
+</table>
+<h3>文档与测试</h3>
+<table>
+<thead><tr><th>位置</th><th>要跟着动的东西</th></tr></thead>
+<tbody>
+<tr><td class="mono">03 §3.5（:199-216）</td><td>格式式子、五个例子、"前缀与位数在 app_setting 中可配"那一行改为"票种码在载荷里，单号本身无可配前缀"</td></tr>
+<tr><td class="mono">03 §9.3.1（:443-444）</td><td>删 <code>doc_no_prefix_*</code> 五行 + 一行退役说明（<code>seed_baseline_matches_design_doc</code> 要求文档键集与库内键集<b>逐字相等</b>）</td></tr>
+<tr><td class="mono">02 §F1.4（:140,142,367）</td><td>载荷＝<code>BH1:</code>+单号 那条契约改写为数字契约，并保留"存量 <code>BH1:</code> 永久只读兼容"；"裸单号入口刻意撤掉"照旧</td></tr>
+<tr><td class="mono">04 §5.6（:479-539）</td><td>三类丢字的成因补一句"根治＝载荷不再含字母"，实测串换成新号形</td></tr>
+<tr><td class="mono">05 §4 ⑥b（:145）、§9（:365,379）</td><td>示例串、"仅一维条码"那两行的示例载荷</td></tr>
+<tr><td class="mono">scripts/receipt-code/check.ts:45,139</td><td><code>TICKET</code> 常量换 16 位数字、E1 的 <code>startsWith("BH1:")</code> 换成数字断言。<b>码宽那一整片（C6/C10/H/I 系列）都是算出来的，会自己跟上</b>；16 位纯数字整串咬合成 Code C，模块数从 253 降到约 123，58 纸反而更宽松</td></tr>
+<tr><td class="mono">Rust 契约测试</td><td>写死号形的断言要换：<span class="mono">orders_contract.rs:361,634,695,1022</span>、<span class="mono">settlements_contract.rs:271-367</span>、<span class="mono">payments_contract.rs:257-333</span>、<span class="mono">outbound_contract.rs:548</span>、<span class="mono">schema_contract.rs:1170-1220</span>、<span class="mono">system_contract.rs</span>（十余处）、<span class="mono">cards_contract.rs:108-136</span>、<span class="mono">search_contract.rs:328</span>、<span class="mono">crates/ticket-core/src/render.rs:1266</span></td></tr>
+<tr><td class="mono">新增：parseScannedCode 的无头断言</td><td>2.3 那张表逐行钉成用例（新载荷 / 存量 BH1 / 吞键容错 / 裸单号 / 四类拒收）。<b>这条链路今天零测试覆盖</b>，而它是"错一次就在结算窗口现场炸"的东西</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">4</span>需要你拍板的 5 件事</h2>
+
+<div class="card">
+<div class="hd"><span class="tag key">D1</span><b>票种码放不放进单号本体</b><span class="tag ok">推荐 a</span></div>
+<p>(a) <b>不进</b>：单号 14 位纯数字（<code>01202610000053</code>），票种只在码载荷的第 2 位。票面最干净，且字面满足"前缀为空"。<br>
+(b) 进：单号 15 位（<code>101202610000053</code> 这类，首位票种码），载荷 = 版本位 + 单号 = 16 位。<br>
+<span class="sub">差别只在"人读的那串号"自不自带种类。(a) 的代价：同一站点同一月，磅单与结算单会出现<b>完全相同的号</b>（流水各排各的），电话对账、纸质台账上手抄会混——但扫码、查库、唯一约束都不受影响（各表各自的唯一索引）。(b) 的代价：票面首位多一个"看不懂的数字"，而它其实就是刚被拿掉的那个前缀换了件衣服。<b>载荷长度与码宽两者完全相同。</b></span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D2</span><b>载荷要不要保留版本位</b><span class="tag ok">推荐 a</span></div>
+<p>(a) <b>保留</b>：16 位 = 版本 1 + 票种 1 + 单号 14。将来换方案只能加 <code>2</code>，与今天 <code>BH1→BH2</code> 同规。<br>
+(b) 不留：载荷就是"票种 + 单号"15 位，票面更短一格。<br>
+<span class="sub">(b) 丢的是两样东西：一是"这是我们打的码"的显式标记（只能靠站码+年月结构判，对外来纯数字条码的拒收面变窄）；二是 <code>prefixed</code> 这个字段——今天靠它区分"扫到的票"与"手输/旧版"，那句 <code>WorkstationPage.tsx:463</code> 的话术就没依据了。省 1 位数字不值得。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D3</span><b>输入法这一层加固到什么程度</b><span class="tag ok">推荐 a + b</span></div>
+<p>(a) <b>载荷纯数字化</b>（本简报的主体，从根上不触发拼音合成）。<br>
+(b) <b>捕获层加 <code>e.code</code> 数字兜底</b>：合成态（<code>isComposing</code> / <code>keyCode===229</code>）下，纯数字键仍能从物理码 <code>Digit0-9</code>/<code>Numpad0-9</code> 还原——今天 <code>useScannerCapture.ts:90</code> 是"命中即清缓冲 + 说破请切英文"，救不回任何字符。纯数字载荷下这条映射与键盘布局、输入法都无关，稳。<br>
+(c) <code>ime::force_alphanumeric</code> 的触发时机从"窗口聚焦一次"扩到"进工作台/每次扫码前再翻一次"。<br>
+<span class="sub">建议 a+b 一起做，c 先不动：c 是在跟系统抢方向盘，操作员按 Shift 切中文的意图被反复覆盖会更烦人；a+b 之后，输入法对这条链路已经只剩"整串都是数字、合成起不来"这一种残留风险。b 的实现要盯住 <code>02 §F1.4</code> 那句"不做任何模糊匹配"——兜底只还原按键字符，不猜缺位。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D4</span><b><code>doc_no_seq_len</code>（流水号位数）留不留</b><span class="tag ok">推荐 a</span></div>
+<p>(a) <b>留着</b>，但解析侧按<b>变长</b>写：结构校验只要求"流水 ≥ 4 位"，不卡总长度。<br>
+(b) 一并删掉、写死 6 位，载荷与单号从此定长。<br>
+<span class="sub">定长的好处是判"是不是我们的码"更硬（16 位整）。但站长改流水位数是有真实场景的（小站号短、大站号长），而且 03 §3.5 早就写了"前缀与位数可配"——只留位数这一半可配，改动面最小。存量库里已有 6 位号，写死会让将来的号与历史号长度不齐，反而更乱。</span></p>
+</div>
+
+<div class="card">
+<div class="hd"><span class="tag key">D5</span><b>站点码要不要收口成 2 位数字</b><span class="tag ok">推荐 a</span></div>
+<p>(a) <b>收口</b>：<code>station.code</code> 建档时校验"恰好 2 位数字"，文档 §9.2 与 §3.5 同批写死。<br>
+(b) 不动：继续是自由 <code>TEXT</code>。<br>
+<span class="sub">新号形与"站码等于本站"这条扫码判据都建立在"站码是 2 位数字"上。今天种子是 <code>'01'</code>（<span class="mono">0002_seed.sql:16</span>），但 <code>save_station</code> 没有这个校验——一旦有人填了 <code>A1</code> 或 <code>1</code>，纯数字单号就重新长出字母/错位，前面全部白做。装机版现在只有一站，成本≈0，是收口的时机。</span></p>
+</div>
+
+<h2><span class="no">5</span>风险与回退</h2>
+<table>
+<thead><tr><th>风险</th><th>说明</th><th>处置</th></tr></thead>
+<tbody>
+<tr><td>存量纸质票</td><td>已发到农户手里的 <code>BH1:BD…</code> 票</td><td class="c-yes">零影响：旧解析轨原样保留，且存量库里的单号本来就带字母，两边对得上</td></tr>
+<tr><td>同一库两种号形并存</td><td>升级前 <code>BD01202610000053</code>、升级后 <code>01202610000054</code></td><td class="c-part">接受。跨月自然分界；界面/搜索/导出都只把单号当文本，无长度与形状假设（已核：<span class="mono">orders.rs:2592</span>、<span class="mono">search.rs:56,94</span>、<span class="mono">reports.rs:425</span> 全是 <code>LIKE</code>）</td></tr>
+<tr><td>条码变窄</td><td>24 字符 → 16 位数字，整串咬合 Code C</td><td class="c-yes">只会更宽松（模块数约减半）。58 纸压档、居中落点那两套断言是算出来的，会自动跟上；跑 <code>receipt-code/check.ts</code> 复核</td></tr>
+<tr><td>手输单号歧义</td><td>D1 选 (a) 时，14 位裸号同指磅单与结算单</td><td class="c-part">裸号入口本来就只在工作台测试框与"旧版票"话术里（02 §F1.4 刻意撤掉了手输口），按"先磅单后结算单"判并在话术里点破</td></tr>
+<tr><td>回退</td><td>—</td><td class="c-yes">不改列类型、不回填历史行 → 回退＝恢复 <code>pre_migrate_0001_to_0025_*</code> 快照（03 §6 的既有口径：不提供降级脚本）。取号器与 <code>seq_counter</code> 键都没动，回退后流水照旧接着排</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">6</span>验收口径</h2>
+<ul>
+<li><code>npx tsc --noEmit --incremental false -p tsconfig.json</code> 干净</li>
+<li><code>npx esbuild scripts/receipt-code/check.ts --bundle --platform=node --format=cjs --outfile=.scratch/receipt-code.cjs && node .scratch/receipt-code.cjs</code> 全通过（含换到新号形的码宽断言）</li>
+<li>新增的 <code>parseScannedCode</code> 用例：2.3 表七行各一条，全绿</li>
+<li><code>cd src-tauri; cargo test</code>：含 <code>seed_baseline_matches_design_doc</code>（文档与库键集逐字相等，五个 <code>doc_no_prefix_*</code> 两边同时消失）、<code>every_key_the_frontend_catalog_renders_exists_in_the_library</code>、<code>every_migration_file_is_registered</code>、<code>schema_matches_blessed_snapshot</code>（本次不动表结构，快照不该变）</li>
+<li>装机版实测一条：新制一张磅单 → 号是 14 位纯数字 → 扫它的票进结算 → 再扫结算凭证进补付；顺手拿一张升级前打的旧 <code>BH1:BD…</code> 票在同一个窗口扫，仍然认</li>
+</ul>
+
+<p class="foot">本页只到"拍板"为止：D1–D5 定了我就按结论一次改完（取号 / 载荷 / 解析 / 迁移 / 目录 / 文档 / 测试同批落），不分次提交半成品。定稿后本文并入 03 §3.5 与 02 §F1.4，随即删除。</p>
+
+</div>
+</body>
+</html>
