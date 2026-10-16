@@ -465,7 +465,7 @@ export function OrdersPage() {
             }
             toolbar={
               <span className="text-xs text-muted-foreground">
-                末列「操作」横向滚动时也钉在最右边：「详情」在本页右侧弹出完整磅单，「重新称重」把这张在途单带回磅房工作台复称；Ctrl+点击行在新窗口并排对单，勾选后可批量补打（需站长授权）。
+                末列「详情」在本页右侧弹出完整磅单；Ctrl+点击行可在新窗口并排对单；勾选后可批量补打（需站长授权）。
               </span>
             }
           />
@@ -477,8 +477,7 @@ export function OrdersPage() {
           <DialogHeader>
             <DialogTitle className="text-sm">批量打印 {selected.size} 张码单</DialogTitle>
             <DialogDescription className="text-xs">
-              真实实现会依次生成 PDF 送入同一打印机，中途失败会停在那里并提示重试；
-              本版本逐张写打印留痕，用于验证联次与授权链路。
+              会依次送打选中的码单，中途失败会停在失败那张并提示重试。
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-40 overflow-y-auto border p-2 text-xs">

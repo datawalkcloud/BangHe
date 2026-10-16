@@ -53,19 +53,18 @@ export const MEDIUM: Record<CardMedium, MediumSpec> = {
   idcard: {
     medium: "idcard",
     label: "身份证（芯片）",
-    qualifier: "SAM 解密，脱敏显示",
+    qualifier: "脱敏显示",
     action: "读身份证",
     pending: "正在读卡…",
-    note: "读到的明文只存在内存，界面一律脱敏显示；写库时按 03 §4 的字段级加密处理。",
+    note: "读到的内容只存在内存里，界面一律脱敏显示。",
   },
   ic: {
     medium: "ic",
-    label: "IC（Mifare）卡",
+    label: "IC 卡",
     qualifier: "只读，不写任何块",
     action: "读 IC 卡",
     pending: "正在寻卡…",
-    note: "默认用出厂密钥 FF FF FF FF FF FF 读扇区 0 的块 0/1/2，块 0 含厂商 UID。" +
-      " 读不出来通常是密钥被改过，不代表设备坏了。IC 卡参与收粮流程（如内部流转卡）时再接业务侧。",
+    note: "只读卡号，不往卡里写。读不出来通常是这张卡的密钥被改过，不代表设备坏了。",
   },
 };
 

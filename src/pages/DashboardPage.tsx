@@ -43,7 +43,7 @@ export function DashboardPage() {
     <>
       <PageHeader
         title="首页看板"
-        description={isPending ? "加载中…" : `统计区间 ${range.from} ~ ${range.to}（${p}；业务日期口径，跨零点单归前一日）`}
+        description={isPending ? "加载中…" : `统计区间 ${range.from} ~ ${range.to}（${p}，业务日期口径）`}
         actions={
           <>
             <Button size="sm" render={<Link to="/workstation" />}>
@@ -104,7 +104,7 @@ export function DashboardPage() {
             label="挂账未付"
             value={money(data?.summary.credit_fen ?? 0)}
             tone={(data?.summary.credit_fen ?? 0) > 0 ? "warning" : "neutral"}
-            hint="超时效天数的进下方告警"
+            hint="超时效进告警"
           />
           <StatCard
             label="手录车次"
@@ -122,7 +122,7 @@ export function DashboardPage() {
               <CardTitle className="flex items-center gap-2 text-sm">
                 在途作业
                 <span className="font-normal text-muted-foreground">
-                  共 {data?.openOrders.length ?? 0} 车，停留超阈值标"超"
+                  共 {data?.openOrders.length ?? 0} 车，"超"＝停留超时
                 </span>
                 <Button size="xs" variant="ghost" className="ml-auto" render={<Link to="/workstation" />}>
                   处理
@@ -133,7 +133,7 @@ export function DashboardPage() {
               {(data?.openOrders.length ?? 0) === 0 ? (
                 <EmptyState
                   title="当前没有在途车辆"
-                  description="磅房空闲，可直接新建过磅单开始今天的作业。"
+                  description="可直接新建过磅单开始今天的作业。"
                   action={
                     <Button size="sm" render={<Link to="/workstation" />}>
                       新建过磅单
@@ -199,7 +199,7 @@ export function DashboardPage() {
                 <p className="px-4 pb-2 text-xs text-success">全部启用设备在线，可直接作业</p>
               ) : (
                 <p className="px-4 pb-2 text-xs text-warning">
-                  {offline.length} 台异常，相关录入将回退到手录，底栏可定位具体设备
+                  {offline.length} 台异常，相关录入将回退到手录
                 </p>
               )}
             </CardContent>
@@ -250,7 +250,7 @@ export function DashboardPage() {
                 formatter={(v) => `${v} 车`}
               />
               <p className="mt-2 text-xs text-muted-foreground">
-                大户与经纪人贡献 {ratioText(ratioOf(data?.byPartyType))} 的车次，皮重历史更稳定，可放宽容差。
+                大户与经纪人车次占比 {ratioText(ratioOf(data?.byPartyType))}。
               </p>
             </CardContent>
           </Card>
@@ -261,7 +261,7 @@ export function DashboardPage() {
             <CardTitle className="text-sm">在途状态与作业节奏</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
-            <SectionTitle extra={<span className="text-xs text-muted-foreground">实时在途，按磅单状态</span>}>
+            <SectionTitle extra={<span className="text-xs text-muted-foreground">按磅单状态</span>}>
               当前在途
             </SectionTitle>
             <div className="flex flex-wrap gap-2">
@@ -289,7 +289,7 @@ export function DashboardPage() {
               colorClass="bg-chart-2"
             />
             <p className="text-xs text-muted-foreground">
-              数据最后刷新：{data ? dateTimeShort(nowLocalISO()) : "—"}（点击页面内任意查询会自动重取）
+              数据最后刷新：{data ? dateTimeShort(nowLocalISO()) : "—"}
             </p>
           </CardContent>
         </Card>

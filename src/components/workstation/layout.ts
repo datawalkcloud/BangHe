@@ -71,7 +71,7 @@ export const PANELS: readonly PanelSpec[] = [
   { id: "identity", title: "身份与制单", hint: "读卡、选农户、取号制单", box: { x: 0, y: 0, w: 3, h: 14 }, min: { w: 2, h: 8 }, defaultHidden: true },
   { id: "tare", title: "皮重参考", hint: "历史皮重与容差告警", box: { x: 0, y: 14, w: 3, h: 10 }, min: { w: 2, h: 4 } },
   { id: "camera", title: "车上磅画面", hint: "实时预览与上磅抓拍", box: { x: 3, y: 0, w: 6, h: 7 }, min: { w: 3, h: 4 } },
-  { id: "weigh", title: "称重区", hint: "读数、判稳、捕获", box: { x: 3, y: 7, w: 6, h: 11 }, min: { w: 3, h: 8 } },
+  { id: "weigh", title: "称重区", hint: "读数与捕获", box: { x: 3, y: 7, w: 6, h: 11 }, min: { w: 3, h: 8 } },
   { id: "qc", title: "化验区", hint: "指标录入与等级判定", box: { x: 3, y: 18, w: 6, h: 6 }, min: { w: 3, h: 5 } },
   // 「凭票与打印」不再是格子面板：出票/补打入口收进第三刷结算弹窗（TicketPrintSection）。
   // 老用户存好的排布里若还留着 "settle" 那一格，sanitize 认不出就静默丢弃，不报错也不重排其余面板。

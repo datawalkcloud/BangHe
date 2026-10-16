@@ -164,25 +164,21 @@ function UsersSection() {
           )}
         </Card>
 
-        <CallOut title="密码与会话都在本机校验，问不到会话就当作没登录">
-          登录、设密码、重置与授权全部走桌面端的 <span className="font-mono">auth.rs</span>：
-          argon2id 校验、连错若干次临时锁定并在登录页倒计时、
-          {idleMinutes == null ? (
-            <>空闲锁屏时长由桌面端会话下发（当前拿不到该值，前端不抄一份常量兜底）；</>
-          ) : idleMinutes === 0 ? (
-            <>自动锁屏已设为「从不」，空闲不锁，只能在左下角手动锁屏；</>
+        <CallOut title="账号与安全">
+          空闲锁屏与连错锁定在登录页提示；
+          {idleMinutes == null ? null : idleMinutes === 0 ? (
+            <>当前设为「从不」，只能手动锁屏；</>
           ) : (
             <>
-              无操作<span className="tnum"> {idleMinutes} </span>分钟后自动锁屏，输本人密码即解锁（登录态不清）；
+              无操作<span className="tnum"> {idleMinutes} </span>分钟后自动锁屏，输本人密码即解锁；
             </>
           )}
-          会话只存内存，重启程序必须重登。未登录进不了任何业务页，
-          写操作的署名由这个会话给出，而不是前端传进来的 id。新增账号、调整岗位与权限矩阵在
+          关闭程序后需重新登录。新增账号、调整岗位与权限矩阵在
           <Link to="/system/$section" params={{ section: "staff" }} className="underline">
             {" "}
             系统与审计 → 员工与岗位
           </Link>
-          （仅站长）。浏览器预览没有原生通道，属演示模式：只认在职名单、不校验密码。
+          （仅站长）。浏览器预览为演示模式：只认在职名单，不校验密码。
         </CallOut>
       </div>
     </div>
@@ -296,7 +292,7 @@ function StaffSection() {
   return (
     <div className="flex flex-col gap-3">
       <SectionBar
-        note="身份来源已从「选择操作员」换成密码登录：制单 / 称重 / 化验 / 结算的留痕一律署名当前登录人，署名机制未变，只是拿人的入口换了。"
+        note="制单 / 称重 / 化验 / 结算的留痕一律署名当前登录人。"
         action={
           <Button
             size="sm"
@@ -699,18 +695,10 @@ function AuditSection() {
         empty={<EmptyState title="没有匹配的审计记录" description="清空检索词，或扩大结果筛选范围。" />}
         toolbar={
           <span className="text-xs text-muted-foreground">
-            读的是 <span className="font-mono">audit_log</span>，按留痕时间倒序取最近 300 条，检索词与日期区间在库里就筛完（不是先取一批再在前端过滤）。
-            被拒绝的记录同样留痕——它证明有人试图越权。
+            按留痕时间倒序取最近 300 条；未成功的操作同样有记录。
           </span>
         }
       />
-
-      <CallOut tone="info" title="字段级前后值对比只在写入方回填了 before_json / after_json 的行上出现">
-        库里的 <span className="font-mono">audit_log</span> 有这两列，本页把它们解析成逐字段
-        <span className="text-foreground"> 旧 → 新 </span>
-        显示。目前站点参数与改单价把变化写进了事由文本（形如 12 → 24），磅单与价目的修改
-        还没有在写入侧回填结构化的前后值——补那一段属于各模块写入自己的轮次，不在本页。
-      </CallOut>
     </div>
   );
 }
@@ -793,11 +781,8 @@ function BackupSection() {
 
   if (!desktop) {
     return (
-      <CallOut tone="warning" title="备份、校验、体检与恢复都要落文件系统，浏览器预览里没有">
-        这一节不再放"点了只弹 toast"的灰按钮：读的是站点机 AppData 下的
-        <span className="font-mono"> banghe.db </span>
-        与备份目录。要看真实状态请在桌面端打开本页；站点参数与留存自查同样取自
-        <span className="font-mono">app_setting</span>。
+      <CallOut tone="warning" title="浏览器预览不支持备份与恢复">
+        备份、校验、体检与恢复都要读写本机文件，请在桌面端打开本页操作。
       </CallOut>
     );
   }
@@ -811,17 +796,17 @@ function BackupSection() {
     {
       label: `附件留存 ${captureDays} 天`,
       need: captureDays >= REQUIRE_CAPTURE_DAYS,
-      text: `单据与附件要求保存 ${REQUIRE_DOC_YEARS} 年（≥ ${REQUIRE_CAPTURE_DAYS} 天），库里 attachment_keep_days = ${captureDays}`,
+      text: `要求保存 ${REQUIRE_DOC_YEARS} 年（≥ ${REQUIRE_CAPTURE_DAYS} 天），当前 ${captureDays} 天`,
     },
     {
       label: `备份保留 ${keepCount} 份`,
       need: keepCount >= REQUIRE_BACKUP_KEEP,
-      text: `要求保留 ${REQUIRE_BACKUP_KEEP} 份，库里 backup_keep_count = ${keepCount}；淘汰更旧的备份时按这个数收`,
+      text: `要求保留 ${REQUIRE_BACKUP_KEEP} 份，当前 ${keepCount} 份`,
     },
     {
       label: status?.last_backup_at ? `最近备份 ${sinceText(status.last_backup_at)}前` : "还没有过备份",
       need: status?.last_backup_at != null,
-      text: "恢复只能回到有过副本的那天，没备份就等于没有退路",
+      text: "恢复只能回到有过副本的那天，请立即备份一次",
     },
   ];
   const failed = checks.filter((c) => !c.need);
@@ -842,7 +827,7 @@ function BackupSection() {
           {busy === "run" ? "备份中…" : "立即备份"}
         </Button>
         <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act("health", () => systemApi.dbHealth(), () => "体检完成，结果见下")}>
-          {busy === "health" ? "体检中…" : "库体检（integrity_check）"}
+          {busy === "health" ? "体检中…" : "库体检"}
         </Button>
         <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void act("reveal", () => systemApi.backupReveal(), (p) => `已打开 ${String(p)}`)}>
           <DownloadIcon />
@@ -884,7 +869,7 @@ function BackupSection() {
             ),
           },
           { label: "库文件", value: <span className="tnum">{status ? fileSize(status.db_size_bytes) : "—"}</span> },
-          { label: "WAL 未合并", value: <span className="tnum">{status ? fileSize(status.wal_size_bytes) : "—"}</span> },
+          { label: "临时文件", value: <span className="tnum">{status ? fileSize(status.wal_size_bytes) : "—"}</span> },
           { label: "最早单据", value: <span className="tnum">{status?.doc_oldest_date ?? "—"}</span> },
           { label: "审计留痕", value: <span className="tnum">{status?.audit_rows ?? 0}</span> },
           { label: "备份目录", value: <span className="break-all font-mono text-xs">{status?.backup_dir ?? "—"}</span> },
@@ -893,7 +878,7 @@ function BackupSection() {
             // 0028 把那枚"界面掩码"假开关请出去之后，掩码是代码默认、不是可配项，
             // 这一格能如实回答的只剩"最近有没有人在翻"——数取自 audit_log 里的 pii.read
             value: (
-              <span className="tnum" title="近 30 天两类动作的合计：逐格点开证号全号、以及含完整证号的台账导出。要看是谁在哪天做的，到「操作审计」页筛动作「查看个人信息」——那一筛里还有看人像与看抓拍两同族动作，reason 写着「查看售粮人证号明文」与「导出含身份证号明文」的才是这一格数进去的两类">
+              <span className="tnum" title="近 30 天点开证号全号、或导出含证号台账的次数；要看是谁在哪天做的，到「操作审计」页查">
                 {idCardReads} 次（近 30 天）
               </span>
             ),
@@ -901,10 +886,9 @@ function BackupSection() {
         ]}
       />
 
-      <SectionTitle extra={<span className="text-xs text-muted-foreground">对照 02 §非功能指标逐条自查，数值取自真库参数与文件</span>}>留存合规自查</SectionTitle>
-      {failed.length === 0 ? (        <CallOut tone="success" title="可判定的留存项均满足验收口径">
-          参数改在「基础档案 → 站点参数」由站长操作并留审计；备份保留份数取自
-          <span className="font-mono"> backup_keep_count</span>，超过该数的更旧副本会在下次备份时成对删掉（.db 与 .sha256）。
+      <SectionTitle extra={<span className="text-xs text-muted-foreground">按留存要求逐条自查</span>}>留存合规自查</SectionTitle>
+      {failed.length === 0 ? (        <CallOut tone="success" title="留存项全部达标">
+          留存参数在「基础档案 → 站点参数」调整，仅站长可改；更旧的备份会在下次备份时自动清理。
         </CallOut>
       ) : (
         <CallOut tone="danger" title={`${failed.length} 项留存参数低于验收口径`}>
@@ -931,13 +915,12 @@ function BackupSection() {
       {health && (
         <CallOut
           tone={health.integrity_ok && health.fk_violations.length === 0 ? "success" : "danger"}
-          title={`体检结果：integrity_check「${health.integrity}」，外键违反 ${health.fk_violations.length} 条`}
+          title={`体检结果：${health.integrity}，关联异常 ${health.fk_violations.length} 条`}
           action={<Button size="xs" variant="outline" onClick={() => setHealth(null)}>收起</Button>}
         >
           <p>
-            模式 <span className="font-mono">{health.journal_mode}</span>，页大小 {health.page_size}，
-            库 {fileSize(health.db_size_bytes)} + WAL {fileSize(health.wal_size_bytes)}；
-            应用版本 {health.app_version ?? "未知"} / 结构版本 {health.schema_version ?? "未知"}。
+            库 {fileSize(health.db_size_bytes)}（临时文件 {fileSize(health.wal_size_bytes)}）；
+            版本 {health.app_version ?? "未知"}；
             单据 {health.counts.weigh_order} 张、结算 {health.counts.settlement} 张、留痕 {health.counts.audit_log} 条、附件 {health.counts.attachment} 个。
           </p>
           {health.fk_violations.length > 0 && (
@@ -1078,9 +1061,7 @@ function BackupSection() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        备份用 <span className="font-mono">VACUUM INTO</span> 在线生成一致副本，不锁业务写入；
-        恢复是唯一不可逆动作，所以顺序固定为「预检 → 强制备份现库 → WAL 收敛 → 旧库改名留底 → 复制副本入库」，
-        任何一步失败都会把已完成的部分写在错误里，留底文件不会被删。
+        备份不影响正在进行的业务；恢复是唯一不可逆的操作，执行前会自动把当前库改名留底。
       </p>
     </div>
   );
@@ -1137,10 +1118,7 @@ function ShiftSection() {
         </div>
       </div>
       <p className="-mt-1 text-xs text-muted-foreground">
-        「封账」按下去要做三件事：当日未结算单清零、单据状态转 archived、写入一条不可撤销的日结记录。
-        前两件在现有表里做得到，第三件缺一张日结记录表（<span className="font-mono">shift_close</span>）——
-        没有它，"这天封过账"这件事只存在于记忆里，事后无法证明哪天封的、谁封的、封的时候是什么数。
-        所以按钮仍然是灰的：补一张表和一支事务命令是它自己的那一轮，不在这里偷偷先按下去。
+        「封账」需要写入一条不可撤销的当日记录，该功能尚未开放，按钮暂不可用。
       </p>
 
       <StatCardGrid>
@@ -1158,8 +1136,7 @@ function ShiftSection() {
 
       {open.length > 0 ? (
         <CallOut tone="warning" title={`${open.length} 张单还没走完流程`}>
-          这些单封账前必须处理完：要么继续过磅结算，要么作废并写明事由。留成"在途"过夜的后果是
-          第二天对不上现金，而且农户已经不记得当时说的是哪个价。
+          封账前必须处理完：继续过磅结算，或作废并写明事由。
         </CallOut>
       ) : (
         <CallOut tone="success" title="没有在途单据">
@@ -1173,7 +1150,7 @@ function ShiftSection() {
         rowKey={(o) => o.order_no}
         dense
         empty={<EmptyState title="没有在途单" description="今天的单都走完了。" />}
-        toolbar={<span className="text-xs text-muted-foreground">末列「详情」在本页右侧弹出该单，可在工作台继续未完成的操作。</span>}
+        toolbar={<span className="text-xs text-muted-foreground">末列「详情」在本页右侧弹出完整磅单。</span>}
       />
 
       <Card size="sm" className="gap-2 p-3">
@@ -1181,7 +1158,7 @@ function ShiftSection() {
           extra={
             capped ? (
               <span className="text-xs text-warning">
-                单次最多取回 {SETTLEMENT_SCAN_LIMIT} 条，下面这个金额是部分和——挂账已多到需要按日期段在结算台账里逐段核对
+                单次最多取回 {SETTLEMENT_SCAN_LIMIT} 条，下面这个金额只是部分和；请到结算台账按日期段分段核对
               </span>
             ) : (
               <span className="text-xs text-muted-foreground">交接时必须当面点清的挂账</span>

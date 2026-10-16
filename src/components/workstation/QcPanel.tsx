@@ -392,7 +392,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             所以这一行挡在最上面：选完指标格与基准立刻按新品种重排 */}
         {needVariety && order && (
           <Label className="flex items-center gap-1.5 border bg-muted/30 p-1.5 text-xs text-muted-foreground">
-            <span className="shrink-0 text-destructive">本单还没有定收购品种，选定后才会保存化验</span>
+            <span className="shrink-0 text-destructive">请先选择收购品种：</span>
             <Choose
               aria-label="收购品种"
               size="sm"
@@ -452,7 +452,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
           <Label
             className="flex flex-col gap-0.5 text-xs text-muted-foreground"
-            title="化验员按国标的判定，写进化验单后永不改写（复检另立新单）；这一车按几等结钱在计算单的「结算等级」里定。"
+            title="化验定级按国标判定，复检另立新单；这一车按几等结钱在计算单的「结算等级」里定。"
           >
             化验定级
             <Choose
@@ -518,7 +518,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
             （那才是进结算、进票面的真值）。不点明"这里是建议"，化验员与出纳就会各录一遍，
             事后也说不清哪份算数。 */}
         <p className="text-[11px] text-muted-foreground">
-          扣水 / 扣杂 是化验给出的<span className="text-foreground">建议值</span>：结算与票面一律按计算单里确认的那份算，两份不会互相同步。
+          扣水 / 扣杂 是化验给出的<span className="text-foreground">建议值</span>：结算与票面按计算单里确认的那份算。
         </p>
 
         {decision === "reject" && (
@@ -540,7 +540,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
               className="min-h-0 text-sm"
             />
             {editable && needReason && (
-              <span className="text-destructive">拒收需填写原因（不少于 {REASON_MIN} 字），填好后自动保存</span>
+              <span className="text-destructive">拒收需填写原因，不少于 {REASON_MIN} 字</span>
             )}
           </div>
         )}

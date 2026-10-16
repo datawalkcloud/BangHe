@@ -167,11 +167,10 @@ export function AppTopbar({
                 </DropdownMenuItem>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              {/* 版本脚注升级成了「关于」弹窗：版本与仓库地址以 pkg（这份守卫钉住的导入）传入，
-                  产品名/版权/标识取自 tauri.conf.json，详情弹窗里看 */}
+              {/* 版本与仓库地址以 pkg（这份守卫钉住的导入）传入，产品名/版权取 tauri.conf.json */}
               <DropdownMenuItem onClick={() => setAboutOpen(true)}>
                 <InfoIcon />
-                关于磅禾粮站收粮系统…
+                关于…
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

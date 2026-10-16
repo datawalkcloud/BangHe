@@ -38,7 +38,7 @@ export function LocalCameraLive({ spec, className }: { spec: LocalCamSpec; class
         handleRef.current = handle;
         attach();
         setStatus("live");
-        setNote(handle.fellBack ? `未匹配到登记的「${spec.deviceName || "摄像头"}」，画面来自：${handle.label}` : null);
+        setNote(handle.fellBack ? `没找到登记的「${spec.deviceName || "摄像头"}」，画面来自：${handle.label}` : null);
       },
       (e) => {
         if (cancelled) return;

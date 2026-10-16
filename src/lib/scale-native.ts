@@ -105,7 +105,7 @@ export interface ScaleLiveStatus {
 }
 
 const NO_CHANNEL =
-  "当前是浏览器预览，没有地磅串口通道；请用「npm run tauri dev」启动桌面端后重试，工作台可用手工录入继续过磅";
+  "当前是浏览器预览，没有地磅串口通道；工作台可用手工录入继续过磅";
 
 /**
  * 与 `@/lib/native` 里的 `call` 同一套语义（不抛异常、区分"命令失败"与"没有通道"）。

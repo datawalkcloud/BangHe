@@ -64,7 +64,7 @@ export function PartyPicker({
         <DialogHeader className="border-b px-4 py-3">
           <DialogTitle className="text-sm">{title}</DialogTitle>
           <DialogDescription className="text-xs">
-            名单已按「在场优先」排好，直接点人像那一行就能选定；要找人也可以打姓名、编号、证号后 4 位、手机号、车牌。查无此人请关掉本框点「新档案」就地建一张，开户行等其余信息到「农户与单位」补全。
+            点一行即选定，可搜姓名、证号后 4 位、手机号或车牌。
           </DialogDescription>
         </DialogHeader>
 

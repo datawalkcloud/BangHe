@@ -20,7 +20,7 @@ export function SoftKeyboardPanel() {
     <Card size="sm">
       <CardHeader>
         <CardTitle className="text-sm">屏幕软键盘</CardTitle>
-        <CardAction><span className="text-xs text-muted-foreground">按登录账号各存一份，关掉不影响手工打字</span></CardAction>
+        <CardAction><span className="text-xs text-muted-foreground">每个账号各存一份，关掉不影响手工打字</span></CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <ChoiceCardGroup
@@ -32,17 +32,16 @@ export function SoftKeyboardPanel() {
           <ChoiceCard
             value="on"
             label="显示点选键盘"
-            hint="数字、证号、金额、车牌这些框右边带一个键盘按钮，点开键阵逐字符点选"
+            hint="数字、证号、金额、车牌这些框右边有键盘按钮，点开逐字点选"
           />
           <ChoiceCard
             value="off"
             label="只用真键盘"
-            hint="收掉所有键阵与展开按钮，屏幕更清爽；框里照常逐字敲"
+            hint="收掉键盘按钮，框里照常逐字敲"
           />
         </ChoiceCardGroup>
         <p className="text-xs text-muted-foreground">
-          这里管的是"点一下出一个字符"的键阵。作废原因、拒收原因、备注那些"点一句人话"的
-          快捷选项不算软键盘，仍然留着；读卡、选人、选仓房等点选入口同样不受影响。
+          作废原因、拒收原因等快捷选项与读卡、选人、选仓房等点选入口不受影响。
         </p>
       </CardContent>
     </Card>

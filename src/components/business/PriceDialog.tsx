@@ -85,7 +85,7 @@ export function PriceDialog({
         return;
       }
       toast.success(`本单单价已定为 ${fmtPrice(o.price_fen_per_ton)}`, {
-        description: deviates ? (reason.trim() ? "改价事由已记入审计日志" : "已偏离价目表，未写改价事由") : "照价目表执行",
+        description: deviates ? (reason.trim() ? "已偏离价目表，事由已记录" : "已偏离价目表，未填事由") : "照价目表执行",
       });
       onOpenChange(false);
       queryClient.invalidateQueries({ queryKey: ["order", o.order_no] });
@@ -109,9 +109,7 @@ export function PriceDialog({
             {order.price_fen_per_ton == null ? "定价" : "改价"} · {order.order_no}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            谈定的价落到本单上，之后出票、结算都按它走。偏离价目表现行价时可以写一句事由留痕（选填，
-            不写也能保存）——票面要把这个价印给客户，事后才拿得出「凭什么」。已结算的单不能再改价，
-            要更正经站长走红冲（02 §F6.3）。
+            本单价用于出票与结算。偏离价目表现行价可写一句改价事由（选填）；已结算的单不能再改价，需站长红冲更正。
           </DialogDescription>
         </DialogHeader>
 
@@ -135,7 +133,7 @@ export function PriceDialog({
                   variant="ghost"
                   onClick={() => setValue(live.price_fen_per_ton)}
                   disabled={value === live.price_fen_per_ton}
-                  title="把单价填成价目表上这一行的价"
+                  title="填入价目表现行价"
                 >
                   按此价
                 </Button>
@@ -145,20 +143,20 @@ export function PriceDialog({
         </div>
 
         {order.variety_id == null && (
-          <p className="text-xs text-destructive">本单还没定收购品种：价对不回价目表，请先定品种再定价。</p>
+          <p className="text-xs text-destructive">本单还没定收购品种，先定品种再定价。</p>
         )}
 
         {preview ? (
           <p className="tnum text-xs text-muted-foreground">
             按此价试算：结算重量 {weight(preview.settlement_weight_01kg)} × {fmtPrice(value)} = 货款 {money(preview.goods_amount_fen)}
-            ，应付 {money(preview.payable_amount_fen)}。扣项取磅单现值、化验建议兜底，实际以结算确认为准。
+            ，应付 {money(preview.payable_amount_fen)}。仅为预估，实际以结算确认为准。
           </p>
         ) : (
-          <p className="text-xs text-muted-foreground">填上单价后这里会给出这车大概能拿多少（预估）。</p>
+          <p className="text-xs text-muted-foreground">填上单价后这里给出这一车的预估金额。</p>
         )}
 
         <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-          <span>{deviates ? "改价事由（选填，写了才随价留痕）" : "改价事由（照价目表执行，写了也不留）"}</span>
+          <span>{deviates ? "改价事由（选填，会一并记录）" : "改价事由（照价目表执行，不会记录）"}</span>
           <ComboBox
             aria-label="改价事由"
             presets={priceOptions}

@@ -7,6 +7,9 @@
 
   · src-tauri/icons/app-icon.png  1024x1024  —— `npx tauri icon` 的母图
   · public/logo.png                256x256   —— 浏览器 favicon + 侧栏 Brand
+  · site/logo.png                  256x256   —— 官网顶栏/页脚，与软件同一枚图形
+  · site/favicon.ico               16/24/32/48
+  · site/apple-touch-icon.png      180x180   —— iOS 主屏图标不支持透明，垫白底
 
 重跑：python scripts/make-app-icon.py
 母图换完记得再跑 `npx tauri icon src-tauri/icons/app-icon.png` 生成 ico/icns/磁贴全套。
@@ -24,9 +27,12 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "brand" / "logo-source.png"
 OUT_TAURI = ROOT / "src-tauri" / "icons" / "app-icon.png"
 OUT_WEB = ROOT / "public" / "logo.png"
+OUT_SITE = ROOT / "site"
 
 MASTER_PX = 1024  # tauri 母图边长
 WEB_PX = 256  # favicon / 界面用
+APPLE_PX = 180  # apple-touch-icon 边长
+ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48)]
 MARGIN = 0.06  # 方形画布四周留白比例（图形占 88%）
 ALPHA_FLOOR = 8  # 低于此 alpha 视为透明（源图边缘有半像素羽化）
 MIN_GAP_ROWS = 12  # 连续这么多整行透明才算一道分隔带
@@ -111,8 +117,17 @@ def main() -> None:
     OUT_TAURI.parent.mkdir(parents=True, exist_ok=True)
     OUT_WEB.parent.mkdir(parents=True, exist_ok=True)
     square_master(img, (x0, y0, x1, y1), MASTER_PX).save(OUT_TAURI)
-    square_master(img, (x0, y0, x1, y1), WEB_PX).save(OUT_WEB)
+    web = square_master(img, (x0, y0, x1, y1), WEB_PX)
+    web.save(OUT_WEB)
     print(f"写出 {OUT_TAURI.relative_to(ROOT).as_posix()} ({MASTER_PX}px)、{OUT_WEB.relative_to(ROOT).as_posix()} ({WEB_PX}px)")
+
+    OUT_SITE.mkdir(parents=True, exist_ok=True)
+    web.save(OUT_SITE / "logo.png")
+    web.save(OUT_SITE / "favicon.ico", sizes=ICO_SIZES)
+    apple = Image.new("RGBA", (APPLE_PX, APPLE_PX), (255, 255, 255, 255))
+    apple.alpha_composite(web.resize((APPLE_PX, APPLE_PX), Image.LANCZOS))
+    apple.convert("RGB").save(OUT_SITE / "apple-touch-icon.png")
+    print(f"写出 site/logo.png、site/favicon.ico {ICO_SIZES}、site/apple-touch-icon.png ({APPLE_PX}px)")
 
 
 if __name__ == "__main__":

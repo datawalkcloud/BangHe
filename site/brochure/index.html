@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="../logo.png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <meta name="theme-color" content="#05241a">
 <meta name="description" content="磅禾粮站收粮管理系统产品画册，16 开电子版，在线翻阅。">
 <title>磅禾产品画册｜粮站收粮管理系统 · 16 开电子版</title>
@@ -31,10 +34,7 @@ img{display:block}
 .bar::after{content:"";position:absolute;left:0;right:0;bottom:-4px;height:4px;
   background:repeating-linear-gradient(135deg,var(--gold) 0 14px,var(--green-ink) 14px 28px);opacity:.9}
 .mark{display:flex;align-items:center;gap:11px;flex:0 0 auto}
-.mark i{width:34px;height:34px;background:var(--primary);position:relative;display:block}
-.mark i::before{content:"";position:absolute;left:7px;right:7px;bottom:8px;height:2px;background:#fff}
-.mark i::after{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-60%);
-  width:15px;height:8px;background:var(--gold);border-radius:15px 15px 0 0}
+.mark img{width:37px;height:37px;object-fit:contain;display:block}
 .mark b{font-size:19px;letter-spacing:.14em}
 .mark small{display:block;margin-top:3px;font:700 8px/1 var(--mono);letter-spacing:.3em;color:var(--primary)}
 .bar .ttl{display:flex;align-items:baseline;gap:12px;padding-left:20px;border-left:1px solid var(--hair)}
@@ -87,10 +87,7 @@ body.closed-spread #book .stf__item.--hard{
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;
   transition:opacity .5s ease,visibility .5s}
 .load.done{opacity:0;visibility:hidden;pointer-events:none}
-.load .mk{width:56px;height:56px;background:var(--primary);position:relative;animation:tilt 2.4s ease-in-out infinite}
-.load .mk::before{content:"";position:absolute;left:12px;right:12px;bottom:13px;height:3px;background:#fff}
-.load .mk::after{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-58%);
-  width:26px;height:13px;background:var(--gold);border-radius:26px 26px 0 0}
+.load .mk{width:60px;height:60px;object-fit:contain;animation:tilt 2.4s ease-in-out infinite}
 @keyframes tilt{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
 .load strong{font-size:19px;letter-spacing:.06em;font-weight:700}
 .load p{margin:-10px 0 0;font:700 11px/1 var(--mono);letter-spacing:.2em;color:var(--leaf)}
@@ -148,7 +145,7 @@ body.scroll-mode .bh-page{width:100%;height:auto;aspect-ratio:1050/1475;
 <body>
 
 <div class="load" id="load">
-  <span class="mk" aria-hidden="true"></span>
+  <img class="mk" src="../logo.png" alt="">
   <strong>正在装帧产品画册</strong>
   <p>16 开 · 12P · WEBP</p>
   <div class="track"><s id="bar"></s></div>
@@ -157,13 +154,14 @@ body.scroll-mode .bh-page{width:100%;height:auto;aspect-ratio:1050/1475;
 
 <header class="bar">
   <a class="mark" href="../" aria-label="返回磅禾官网首页">
-    <i aria-hidden="true"></i><span><b>磅禾</b><small>BANGHE</small></span>
+    <img src="../logo.png" alt=""><span><b>磅禾</b><small>BANGHE</small></span>
   </a>
   <div class="ttl"><b>产品画册</b><span>16 开电子版 · V1.0.4</span></div>
   <nav class="links">
     <a href="../">返回官网</a>
     <a class="cta" href="../#download">下载体验</a>
-      <a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">开源仓库</a>
+    <a href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener">Gitee 仓库</a>
+    <a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">GitHub 仓库</a>
   </nav>
 </header>
 

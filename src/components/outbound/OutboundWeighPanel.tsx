@@ -281,7 +281,7 @@ export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
                             size="xs"
                             variant="ghost"
                             className="h-5 shrink-0 gap-0.5 px-1 text-[11px] text-muted-foreground hover:text-foreground"
-                            title={`修改${LABEL[t]}：改完按回车或点下面的「保存${LABEL[t]}」落库`}
+                            title={`修改${LABEL[t]}：改完按回车，或点下面的「保存${LABEL[t]}」`}
                             disabled={capture.isPending}
                             onClick={() => startEditCell(t)}
                           >
@@ -329,14 +329,14 @@ export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
         {!editable ? (
           <p className="text-xs text-muted-foreground">
             {order.status === "draft"
-              ? "当前岗位不能做出库称重；这一格需要值仓 / 站长 / 磅员 / 登记员。"
-              : `本单已「${OUTBOUND_STATUS[order.status].label}」，重量已进库存账，不能再称重；要更正只能走红冲后另开一张。`}
+              ? "当前岗位不能称重，需要值仓 / 站长 / 磅员 / 登记员。"
+              : `本单${OUTBOUND_STATUS[order.status].label}，重量已进库存账，不能再称重；要更正只能红冲后另开一张。`}
           </p>
         ) : null}
 
         {editable && scaleDown && (
           <p className="text-xs text-destructive">
-            仪表离线{scale.error ? `：${scale.error}` : ""}。上面「毛重 / 皮重」两格本身就是录入框：照仪表小票上的数敲进去、按回车即可（两个按钮也已切成「录入…」）。
+            仪表离线{scale.error ? `：${scale.error}` : ""}。照仪表小票上的数敲进「毛重 / 皮重」两格，按回车即可。
           </p>
         )}
         {/*
@@ -346,7 +346,7 @@ export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
         */}
         {editable && (draft.gross.trim() !== "" || draft.tare.trim() !== "") && (
           <p className="text-[11px] text-warning">
-            框里这个数按「手录」落库并标在本单的「重量来源」上，事后由站长在审计日志里逐条核对；仪表恢复后重新捕获一次即可改回「地磅」（旧那一捕留在轨迹里，不删）。
+            框里这个数按「手录」记在本单的「重量来源」上；仪表恢复后重新捕获一次即改回「地磅」，旧记录保留。
           </p>
         )}
 
@@ -355,7 +355,7 @@ export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
             <p className="text-[11px] font-medium text-muted-foreground">
               称重轨迹 {records.length} 次
               {records.some((r) => r.source === "manual") && <span className="text-warning">（含手录）</span>}
-              <span className="ml-1 font-normal">——复称不删行，只把「采用」标记挪到新那一捕</span>
+              <span className="ml-1 font-normal">复称不删旧记录，只把「采用」标记挪到最新一次</span>
             </p>
             <ul className="flex flex-col gap-0.5 text-[11px]">
               {records.map((r) => (
@@ -373,8 +373,8 @@ export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
         ) : (
           <p className="text-xs text-muted-foreground">
             {weighed
-              ? "本单已记录毛重 / 皮重，但轨迹行读不出来——请让站长核查数据。"
-              : "还没上过磅：这一单的净重目前是手填的那一格。上过磅之后，改重量只走这一块（表单里那一格会锁住，免得两份数字互相盖）。"}
+              ? "本单已记录毛重 / 皮重，但称重轨迹读不出来，请让站长核查数据。"
+              : "还没上过磅，当前净重是手填的。上过磅后改重量只走这一块，表单里的净重格会锁定。"}
           </p>
         )}
       </CardContent>

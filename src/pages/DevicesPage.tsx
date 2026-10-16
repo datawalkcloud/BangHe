@@ -433,7 +433,7 @@ export function DevicesPage() {
     }
     if (!runningInTauri()) {
       setCamDetectState("done");
-      setCamDetectMsg({ ok: false, text: "浏览器预览探测不到内网摄像机。已按海康默认路径填好，请用桌面端（npm run tauri dev）自动检测，或在「高级参数」里手填后保存。" });
+      setCamDetectMsg({ ok: false, text: "浏览器预览探测不到内网摄像机。已按默认路径填好，请用桌面端自动检测，或在「高级参数」里手填后保存。" });
       return;
     }
     setCamDetectState("running");
@@ -477,7 +477,7 @@ export function DevicesPage() {
     if (!runningInTauri()) {
       setPrintScan(null);
       setScanState("done");
-      setScanHint("浏览器预览问不到本机打印机。请用桌面端（npm run tauri dev）扫描，或先按纸型登记、之后在右侧面板配置。");
+      setScanHint("浏览器预览问不到本机打印机。请用桌面端扫描，或先按纸型登记、之后在右侧面板配置。");
       return;
     }
     const [e, q] = await Promise.all([nativePrinter.list(), nativePrinter.listQueues()]);
@@ -504,7 +504,7 @@ export function DevicesPage() {
     if (!runningInTauri()) {
       setReaderProbe(null);
       setReaderScanState("done");
-      setReaderHint("浏览器预览探测不到读卡器。请用桌面端（npm run tauri dev）探测，或先按驱动登记、之后在工作台读卡时再验。");
+      setReaderHint("浏览器预览探测不到读卡器。请用桌面端探测，或先按驱动登记、之后在工作台读卡时再验。");
       return;
     }
     const r = await nativeIdcard.status();
@@ -533,7 +533,7 @@ export function DevicesPage() {
     if (!runningInTauri()) {
       setCameraScan(null);
       setCamScanState("done");
-      setCamHint("浏览器预览扫描不到本机摄像头。请用桌面端（npm run tauri dev）扫描，或改用内网 IP 摄像机手动登记。");
+      setCamHint("浏览器预览扫描不到本机摄像头。请用桌面端扫描，或改用内网 IP 摄像机手动登记。");
       return;
     }
     const r = await nativeCamera.listLocal();
@@ -563,7 +563,7 @@ export function DevicesPage() {
     if (!runningInTauri()) {
       setSerialScan(null);
       setSerialScanState("done");
-      setSerialHint("浏览器预览问不到本机串口。请用桌面端（npm run tauri dev）扫描，或先手动输入串口号。");
+      setSerialHint("浏览器预览问不到本机串口。请用桌面端扫描，或先手动输入串口号。");
       return;
     }
     const r = await nativeSerial.list();
@@ -899,7 +899,7 @@ export function DevicesPage() {
               </Button>
             }
           >
-            {actor ? `「${actor.displayName} · ${ROLE[actor.role]}」` : "—"}没有 device.manage（仅站长可启用/停用设备、切换 Mock）。点卡片标题仍能联机测试、看状态与原始帧——排障不需要权限，改配置才需要。要动手得用站长账号：换人走左侧栏底部「当前操作员」入口，切换需要密码。
+            {actor ? `「${actor.displayName} · ${ROLE[actor.role]}」` : "—"}没有设备管理权限，仅站长可启用 / 停用设备、切换 Mock。点卡片标题仍可联机测试、看状态与原始帧。要改得换站长账号：入口在左侧栏底部「当前操作员」，切换需要密码。
           </CallOut>
         )}
 
@@ -975,12 +975,9 @@ export function DevicesPage() {
           </div>
         )}
 
-        <CallOut className="mt-4" tone="info" title="已开放：小票机的配置写入；仍未开放：地磅串口参数与帧模板">
-          小票机（ESC/POS 直连）的 VID / PID / 纸宽在右侧面板「配置…」里改，
-          <span className="font-medium">保存前必须先联机测试通过</span>（02 §M9）：改任一字段旧的测试结果立即作废，
-          测不过就不写入；浏览器预览问不到设备时允许保存，但状态标成"未检测 · 未经真机验证"，不会伪装成在线。
-          地磅的串口参数、帧模板、判稳阈值的写入仍要走 device_config.config_json 的完整校验（保存前同样必须联机测试通过），
-          该接口随 Rust 侧通用帧解析器一并实现；上方「导出配置」给出的是可核对的完整快照。
+        <CallOut className="mt-4" tone="info" title="小票机配置可写入，地磅串口参数暂未开放">
+          小票机的 VID / PID / 纸宽在右侧面板「配置…」里改。
+          <span className="font-medium">保存前必须先联机测试通过</span>：改任一字段，旧的测试结果即作废。
         </CallOut>
         {mockCount > 0 && <p className="pb-2 text-xs text-muted-foreground">另有 {mockCount} 台设备处于 Mock 模式。</p>}
       </div>
@@ -1001,8 +998,8 @@ export function DevicesPage() {
             <DialogTitle className="text-sm">{isEdit ? `编辑设备 · ${editing?.code}` : "添加设备"}</DialogTitle>
             <DialogDescription className="text-xs">
               {isEdit
-                ? "改名称、驱动、关键参数与是否默认。编码是台账主键、类型换了就是一整套配置语义，两者都不可改；错录类型请停用本台后重新登记。改了驱动或配置会把上次的联机结论作废、回到未检测，需重测才转绿（02 §M9）。"
-                : "登记现场硬件到台账。新设备一律先记「未检测」，保存后在右侧面板做一次联机测试通过才会转绿——登记不等于验证（02 §M9）。编码是台账主键，导出配置与换机重建都按它核对，需唯一。"}
+                ? "名称、驱动与关键参数可改；编码与类型不可改，错录类型请停用本台后重新登记。改了驱动或配置需重测才转绿。"
+                : "新登记的设备先记「未检测」，保存后在右侧联机测试通过才转绿。编码需唯一。"}
             </DialogDescription>
           </DialogHeader>
 
@@ -1059,7 +1056,7 @@ export function DevicesPage() {
                   </Button>
                 </div>
                 {scanState === "running" ? (
-                  <p className="text-xs text-muted-foreground">正在枚举 usbprint 直连设备与系统打印队列…</p>
+                  <p className="text-xs text-muted-foreground">正在扫描本机打印机…</p>
                 ) : hasScanHits ? (
                   <Choose
                     size="sm"
@@ -1073,8 +1070,7 @@ export function DevicesPage() {
                   <p className="text-xs text-muted-foreground">{scanHint ?? "尚未扫描到本机打印机，可先按下方纸型手动登记。"}</p>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  选直连小票机会把驱动定为 <span className="font-mono">escpos_usbprint</span> 并回填 VID/PID；选系统打印队列则回填打印机名到
-                  <span className="font-mono"> rawQueue</span>。两者都会给出设备名称建议、并按驱动收敛纸型——都可再手改。
+                  选直连小票机回填 VID/PID，选系统打印队列回填打印机名。两者都会给出名称建议，可再手改。
                 </p>
               </div>
             )}
@@ -1082,17 +1078,17 @@ export function DevicesPage() {
             {form.kind === "idcard" && (
               <div className="flex flex-col gap-1.5 sm:col-span-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">本机读卡器（自动探测 · 一台进程内设备，非多选）</span>
+                  <span className="text-xs text-muted-foreground">本机读卡器（自动探测，选一台）</span>
                   <Button size="xs" variant="outline" onClick={() => void runIdcardProbe()} disabled={readerScanState === "running"}>
                     {readerScanState === "running" ? "探测中…" : "重新探测"}
                   </Button>
                 </div>
                 {readerScanState === "running" ? (
-                  <p className="text-xs text-muted-foreground">正在打开设备并向安全模块问 SAM 号…</p>
+                  <p className="text-xs text-muted-foreground">正在探测本机读卡器…</p>
                 ) : readerProbe?.connected ? (
                   <CallOut tone="success" title="已探测到读卡器，登记后即可联机读卡">
                     <span className="tnum">
-                      SAM 序列号 {readerProbe.samId ?? "未读到"} · 指纹 {readerProbe.fingerprint ? "支持" : "不支持"}
+                      读卡器编号 {readerProbe.samId ?? "未读到"} · 指纹 {readerProbe.fingerprint ? "支持" : "不支持"}
                     </span>
                   </CallOut>
                 ) : (
@@ -1110,7 +1106,7 @@ export function DevicesPage() {
                   </Button>
                 </div>
                 {camScanState === "running" ? (
-                  <p className="text-xs text-muted-foreground">正在通过 Media Foundation 枚举本机视频输入设备…</p>
+                  <p className="text-xs text-muted-foreground">正在扫描本机摄像头…</p>
                 ) : cameraOptions.length > 0 ? (
                   <Choose
                     size="sm"
@@ -1123,8 +1119,7 @@ export function DevicesPage() {
                   <p className="text-xs text-muted-foreground">{camHint ?? "尚未扫描到本机摄像头，可改用内网 IP 摄像机手动登记。"}</p>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  选中本机摄像机会把驱动定为 <span className="font-mono">local_uvc</span> 并记 <span className="font-mono">deviceId</span>；
-                  要登记内网 IP 摄像机，选上面「手动填」项后在下方填地址与登录用户。
+                  选中本机摄像头即回填设备号；要登记内网 IP 摄像机，选上面「手动填」项后在下方填地址与登录用户。
                 </p>
                 {/* 海康 ISAPI：填完 IP + 登录用户 + 口令后，剩下的端口/路径/认证/RTSP 全部自动检测回填。 */}
                 {form.driver === "hikvision_isapi" && (
@@ -1141,7 +1136,7 @@ export function DevicesPage() {
                       </Button>
                     </div>
                     {camDetectState === "running" ? (
-                      <p className="text-xs text-muted-foreground">正在探测地址、认证方式、抓拍/预览路径与 RTSP 端口…</p>
+                      <p className="text-xs text-muted-foreground">正在探测这台摄像机…</p>
                     ) : camDetectMsg ? (
                       <CallOut
                         tone={camDetectMsg.ok ? "success" : "danger"}
@@ -1151,7 +1146,7 @@ export function DevicesPage() {
                       </CallOut>
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        端口、认证方式、抓拍 / 预览路径与 RTSP 地址都由系统探测填写，无需手填。
+                        端口、认证方式与取图地址由自动探测填写，无需手填。
                       </p>
                     )}
                     <Label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1173,7 +1168,7 @@ export function DevicesPage() {
                   </Label>
                   <p className="text-[11px] text-muted-foreground">
                     {captureOnWeighCount >= 3 && form.cfg.captureOnWeigh !== "true"
-                      ? `已有 3 台勾了「过磅抓拍」，达上限——要先取消其中一台才能勾这台`
+                      ? `已有 3 台勾了「过磅抓拍」，要先取消其中一台才能勾这台`
                       : `已勾选 ${captureOnWeighCount}${form.cfg.captureOnWeigh === "true" ? " +1" : ""}/3 台参与过磅抓拍`}
                   </p>
                   {!!quotaErr && <p className="text-[11px] text-destructive">{quotaErr}</p>}
@@ -1190,7 +1185,7 @@ export function DevicesPage() {
                   </Button>
                 </div>
                 {serialScanState === "running" ? (
-                  <p className="text-xs text-muted-foreground">正在枚举本机串口…</p>
+                  <p className="text-xs text-muted-foreground">正在扫描本机串口…</p>
                 ) : serialOptions.length > 0 ? (
                   <Choose
                     size="sm"
@@ -1202,9 +1197,7 @@ export function DevicesPage() {
                 ) : (
                   <p className="text-xs text-muted-foreground">{serialHint ?? "尚未扫描到本机串口，可在下方手动输入。"}</p>
                 )}
-                <p className="text-xs text-muted-foreground">
-                  扫描依赖桌面端原生通道；浏览器预览只能手动填写。选中的串口号会写进设备配置。
-                </p>
+                <p className="text-xs text-muted-foreground">浏览器预览里扫不到串口，只能手动填写。</p>
               </div>
             )}
 
@@ -1301,8 +1294,7 @@ export function DevicesPage() {
               {pendingDelete ? (
                 <span className="font-medium"> {pendingDelete.name} · {pendingDelete.code}</span>
               ) : null}
-              。只有没被任何称重记录或抓拍附件引用的设备才允许删除——被引用的会被拒，那种只能
-              「停用」（留在台账、不再参与作业，保住可追溯）。此操作不可撤销。
+              。已被磅单或抓拍引用过的设备不能删除，只能「停用」，台账与追溯都留着。此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1501,11 +1493,11 @@ function TestPanel({ d }: { d: DeviceConfig }) {
       <div className="flex flex-col gap-2">
         {d.kind === "printer" && (d.driver === "escpos_usbprint" || d.driver === "raw_escpos") ? (
           <p className="text-xs text-muted-foreground">
-            这台机的联机测试在下方小票机面板里，走真设备状态查询（<span className="font-mono">DLE EOT</span>），不用这里的模拟探测。
+            这台机的联机测试在下方小票机面板里做。
           </p>
         ) : d.kind === "idcard" ? (
           <p className="text-xs text-muted-foreground">
-            这台机的联机测试在下方读卡器面板里，走真机打开设备 + 问 SAM 号，不用这里的模拟探测。
+            这台机的联机测试在下方读卡器面板里做。
           </p>
         ) : d.kind === "scale" ? (
           <>
@@ -1513,8 +1505,7 @@ function TestPanel({ d }: { d: DeviceConfig }) {
               {testing.isPending ? "正在读帧…" : "联机测试"}
             </Button>
             <p className="text-xs text-muted-foreground">
-              地磅测的就是那条串口：工作台正在收数时直接按读数流判定在线；这里没开流时会临时开一次端口读三帧（最多约 2 秒）再归还，
-              结论当场回写上方状态灯。台账里标成 Mock 或已停用的磅不会去碰端口。
+              工作台正在收数时按读数流判定在线；没开流时会临时读三帧再归还，结果当场更新上方状态灯。
             </p>
           </>
         ) : localCam ? (
@@ -1524,8 +1515,8 @@ function TestPanel({ d }: { d: DeviceConfig }) {
             </Button>
             <p className="text-xs text-muted-foreground">
               {d.is_mock === 1
-                ? "这台标成 Mock 的本机摄像头不做真机探测：切回真实设备后再测。"
-                : "本机摄像头的测试直接从画面里开一次真流、取一帧——和工作台抓拍是同一条通道，这里测得过，过磅就拍得出。结论当场回写上方状态灯；被别的程序（如 Windows 相机）占用时会如实报「打不开」。"}
+                ? "这台是 Mock 模拟设备，不做真机探测。"
+                : "测试会开一次真流取一帧，与工作台抓拍同一通道；被其它程序占用时报「打不开」，结果当场更新上方状态灯。"}
             </p>
           </>
         ) : (
@@ -1695,16 +1686,12 @@ function ScalePanel({ d }: { d: DeviceConfig }) {
           帧、坏帧 <span className="tnum">{scale.errCount}</span> 帧。
           <span className="text-foreground">三项里没达标的那一项，就是"还在波动中"的原因。</span>
           <br />
-          窗口、容差与分度写在<span className="font-medium">这台磅的帧模板</span>里（
-          <span className="font-mono">stability.window_frames / max_spread_divisions / stable_ms</span>、
-          <span className="font-mono">align.division_01kg</span>）——上方「编辑」表单只给波特率与帧族，
-          这几项要改得把嵌套模板写进台账的 <span className="font-mono">config_json</span>（配置导出 → 改 → 导入）。
+          窗口、容差与分度写在<span className="font-medium">这台磅的帧模板</span>里；上方「编辑」表单只给波特率与帧族，
+          要改这几项需导出配置、修改后再导入。
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">
           这条流不是这台磅的真机帧（{d.is_mock === 1 ? "台账把它标成了 Mock，不会去开它的串口" : "没有收到真机帧"}），界面不会凭空造读数。
-          判稳窗口与容差写在这台磅的帧模板里（<span className="font-mono">stability.*</span> /{" "}
-          <span className="font-mono">align.division_01kg</span>），站点参数不参与判稳。
         </p>
       )}
     </div>
@@ -1852,7 +1839,7 @@ function IdCardMedium({
       {demoMode && !card.reading && (
         <p className="text-xs text-muted-foreground">
           {!runningInTauri()
-            ? "此刻不碰真设备，读出来的是演示卡；用桌面版（npm run tauri dev）才会走 Sdtapi 真机读卡。"
+            ? "此刻不碰真设备，读出来的是演示卡；用桌面端才会真机读卡。"
             : "此刻不碰真设备，读出来的是演示卡；要让现场证号进这里，把这台机切回真实设备。"}
         </p>
       )}
@@ -1968,10 +1955,7 @@ function CameraPanel({ d, live }: { d: DeviceConfig; live: boolean }) {
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        本机 USB 摄像头这里直接开 WebView2 的流；IP 摄像机在「联机测试」通过后走服务端那条
-        RTSP 子码流（H.264 软解、一帧一张推屏），与工作台过磅画面同源，只预览、不落库。
-        真实抓拍仍发生在工作台捕获读数的瞬间（触发时机 triggerOn=capture），图片随磅单入附件表——
-        这里不单独发起落库，是为了避免产生没有单据归属的野图。
+        这里只预览、不落库；真实抓拍发生在工作台捕获读数的瞬间，随磅单存档。
       </p>
     </div>
   );
@@ -2153,7 +2137,7 @@ function PrinterPanel({ d }: { d: DeviceConfig }) {
 
   const saveCfg = useMutation({
     mutationFn: () => {
-      if (!verify) throw new Error("请先联机测试：配置必须验证过才允许保存（02 §M9）");
+      if (!verify) throw new Error("请先联机测试，配置验证通过才能保存");
       if (verify.mode === "device" && !verify.ok) throw new Error(`联机测试未通过：${verify.message}`);
       const paperKind = draft.paper === "p80" ? "thermal80" : "thermal58";
       return api.updateDeviceConfig({
@@ -2290,7 +2274,7 @@ function PrinterPanel({ d }: { d: DeviceConfig }) {
           配置…
         </Button>
       </div>
-      {!can("device.manage") && <p className="text-xs text-muted-foreground">改设备配置需要站长岗位（device.manage）；这里置灰是权限不足，不是设备问题。</p>}
+      {!can("device.manage") && <p className="text-xs text-muted-foreground">改设备配置需要站长岗位；这里置灰是权限不足，不是设备问题。</p>}
       {selfTest.data && (
         <CallOut
           tone={selfTest.data.ok ? "success" : "danger"}
@@ -2302,9 +2286,7 @@ function PrinterPanel({ d }: { d: DeviceConfig }) {
         </CallOut>
       )}
       <p className="text-xs text-muted-foreground">
-        自检票一次判读四件事：RAW 字节是否直达（通道）、中文是否清晰（内置 GBK 字库）、
-        那条分隔线是否折行（栅格列数）、末尾有没有切痕（切刀）。工装
-        <span className="font-mono"> tools/escpos-probe</span> 与这张票同源同码，两边打出来必然一致。
+        自检票一次分出四件事：通道是否直达、中文是否清晰、分隔线是否折行、末尾有没有切痕。
       </p>
 
       <Dialog
@@ -2318,7 +2300,7 @@ function PrinterPanel({ d }: { d: DeviceConfig }) {
           <DialogHeader className="border-b px-4 py-3">
             <DialogTitle className="text-sm">小票机配置 · {d.code}</DialogTitle>
             <DialogDescription className="text-xs">
-              保存前必须先联机测试通过（02 §M9）。改动任意一项，上一次测试结果即刻作废——存进去的必须是刚验过的那套参数。
+              保存前必须先联机测试通过。改动任意一项，上一次测试结果即刻作废。
             </DialogDescription>
           </DialogHeader>
 
@@ -2359,8 +2341,7 @@ function PrinterPanel({ d }: { d: DeviceConfig }) {
               />
             </Label>
             <p className="text-xs text-muted-foreground">
-              栅格 {PAPER_COLS[draft.paper]} 列由纸宽决定，票面排版按这一列数分行；改错纸宽不会报错，只会把行打折。
-              本机 80mm 的 48 列是实机打一行分隔线验证过的。
+              纸宽决定每行可印的列数，票面排版按这一列数分行；改错纸宽不会报错，只会把行打折。
             </p>
 
             <div
@@ -2383,7 +2364,7 @@ function PrinterPanel({ d }: { d: DeviceConfig }) {
                   <span className="ml-1">{verify.message}</span>
                   {verify.mode === "none" && (
                     <p className="mt-1 text-muted-foreground">
-                      这样保存的配置会标成"未检测"，等桌面端验过才转绿——不允许把没验过的配置显示成在线。
+                      这样保存的配置会标成"未检测"，等桌面端验过才转绿。
                     </p>
                   )}
                 </>

@@ -18,7 +18,7 @@ import { PlusIcon, SearchIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import {
-  OUTBOUND_KIND, OUTBOUND_STATUS, VOID_REASON_MIN,
+  OUTBOUND_KIND, OUTBOUND_STATUS,
   type OutboundKind, type OutboundStatus,
 } from "@/lib/constants";
 import { money, orDash, price, ton, todayISO, weight } from "@/lib/format";
@@ -112,7 +112,7 @@ export function OutboundPage() {
         key: "source",
         header: "重量来源",
         cell: (r) => <WeightSourceBadge source={r.weight_source} />,
-        title: "「地磅」＝在详情页「地磅称重」里捕获的读数（毛 − 皮）；「手录」＝人敲的数，永久标记、迎检必查",
+        title: "「地磅」＝在详情页「地磅称重」里取的读数；「手录」＝人工填写，会标在单上",
       },
       { key: "price", header: "单价", align: "right", cell: (r) => <span className="tnum">{price(r.price_fen_per_ton)}</span>, sortValue: (r) => r.price_fen_per_ton },
       {
@@ -243,7 +243,7 @@ export function OutboundPage() {
             rowKey={(r) => r.id}
             loading={query.isLoading}
             rowHref={(r) => `/outbound/${r.order_no}`}
-            empty={<EmptyState title="这一段时间没有出库单" description={`开出库单需要「${can("outbound.create") ? "值仓 / 站长 / 磅员 / 登记员" : "值仓或站长"}」岗位；净重可手填，也可在详情页过地磅现取。至少写 ${VOID_REASON_MIN} 个字的原因是作废与红冲的硬性留痕。`} />}
+            empty={<EmptyState title="这一段时间没有出库单" description={`开出库单需要「${can("outbound.create") ? "值仓 / 站长 / 磅员 / 登记员" : "值仓或站长"}」岗位；净重可手填，也可到详情页过地磅现取。`} />}
             rowClassName={(r) => (r.stock_warning ? "bg-amber-50/70 dark:bg-amber-950/20" : undefined)}
           />
         </div>

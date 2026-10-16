@@ -191,7 +191,7 @@ export function CardBindDialog({
           if (!loc.found) {
             // 站点关掉「允许使用未登记的流转卡」＝闸门 3 退回硬拦：不替它登记，只说清去哪儿登记
             if (!autoRegisterRef.current) {
-              setRejected(`卡 ${sn} 未在卡池登记：请到「流转卡」页登记后${afterWord}，或换一张已登记的卡`);
+              setRejected(`卡 ${sn} 未登记：请到「流转卡」页登记后${afterWord}，或换一张已登记的卡`);
               // 拒绝原因写在屏上，农户看不见——这一句得从喇叭里出去才知道下一步干什么
               announce("这张卡没有登记过，换一张卡");
               continue;
@@ -220,7 +220,7 @@ export function CardBindDialog({
           }
           if (loc.status === "in_use") {
             setRejected(
-              `卡 ${sn} 还挂着没做完的单 ${loc.order_no ?? ""}${loc.party_name ? `（${loc.party_name}）` : ""}：一张卡不能同时开两张单，请先给那张单退卡或换一张空闲卡`,
+              `卡 ${sn} 还挂着没做完的单 ${loc.order_no ?? ""}${loc.party_name ? `（${loc.party_name}）` : ""}：请先给那张单退卡，或换一张空闲卡`,
             );
             announce("这张卡还挂着没做完的单，先换一张");
             continue;
@@ -230,7 +230,7 @@ export function CardBindDialog({
           pickedRef.current(sn);
           return;
         } catch (e) {
-          setRejected(`定位卡 ${sn} 失败：${e instanceof Error ? e.message : "请重试，或换一张卡"}`);
+          setRejected(`卡 ${sn} 读不出来：${e instanceof Error ? e.message : "请重试，或换一张卡"}`);
           announce("这张卡读不出来，再贴一次试试");
         }
       }
@@ -253,13 +253,13 @@ export function CardBindDialog({
       setLeft(rest);
       if (rest > 0) return;
       clearInterval(ticker);
-      toast.info(`监听了 ${timeoutSeconds} 秒，还没有读到流转卡`, {
+      toast.info(`等了 ${timeoutSeconds} 秒，还没有读到流转卡`, {
         description:
           purpose === "rebind"
-            ? `这张单还是没有卡。重新点一次「${againLabel}」可再来一轮，也可以先把卡放上感应区，由工作台自动认领。`
+            ? `这张单还是没有卡。点「${againLabel}」可再来一轮，或把卡放上感应区让工作台自己读到。`
             : required
-              ? `本站要求「制单必须绑卡」，没读到卡这张单制不成。重新点一次「${againLabel}」可再来一轮。`
-              : `这一轮没人放卡；重新点一次「${againLabel}」可再来一轮，也可以不绑卡先制单。`,
+              ? `本站要求「制单必须绑卡」，没读到卡这张单制不成。点「${againLabel}」可再来一轮。`
+              : `这一轮没人放卡。点「${againLabel}」可再来一轮，也可以不绑卡先制单。`,
       });
       // 弹窗是自己关的，谁都没盯着屏幕——这一声不说，农户会一直站在窗口前等着
       announce(
@@ -276,11 +276,11 @@ export function CardBindDialog({
   }, [open, halted, manual, timeoutSeconds, required]);
 
   const statusLine = halted
-    ? "这台机此刻读不到 IC 卡，监听已停止"
+    ? "这台机读不到卡，已停止监听"
     : manual
-      ? "手动绑卡：从下面的下拉里挑一张空闲卡，卡贴到感应区同样算"
+      ? "手动绑卡：从下面挑一张空闲卡，卡贴到感应区同样算"
       : rejected
-        ? "这张卡用不了，换一张贴上来就行"
+        ? "这张卡用不了，换一张贴上来"
         : "正在监听感应区，请放卡…";
   const hint = halted ? (icError ?? "请检查读卡器连接") : (rejected ?? (watchNote ? `${watchNote}（继续等待中）` : null));
 
@@ -299,7 +299,7 @@ export function CardBindDialog({
           ? "正在读取卡池…"
           : freeCards.length
             ? `选择空闲卡（${freeCards.length} 张）`
-            : "卡池里没有空闲在册的卡",
+            : "卡池里没有空闲卡",
     },
     ...freeCards.map((c) => ({
       value: c.card_no,
@@ -321,13 +321,13 @@ export function CardBindDialog({
     <Dialog open={open} onOpenChange={(next) => closeRef.current(next)}>
       <DialogContent className="max-w-[470px]">
         <DialogHeader>
-          <DialogTitle className="text-sm">请将流转卡（IC 小白卡）贴在读卡器感应区</DialogTitle>
+          <DialogTitle className="text-sm">请将流转卡贴在读卡器感应区</DialogTitle>
           <DialogDescription className="text-xs">
             {halted
-              ? "这台机现在解不出 IC 卡，下面写的是具体原因。"
+              ? "这台机读不到卡，下面是具体原因。"
               : purpose === "rebind"
-                ? "这张单还没有流转卡：贴稳后不用点任何东西，系统正在连续寻卡，读到可用的空闲卡就绑到这张单上。"
-                : "本站制单要绑卡：贴稳后不用点任何东西，系统正在连续寻卡，读到可用的卡就自动取号制单。"}
+                ? "这张单还没有流转卡：贴稳后不用点任何东西，读到可用的空闲卡就绑到这张单上。"
+                : "本站制单要绑卡：贴稳后不用点任何东西，读到可用的卡就自动取号制单。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -364,12 +364,12 @@ export function CardBindDialog({
             <p className={halted || rejected ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{hint}</p>
             {required && halted && purpose === "create" && (
               <p className="text-xs text-muted-foreground">
-                读不到卡就制不了单：接上读卡器再点一次，或到「设置 · 过磅计量」关掉「制单必须绑卡」；读卡器一时接不回来就退回制单框点「无卡制单」先出号。
+                读不到卡就制不了单：接上读卡器再点一次，或在「设置 · 过磅计量」关掉「制单必须绑卡」；急用时回制单框点「无卡制单」先出号。
               </p>
             )}
             {purpose === "rebind" && halted && (
               <p className="text-xs text-muted-foreground">
-                读不到卡就补不了绑：接上读卡器再点一次，或点「手动绑卡」从卡池里挑一张空闲卡。
+                读不到卡就补不了绑：接上读卡器再点一次，或点「手动绑卡」挑一张空闲卡。
               </p>
             )}
           </div>

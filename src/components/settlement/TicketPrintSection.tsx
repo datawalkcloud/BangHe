@@ -47,10 +47,10 @@ export function TicketPrintSection({
       </div>
       <Button size="default" onClick={onPrint} disabled={!canPrint} className="h-8 text-xs">
         <PrinterIcon />
-        {prints.length > 0 ? `补打码单（F9，已打 ${prints.length} 次）` : "打印码单交客户（F9）"}
+        {prints.length > 0 ? "补打码单（F9）" : "打印码单交客户（F9）"}
       </Button>
-      {!canPrint && <p className="text-xs text-warning">净重还没确定，打出来是一张没有重量的票。</p>}
-      {lastPrintAt && <p className="text-[10px] text-muted-foreground">最近一次出纸 {dateTimeShort(lastPrintAt)}，再打即为补打。</p>}
+      {!canPrint && <p className="text-xs text-warning">净重还没确定，打不出有效票据。</p>}
+      {lastPrintAt && <p className="text-[10px] text-muted-foreground">最近一次出纸 {dateTimeShort(lastPrintAt)}</p>}
     </div>
   );
 }

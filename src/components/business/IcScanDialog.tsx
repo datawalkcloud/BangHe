@@ -185,7 +185,7 @@ export function IcScanDialog({
       if (rest > 0) return;
       clearInterval(ticker);
       toast.info(`监听了 ${timeoutSeconds} 秒，还没读到 IC 卡`, {
-        description: "卡未贴紧感应区？点「再读一轮」可继续；也可改「手工录入」直接输卡号。",
+        description: "重新点一次「读卡登记」再来一轮；也可用「手工录入」直接输卡号。",
       });
       closeRef.current(false);
     }, 200);
@@ -244,7 +244,7 @@ export function IcScanDialog({
     setPhase("submitting");
     try {
       await onRegisterRef.current({ card_no, label: label.trim() });
-      toast.success(`卡 ${card_no} 已入池`);
+      toast.success(`卡 ${card_no} 已登记`);
       // 批量登记时手里握着一叠卡，这一声就是"这张可以放下了、拿下一张"的信号；卡号不念（念了也对不上）
       announce("这张卡已登记入库，可以登记下一张", `reg:${card_no}`);
       onRegisteredRef.current?.(card_no);
@@ -271,8 +271,8 @@ export function IcScanDialog({
           </DialogTitle>
           <DialogDescription className="text-xs">
             {scanning
-              ? "贴稳后不用点任何东西，系统正在连续寻卡，读到即自动带回卡号登记。"
-              : "卡号已就位。补一条贴签便于现场辨认，然后点「登记入库」即可。也可「再刷一张」换卡。"}
+              ? "贴稳后不用点任何东西，读到卡会自动带回卡号。"
+              : "卡号已就位，点「登记入库」完成；换卡点「再刷一张」。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -300,7 +300,7 @@ export function IcScanDialog({
 
             <div className="flex min-w-0 flex-col gap-1.5" aria-live="polite">
               <p className="text-xs text-muted-foreground">
-                {halted ? "IC 卡读卡器不可用，监听已停止" : "正在监听感应区，请贴卡…"}
+                {halted ? "IC 卡读卡器不可用" : "正在监听感应区，请贴卡…"}
               </p>
               {!halted && (
                 <p className="flex items-baseline gap-1">
@@ -310,10 +310,10 @@ export function IcScanDialog({
               )}
               <p className={halted || icError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
                 {halted
-                  ? (icError ?? "请检查读卡器连接；如已损坏，可在右侧点「手工录入」直接输卡号。")
+                  ? (icError ?? "请检查读卡器连接；读不出可用「手工录入」直接输卡号。")
                   : watchNote
                     ? `${watchNote}（继续等待中）`
-                    : "读卡只影响录入速度；读不出可点「手工录入」照样登记。"}
+                    : "读不出可点「手工录入」，照样能登记。"}
               </p>
             </div>
           </div>
@@ -333,17 +333,17 @@ export function IcScanDialog({
                   maxLength={20}
                   toggleLabel="键盘"
                   disabled={submitting}
-                  placeholder="贴上卡自动填入；读不出点键盘输"
+                  placeholder="贴卡自动填入；也可自己输入"
                   inputClassName="h-8 text-sm tnum"
                 />
                 {cardNo && (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">（存根 {maskSn(cardNo)}）</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">（已读到 {maskSn(cardNo)}）</span>
                 )}
               </div>
               {errors.card_no && <span className="text-xs text-destructive">{errors.card_no}</span>}
             </div>
             <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-              <span>贴签编号（选填，便于现场辨认，不填也能登记）</span>
+              <span>贴签编号（选填，现场辨认用）</span>
               <KeypadInput
                 aria-label="贴签编号"
                 aria-invalid={errors.label ? true : undefined}

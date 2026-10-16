@@ -141,7 +141,7 @@ export function CardsPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="流转卡卡池"
-        description="卡只认单不认人：工作台上刷到没登记的卡会当场自动入库（来源记在备注里），本页批量登记贴签、注销丢损，结算/作废自动回收。"
+        description="批量登记贴签、注销丢失或磨损的卡；工作台刷到没登记的卡会自动入库。"
         actions={
           <>
             <Button size="sm" onClick={() => setScanOpen(true)} disabled={!can("order.create")}>
@@ -154,7 +154,7 @@ export function CardsPage() {
       <div className="flex min-h-0 flex-1 flex-col gap-3 px-2.5 py-2">
         {freeCount < warnFree && (
           <CallOut tone="warning" title={`空闲卡仅剩 ${freeCount} 张`}>
-            低于预警阈值 {warnFree} 张：当日在途若多，请到本页继续登记入库，免得发到没卡可用。
+            低于预警阈值 {warnFree} 张，当日在途多时请到本页继续登记入库。
           </CallOut>
         )}
 
@@ -190,7 +190,7 @@ export function CardsPage() {
             empty={
               <EmptyState
                 title="卡池里还没有卡"
-                description="批量登记便于贴签辨认；不登也行——工作台上刷到没登记的卡会当场自动入库。"
+                description="工作台刷到未登记的卡会自动入库；要贴签辨认就点下面登记第一张。"
                 action={
                   <Button size="sm" onClick={() => setScanOpen(true)}>
                     <ScanLineIcon />
@@ -209,18 +209,18 @@ export function CardsPage() {
             <DialogTitle className="text-sm font-semibold">注销流转卡 {retire?.card_no}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-            <span>注销原因（不少于 {REASON_MIN} 字，迎检可追溯）</span>
+            <span>注销原因（不少于 {REASON_MIN} 字）</span>
             <ComboBox
               aria-label="注销原因"
               presets={retireOptions}
               value={retireReason}
               onChange={setRetireReason}
               invalid={retireReason.trim().length > 0 && retireReason.trim().length < REASON_MIN}
-              placeholder="选一条常用的，或写清楚这张卡为什么注销…"
+              placeholder="选一条常用的，或自己写…"
               className="text-xs"
             />
             {retireReason.trim().length > 0 && retireReason.trim().length < REASON_MIN && (
-              <span className="text-destructive">注销原因写全一点（不少于 {REASON_MIN} 字），这张卡为什么退场要留得明白</span>
+              <span className="text-destructive">注销原因太短，请写到 {REASON_MIN} 字以上</span>
             )}
           </div>
           <p className="text-xs text-muted-foreground">注销只影响卡池，不动任何磅单与金额；挂在途单上的卡需先退卡或走补发换卡。</p>
@@ -240,7 +240,7 @@ export function CardsPage() {
         onOpenChange={setScanOpen}
         validate={({ card_no }) =>
           !card_no.trim()
-            ? { card_no: "未检测到 IC 卡号：请贴卡或手输后再提交" }
+            ? { card_no: "没读到卡号：请贴卡或手工输入后再提交" }
             : register.isError
               ? { card_no: register.error instanceof Error ? register.error.message : "登记失败，请稍后再试" }
               : {}

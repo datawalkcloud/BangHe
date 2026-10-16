@@ -120,7 +120,7 @@ export function CameraPanel({
                   size="xs"
                   variant="ghost"
                   className="h-5 gap-0.5 px-1 text-[10px]"
-                  title="选择要显示的相机（隐藏记住本人）"
+                  title="选择要显示的相机"
                 />
               }
             >
@@ -215,7 +215,7 @@ export function CameraPanel({
           </div>
         ) : (
           <p className="shrink-0 text-[10px] text-muted-foreground">
-            本单暂无抓拍{order ? "：捕获毛/皮重时自动取图；摄像机离线只标记，不拦作业。" : "：先取号制单后才会触发。"}
+            本单暂无抓拍{order ? "：捕获毛/皮重时自动取图。" : "：先取号制单后才会触发。"}
           </p>
         )}
       </CardContent>
@@ -250,7 +250,7 @@ export function CameraPanel({
             </div>
           )}
           <p className="text-xs text-muted-foreground">
-            画面与缩略图仅本机留存，按 attachment_keep_days 到期清理；缺失只标文字，不用颜色单独表达（05 §6.2）。
+            画面与抓拍只存本机，到期自动清理。
           </p>
         </DialogContent>
       </Dialog>
@@ -352,7 +352,7 @@ function ZoomBody({ cam, order }: { cam: DeviceConfig; order: WeighOrder | null 
  * 拉流本身的失败（401、连不上、子码流是 H.265）由 `IpCameraLive` 带着服务端原话显示，不到这里来。
  */
 function noFrameHint(cam: DeviceConfig): string {
-  if (cam.is_mock === 1) return "这台是 Mock 模拟档：到设备中心切回真实设备才出画面";
+  if (cam.is_mock === 1) return "这台是模拟画面，不是真摄像机：到设备中心切回真实设备";
   if (!String(cam.config?.host ?? "").trim()) return "台账里没填摄像机地址：到设备中心补「地址（IP）」";
   return cam.last_error ?? "摄像机离线，本单将标「无抓拍」";
 }

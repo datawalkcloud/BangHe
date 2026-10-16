@@ -41,18 +41,18 @@ export const SETTINGS_GROUP: Record<AppSetting["group"], string> = {
   print: "打印与联次",
   retain: "留样与数据保留",
   session: "登录与锁屏",
-  other: "库里新增、目录还没补",
+  other: "其它参数",
 };
 
 /** 顺序即界面顺序：同组内按这里排，不按库里的字母序（键名首字母没有业务含义） */
 export const SETTINGS_CATALOG: CatalogEntry[] = [
   {
     key: "station_name", demo: "", label: "站点名称", group: "doc", kind: "text",
-    hint: "打印抬头与磅单第一行；存在站点档案里，不占参数键",
+    hint: "打印抬头与磅单第一行",
   },
   {
     key: "doc_no_seq_len", demo: "6", label: "流水号位数", group: "doc", kind: "number",
-    hint: "按站点+票种+年月归零重排。单号本身只有「站码+年月+流水」，不带前缀（03 §3.5）；票种写在票面码载荷里，界面上不出现",
+    hint: "每个站点、每种票、每个月各自从零起号",
   },
 
   // 分度值与对齐方式不在这一页：它是**设备属性**，写在这台磅的帧模板 align 段里
@@ -66,55 +66,54 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
   },
   {
     key: "tare_tolerance_pct", demo: "300", label: "皮重偏差容差（0.01%）", group: "weigh", kind: "number",
-    hint: "300 即 ±3.00%，超出仍正常捕获，只在磅单上醒目警示",
+    hint: "300 即 ±3.00%，超出照常捕获，只在磅单上警示",
   },
   { key: "open_order_alert_minutes", demo: "30", label: "在途停留提醒（分钟）", group: "weigh", kind: "number" },
   { key: "capture_on_gross", demo: "true", label: "毛重抓拍", group: "weigh", kind: "bool" },
   { key: "capture_on_tare", demo: "true", label: "皮重抓拍", group: "weigh", kind: "bool" },
   {
-    key: "card_flow_mode", demo: "auto", label: "流转卡模式（06 篇）", group: "weigh", kind: "select",
+    key: "card_flow_mode", demo: "auto", label: "流转卡模式", group: "weigh", kind: "select",
     options: [
-      { value: "auto", label: "启用：后台听 IC、刷卡推进" },
-      { value: "off", label: "不启用：工作台一律手点" },
+      { value: "auto", label: "启用：刷卡自动推进" },
+      { value: "off", label: "不启用：手工点选" },
     ],
-    hint: "auto＝制单发卡后靠刷 IC 卡推进毛重/皮重/结算；off＝该站不用流转卡，读卡器故障时的退路",
   },
   {
     key: "card_pool_warn_free", demo: "5", label: "空闲卡预警阈值（张）", group: "weigh", kind: "number",
-    hint: "空闲卡低于此值时看板与卡池页黄色提示",
+    hint: "空闲卡低于此数时，看板与流转卡页黄色提示",
   },
   {
     key: "card_release_on_terminal", demo: "true", label: "终态自动回收卡", group: "weigh", kind: "bool",
-    hint: "置 false 则结算/作废后仍需人工刷卡退卡才回池（要逐张点收卡的站点）",
+    hint: "关掉后，结算或作废仍需人工刷一次卡才回池",
   },
   {
     key: "card_swipe_debounce_ms", demo: "1500", label: "刷卡去抖窗口（毫秒）", group: "weigh", kind: "number",
-    hint: "同一张卡重复命中只算一刷，防止卡不动被循环读到把单推到结算",
+    hint: "同一张卡在这个时间里重复命中只算一刷",
   },
   // 演示值取 false 是例外（库里默认 true）：浏览器预览压根没有 IC 通道，
   // 按库里的强制口径演示里连单都制不出来。桌面端读库里真值，不受这行影响。
   {
     key: "card_required_on_create", demo: "false", label: "制单必须绑卡", group: "weigh", kind: "bool",
-    hint: "点「取卡并制单」先弹框刷 IC 卡，读不到卡这张单制不成；关掉才允许无卡制单、事后靠监听发卡。读卡器临时坏掉不必关这个参数——制单框里有「无卡制单」那颗退路，卡事后在磅单详情补绑",
+    hint: "开：制单前必须先读到卡。关：可无卡制单，卡事后在磅单详情补绑",
   },
   {
     key: "card_auto_register", demo: "true", label: "允许使用未登记的流转卡", group: "weigh", kind: "bool",
-    hint: "开＝工作台上刷到没登记过的卡当场自动登记入库，并接着用它发卡/制单（来源写在卡池「备注」列，误收的公交卡事后可注销）；关＝未登记的卡一律拦下，必须先到「流转卡」页登记。已注销的卡两种口径下都不会因为又被刷到就复活",
+    hint: "开：刷到没登记的卡当场自动入库并接着用。关：必须先到「流转卡」页登记",
   },
   {
     // 候选是仓房档案（会增删改停用），不是目录里能写死的静态 options——界面按 kind="warehouse" 现取现列
     key: "default_warehouse_id", demo: "", label: "制单默认仓房", group: "weigh", kind: "warehouse",
-    hint: "启用仓房只有一处时制单直接选中它（与本参数无关）；有多处时新磅单的「入仓去向」自动带出这里预设的仓房，磅员仍可当场改回别的仓房或「未定」。留空＝多仓站不预设；预设的仓房停用后按未预设处理",
+    hint: "多仓站的新磅单默认带出这里选的仓房，磅员可当场改。留空＝不预设",
   },
   {
     key: "reader_prompt_voice", demo: "true", label: "磅房语音提示", group: "weigh", kind: "bool",
-    hint: "两类出声：① 读卡类弹窗（读卡建档 / 制单读卡 / 制单绑卡 / 流转卡登记）弹出时念一句「请将卡放到感应区」；② 工作台每道闸门拦下与每步落成都回话——读数没稳、这张卡用不了、档案已停用、毛重皮重已捕获、结算完成、码单没出纸，让不盯屏幕的操作员也听得见。关掉只是这台机不出声，读卡、称重、结算、绑卡闸门一律照旧；这台机没装中文语音包时自动改播提示音",
+    hint: "放卡提示与工作台的每步结果都念出来；关掉只是这台机不出声，操作不受影响",
   },
   {
     // 演示值取 true 是刻意的（库里默认 false）：浏览器里没有扫码枪，这一框是那里唯一的
     // 扫码入口；桌面装机按库里的真值走，交出去的生产机默认干干净净不出现这一框。
     key: "scan_test_input", demo: "true", label: "工作台测试扫码框", group: "weigh", kind: "bool",
-    hint: `开＝磅房工作台底部多一个输入框，把票面码（例 ${CODE_EXAMPLES.order}，就是票上那行单号）贴进去按回车，等同扫一下枪：走同一个回调、同一套闸门与话术。用在还没接枪、枪坏了、或拿浏览器演示流程的机器上。它替代不了硬件——80ms 连打的枪判与真出纸仍要真枪来验。关＝那一框整条消失，界面与从前逐字一致`,
+    hint: `工作台底部多一个输入框，把票上那行单号（例 ${CODE_EXAMPLES.order}）贴进去按回车，等同扫一下枪；没有扫码枪的机器用这个`,
   },
 
   { key: "settlement_allow_part_pay", demo: "true", label: "允许挂账（部分付款）", group: "settle", kind: "bool" },
@@ -125,7 +124,7 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
   { key: "settle_merge_by_day", demo: "true", label: "同人同日合并结算", group: "settle", kind: "bool" },
   {
     key: "moisture_deduct_manual", demo: "true", label: "扣水按人工录入", group: "settle", kind: "bool",
-    hint: "计价规则引擎未启用，关掉也不会自动扣",
+    hint: "扣水比例由化验员手填，系统不自动扣",
   },
   { key: "impurity_deduct_manual", demo: "true", label: "扣杂按人工录入", group: "settle", kind: "bool" },
 
@@ -137,18 +136,18 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
       { value: "thermal58", label: "58 热敏" },
       { value: "thermal80", label: "80 热敏" },
     ],
-    hint: "工作台不弹预览：热敏走 ESC/POS 直连，A4/针式直接进打印队列，纸张等按打印机自身配置",
+    hint: "工作台不弹预览，直接送进打印机",
   },
   { key: "print_default_copies", demo: "3", label: "联数（存根/财务/客户）", group: "print", kind: "number" },
   { key: "reprint_need_auth", demo: "true", label: "补打需站长授权", group: "print", kind: "bool" },
 
   {
     key: "attachment_max_kb", demo: "2048", label: "抓拍图落库上限（KB）", group: "retain", kind: "number",
-    hint: "04 §4.2：未超限的原图一个字节不动；超限才解码、缩到长边 1600、逐级降质压进来。压到最小档仍超上限才按无抓拍降级。调小它省磁盘，代价是相机出图越大、被重编（而非原样存）的比例越高",
+    hint: "超过这个大小的抓拍图会被压缩入库；调小省磁盘",
   },
   {
     key: "attachment_keep_days", demo: "3650", label: "抓拍留存（天）", group: "retain", kind: "number",
-    hint: "3650 即 10 年，与保管期限同口径",
+    hint: "3650 即 10 年",
   },
   { key: "retention_sample_days", demo: "30", label: "留样保存（天）", group: "retain", kind: "number" },
   { key: "pii_encrypt_enabled", demo: "true", label: "证号与照片加密存储", group: "retain", kind: "bool" },
@@ -159,7 +158,7 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
   { key: "backup_keep_count", demo: "30", label: "备份保留份数", group: "retain", kind: "number" },
   {
     key: "backup_auto_interval_days", demo: "1", label: "自动备份间隔（天）", group: "retain", kind: "number",
-    hint: "程序每小时醒一次比对上次副本的时间，够数才补一份；填 0 按 1 天处理",
+    hint: "到间隔天数才补一份；填 0 按 1 天处理",
   },
   {
     key: "idle_lock_minutes", demo: "60", label: "无操作自动锁屏（分钟）", group: "session", kind: "select",
@@ -172,7 +171,7 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
       { value: "180", label: "3 小时" },
       { value: "0", label: "从不" },
     ],
-    hint: "到点只是锁屏：输本人密码即原地解锁，不退出登录、正在录的单据不丢；选「从不」则不自动锁屏，左下角仍可手动锁。改动最迟一分钟内对在线会话生效",
+    hint: "到点只是锁屏：输本人密码即解锁，正在录的单据不丢；选「从不」则不自动锁屏",
   },
 ];
 
@@ -203,7 +202,7 @@ export function mergeSettings(rows: SettingRow[]): AppSetting[] {
     label: r.description || r.key,
     group: "other",
     kind: r.value_type === "bool" ? "bool" : r.value_type === "int" ? "number" : "text",
-    hint: `参数目录未收录（值类型 ${r.value_type}），到 src/lib/settings-catalog.ts 补一项`,
+    hint: `参数说明待补充（值类型 ${r.value_type}）`,
   }));
   return [...known, ...extras];
 }

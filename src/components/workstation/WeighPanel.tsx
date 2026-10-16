@@ -248,7 +248,7 @@ export function WeighPanel({
       // 超容差不拦这次捕获：以服务端复核结果为准给警告，警示文案同时已记在磅单上（醒目条/票面/审计）。
       // 只判皮重那一捕——毛重/复称时单上可能挂着更早留下的警示，别拿旧文案冒充这次的结论
       if (args.weigh_type === "tare" && o.tare_override_reason) {
-        toast.warning(`皮重 ${weight(args.weight_01kg)} 已捕获${manualTag}：偏差超出容差，已在磅单醒目提醒`, {
+        toast.warning(`皮重 ${weight(args.weight_01kg)} 已捕获${manualTag}：偏差超出容差`, {
           description: o.tare_override_reason,
         });
         announce("皮重偏差超出容差，请核对车上有没有留人", `ic-tare-tol:${o.order_no}`);
@@ -538,7 +538,7 @@ export function WeighPanel({
                             size="xs"
                             variant="ghost"
                             className="h-5 shrink-0 gap-0.5 px-1 text-[11px] text-muted-foreground hover:text-foreground"
-                            title={`修改${CELL_LABEL[type]}：改完按回车或点下面的「保存${CELL_LABEL[type]}」落库`}
+                            title={`修改${CELL_LABEL[type]}：改完按回车，或点下面的「保存${CELL_LABEL[type]}」`}
                             disabled={capture.isPending}
                             onClick={() => startEditCell(type)}
                           >
@@ -631,7 +631,7 @@ export function WeighPanel({
         {!order && <p className="text-xs text-warning">尚未制单，取号后才能捕获重量。</p>}
         {order && !scale.connected && (
           <p className="text-xs text-destructive">
-            仪表离线{scale.error ? `：${scale.error}` : ""}。上面「毛重 / 皮重」两格本身就是录入框：照仪表小票上的数敲进去、按回车即可（两个按钮也已切成「录入…」，空格 / P 同权提交）。本单将永久标记为「手录」，事后由站长在审计日志里逐条核对。
+            仪表离线{scale.error ? `：${scale.error}` : ""}。在「毛重 / 皮重」格里照仪表小票敲数、按回车即可。本单将永久标记为「手录」。
           </p>
         )}
         {order &&
@@ -640,7 +640,7 @@ export function WeighPanel({
           !submitsManual("gross") &&
           !submitsManual("tare") && (
             <p className="text-xs text-warning">
-              读数未稳定（窗口内波动超容差），捕获按钮已锁定。等车停稳再捕，或直接在上面那一格里手工录入。
+              读数未稳定，捕获按钮已锁定。等车停稳再捕，或在「毛重 / 皮重」格里手工录入。
             </p>
           )}
         {/*
@@ -651,7 +651,7 @@ export function WeighPanel({
         */}
         {order && canManual && (draft.gross.trim() !== "" || draft.tare.trim() !== "") && (
           <p className="text-[11px] text-warning">
-            框里这个数按「手录」落库：本单「重量来源」将永久标为手录（此后重新捕获也改不回去），事后由站长在审计日志里逐条核对，请与仪表小票核对一遍。
+            这个数按「手录」记录：本单将永久标为手录，之后重新捕获也改不回去。请与仪表小票核对一遍。
           </p>
         )}
         {/*
@@ -663,8 +663,8 @@ export function WeighPanel({
           <p className="text-xs text-destructive">
             本单还没有单价：
             {can("price.override")
-              ? "捕毛重前必须先定价——点上面的「先定价（本单还没价）」把价填好，再刷卡或点捕获。"
-              : "捕毛重前必须由磅员或站长先定价，本岗位改不了这一格。"}
+              ? "捕毛重前必须先定价：点上面「先定价（本单还没价）」，再刷卡或点捕获。"
+              : "捕毛重前必须由磅员或站长定价，本岗位改不了这一格。"}
           </p>
         )}
 
@@ -686,7 +686,7 @@ export function WeighPanel({
           <div className="border border-warning bg-warning-bg p-1.5 text-xs">
             <ToneBadge tone="warning">皮重偏差超容差</ToneBadge>
             <p className="mt-0.5">
-              本单已按现场读数捕获（数据有效）：{order.tare_override_reason}。请核对车辆与读数，如需更正走红冲重录；提醒已记入磅单、补打票面与审计。
+              本单已按现场读数捕获，数据有效：{order.tare_override_reason}。请核对车辆与读数，如需更正走红冲重录。
             </p>
           </div>
         )}

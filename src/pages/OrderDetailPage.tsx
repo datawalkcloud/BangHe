@@ -227,7 +227,7 @@ export function OrderDetailBody({
   const bindCardMut = useMutation({
     mutationFn: (cardNo: string) => api.cardIssue({ order_no: orderNo, card_no: cardNo }),
     onSuccess: (res) => {
-      toast.success(`已补绑流转卡 ${res.card.card_no}：本单回到「刷卡推进」那条流（毛重 / 皮重 / 结算）`);
+      toast.success(`已补绑流转卡 ${res.card.card_no}`);
       setBindOpen(false);
       invalidate();
       // `invalidate()` 里那个 ["openOrders"] 是全局检索与档案下拉的键；工作台在途条读的是 ["open-orders"]，
@@ -371,7 +371,7 @@ export function OrderDetailBody({
     locked
       ? "作废/拒收的单不能再调整等级"
       : ["settled", "paid", "archived", "reversed"].includes(order.status)
-        ? "本单已结算，改等级请先由站长红冲（02 §F6.3）"
+        ? "本单已结算，改等级请先由站长红冲"
         : !can("order.grade")
           ? "当前岗位无权调整等级（需化验员、出纳或站长）"
           : null;
@@ -383,7 +383,7 @@ export function OrderDetailBody({
     locked
       ? "作废/拒收的单不能再定价"
       : ["settled", "paid", "archived", "reversed"].includes(order.status)
-        ? "本单已结算，改价请先由站长红冲（02 §F6.3）"
+        ? "本单已结算，改价请先由站长红冲"
         : !can("price.override")
           ? "当前岗位无权定价（需磅员或站长）"
           : null;
@@ -511,12 +511,12 @@ export function OrderDetailBody({
           )}
           {manual && (
             <CallOut tone="warning" title="称重读数为手工录入" icon={<AlertTriangleIcon />}>
-              仪表通讯异常时允许手录，但必须事后补上传仪表打印小票照片。迎检时此标记会作为重点核查项。
+              手录读数须事后补传仪表打印小票照片。
             </CallOut>
           )}
           {order.tare_override_reason && (
-            <CallOut tone="warning" title="皮重偏差超容差（数据有效，醒目标记）" icon={<AlertTriangleIcon />}>
-              {order.tare_override_reason}；本单已按现场读数捕获，请核对车辆与读数，如需更正走红冲后重录。
+            <CallOut tone="warning" title="皮重偏差超容差（数据有效）" icon={<AlertTriangleIcon />}>
+              {order.tare_override_reason}；请核对车辆与读数，如需更正先红冲再重录。
             </CallOut>
           )}
           {order.price_override_reason && (
@@ -566,7 +566,7 @@ export function OrderDetailBody({
                         locked
                           ? "作废/拒收的单不再登记入仓去向"
                           : !can("order.destination")
-                            ? "登记入仓去向需保管员或站长岗位（02 §11 权限矩阵）"
+                            ? "登记入仓去向需保管员或站长岗位"
                             : undefined
                       }
                     >
@@ -669,12 +669,12 @@ export function OrderDetailBody({
                     化验给出的建议扣量是 扣水 <span className="tnum">{weight(qc.moisture_deduct_01kg)}</span>／扣杂{" "}
                     <span className="tnum">{weight(qc.impurity_deduct_01kg)}</span>，
                     本单按上表（扣水 <span className="tnum">{weight(order.moisture_deduct_01kg)}</span>／扣杂{" "}
-                    <span className="tnum">{weight(order.impurity_deduct_01kg)}</span>）结算——结算重量、票面与台账一律认磅单这份。
+                    <span className="tnum">{weight(order.impurity_deduct_01kg)}</span>）结算，结算重量与出票以此为准。
                   </p>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  净重 = 毛重 − 皮重；结算重量 = 净重 − 扣重合计。首版不实现水分/杂质自动增扣量（02 §F4.4），
-                  上表扣重均为人工录入值，其中扣水/扣杂以<span className="text-foreground">结算时在计算单确认的磅单值</span>为准。
+                  净重 = 毛重 − 皮重；结算重量 = 净重 − 扣重合计。
+                  上表扣重为人工录入，扣水/扣杂以<span className="text-foreground">结算时确认的磅单值</span>为准。
                 </p>
               </CardContent>
             </Card>
@@ -685,7 +685,7 @@ export function OrderDetailBody({
               <CardTitle className="flex items-center gap-2 text-sm">
                 称重轨迹
                 <span className="font-normal text-xs text-muted-foreground">
-                  共 {records.length} 次读数，含被弃用记录；整量化按分度值取整
+                  共 {records.length} 次读数，含被弃用记录
                 </span>
               </CardTitle>
             </CardHeader>
@@ -713,7 +713,7 @@ export function OrderDetailBody({
               <CardContent className="flex flex-col gap-3">
                 {!qc ? (
                   <p className="text-sm text-muted-foreground">
-                    {order.qc_at ? "化验记录未随单返回，可在化验台账按单号查询。" : "本单未做化验登记。"}
+                    {order.qc_at ? "本单的化验记录请到化验台账按单号查询。" : "本单未做化验登记。"}
                   </p>
                 ) : (
                   <>
@@ -783,9 +783,7 @@ export function OrderDetailBody({
                       </TableBody>
                     </Table>
                     <p className="text-xs text-muted-foreground">
-                      基准值仅用于超标提示与定级参考，不参与扣量计算；「定级」是化验员按国标的判定（复检另立新单，本单永不改写），
-                      与磅单上"这一车按几等结钱"的业务等级是两条线。「扣水（建议）／扣杂（建议）」也一样——
-                      结算时以计算单确认进磅单的那份为准，化验这份不会被回写。
+                      基准值仅用于超标提示；化验的「定级」与建议扣量不会回写磅单，结算以磅单值为准。
                     </p>
                   </>
                 )}
@@ -868,7 +866,7 @@ export function OrderDetailBody({
                 )}
                 {order.status !== "voided" && order.status !== "rejected" && order.settled_at == null && (
                   <CallOut tone="info" title="下一步">
-                    结算在磅房工作台做：扫这张码单右下角的二维码即弹结算框，现场计价付款，结完本页自动出现金额明细。
+                    到磅房工作台扫这张码单右下角的二维码即可结算。
                     <Link
                       to="/workstation"
                       search={{ orderNo: order.order_no }}
@@ -879,7 +877,7 @@ export function OrderDetailBody({
                     </Link>
                     {(order.prints ?? []).length === 0 && order.net_weight_01kg != null && (
                       <span className="ml-1 text-muted-foreground">
-                        （这单还没打过码单，客户手里没有可扫的票——到工作台打印码单，或在顶部在途条点中这张单直接结算）
+                        （这单还没打过码单，可去工作台打印，或在在途条选中它直接结算）
                       </span>
                     )}
                   </CallOut>
@@ -897,7 +895,7 @@ export function OrderDetailBody({
                 <CardTitle className="flex items-center gap-2 text-sm">
                   现场附件
                   <span className="font-normal text-xs text-muted-foreground">
-                    {photos.length} 项 · 抓拍缺失只标文字，不用颜色单独表达
+                    {photos.length} 项
                   </span>
                 </CardTitle>
               </CardHeader>
@@ -954,7 +952,7 @@ export function OrderDetailBody({
                   </Table>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  补打必须在纸上带「补打」字样并记录授权人，与首打联次区分（01 §F6.2）。
+                  补打必须在纸上带「补打」字样并记录授权人。
                 </p>
               </CardContent>
             </Card>
@@ -964,7 +962,7 @@ export function OrderDetailBody({
             <CardHeader>
               <CardTitle className="text-sm">
                 全链路时间轴
-                <span className="ml-2 font-normal text-xs text-muted-foreground">每一步都带署名与时刻，用于回答"这张单谁在哪一步干了什么"</span>
+                <span className="ml-2 font-normal text-xs text-muted-foreground">每一步都带署名与时刻</span>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -986,7 +984,7 @@ export function OrderDetailBody({
           <DialogHeader>
             <DialogTitle className="text-sm">入仓去向 · {order.order_no}</DialogTitle>
             <DialogDescription className="text-xs">
-              去向在制单时是选填项，粮真进了仓由值仓在这里补登记；改派会记审计，并把保管员署名换成当前操作人。
+              粮进仓后由值仓在这里登记去向；改派会把保管员署名换成当前操作人。
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
@@ -1019,7 +1017,7 @@ export function OrderDetailBody({
             </Label>
           </div>
           <p className="text-xs text-muted-foreground">
-            两处都选「未定」即清空本单去向；只选货位时按货位反查仓房。停用的仓房与货位不进候选，历史单据上的去向照旧可查。
+            两处都选「未定」即清空本单去向；只选货位时按货位反查仓房。停用的仓房与货位不进候选。
           </p>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setDestOpen(false)}>
@@ -1038,8 +1036,7 @@ export function OrderDetailBody({
           <DialogHeader>
             <DialogTitle className="text-sm">调整业务定级 · {order.order_no}</DialogTitle>
             <DialogDescription className="text-xs">
-              本单按此等级参与结算与台账汇总。化验报告上的判定不受影响——复检另立新单。
-              已结算/已作废的单不能再改，要更正经站长走红冲（02 §F6.3）。
+              本单按此等级参与结算与台账汇总，化验报告的判定不受影响。已结算/已作废的单需站长红冲。
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
@@ -1061,7 +1058,7 @@ export function OrderDetailBody({
             </Label>
           </div>
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-            <span>改判事由（可选，填了会一起写进审计）</span>
+            <span>改判事由（选填，会记入审计）</span>
             <ComboBox
               aria-label="改判事由"
               presets={gradeReasonOptions}
@@ -1119,25 +1116,22 @@ export function OrderDetailBody({
           <AlertDialogHeader>
             <AlertDialogTitle className="text-sm">作废磅单 {order.order_no}</AlertDialogTitle>
             <AlertDialogDescription className="text-xs">
-              作废后本单不再参与任何汇总统计，但记录永久保留、可查询。作废不需要站长授权，
-              磅员填明事由即可废单，事由与经办人会写进审计日志。<strong>任何状态都能作废</strong>
-              （02 §F2.3）：本版没有磅单红冲，配错了价、结错了钱的单就是靠这一笔勾掉。
+              作废后本单不再参与任何汇总统计，记录永久保留、可查询。磅员填明事由即可废单，不需站长授权。
+              <strong>任何状态都能作废</strong>。
             </AlertDialogDescription>
           </AlertDialogHeader>
           {voidRevokesBill && (
             <CallOut tone="warning" title={`本单已结算，作废会同时撤销结算单 ${voidRevokesBill.settle_no}`} icon={<AlertTriangleIcon />}>
-              这张结算单应付 {money(voidRevokesBill.payable_fen)}、已付 {money(voidRevokesBill.paid_fen)}。作废之后它标记为「已撤销」：
-              挂账池里当场消失，钱也收不进来了。
+              这张结算单应付 {money(voidRevokesBill.payable_fen)}、已付 {money(voidRevokesBill.paid_fen)}，作废后标记为「已撤销」，不能再登记付款。
               {voidRevokesBill.paid_fen > 0
-                ? "已经付出去的钱流水一行都不删（账本不涂改），要线下向农户追回。"
+                ? "已付出去的钱不会自动退回，需线下向农户追回。"
                 : ""}
-              要重做这一笔，请另开一张磅单——原单号与结算单号都留在库里，审计上串得起来。
+              要重做这一笔，请另开一张磅单。
             </CallOut>
           )}
           {order.status === "voided" && (
             <CallOut tone="info" title="本单已经是作废态" icon={<ShieldAlertIcon />}>
-              再填一次会把票面与详情上那句作废原因、作废时间换成新写的这句；第一次填的那句不会消失，
-              它留在审计日志和本单时间轴里（按次追加，两笔都在）。
+              再填一次会把票面与详情上的作废原因、作废时间换成新写的这句；第一次填的那句仍留在审计日志里。
             </CallOut>
           )}
           <div className="flex flex-col gap-3">
@@ -1147,7 +1141,7 @@ export function OrderDetailBody({
               invalid={voidReason.trim().length > 0 && voidReason.trim().length < VOID_REASON_MIN}
               error={
                 voidReason.trim().length > 0 && voidReason.trim().length < VOID_REASON_MIN
-                  ? `事由写全一点（不少于 ${VOID_REASON_MIN} 字），迎检要看得懂这句为什么废单`
+                  ? `事由写全一点（不少于 ${VOID_REASON_MIN} 字）`
                   : undefined
               }
             />

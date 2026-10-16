@@ -129,7 +129,7 @@ export function IpCameraLive({ spec, className, meta }: { spec: IpCamSpec; class
 
   let note: string | null = null;
   if (!frame) note = why ?? (status ? phaseLabel(status.phase) : `正在连 ${spec.host}…`);
-  else if (stalled) note = `画面停在上一帧：${why ?? "连接已断"}`;
+  else if (stalled) note = `画面已停止更新：${why ?? "连接已断"}`;
 
   return (
     <div className={cn("absolute inset-0", className)}>

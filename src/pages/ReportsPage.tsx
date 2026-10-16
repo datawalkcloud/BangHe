@@ -157,7 +157,7 @@ function RangeBar({
 
 /** 打印：报表走系统打印对话框，不进 print_log（那张表只记三类单据） */
 function printReport() {
-  toast.info("已调用系统打印，请在对话框里选择打印机与纸张方向");
+  toast.info("请在打印对话框里选择打印机与纸张方向");
   window.print();
 }
 
@@ -169,7 +169,7 @@ function useExportGuard() {
    */
   return async (headers: string[], rows: (string | number)[][], base: string, piiEntity?: string) => {
     if (!can("data.export")) {
-      toast.error("当前岗位没有导出权限（需 data.export）");
+      toast.error("当前岗位没有导出权限");
       return;
     }
     if (rows.length === 0) {
@@ -393,9 +393,8 @@ function LedgerReport() {
       />
 
       {unsettled > 0 && (
-        <CallOut tone="info" title={`其中 ${unsettled} 单尚未结算`}>
-          台账按业务日期归期，未结算的单也会出现在本期台账里，金额为空。日结前必须把它们结掉或作废，
-          否则明天的台账和今天的现金对不上。
+        <CallOut tone="info" title={`未结算 ${unsettled} 单`}>
+          未结算的单也会出现在本期台账里，金额为空。日结前先结掉或作废。
         </CallOut>
       )}
 
@@ -408,8 +407,7 @@ function LedgerReport() {
         empty={<EmptyState title="该期间没有收购记录" description="换一段日期，或先在工作台完成过磅与结算。" />}
         toolbar={
           <span className="text-xs text-muted-foreground">
-            红冲单以负值参与合计，因此合计数就是本站该期间的真实净收购量；作废与拒收单不进台账。
-            证件号已脱敏，向监管报送全号需现场另行导出。
+            红冲单以负值计入合计；作废与拒收单不统计。证件号已脱敏，报送全号需另行导出。
           </span>
         }
       />
@@ -547,7 +545,7 @@ function DailyReportView() {
               value={money(total.credit_fen, false)}
               unit="元"
               tone={total.credit_fen > 0 ? "danger" : "success"}
-              hint={total.credit_fen > 0 ? "日结前应催清或说明原因" : "当天粮款已全部付清"}
+              hint={total.credit_fen > 0 ? "日结前应先付清或说明原因" : "当天粮款已全部付清"}
             />
           </StatCardGrid>
 
@@ -556,7 +554,7 @@ function DailyReportView() {
               columns={columns}
               rows={data.rows}
               rowKey={(r) => r.variety_code}
-              empty={<EmptyState title="当天没有收购记录" description="换一个日期，或确认业务日期归属（跨天单登记在过磅完成日）。" />}
+              empty={<EmptyState title="当天没有收购记录" description="换一个日期；跨天单登记在过磅完成日。" />}
               toolbar={<span className="text-xs text-muted-foreground">合计行为当日全品种汇总，含红冲负值。</span>}
             />
             <Card size="sm" className="gap-2 p-3">
@@ -722,7 +720,7 @@ function QualityReportView() {
         rows={data?.byVariety ?? []}
         rowKey={(r) => r.variety_code}
         empty={<EmptyState title="该期间没有化验数据" description="先在磅房工作台完成扦样化验。" />}
-        toolbar={<span className="text-xs text-muted-foreground">超基准率 = 任一指标超国标的样本 / 有效样本（复检生效则取代首检）；拒收率 = 拒收单 / 磅单；两者分母不同，不可相加。</span>}
+        toolbar={<span className="text-xs text-muted-foreground">超基准率分母是有效样本，拒收率分母是磅单，两者不可相加；复检生效后取代首检。</span>}
       />
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -733,7 +731,7 @@ function QualityReportView() {
           ) : (
             <p className="text-sm text-muted-foreground">该期间没有可统计的水分样本。</p>
           )}
-          <p className="text-xs text-muted-foreground">横轴为水分区间（%），纵轴为样本数；基准线以品种的国标值为准，见上表。</p>
+          <p className="text-xs text-muted-foreground">基准线按各品种的国标值，见上表。</p>
         </Card>
 
         <Card size="sm" className="gap-3 p-3">
@@ -805,7 +803,7 @@ function PartyRankReport() {
         key: "tare",
         header: "历史平均皮重",
         align: "right",
-        title: "该售粮人全部历史过磅记录的皮重均值，不受上方日期区间影响",
+        title: "全部历史过磅的皮重均值，不受上方日期区间影响",
         cell: (r) => <Num>{weight(r.avg_tare_01kg)}</Num>,
       },
       detailColumn("party", (r) => r.party_id),
@@ -877,10 +875,10 @@ function PartyRankReport() {
         empty={
           <EmptyState
             title={onlyCredit ? "没有未付清的售粮人" : "该期间没有售粮记录"}
-            description={onlyCredit ? "说明这段期间的粮款都已当场结清。" : "换一段日期试试。"}
+            description={onlyCredit ? "该期间粮款已全部付清。" : "换一段日期试试。"}
           />
         }
-        toolbar={<span className="text-xs text-muted-foreground">排行按净重倒序（默认）；点姓名进入该售粮人履历，可核对历次皮重是否稳定。</span>}
+        toolbar={<span className="text-xs text-muted-foreground">排行按净重倒序；点姓名可查看该售粮人履历。</span>}
       />
     </div>
   );
@@ -1015,13 +1013,12 @@ function StaffLoadReport() {
         />
       </StatCardGrid>
 
-      <CallOut tone="info" title="这些数字不是考核，是异常线索">
-        手录、皮重授权、补打、作废都属于"正常但需要能被解释"的动作。站长要看的是趋势与离群值，
-        某个人某一周突然翻倍，通常意味着磅坏了或者有人在硬凑数据，应当去查那几天的具体单（
+      <CallOut tone="info" title="异常线索">
+        手录、皮重授权、补打、作废都应有可说明的原因，重点看趋势与离群值。可在
         <Link to="/orders" className="underline">
           磅单中心
         </Link>
-        可按"称重来源=手录"筛选）。
+        按「称重来源=手录」筛出那几天的单。
       </CallOut>
 
       <DataTable
@@ -1029,7 +1026,7 @@ function StaffLoadReport() {
         rows={data}
         rowKey={(r) => r.user_id}
         empty={<EmptyState title="该期间没有作业记录" description="换一段日期试试。" />}
-        toolbar={<span className="text-xs text-muted-foreground">经手单数按“磅员或登记员”归属统计，同一单两人各计一次，所以合计行会大于实际单数（看板上的“今日单量”才是去重后的值）。</span>}
+        toolbar={<span className="text-xs text-muted-foreground">同一单按磅员、登记员各计一次，合计行会大于实际单数。</span>}
       />
     </div>
   );

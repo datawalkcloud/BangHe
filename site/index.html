@@ -3,8 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>磅禾｜开源免费的粮站收粮管理系统 · 地磅 证卡 化验 结算 票证</title>
+<title>磅禾｜开源免费的粮站收粮管理系统 · 地磅 粮仓 粮站 离线 开票</title>
 <meta name="description" content="磅禾粮站收粮管理系统：地磅称重、身份证与 IC 卡、扦样化验、计价结算、票面码与经营台账接在一台机器上。断网可用，数据留在企业自己手里。">
+<link rel="icon" href="./favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="./logo.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <style>
 /* ── 令牌：与产品 src/App.css 逐值一致，官网不另起一套 ───────────────── */
 :root{
@@ -45,16 +48,18 @@ a{color:inherit;text-decoration:none}
 .topbar{border-bottom:var(--hair);height:74px;position:relative;z-index:5;background:var(--background)}
 .topbar-in{height:100%;display:flex;align-items:center;gap:34px}
 .logo{display:flex;align-items:center;gap:11px;flex:0 0 auto}
-.logo-mark{width:38px;height:38px;background:var(--primary);position:relative;display:grid;place-items:center}
-/* 磅台 + 一道粮堆：把"秤"压进一个方印里 */
-.logo-mark::before{content:"";position:absolute;left:8px;right:8px;bottom:9px;height:2px;background:#fff}
-.logo-mark::after{content:"";width:16px;height:8px;background:var(--grain-gold);border-radius:16px 16px 0 0}
+/* 图形直接用软件那枚 logo（scripts/make-app-icon.py 生成），不再手搓方印 */
+.logo-mark{width:41px;height:41px;object-fit:contain;display:block}
 .logo-txt strong{display:block;font-size:19px;letter-spacing:.14em;line-height:1.1}
 .logo-txt small{display:block;margin-top:3px;font:700 8px/1 var(--mono);letter-spacing:.3em;color:var(--primary)}
 .nav{display:flex;gap:28px;margin-left:12px}
 .nav a{font-size:14px;font-weight:600;padding:26px 0;border-bottom:2px solid transparent;color:oklch(0.35 0 0)}
 .nav a:hover,.nav a.on{color:var(--primary);border-color:var(--primary)}
 .top-actions{margin-left:auto;display:flex;align-items:center;gap:18px}
+/* 顶栏这一行不换行、且 1181 起导航就出来了，宽度本就吃紧：
+   两枚源码入口都只放品牌标（Gitee 圆环 / GitHub 猫形），名字交给 title 与 aria-label */
+.repo-links{display:flex;align-items:center;gap:8px}
+.repo-links .ico{padding:0 14px}
 .hotline{font-size:12px;color:var(--muted-foreground);line-height:1.5;text-align:right}
 .hotline b{display:block;font:700 15px/1.2 var(--mono);color:var(--foreground);letter-spacing:.02em}
 
@@ -92,15 +97,11 @@ a{color:inherit;text-decoration:none}
 
 /* ── 首屏骨架 ─────────────────────────────────────────────────── */
 .hero{position:relative;overflow:hidden;border-bottom:var(--hair)}
-/* 钢网底纹 + 右上那枚"日头"（沿用登录插画的用光） */
-.hero::before{content:"";position:absolute;inset:0;pointer-events:none;
-  background-image:linear-gradient(oklch(0.145 0 0 / .028) 1px,transparent 1px),
-                   linear-gradient(90deg,oklch(0.145 0 0 / .028) 1px,transparent 1px);
-  background-size:56px 56px}
+/* 右上那枚"日头"（沿用登录插画的用光） */
 .hero::after{content:"";position:absolute;width:640px;height:640px;right:-190px;top:-230px;pointer-events:none;
   background:radial-gradient(circle,var(--grain-gold-soft) 0%,oklch(0.98 0.03 90 / .55) 34%,transparent 66%);opacity:.5}
 .hero-copy,.unit{min-width:0}
-.hero-in{position:relative;z-index:2;display:grid;grid-template-columns:minmax(430px,.92fr) minmax(520px,1.18fr);
+.hero-in{position:relative;z-index:2;display:grid;grid-template-columns:minmax(470px,.78fr) minmax(560px,1.32fr);
   gap:62px;align-items:center;padding:66px 0 0}
 
 /* 左侧文案 */
@@ -139,22 +140,60 @@ h1 u{text-decoration:none;color:var(--primary)}
 .tb-win i:nth-child(3)::before{transform:rotate(45deg)}
 .tb-win i:nth-child(3)::after{transform:rotate(-45deg)}
 
-/* 设备状态条 */
-.devs{display:flex;align-items:center;gap:0;height:34px;border-bottom:var(--hair);background:var(--steel);
+/* 折叠档侧栏（AppShell 左列：品牌 + 三组图标 + 底部操作员） */
+.frame{display:flex;align-items:stretch;min-height:0}
+.main{display:flex;flex-direction:column;flex:1;min-width:0}
+.rail{flex:0 0 42px;display:flex;flex-direction:column;align-items:center;
+  background:var(--steel);border-right:var(--hair);padding:8px 0 9px}
+.rail .rb{width:26px;height:26px;background:var(--background);border:1px solid var(--border);
+  position:relative;margin-bottom:6px}
+.rail .rb::after{content:"";position:absolute;left:6px;right:6px;top:7px;height:8px;background:var(--primary)}
+.rail .rb::before{content:"";position:absolute;left:9px;right:9px;top:10px;height:2px;background:var(--grain-gold);z-index:1}
+.rg{display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 0}
+.rg+.rg{border-top:1px solid var(--border)}
+.rail b{width:28px;height:28px;display:grid;place-items:center;position:relative;color:oklch(0.44 0 0)}
+.rail b:hover{color:var(--foreground)}
+.rail b.on{background:var(--primary);color:#fff}
+.rail b.on::before{content:"";position:absolute;left:-7px;top:5px;bottom:5px;width:2px;background:var(--primary)}
+.rail svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:square;stroke-linejoin:miter}
+.rail .rf{margin-top:auto;width:26px;height:26px;border:1px solid var(--border);background:var(--background);
+  position:relative;overflow:hidden}
+.rail .rf::after{content:"";position:absolute;left:50%;top:5px;width:9px;height:9px;margin-left:-4.5px;border-radius:50%;background:oklch(0.72 0 0)}
+.rail .rf::before{content:"";position:absolute;left:50%;bottom:-5px;width:20px;height:13px;margin-left:-10px;border-radius:10px 10px 0 0;background:oklch(0.72 0 0)}
+
+/* 页头那一排：真程序的动作条就在标题下面，设备灯在窗口最底下 */
+.wsbar{display:flex;align-items:stretch;height:34px;border-bottom:var(--hair);background:var(--steel);
+  font:600 10.5px/1 var(--mono);letter-spacing:.04em;color:oklch(0.42 0 0);overflow:hidden}
+.wsbar i{font-style:normal;display:flex;align-items:center;gap:6px;padding:0 11px;border-right:1px solid var(--border);white-space:nowrap}
+.wsbar i:last-child{margin-left:auto;border-right:0}
+.wsbar b{font-weight:700;color:var(--foreground);letter-spacing:-.01em}
+.wsbar .pri{background:var(--primary);color:#fff;border-right-color:oklch(0.32 0.06 151)}
+
+/* 设备状态条（AppShell 全局底栏，不在工作台页面里） */
+.devs{display:flex;align-items:center;gap:0;height:34px;border-top:var(--hair);background:var(--steel);
   font:600 10.5px/1 var(--mono);letter-spacing:.05em;color:oklch(0.42 0 0);overflow:hidden}
 .devs div{display:flex;align-items:center;gap:6px;padding:0 13px;height:100%;border-right:1px solid var(--border);white-space:nowrap}
 .devs div:last-child{margin-left:auto;border-right:0;color:var(--muted-foreground)}
 .led{width:7px;height:7px;background:var(--leaf);box-shadow:0 0 0 2px oklch(0.33 0.09 151 / .18)}
 .led.warn{background:var(--grain-gold);box-shadow:0 0 0 2px oklch(0.72 0.15 75 / .2)}
+/* 插图会跟着窗口一起缩，顶栏/底栏那几项排不下时宁可少摆两项，也别把「F1 快捷键一览」裁成半截。
+   1528 是 --page 撞到 1440 上限的那一档，再窄插图就开始缩水 */
+@media (max-width:1527px){.wsbar .opt,.devs .opt{display:none}}
+@media (max-width:1279px){.wsbar .opt2{display:none}}
 
-/* 主体三栏 */
-.body{display:grid;grid-template-columns:1fr 1.32fr .96fr;min-height:398px}
+/* 主体三栏：左「身份与制单 / 皮重参考」、中「称重区 / 化验区」、右「过磅画面」竖排 */
+.body{display:grid;grid-template-columns:1fr 1.44fr 1.02fr;min-height:398px}
+.col{display:flex;flex-direction:column;min-width:0}
+.col+.col{border-left:var(--hair)}
 .pane{padding:16px 15px;border-right:var(--hair);position:relative}
 .pane:last-child{border-right:0}
+.col .pane{border-right:0;padding:11px 13px}
+.col .pane+.pane{border-top:var(--hair)}
+.col .pane.grow{flex:1}
 details.pane>summary{list-style:none;pointer-events:none}
 details.pane>summary::-webkit-details-marker{display:none}
 .pane-h{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;letter-spacing:.14em;
-  color:var(--muted-foreground);margin-bottom:12px}
+  color:var(--muted-foreground);margin-bottom:9px}
 .pane-h s{text-decoration:none;font:700 9.5px/1 var(--sans);letter-spacing:.1em;color:var(--primary);border:1px solid oklch(0.515 0.105 151 / .3);padding:3px 5px}
 
 /* 读数区：刻度尺 + 大数字 */
@@ -169,58 +208,69 @@ details.pane>summary::-webkit-details-marker{display:none}
 .badge{display:inline-flex;align-items:center;gap:6px;margin-top:11px;padding:4px 8px;font:700 10.5px/1 var(--mono);letter-spacing:.1em}
 .badge.ok{color:#fff;background:var(--primary)}
 .badge.ok::before{content:"";width:5px;height:5px;background:currentColor;opacity:.9}
-.meta{margin-top:14px;display:flex;flex-direction:column;gap:7px;font:600 10.5px/1.4 var(--mono);color:var(--muted-foreground)}
+.meta{margin-top:10px;display:flex;flex-direction:column;gap:7px;font:600 10.5px/1.4 var(--mono);color:var(--muted-foreground)}
 .meta i{font-style:normal;color:var(--foreground)}
-.trio{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--border);margin-top:16px}
-.trio div{padding:8px 9px;border-right:1px solid var(--border)}
-.trio div:last-child{border-right:0;background:oklch(0.72 0.15 75 / .1)}
-.trio span{display:block;font-size:10px;color:var(--muted-foreground);letter-spacing:.1em}
-.trio b{display:block;margin-top:5px;font:700 15px/1 var(--mono);letter-spacing:-.02em}
+/* 称重区：读数压到本栏宽度，实测重量走键值行 */
+.pane-weigh .readout{gap:10px}
+.pane-weigh .big .num{font-size:clamp(28px,3vw,40px)}
+.pane-weigh .badge{margin-top:8px}
+.pane-weigh .kv{padding:4px 0}
+.kv b i{font-style:normal;margin-left:6px;padding:1px 4px;border:1px solid var(--border);
+  font:600 10px/1 var(--sans);color:var(--muted-foreground)}
+/* 化验指标格（真界面是 2×4 的小方格，不是键值行） */
+.flds{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.fld{border:1px solid var(--border);background:var(--steel);padding:6px 8px}
+.fld span{display:block;font:600 9.5px/1.3 var(--mono);letter-spacing:.05em;color:var(--muted-foreground);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld b{display:block;margin-top:4px;font:700 14px/1 var(--mono);letter-spacing:-.02em}
+.fld b em{font-style:normal;margin-left:3px;font:600 9px/1 var(--mono);color:var(--muted-foreground)}
+/* 面板内的小按钮 + 键帽 */
+.btnrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.btnrow b{display:inline-flex;align-items:center;gap:5px;padding:6px 8px;border:1px solid var(--border);
+  background:var(--background);font:600 11px/1 var(--sans);color:oklch(0.35 0 0);white-space:nowrap}
+.btnrow b.pri{background:var(--primary);border-color:var(--primary);color:#fff}
+.btnrow b kbd{font:700 9px/1 var(--mono);border:1px solid currentColor;padding:2px 3px;opacity:.75}
 
 /* 键值行 */
-.kv{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed var(--border);font-size:12.5px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--border);font-size:12.5px}
 .kv:last-child{border-bottom:0}
 .kv span{color:var(--muted-foreground)}
 .kv b{font-weight:700;font-family:var(--mono);letter-spacing:-.01em}
 .kv b.gold{color:var(--primary)}
 .tag{display:inline-block;padding:2px 6px;font:700 10px/1.5 var(--sans);letter-spacing:.08em;color:var(--primary-ink);background:oklch(0.515 0.105 151 / .1)}
-.person{display:flex;align-items:center;gap:9px;padding-bottom:12px;margin-bottom:4px;border-bottom:var(--hair)}
+.person{display:flex;align-items:center;gap:9px;padding-bottom:9px;margin-bottom:4px;border-bottom:var(--hair)}
 .person .av{width:34px;height:34px;flex:0 0 auto;background:var(--steel);border:1px solid var(--border);position:relative;overflow:hidden}
 .person .av::after{content:"";position:absolute;left:50%;top:6px;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:oklch(0.72 0 0)}
 .person .av::before{content:"";position:absolute;left:50%;bottom:-6px;width:24px;height:16px;margin-left:-12px;border-radius:12px 12px 0 0;background:oklch(0.72 0 0)}
 .person p{margin:0;font-size:13px;font-weight:700;line-height:1.35}
 .person small{display:block;font:600 10px/1.4 var(--mono);color:var(--muted-foreground);letter-spacing:.02em}
 
-/* 抓拍 + 票面码 */
-.cam-row{display:flex;align-items:flex-end;gap:11px;margin-top:12px}
-.cam-row .cams-wrap{flex:1;min-width:0}
-.cams{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
-.cams i{aspect-ratio:4/3;border:1px solid var(--border);position:relative;font-style:normal;
+/* 过磅画面：三路预览竖排，格子和电脑一致 16:9 */
+.cams{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+.cams i{aspect-ratio:16/9;border:1px solid var(--border);position:relative;font-style:normal;
   background:linear-gradient(160deg,var(--ink-green-2),#123f2c 55%,#1d5b3f)}
-.cams i::after{content:"";position:absolute;left:12%;right:12%;bottom:22%;height:26%;background:linear-gradient(180deg,var(--grain-gold),#c9871d);
+.cams i::after{content:"";position:absolute;left:18%;right:18%;bottom:20%;height:30%;background:linear-gradient(180deg,var(--grain-gold),#c9871d);
   clip-path:polygon(0 100%,14% 22%,38% 0,66% 8%,88% 34%,100% 100%)}
-.cams i::before{content:"";position:absolute;left:6px;top:5px;width:4px;height:4px;background:#ff5a5a;border-radius:50%}
+.cams i::before{content:"";position:absolute;left:7px;top:8px;width:4px;height:4px;background:#ff5a5a;border-radius:50%;z-index:2}
 .cams i:nth-child(2)::before{background:var(--leaf)}
+.cams i b{position:absolute;left:6px;top:6px;right:6px;padding:3px 6px 3px 16px;background:oklch(0.98 0.01 151 / .85);
+  font:600 9.5px/1 var(--sans);color:var(--foreground);letter-spacing:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cam-cap{margin-top:7px;font:600 10px/1.4 var(--mono);color:var(--muted-foreground);letter-spacing:.04em}
-/* 票面码：三个定位角 + 网点，一眼读得出是码 */
-.qr-wrap{flex:0 0 auto;text-align:center}
-.qr{position:relative;width:46px;height:46px;padding:3px;background:var(--background);border:1px solid var(--border)}
-.qr s{position:absolute;inset:3px;display:block;
-  background-image:repeating-conic-gradient(var(--foreground) 0 25%,transparent 0 50%);
-  background-size:6px 6px}
-.qr b{position:absolute;width:11px;height:11px;background:var(--foreground);display:block}
-.qr b::after{content:"";position:absolute;inset:3px;background:var(--background)}
-.qr b:nth-of-type(1){left:3px;top:3px}
-.qr b:nth-of-type(2){right:3px;top:3px}
-.qr b:nth-of-type(3){left:3px;bottom:3px}
+.pane-cam{display:flex;flex-direction:column}
+.pane-cam .cams{flex:1;justify-content:space-between}
+.pane-cam .cam-cap{margin-top:auto;padding-top:12px}
 
-/* 底部在途条 */
-.strip{display:flex;align-items:center;gap:14px;height:56px;padding:0 15px;border-top:1px solid var(--ink-green);background:var(--steel)}
-.strip .lbl{font:700 10.5px/1 var(--mono);letter-spacing:.12em;color:var(--muted-foreground)}
-.chips{display:flex;gap:6px}
-.chips b{font:600 10.5px/1 var(--mono);letter-spacing:.02em;padding:6px 8px;background:var(--background);border:1px solid var(--border);color:oklch(0.35 0 0)}
+/* 底部在途条（真程序这排没有按钮，点中一张就是切当前单） */
+.strip{display:flex;align-items:center;gap:12px;min-height:56px;padding:9px 15px;border-top:1px solid var(--ink-green);background:var(--steel);overflow:hidden}
+.strip .lbl{flex:0 0 auto;font:700 10.5px/1 var(--mono);letter-spacing:.12em;color:var(--muted-foreground)}
+.chips{display:flex;gap:6px;min-width:0}
+.chips b{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;font:600 10.5px/1 var(--mono);letter-spacing:.02em;
+  padding:7px 8px;background:var(--background);border:1px solid var(--border);color:oklch(0.35 0 0)}
 .chips b.now{border-color:var(--primary);color:var(--primary-ink);background:oklch(0.515 0.105 151 / .08)}
-.strip .btn{margin-left:auto;height:36px;padding:0 16px;font-size:13px}
+.chips b i{font-style:normal;font:600 10px/1 var(--sans);color:var(--muted-foreground)}
+.chips b em{font-style:normal;padding:3px 4px;font:700 9px/1 var(--mono);letter-spacing:.06em;color:var(--primary-ink);background:oklch(0.515 0.105 151 / .1)}
+.chips b u{font-style:normal;text-decoration:none;color:var(--grain-gold);font-weight:700}
 
 /* 道闸斜纹：首屏收口 */
 .barrier{height:8px;background:repeating-linear-gradient(135deg,var(--grain-gold) 0 16px,var(--ink-green) 16px 32px)}
@@ -372,6 +422,16 @@ details.pane>summary::-webkit-details-marker{display:none}
 .foot-bar a:hover{color:#fff}
 .foot-bar .sep{width:1px;height:11px;background:oklch(0.3 0.03 151)}
 
+/* 返回顶部：右下角一枚方钮，滚过首屏才出现。跟全站一样用发丝线承重，不做浮起阴影 */
+.to-top{position:fixed;right:26px;bottom:30px;z-index:8;width:46px;height:46px;display:grid;
+  place-items:center;background:var(--background);border:var(--hair);color:var(--foreground);
+  cursor:pointer;opacity:0;transform:translateY(8px);pointer-events:none;
+  transition:opacity .22s,transform .22s,border-color .16s,color .16s}
+.to-top.on{opacity:1;transform:none;pointer-events:auto}
+.to-top:hover{border-color:var(--primary);color:var(--primary)}
+.to-top svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:square;stroke-linejoin:miter}
+@media (prefers-reduced-motion:reduce){.to-top{transition:none}}
+
 @media (max-width:1180px){
   .metrics{grid-template-columns:repeat(3,1fr)}
   .metrics>div:nth-child(3){border-right:0}
@@ -383,7 +443,7 @@ details.pane>summary::-webkit-details-marker{display:none}
   .specs,.cols.c3,.law,.rel,.foot-grid,.wall{grid-template-columns:minmax(0,1fr)}
   .sec-head{grid-template-columns:minmax(0,1fr);gap:22px;align-items:start}
   .final-in{grid-template-columns:minmax(0,1fr)}
-  /* 首屏两列要 430+520+62=1012 才排得下，加上 --page 两侧 88 就是 1100；
+  /* 首屏两列要 470+560+62=1092 才排得下，加上 --page 两侧 88 就是 1180；
      实测顶栏导航也在这一档开始折行（innerWidth 1154 单行 73px，1128 起变 92px），
      所以折叠与收导航都并到已有的 1180 档，不再新增断点 */
   .hero-in{grid-template-columns:minmax(0,1fr);gap:44px;padding-top:48px}
@@ -419,21 +479,29 @@ details.pane>summary::-webkit-details-marker{display:none}
   .devs div{padding:7px 11px;border-bottom:1px solid var(--border)}
   .devs div:last-child{margin-left:0}
 
-  /* mock：读数栏整屏优先摆第一个，身份栏与化验栏收进可展开区 */
+  /* 顶栏那一排按钮与设备条：折行而不是横滑——横滑会让人怀疑后面还有没看完的东西 */
+  .wsbar{height:auto;flex-wrap:wrap}
+  .wsbar i{padding:7px 11px;border-bottom:1px solid var(--border)}
+  .wsbar i:last-child{margin-left:0}
+
+  /* mock：中栏（称重区 / 化验区）整屏优先摆第一个，左栏身份与皮重收在后面，右栏画面垫底 */
   .body{display:flex;flex-direction:column;min-height:0}
-  .pane-read{order:-1}
-  .pane{border-right:0;border-bottom:var(--hair)}
-  .pane:last-child{border-bottom:0}
+  .col-m{order:-1}
+  .col-r{order:1}
+  .col+.col{border-left:0;border-top:var(--hair)}
+  .col .pane.grow{flex:0 0 auto}
+  /* 竖排到了手机上反过来摆：整屏宽度下三路并排，一格 16:9 只剩一点点高，够用 */
+  .cams{display:grid;grid-template-columns:repeat(3,1fr)}
+  .cams i b{display:none}
+  .cams i::before{left:5px;top:4px}
   details.pane>summary{pointer-events:auto;cursor:pointer;min-height:46px;padding:15px 0 13px}
   details.pane>summary::after{content:"+";margin-left:auto;font:400 21px/1 var(--mono);color:var(--primary)}
   details.pane[open]>summary::after{content:"–"}
 
-  /* 在途条：chips 自己横滑，按钮不再被顶出视口 */
-  .strip{height:auto;flex-wrap:wrap;gap:10px;padding:12px 15px}
+  /* 在途条：chips 自己横滑 */
+  .strip{flex-wrap:wrap;gap:10px;padding:12px 15px}
   .strip .lbl{margin-right:auto}
   .chips{order:3;flex:1 1 100%;overflow-x:auto;padding-bottom:3px}
-  .strip .btn{margin-left:0;height:44px;padding:0 20px;font-size:14px}
-  .qr-wrap{display:none}
 
   /* 页脚链接从 18px 抬到 42px，拇指点得中 */
   .foot ul li{margin:0}
@@ -453,7 +521,7 @@ details.pane>summary::-webkit-details-marker{display:none}
 <header class="topbar">
   <div class="wrap topbar-in">
     <a class="logo" href="#">
-      <span class="logo-mark" aria-hidden="true"></span>
+      <img class="logo-mark" src="./logo.png" alt="">
       <span class="logo-txt"><strong>磅禾</strong><small>BANGHE</small></span>
     </a>
     <nav class="nav">
@@ -468,7 +536,10 @@ details.pane>summary::-webkit-details-marker{display:none}
       <span class="hotline">下载与演示<b>联系服务人员</b></span>
       <a class="btn btn-line btn-sm" href="#">预约上门演示</a>
       <a class="btn btn-solid btn-sm" href="#download">获取安装包</a>
-      <a class="btn btn-line btn-sm" href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener" aria-label="在 GitHub 查看源码"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>开源仓库</a>
+      <span class="repo-links">
+        <a class="btn btn-line btn-sm ico" href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener" aria-label="在 Gitee 查看源码" title="在 Gitee 查看源码"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.984 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.016 0zm6.09 5.333c.328 0 .593.266.592.593v1.482a.594.594 0 0 1-.593.592H9.777c-.982 0-1.778.796-1.778 1.778v5.63c0 .327.266.592.593.592h5.63c.982 0 1.778-.796 1.778-1.778v-.296a.593.593 0 0 0-.592-.593h-4.15a.592.592 0 0 1-.592-.592v-1.482a.593.593 0 0 1 .593-.592h6.815c.327 0 .593.265.593.592v3.408a4 4 0 0 1-4 4H5.926a.593.593 0 0 1-.593-.593V9.778a4.444 4.444 0 0 1 4.445-4.444h8.296Z"/></svg></a>
+        <a class="btn btn-line btn-sm ico" href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener" aria-label="在 GitHub 查看源码" title="在 GitHub 查看源码"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      </span>
     </div>
     <button class="menu-btn" type="button" aria-label="打开菜单" aria-expanded="false" aria-controls="site-menu"><i></i></button>
   </div>
@@ -480,7 +551,8 @@ details.pane>summary::-webkit-details-marker{display:none}
       <a href="#deploy">数据与部署</a>
       <a href="./brochure/">产品画册</a>
       <a href="#download">下载</a>
-      <a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">开源仓库</a>
+      <a href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener">Gitee 源码</a>
+      <a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">GitHub 源码</a>
       <div class="drawer-cta">
         <a class="btn btn-solid btn-sm" href="#download">获取安装包</a>
         <a class="btn btn-line btn-sm" href="#">预约上门演示</a>
@@ -497,26 +569,23 @@ details.pane>summary::-webkit-details-marker{display:none}
         <div class="eyebrow"><s></s>01<em>粮站收粮系统 · 开源免费</em></div>
 
         <h1>
-          <span>过磅这一分钟，</span>
-          <span>不<u>喊人</u>、不<u>翻本</u>、</span>
-          <span>不<u>估</u>。</span>
+          <span>开源免费，</span>
+          <span><u>3 分钟</u>装完上线，</span>
+          <span><u>5 分钟</u>开始过磅。</span>
         </h1>
 
         <p class="lede">
-          地磅读数自己进来，身份证和 IC 卡自己认人，水分杂质自己扣，票面码自己出，
-          钱当场结清。<code>8 类设备接在一个界面上</code>，断网照收，账本留在你自己机器里。
+          不用挑电脑、不用配环境：<code>老机器双击就能装</code>，自己就能轻松完成部署。
         </p>
 
         <ul class="pledge">
           <li><s></s>开源免费，永久使用<em>Apache-2.0 许可 / 不收年费不按车抽成</em></li>
           <li><s></s>本地部署，数据不出站<em>单机可跑，无需服务器</em></li>
-          <li><s></s>设备直连，不装厂家驱动壳<em>地磅 · 读卡器 · 摄像头 · 票据机</em></li>
+          <li><s></s>设备直连，不装厂家驱动壳<em>地磅 · 读卡器 · 摄像头 · 打印机</em></li>
         </ul>
 
         <div class="cta">
           <a class="btn btn-solid" href="#download">下载 Windows 安装包 <i>V1.0.4</i></a>
-          <a class="btn btn-line" href="./brochure/">翻看产品画册 <i>16 开 12P</i></a>
-          <a class="btn btn-line" href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">在 GitHub 看源码</a>
         </div>
 
         <div class="spec">
@@ -533,82 +602,134 @@ details.pane>summary::-webkit-details-marker{display:none}
           <span class="tb-win"><i></i><i></i><i></i></span>
         </div>
 
-        <div class="devs">
-          <div><span class="led"></span>地磅 在线 · 分度 10 kg</div>
-          <div><span class="led"></span>身份证读卡器 监听中</div>
-          <div><span class="led"></span>摄像头 3 / 3</div>
-          <div><span class="led"></span>打印机 就绪</div>
-          <div>F1 快捷键一览</div>
+        <div class="frame">
+        <!-- 折叠档侧栏：真程序收起来固定 56，只剩图标；这里按插图比例画到 42 -->
+        <div class="rail" aria-hidden="true">
+          <span class="rb"></span>
+          <div class="rg">
+            <b><svg viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v5h-7zM14 11h7v10h-7zM3 13h7v8H3z"/></svg></b>
+            <b class="on"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 6h14M5 6l-3 7h6zM19 6l-3 7h6zM7 21h10"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M9 3h6v3H9zM6 5h12v16H6zM9 11h6M9 15h6"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></svg></b>
+          </div>
+          <div class="rg">
+            <b><svg viewBox="0 0 24 24"><path d="M9 11a4 4 0 100-8 4 4 0 000 8zM2 21c0-4 3-6 7-6s7 2 7 6M17 4a4 4 0 010 7"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-6 10h16L14 9V3M7 15h10"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M3 7h16a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2zM3 7V5h13M16 13h4"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M2 6h20v12H2zM2 10h20M6 15h3"/></svg></b>
+          </div>
+          <div class="rg">
+            <b><svg viewBox="0 0 24 24"><path d="M12 5a3 3 0 00-3-2H4v16h5a3 3 0 013 2M12 5a3 3 0 013-2h5v16h-5a3 3 0 00-3 2M12 5v16"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-6M21 20H3"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v2a6 6 0 01-12 0zM12 16v5"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M12 9a3 3 0 100 6 3 3 0 000-6zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zM7 10h4M7 14h2M15 10h3M15 14h3"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM8.5 13h7v7h-7z"/></svg></b>
+          </div>
+          <span class="rf"></span>
+        </div>
+
+        <div class="main">
+        <div class="wsbar">
+          <i>当前 <b>01202610000014</b></i>
+          <i class="opt2">单证详情</i>
+          <i class="pri">制单（F7）</i>
+          <i class="opt2">隐藏画面</i>
+          <i>打印（F9）</i>
+          <i class="opt">面板</i>
+          <i class="opt">自定义布局</i>
+          <i class="opt">全屏专注（F11）</i>
         </div>
 
         <div class="body">
 
-          <details class="pane pane-fold" open>
-            <summary class="pane-h">身份 <s>第①刷</s></summary>
-            <div class="person">
-              <span class="av" aria-hidden="true"></span>
-              <p>王*海 <span class="tag">卡已就位</span><small>3701**********1234</small></p>
-            </div>
-            <div class="kv"><span>一人一档</span><b>第 4 次售粮</b></div>
-            <div class="kv"><span>收购品种</span><b>小麦</b></div>
-            <div class="kv"><span>入仓去向</span><b>1 号仓 · A 位</b></div>
-            <div class="kv"><span>历史皮重</span><b>13.480 t</b></div>
-            <div class="kv"><span>本车偏差</span><b class="gold">+0.040 t 正常</b></div>
-            <div class="kv"><span>车牌</span><b>鲁 A·8D291</b></div>
-            <div class="kv"><span>磅单号</span><b>BD2610080014</b></div>
-          </details>
-
-          <div class="pane pane-read">
-            <div class="pane-h">地磅实时读数 <s>捕获 14:32:07</s></div>
-            <div class="readout">
-              <span class="ruler" aria-hidden="true"></span>
-              <div class="big">
-                <div class="num"><s>48.620</s><u>t</u></div>
-                <span class="badge ok">读数稳定</span>
+          <div class="col col-l">
+            <div class="pane grow">
+              <div class="pane-h">身份与制单 <s>第①刷</s></div>
+              <div class="person">
+                <span class="av" aria-hidden="true"></span>
+                <p>王*海 <span class="tag">已制单</span><small>3701**********1234 · 售粮人</small></p>
               </div>
+              <div class="kv"><span>收购品种</span><b>小麦</b></div>
+              <div class="kv"><span>车牌号</span><b>鲁 A·8D291</b></div>
+              <div class="kv"><span>入仓去向</span><b>1 号仓 · A 位</b></div>
+              <div class="kv"><span>流转卡</span><b>IC00000127</b></div>
+              <div class="btnrow"><b>新建下一单（F7）</b><b>读卡换人（F8）</b></div>
+              <div class="meta"><i>等待过磅或化验。</i></div>
             </div>
-            <div class="meta">
-              <i>波动 ±0.010 t · 窗口 3 s</i>
-              <i>要手录，直接在毛重那一格里敲</i>
-            </div>
-            <div class="trio">
-              <div><span>毛重</span><b>62.140</b></div>
-              <div><span>皮重</span><b>13.520</b></div>
-              <div><span>净重 t</span><b>48.620</b></div>
-            </div>
-            <div class="kv" style="margin-top:14px"><span>单价 / 扣量后</span><b>¥ 2 640 / t</b></div>
-            <div class="kv"><span>整量化 / 分度</span><b>48.620 t · 10 kg</b></div>
-            <div class="kv"><span>应收金额</span><b class="gold">¥ 128 356.80</b></div>
+
+            <details class="pane pane-fold" open>
+              <summary class="pane-h">皮重参考 <s>参考值</s></summary>
+              <div class="kv"><span>最近一次</span><b>13 520.0 kg</b></div>
+              <div class="kv"><span>近 5 次均值</span><b>13 480.0（13.480 t）</b></div>
+              <div class="kv"><span>容差</span><b>± 3 %</b></div>
+              <div class="kv"><span>当前偏差</span><b class="gold">+ 40.0</b></div>
+            </details>
           </div>
 
-          <details class="pane pane-fold" open>
-            <summary class="pane-h">化验区 <s>第②步</s></summary>
-            <div class="kv"><span>水分</span><b>12.4 %</b></div>
-            <div class="kv"><span>杂质</span><b>0.6 %</b></div>
-            <div class="kv"><span>扣水 / 扣杂</span><b>0.8 / 0.5 %</b></div>
-            <div class="kv"><span>检测方法</span><b>快速水分仪</b></div>
-            <div class="kv"><span>超基准 / 复检</span><b>无 / 无</b></div>
-            <div class="kv"><span>化验定级</span><b class="gold">二等</b></div>
-            <div class="cam-row">
-              <div class="cams-wrap">
-                <div class="cams"><i></i><i></i><i></i></div>
-                <div class="cam-cap">过磅画面 · 已随单存证 3 张</div>
+          <div class="col col-m">
+            <div class="pane pane-weigh grow">
+              <div class="pane-h">称重区 <s>分度 10 kg · COM3</s></div>
+              <div class="readout">
+                <span class="ruler" aria-hidden="true"></span>
+                <div class="big">
+                  <div class="num"><s>48 620.0</s><u>kg</u></div>
+                  <span class="badge ok">读数稳定，可捕获</span>
+                </div>
               </div>
-              <div class="qr-wrap">
-                <div class="qr" aria-hidden="true"><s></s><b></b><b></b><b></b></div>
-                <div class="cam-cap">票面码</div>
+              <div class="kv" style="margin-top:8px"><span>毛重</span><b>62 140.0 kg<i>修改</i></b></div>
+              <div class="kv"><span>皮重</span><b>13 520.0 kg<i>修改</i></b></div>
+              <div class="kv"><span>净重</span><b class="gold">48 620.0 kg</b></div>
+              <div class="kv"><span>单价</span><b>2.64 元/公斤</b></div>
+              <div class="btnrow">
+                <b>捕获毛重 <kbd>空格</kbd></b><b>捕获皮重 <kbd>P</kbd></b><b>改价</b><b class="pri">去结算（本单）</b>
               </div>
+              <div class="meta"><i>称重轨迹 6 次 · 最近 毛 62 140.0 · 10-08 14:32 地磅</i></div>
             </div>
-          </details>
+
+            <details class="pane pane-fold" open>
+              <summary class="pane-h">化验区 <s>F5</s></summary>
+              <div class="meta" style="margin:0"><i>小麦 · 基准 水分 12.5／杂质 1.0</i></div>
+              <div class="flds">
+                <div class="fld"><span>水分(12.5)</span><b>12.40<em>%</em></b></div>
+                <div class="fld"><span>杂质(1.0)</span><b>0.60<em>%</em></b></div>
+                <div class="fld"><span>扣水</span><b>390.0<em>kg</em></b></div>
+                <div class="fld"><span>扣杂</span><b>245.0<em>kg</em></b></div>
+              </div>
+              <div class="kv" style="margin-top:8px"><span>化验定级 / 判定</span><b class="gold">二等 · 接收</b></div>
+              <div class="meta"><i>改动会自动保存（F5 立即保存）</i></div>
+            </details>
+          </div>
+
+          <div class="col col-r">
+            <div class="pane pane-cam grow">
+              <div class="pane-h">过磅画面 <s>3 / 3</s></div>
+              <div class="cams">
+                <i><b>磅区·车头 · 000014</b></i>
+                <i><b>磅区·车尾 · 000014</b></i>
+                <i><b>磅房内 · 000014</b></i>
+              </div>
+              <div class="cam-cap">本单抓拍 3 张 · 14:32:07 随毛重一起取图</div>
+            </div>
+          </div>
 
         </div>
 
         <div class="strip">
-          <span class="lbl">在途磅单 3</span>
+          <span class="lbl">在途作业 3 张</span>
           <span class="chips">
-            <b class="now">BD2610080014</b><b>BD2610080013</b><b>BD2610080011</b>
+            <b class="now">000014<i>王*海</i><em>待结算</em></b><b>000013<i>李*军</i><em>待皮重</em></b><b>000011<i>赵*田</i><em>已化验</em><i>无卡</i><u>⚠ 停留 42 分</u></b>
           </span>
-          <a class="btn btn-solid" href="#">去结算 第③刷</a>
+        </div>
+
+        <div class="devs">
+          <div><span class="led"></span>磅 COM3 · 48 620.0 kg · 稳</div>
+          <div><span class="led"></span>卡 在线 · 监听身份证</div>
+          <div><span class="led"></span>像 在线</div>
+          <div><span class="led"></span>印 小票机 就绪</div>
+          <div class="opt">F1 快捷键一览</div>
+        </div>
+        </div>
         </div>
       </div>
 
@@ -814,9 +935,7 @@ details.pane>summary::-webkit-details-marker{display:none}
         <div><dt>本地存储</dt><dd>单文件库落在本机，不建服务器、不开公网端口、<b>无外部网络上传</b>。</dd></div>
         <div><dt>崩溃可续</dt><dd>WAL + 收敛检查点。称重中途强制断电，重启后在途磅单状态可续，已提交事务不损坏。</dd></div>
         <div><dt>备份恢复</dt><dd>一键备份保留 <b>30 份</b>；换机整库拷走即可。程序开着的时候界面不会让你用拷贝覆盖库。</dd></div>
-        <div><dt>岗位闸门</dt><dd>磅员 / 质检 / 结算 / 站长分工，写命令按岗位放行。前端传来的经办人一律忽略，伪造不了。</dd></div>
         <div><dt>审计留痕</dt><dd>关键操作不可改；密码 <b>argon2</b> 散列；证号等个人信息加密存储。</dd></div>
-        <div><dt>单实例</dt><dd>第二次双击不会把同一个库开两遍，只把已经开着的那扇窗唤回。</dd></div>
         <div><dt>可诊断</dt><dd>结构化日志本地按天滚动，能定位到某一次异常作业；设备自诊断如实显示在线 / 离线 / 未登记。</dd></div>
         <div><dt>夜班与大屏</dt><dd>深色档给夜班和遮阳棚下；对外大屏可整屏挂墙上，只放当天的数。</dd></div>
         <div><dt>升级</dt><dd>迁移脚本顺序可重放，版本四处单源；升级不动历史单据。</dd></div>
@@ -859,9 +978,9 @@ details.pane>summary::-webkit-details-marker{display:none}
       <div class="sec-head">
         <div>
           <div class="eyebrow"><s></s>08<em>版本与下载</em></div>
-          <h2>装上去就能收粮，<em>不用先做三个月实施</em></h2>
+          <h2>装上去就能收粮，<em>3 分钟完成配置</em></h2>
         </div>
-        <p>开源免费（Apache-2.0），源码公开在 GitHub，下载安装包即可永久免费使用。国内优先走 Gitee 高速直链，GitHub 作备用；需要装机或技术支持可联系服务人员。</p>
+        <p>开源免费（Apache-2.0），源码同时公开在 Gitee 与 GitHub，下载安装包即可永久免费使用。国内优先走 Gitee 高速直链，GitHub 作备用；需要装机或技术支持可联系服务人员。</p>
       </div>
 
       <div class="rel">
@@ -872,28 +991,26 @@ details.pane>summary::-webkit-details-marker{display:none}
             <li><span>系统</span><b>Windows 10 / 11 64 位</b></li>
             <li><span>内存</span><b>建议 4 GB</b></li>
             <li><span>硬盘</span><b>≥ 2 GB</b></li>
-            <li><span>数据库</span><b>本机单文件</b></li>
+            <li><span>数据库</span><b>嵌入式</b></li>
             <li><span>网络</span><b>不需要</b></li>
             <li><span>服务器</span><b>不需要</b></li>
-            <li><span>驱动</span><b>需管理员装串口 / 读卡器</b></li>
           </ul>
-        </div>
-        <div class="rel-main">
-          <h3>本次更新要点</h3>
-          <ol>
-            <li>过磅抓拍超限不再整张拒收<s>补齐压缩链路，上限回到"压缩目标线"——图太大就压，不因为大就把这一张丢掉。</s></li>
-            <li>称重轨迹记录法定分度读数<s>整量化值与原始捕获值分开留痕，分度值取自这台磅自己的帧模板，不再用一枚全局参数管所有磅。</s></li>
-            <li>导出 CSV 不再被 Excel 吃掉号段<s>单号与证号前补一个 <b>'</b>。CSV 不带列类型，Excel 只认 15 位有效数字，前导零会被抹平。</s></li>
-            <li>磅房语音提示<s>放卡、判稳、超限、可结算当场出声。只播要人改动作的那句结论，不念单号卡号姓名重量。站点参数可关。</s></li>
-            <li>无预览直打的出纸口按设备中心配置走<s>配了小票机就出小票机，不会再按模板纸型猜、默默跑去系统默认打印机。</s></li>
-            <li>进程单实例<s>第二次双击不会把同一个库开两遍，只把已经开着的那扇窗唤回。</s></li>
-          </ol>
           <div class="rel-cta">
             <a class="btn btn-solid" href="https://gitee.com/SpringHgui/banghe-dl/raw/master/banghe-latest-windows-x64-setup.exe" target="_blank" rel="noopener">下载 Windows 安装包 <i>V1.0.4</i></a>
             <a class="btn btn-line" href="https://github.com/datawalkcloud/BangHe/releases/latest" target="_blank" rel="noopener">GitHub 备用下载</a>
-            <a class="btn btn-line" href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">在 GitHub 看源码</a>
             <small>国内优先上面的 Gitee 高速直链；打不开再走 GitHub。<br>需要装机或技术支持联系服务人员。</small>
           </div>
+        </div>
+        <div class="rel-main">
+          <h3>产品特性</h3>
+          <ol>
+            <li>单机离线可用<s>一台 Windows 电脑装上就能收粮，不联网、不设服务器，数据只留在这台机器里。</s></li>
+            <li>一车一趟走完<s>制单 — 称重 — 化验 — 计价 — 付款 — 打票在同一屏，不用切软件、不用事后补录。</s></li>
+            <li>老设备接得上<s>耀华 / 柯力 / 托利多仪表、证卡阅读器、ESC/POS 小票机、网络摄像头，按帧模板接，不逐型号写死。</s></li>
+            <li>当场留证<s>过磅抓拍最多三张、化验单与码单随单存 ≥ 3 年，车、票、图对不上当场就看得出来。</s></li>
+            <li>交得出去的账<s>收购明细台账、日报月报、品种等级分析直接导出，Excel 打开单号证号不缺位。</s></li>
+            <li>升级不丢账<s>自动备份留 30 份，用装机包覆盖安装即完成升级，库还是原来那一本。</s></li>
+          </ol>
         </div>
       </div>
     </div>
@@ -948,7 +1065,7 @@ details.pane>summary::-webkit-details-marker{display:none}
     <div class="foot-grid">
       <div>
         <a class="logo" href="#">
-          <span class="logo-mark" aria-hidden="true"></span>
+          <img class="logo-mark" src="./logo.png" alt="">
           <span class="logo-txt"><strong>磅禾</strong><small>BANGHE</small></span>
         </a>
         <p class="foot-tag">开源免费的粮站收粮管理系统。地磅、证卡、化验、结算、票证接在一台机器上，断网可用，数据留在企业自己手里。</p>
@@ -960,12 +1077,16 @@ details.pane>summary::-webkit-details-marker{display:none}
     </div>
     <div class="foot-bar">
       <span>© 2026 磅禾 BANGHE</span><span class="sep"></span>
-      <a href="#">隐私政策</a><a href="#">用户协议</a><span class="sep"></span>
-      <a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>&nbsp;开源仓库</a><span class="sep"></span>
+      <a href="./privacy/">隐私政策</a><a href="./terms/">许可与免责</a><span class="sep"></span>
+      <a href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener">Gitee 仓库</a><a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>&nbsp;GitHub 仓库</a><span class="sep"></span>
       <span>V1.0.4</span>
     </div>
   </div>
 </footer>
+
+<button class="to-top" type="button" aria-label="返回顶部" title="返回顶部">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4M5 11l7-7 7 7"/></svg>
+</button>
 
 <script>
 /* 抽屉与手机首屏折叠都要读 matchMedia，纯 CSS 做不到"按视口决定 details 的默认开合"。
@@ -986,6 +1107,20 @@ details.pane>summary::-webkit-details-marker{display:none}
     var f = document.querySelectorAll("details.pane-fold");
     for (var i = 0; i < f.length; i++) f[i].open = false;
   }
+})();
+
+/* 返回顶部：滚过约一屏才出现。点击只发一句 scrollTo，
+   平滑与否由 html{scroll-behavior} 说了算——减少动效的偏好在那条媒体查询里已经兜住。 */
+(function () {
+  var t = document.querySelector(".to-top"), first = document.querySelector(".topbar a");
+  if (!t) return;
+  function sync() { t.classList.toggle("on", window.scrollY > window.innerHeight * .8); }
+  window.addEventListener("scroll", sync, { passive: true });
+  sync();
+  t.addEventListener("click", function () {
+    window.scrollTo({ top: 0 });
+    if (first) first.focus({ preventScroll: true });
+  });
 })();
 </script>
 </body>

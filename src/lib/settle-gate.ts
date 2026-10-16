@@ -73,14 +73,14 @@ export function settleGateOf(order: WeighOrder | null, bill: Settlement | null, 
       // 这句话在工作台的三种触发上都要站得住：扫票面码、刷第③卡（这两条路上磅员确实不碰钱）、
       // 称重区那个「去结算」（磅房那条路上磅员另有一条只挂账的权）。所以不写"磅员只负责出票"，
       // 而是把边界说清楚——岗位拦下的事必须让人明白自己该换谁来。
-      body: "结算需要出纳或站长权限（05 §5）；磅员在磅房那条路上只有「只挂账、不碰现金」的那一条，替客户算钱仍要出纳或站长。请换当班出纳或站长的账号登录。",
+      body: "结算需要出纳或站长权限。请换当班出纳或站长的账号登录。",
     };
   }
   if (order.status === "voided" || order.status === "rejected" || order.status === "reversed" || order.status === "archived") {
     return {
       tone: "danger",
       title: `这张单是「${ORDER_STATUS[order.status].label}」，不能结算`,
-      body: `${ORDER_STATUS[order.status].desc}${order.void_reason ? `。原因：${order.void_reason}` : ""}。这张单不再在窗口算钱，也不能就地改数；要重做这一笔请另开一张磅单重新过磅——已作废的单拿不回结算框（不变式 6，02 §F2.3）。要复核这张单到「磅单中心」查它。`,
+      body: `${ORDER_STATUS[order.status].desc}${order.void_reason ? `。原因：${order.void_reason}` : ""}。这张单不能再结算，也不能就地改数；要重做这一笔请另开一张磅单重新过磅。要复核这张单到「磅单中心」查它。`,
     };
   }
   const alreadySettled = !!bill || order.settled_at != null || order.status === "settled" || order.status === "paid";
@@ -91,7 +91,7 @@ export function settleGateOf(order: WeighOrder | null, bill: Settlement | null, 
     return {
       tone: paid ? "info" : "warning",
       title: paid ? "这张单已经结算并付清了" : "这张单已经结算过，钱的状态不对",
-      body: `结算单 ${bill?.settle_no ?? "已生成"} 于 ${dateTime(bill?.settled_at ?? order.settled_at)}，重复结算在库里就被拦（不变式 6）。${
+      body: `结算单 ${bill?.settle_no ?? "已生成"} 于 ${dateTime(bill?.settled_at ?? order.settled_at)}，不能重复结算。${
         paid ? "客户要再拿一张纸，凭这张结算单号到「结算台账」补打结算凭证或付款小票即可。" : "到「结算台账」打开这张结算单核对已付与未付，再在结算单详情里登记付款。"
       }`,
     };
@@ -126,28 +126,28 @@ export function creditPayGate(bill: Settlement | null, mayPay: boolean): SettleG
     return {
       tone: "danger",
       title: "查不到这张结算单",
-      body: "这张结算单可能是在别的电脑上结的，或号抄错了。到「结算台账」按收款人姓名找一下，或让客户把收购码单拿来在窗口重扫一次。",
+      body: "这张结算单可能是在别的电脑上结的，或号抄错了。到「结算台账」按售粮人姓名找一下，或让客户把收购码单拿来在窗口重扫一次。",
     };
   }
   if (bill.status === "revoked") {
     return {
       tone: "danger",
-      title: `结算单 ${bill.settle_no} 已撤销，不能再收钱`,
-      body: "这张结算单已经被勾掉了（02 §F2.3：它名下那张磅单被作废时结算单同步撤销，钱不再按这张单收）。要重做这一笔，请在磅房另开一张磅单重新过磅结算——原单已作废，不能拿回来再结一次（不变式 6）。",
+      title: `结算单 ${bill.settle_no} 已撤销，不能再登记付款`,
+      body: "它名下那张磅单作废时，这张结算单同步撤销。要重做这一笔，请在磅房另开一张磅单重新过磅结算。",
     };
   }
   if (unpaidFen(bill) <= 0) {
     return {
       tone: "info",
       title: "这张结算单已经付清了",
-      body: `应付 ${money(bill.payable_fen)} 已全额付清（收款人 ${bill.payee_name}）。客户要再拿一张纸，到「结算台账」按这个单号补打结算凭证或付款小票即可。`,
+      body: `应付 ${money(bill.payable_fen)} 已全额付清（售粮人 ${bill.payee_name}）。客户要再拿一张纸，到「结算台账」按这个单号补打结算凭证或付款小票即可。`,
     };
   }
   if (!mayPay) {
     return {
       tone: "danger",
-      title: "当前岗位不能收这笔钱",
-      body: "登记付款需要出纳或站长权限（05 §6.1 pay.record）。请换当班出纳或站长的账号登录，或把这张凭证交给出纳在「付款与挂账」核销。",
+      title: "当前岗位不能登记这笔付款",
+      body: "登记付款需要出纳或站长权限。请换当班出纳或站长的账号登录，或把这张凭证交给出纳在「付款与挂账」核销。",
     };
   }
   return null;
@@ -176,7 +176,7 @@ export function scanRejectNote(code: ScannedCode | null, raw?: string): { tone: 
   if (code.kind === "settlement") {
     return {
       tone: "warning",
-      text: `递过来的是结算凭证（${code.docNo}）：钱已经算过，这一笔是来付尾款的。窗口不再扫这张纸——请到「结算台账」点开这张结算单登记付款，或在对应的磅单详情点「付款」。`,
+      text: `递过来的是结算凭证（${code.docNo}）：这一笔已经算过钱。请到「结算台账」点开这张结算单登记付款，或在对应的磅单详情点「付款」。`,
     };
   }
   if (code.kind === "payment") {
@@ -186,9 +186,9 @@ export function scanRejectNote(code: ScannedCode | null, raw?: string): { tone: 
     return { tone: "warning", text: `递过来的是质检单（${code.docNo}），质检单不能结算。请让客户翻出那张收购码单。` };
   }
   if (code.kind === "outbound") {
-    return { tone: "info", text: `递过来的是出库单（${code.docNo}）：出库是粮站往外发粮，不在磅房窗口算钱。要复核这一笔到「库存与出库」里查它。` };
+    return { tone: "info", text: `递过来的是出库单（${code.docNo}）：出库不在磅房窗口结算。要复核这一笔到「库存与出库」里查它。` };
   }
-  return { tone: "danger", text: `扫到的是本系统没有的单据种类（${code.docNo}）。窗口只认一张纸：收购码单，扫它右下角那个码。` };
+  return { tone: "danger", text: `扫到的是本系统没有的单据（${code.docNo}）。窗口只认收购码单，扫它右下角那个码。` };
 }
 
 /**

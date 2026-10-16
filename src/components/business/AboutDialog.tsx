@@ -1,22 +1,15 @@
 /**
- * 关于本程序：帮助菜单「关于磅禾粮站收粮系统…」点开的这一张。
+ * 关于本程序：帮助菜单「关于…」点开的这一张。
  *
- * 界面上每一行字都取自既有单源，这里不抄第二份：
- * - 产品名 / 版权 / 应用标识 / 一句话简介：src-tauri/tauri.conf.json——装机包、
- *   主窗口标题、AppData 目录名吃的就是这份配置，界面上这行字与它们天然一致；
- * - 版本号：package.json 的 version（四处单源，schema_contract::app_version_is_single_sourced
- *   钉着），由 AppTopbar——守卫点名的那份导入——以 prop 传入；
- * - 仓库地址：package.json 的 repository 字段（npm 标准位）；官网 bh.datawalk.cn。
- *   两条外链都走 ExtLink：点开经 opener 插件默认放行的 https 白名单，不经自开命令。
+ * 界面上每一行字都取自既有单源，这里不抄第二份：产品名 / 版权 / 一句话简介来自
+ * src-tauri/tauri.conf.json；版本号由 AppTopbar——schema_contract::app_version_is_single_sourced
+ * 点名的那份导入——以 prop 传入；GitHub 仓库地址取 package.json 的 repository 字段。
+ * 外链一律走 ExtLink（opener 插件默认放行的 https 白名单），不经自开命令。
  *
- * 「检查更新」走 tauri-plugin-updater：更新源与验签公钥在 tauri.conf.json 的
- * plugins.updater——清单与安装包直接挂**本仓 datawalkcloud/BangHe 的 GitHub Release**，
- * gh-proxy 镜像优先。
- * 流程是 opt-in 的手动检查——不开自动检查，磅房机大多不联网，开局先撞一次超时
- * 只会招人烦。Windows 下安装器拉起后本程序会退出、装完自动重启
- * （InstallOptions.restartAfterInstall 默认 true），所以「安装中」这一态出现后
- * 不需要前端再调重启；走完前关掉弹窗也不影响后台继续装。
- * 浏览器预览没有原生通道，这一区如实替换成一句说明，不演按钮。
+ * 「检查更新」走 tauri-plugin-updater，更新源与验签公钥在 tauri.conf.json 的 plugins.updater。
+ * 只做手动检查：磅房机大多不联网，开局自动检查只会先撞一次超时招人烦。
+ * Windows 下安装器拉起后本程序即退出并自动重启（InstallOptions.restartAfterInstall 默认 true），
+ * 所以「安装中」之后前端不用再调重启。浏览器预览没有原生通道，这一区如实换成一句说明。
  */
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -32,8 +25,11 @@ import conf from "../../../src-tauri/tauri.conf.json";
 
 type Phase = "idle" | "checking" | "available" | "downloading" | "installing";
 
-/** 官网：现场支持与产品介绍的入口（安装包在本仓 GitHub Release / 国内 Gitee 镜像） */
+/** 官网：产品介绍的入口 */
 const SITE_URL = "https://bh.datawalk.cn";
+
+/** 源码仓的国内镜像（GitHub 那份由 package.json 的 repository 单源提供） */
+const GITEE_REPO_URL = "https://gitee.com/datawalkcloud/BangHe";
 
 /** 命令层回的错误可能是裸字符串（Rust 侧约定），别把 `[object Object]` 弹给人 */
 function errText(e: unknown): string {
@@ -85,7 +81,7 @@ export function AboutDialog({
 }) {
   const desktop = runningInTauri();
   const [phase, setPhase] = useState<Phase>("idle");
-  const [updateMeta, setUpdateMeta] = useState<{ version: string; date: string | null; body: string | null } | null>(null);
+  const [updateMeta, setUpdateMeta] = useState<{ version: string; body: string | null } | null>(null);
   const [progress, setProgress] = useState<{ received: number; total: number | null } | null>(null);
   // Update 在 Rust 侧持有资源（清单与已下载字节），不装就得 close，别攥着不放手
   const updateRef = useRef<Update | null>(null);
@@ -116,7 +112,7 @@ export function AboutDialog({
         return;
       }
       updateRef.current = found;
-      setUpdateMeta({ version: found.version, date: found.date ?? null, body: found.body ?? null });
+      setUpdateMeta({ version: found.version, body: found.body ?? null });
       setPhase("available");
     } catch (e) {
       setPhase("idle");
@@ -168,10 +164,17 @@ export function AboutDialog({
           cols={2}
           items={[
             { label: "出品 / 版权", value: conf.bundle.copyright },
-            { label: "运行环境", value: desktop ? "桌面端（Tauri）" : "浏览器预览（演示模式）" },
             { label: "官网", value: <ExtLink url={SITE_URL} text="bh.datawalk.cn" what="官网地址" /> },
-            { label: "应用标识", value: <span className="font-mono text-xs">{conf.identifier}</span> },
-            { label: "开源仓库", value: <ExtLink url={repoUrl} what="仓库地址" />, span: 2 },
+            {
+              label: "开源仓库",
+              value: (
+                <span className="inline-flex items-center gap-3">
+                  <ExtLink url={GITEE_REPO_URL} text="Gitee 源码仓库" what="Gitee 仓库地址" />
+                  <ExtLink url={repoUrl} text="GitHub 源码仓库" what="GitHub 仓库地址" />
+                </span>
+              ),
+              span: 2,
+            },
           ]}
         />
 
@@ -191,8 +194,7 @@ export function AboutDialog({
 
             {phase === "idle" && (
               <p className="text-xs text-muted-foreground">
-                连一次更新源，有比当前版新的安装包就当场下载、静默安装，装完程序自动以新版本重启；
-                完全离线的机器用装机包覆盖安装同样能升级。
+                发现新版点「下载并安装」，装完自动重启到新版；离线电脑用装机包覆盖安装同样能升级。
               </p>
             )}
 
@@ -200,10 +202,6 @@ export function AboutDialog({
               <div className="flex flex-col gap-2">
                 <p className="text-sm">
                   发现新版本 <span className="tnum font-medium">{updateMeta.version}</span>
-                  {updateMeta.date && (
-                    <span className="ml-2 text-xs text-muted-foreground">发布于 {updateMeta.date.slice(0, 10)}</span>
-                  )}
-                  <span className="ml-2 text-xs text-muted-foreground">当前 {version}</span>
                 </p>
                 {updateMeta.body && <p className="whitespace-pre-line text-xs text-muted-foreground">{updateMeta.body}</p>}
                 <div className="flex items-center gap-2">
@@ -225,24 +223,17 @@ export function AboutDialog({
                 <p className="text-xs text-muted-foreground">
                   下载中 {fileSize(progress.received)}
                   {progress.total != null ? ` / ${fileSize(progress.total)}` : ""}
-                  ，下载完自动安装并重启。
                 </p>
               </div>
             )}
 
-            {phase === "installing" && (
-              <p className="text-xs">安装包已就绪，正在启动安装——程序马上会自动退出并以新版本重启。</p>
-            )}
+            {phase === "installing" && <p className="text-xs">正在安装，程序会自动退出并重启。</p>}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">检查更新只在桌面端可用；浏览器预览是演示模式，没有更新通道。</p>
+          <p className="text-xs text-muted-foreground">检查更新只在桌面端可用。</p>
         )}
 
-        <p className="text-xs text-muted-foreground">
-          本项目以 Apache-2.0 协议开源免费，软件永久免费使用；安装包与在线更新清单直接挂在本仓库的 GitHub
-          <span className="font-mono"> Release </span>
-          页，机房上不了网时把那个地址抄给能上网的人下载装机包即可。
-        </p>
+        <p className="text-xs text-muted-foreground">本项目开源免费，采用 Apache-2.0 协议。</p>
       </DialogContent>
     </Dialog>
   );

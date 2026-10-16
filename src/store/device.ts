@@ -80,7 +80,7 @@ export interface ScaleState {
  * 三条通道（probe / 读身份证 / 读 IC）在未登记时都回这一句，界面不必各编各的。
  */
 const READER_NOT_REGISTERED =
-  "设备台账里没有启用的证卡阅读器：请到设备中心登记并启用后再读卡；制单可继续用「搜档案」或手工录入证号";
+  "还没有启用身份证读卡器：请到设备中心登记并启用后再读卡；制单可继续用「搜档案」或手工录入证号";
 
 /** 一次真机探测的结论，与 Rust `idcard::ReaderStatus` 对齐（设备中心状态灯的数据源） */
 export interface ReaderProbe {
@@ -339,8 +339,8 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
           samId: null,
           fingerprint: false,
           error: get().reader.mocked
-            ? "这台读卡器在台账里处于 Mock 模式：身份证通道回演示卡，IC 通道不造假"
-            : "当前是浏览器预览，没有原生设备通道",
+            ? "这台读卡器切成 Mock，只出演示卡，读不到真证件"
+            : "当前是浏览器预览，读不到本机设备；请在桌面端使用",
           at: clock(),
         };
         patch({ probing: false, status: r.status, lastProbe: r });
@@ -523,8 +523,8 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
             reading: false,
             last: null,
             error: st.reader.mocked
-              ? "这台读卡器在台账里是 Mock，IC 通道不给演示数据"
-              : "当前是浏览器预览，没有原生设备通道；请用「npm run tauri dev」启动桌面端后重试",
+              ? "这台读卡器切成 Mock，读不到 IC 卡"
+              : "当前是浏览器预览，没有原生设备通道；请在桌面端重试",
           });
           return null;
         }
@@ -673,7 +673,7 @@ export function useScaleTick(): void {
       useDeviceStore.getState().setScale({
         connected: false,
         stable: false,
-        error: "当前是浏览器预览，没有原生设备通道：请用「npm run tauri dev」启动桌面端后重试",
+        error: "当前是浏览器预览，没有原生设备通道：请在桌面端重试",
       });
       return;
     }
@@ -713,7 +713,7 @@ async function openRealScale(): Promise<void> {
       const res = await nativeScale.start(dev.code);
       failure = res.error ?? null;
     } else {
-      failure = "设备台账里没有启用的真机地磅：请到设备中心登记并启用，工作台可用手工录入继续过磅";
+      failure = "还没有启用的地磅：请到设备中心登记并启用，工作台可用手工录入继续过磅";
     }
   } catch (e) {
     // 台账通道是会抛的那一类，这里兜住：读数流起不来不该把整页崩掉

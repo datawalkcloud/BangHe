@@ -283,7 +283,7 @@ export function QcPage() {
               empty={
                 <EmptyState
                   title="没有符合条件的质检单"
-                  description="换个关键字或把判定条件放开试试；今天还没有样品的话，待检队列里也没有车。"
+                  description="换个关键字或把判定条件放开试试。"
                 />
               }
               toolbar={
@@ -303,18 +303,17 @@ export function QcPage() {
               empty={
                 <EmptyState
                   title="待检队列是空的"
-                  description="所有已登记的磅单都出结果了。新车登记后会立刻出现在这里。"
+                  description="新车登记后会立刻出现在这里。"
                 />
               }
               toolbar={
                 <span className="text-xs text-muted-foreground">
-                  待检 = 已登记但还没有有效化验单的磅单；停留超 60 分钟标黄，队列每 20 秒自动刷新。
+                  待检 = 已登记但还没有有效化验单的磅单；停留超 60 分钟标黄。
                 </span>
               }
             />
             <p className="text-xs text-muted-foreground">
-              化验在项目里没有独立录入页：选中一行后在工作台按 <Kbd>F5</Kbd> 就地填写并保存，
-              这样扦样、填报、定级三步不用离开磅房。
+              选中待检磅单后，在工作台按 <Kbd>F5</Kbd> 就地化验并保存。
             </p>
           </div>
         )}

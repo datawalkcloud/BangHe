@@ -102,7 +102,7 @@ export function QuickPartyDialog({
   // 校验错误按字段归位：红框 + 紧贴控件的红字标在出错字段上，不在弹窗底部聚合清单
   const nameErr = !form.name.trim() ? "姓名必填" : "";
   // 证号与电话至少填一个（02 §F3.1）：没带卡的临时户，留个电话也建得下来
-  const pairErr = !code && !phoneKey ? "身份证号与手机号至少填一个（证号读卡带入，或手工录入 18 位）" : "";
+  const pairErr = !code && !phoneKey ? "身份证号与手机号至少填一个" : "";
   const idBad = !!code && !idOk;
   const idTakenErr = code && idOk && taken ? `该证号已建档（${taken.name}），请改用「搜档案」选人` : "";
   const phoneErr = phoneTaken ? `该手机号已属于档案「${phoneTaken.name}」，一人一号，请改用「搜档案」选人` : "";
@@ -145,7 +145,7 @@ export function QuickPartyDialog({
         `已建档：${p.name}（${p.code}）${p.id_card_no ? ` · ${p.id_card_verified === 1 ? "已核验" : "未核验"}` : ""}`,
         {
           description: photoError
-            ? `档案已建好并选为本单售粮人；人像照片没存上（${photoError}），可到「农户与单位」补。`
+            ? `人像照片没存上（${photoError}），可到「农户与单位」补。`
             : "已选为本单售粮人；开户行、挂账额度、参考皮重请到「农户与单位」补全。",
         },
       );
@@ -169,7 +169,7 @@ export function QuickPartyDialog({
           <DialogDescription className="text-xs">
             {snapshot ? (
               <>
-                读到 {snapshot.name}（<IdCardText value={snapshot.id_card_no} className="tnum" />），系统内没有对应档案。补个电话就能建档，建好直接用于本单制单。
+                读到 {snapshot.name}（<IdCardText value={snapshot.id_card_no} className="tnum" />），补个电话就能建档，建好直接用于本单。
               </>
             ) : (
               "读卡没带出证件信息，可手工录入建一张档案。"
@@ -205,7 +205,7 @@ export function QuickPartyDialog({
               toggleLabel="数字"
               inputMode="numeric"
               autoComplete="off"
-              placeholder="18 位，末位 X 不区分大小写"
+              placeholder="18 位，末位可为 X"
               inputClassName="tnum text-sm"
             />
             <span className={code === "" ? "hidden" : idOk ? "text-xs text-success" : "text-xs text-destructive"}>
@@ -234,14 +234,14 @@ export function QuickPartyDialog({
               toggleLabel="数字"
               inputMode="tel"
               autoComplete="off"
-              placeholder="读卡读不出来，可不填"
+              placeholder="选填"
               inputClassName="tnum text-sm"
             />
             {!!phoneErr && <span className="text-xs text-destructive">{phoneErr}</span>}
             {!code && !!pairErr && <span className="text-xs text-destructive">{pairErr}</span>}
           </div>
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2">
-            住址（写入磅单与台账，迎检必填）
+            住址（迎检必填）
             <Input value={form.address} onChange={(e) => patch({ address: e.target.value })} className="text-sm" />
           </Label>
         </div>

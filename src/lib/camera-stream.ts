@@ -56,7 +56,7 @@ export interface CameraStreamStatus {
 }
 
 const NO_CHANNEL =
-  "当前是浏览器预览，没有 RTSP 画面通道；请用「npm run tauri dev」启动桌面端后看实时画面";
+  "当前是浏览器预览，看不了实时画面；请在桌面端查看";
 
 /** 与 `@/lib/native` 的 `call` 同一套语义：区分"命令失败"与"没有这条通道"，且不抛。 */
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<NativeResult<T>> {
@@ -92,9 +92,9 @@ export function phaseLabel(phase: string): string {
     case "connecting":
       return "正在连摄像机…";
     case "waiting-keyframe":
-      return "已连上，在等第一个关键帧…";
+      return "已连上，画面即将开始…";
     case "streaming":
-      return "画面在流";
+      return "画面正常";
     case "error":
       return "画面中断";
     default:

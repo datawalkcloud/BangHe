@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="../logo.png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>许可与免责｜磅禾粮站收粮系统</title>
+<meta name="description" content="磅禾粮站收粮管理系统的开源许可、免费使用口径，以及按“现状提供”的免责边界。">
+<style>
+/* 令牌与 ../index.html 逐值一致；这里只取正文页用得上的那几枚 */
+:root{
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --primary: oklch(0.515 0.105 151);
+  --warning: oklch(0.72 0.15 75);
+  --grain-gold: #f2be57;
+  --ink-green: #05241a;
+  --leaf: #54d69b;
+  --sans: "PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono: ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+  --hair: 1px solid var(--border);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--background);color:var(--foreground);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;font-feature-settings:"tnum" 1;line-height:1.9}
+a{color:inherit;text-decoration:none}
+.wrap{width:min(760px,calc(100vw - 44px));margin-inline:auto}
+
+.bar{border-bottom:var(--hair);padding:16px 0}
+.bar-in{display:flex;align-items:center;gap:14px}
+.logo{display:flex;align-items:center;gap:11px}
+.logo-mark{width:32px;height:32px;object-fit:contain;display:block}
+.logo-txt strong{display:block;font-size:16px;letter-spacing:.14em;line-height:1.1}
+.logo-txt small{display:block;font:700 9px/1.6 var(--mono);letter-spacing:.2em;color:var(--muted-foreground)}
+.back{margin-left:auto;font-size:13px;font-weight:600;color:var(--muted-foreground)}
+.back:hover{color:var(--primary)}
+
+h1{font-size:clamp(26px,4.6vw,38px);letter-spacing:-.02em;margin:0 0 18px;line-height:1.35}
+h2{font-size:17px;margin:44px 0 12px;padding-top:20px;border-top:var(--hair);letter-spacing:.01em}
+h2 em{font:700 10px/1 var(--mono);letter-spacing:.18em;color:var(--primary);font-style:normal;
+  display:block;margin-bottom:9px}
+p{margin:0 0 14px;font-size:15px}
+ul,ol{margin:0 0 16px;padding-left:1.35em;font-size:15px}
+li{margin:7px 0}
+b{font-weight:700}
+code{font:12.5px/1.6 var(--mono);background:oklch(0.96 0 0);padding:1px 5px}
+.lede{font-size:16px;color:var(--muted-foreground);margin:0 0 8px}
+.note{border-left:3px solid var(--warning);background:oklch(0.98 0.02 90);padding:14px 16px;margin:0 0 18px;font-size:14px}
+.note p{margin:0}
+.foot{margin-top:56px;border-top:var(--hair);padding:26px 0 60px;font-size:12px;color:var(--muted-foreground)}
+.foot a{text-decoration:underline;text-underline-offset:2px}
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="logo" href="../">
+      <img class="logo-mark" src="../logo.png" alt="">
+      <span class="logo-txt"><strong>磅禾</strong><small>BANGHE</small></span>
+    </a>
+    <a class="back" href="../">返回官网</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>许可与免责</h1>
+  <p class="lede">软件不收钱，也不替你把关。这一页把两件事说清：你能自由用它做什么，以及出了事谁负责。</p>
+
+  <div class="note">
+    <p><b>一句话版：</b>磅禾按 <b>Apache-2.0</b> 开源免费，可商用、可修改、可分发；软件按「现状」提供，
+    <b>不含任何担保</b>，因使用产生的磅单差错、结算差额、数据丢失、罚款或其他损失，我们不承担赔偿责任。
+    地磅属于强制检定的贸易结算计量器具，<b>计量准确与贸易结算的责任在用它的这一方</b>。</p>
+  </div>
+
+  <h2><em>01</em>许可：你可以做什么</h2>
+  <ul>
+    <li>免费下载、安装、永久使用，<b>不收授权费、年费，不按过磅车次抽成</b>。</li>
+    <li>在自己的站点上用到任意多台磅、任意多个操作员，不限站点数量。</li>
+    <li>读源码、改源码、把改过的版本继续分发（含企业内部自用的改造）。</li>
+    <li>商用没有问题：收粮、结算、开票、对外经营都在许可范围内。</li>
+  </ul>
+  <p>条件是 Apache-2.0 那几条老规矩：保留版权与许可声明，改动过的文件要注明，分发时附上许可证副本；
+  不得使用「磅禾 / BANGHE」名义为衍生版本背书；商标与产品名称不在授权范围内。</p>
+
+  <h2><em>02</em>我们不担保什么</h2>
+  <p>软件按「现状」和「现有基础」提供，明示或暗示的担保一律没有。具体到磅房，包括但不限于：</p>
+  <ul>
+    <li><b>不担保称重结果准确。</b>程序显示的是你这套仪表通过串口送进来的读数。仪表零点漂移、传感器故障、
+      接线与接地问题、地基沉降、偏载、外界震动，都会让读数不对，而程序只会照实显示它收到的那个数。</li>
+    <li><b>不担保与你的设备一定兼容。</b>仪表按帧族适配、按帧模板解析，同一型号不同批次都可能是两套协议。
+      没适配过的帧可能读不出、读错或需要人工改模板。</li>
+    <li><b>不担保不间断可用。</b>断电、系统更新、打印机缺纸脱机、读卡器掉线、磁盘坏道都可能让作业中断。</li>
+    <li><b>不担保金额、扣量、台账一定符合你的经营要求。</b>扣率参数、单价、水分杂质判定标准由你自己在系统里设定，
+      算出来的结论要人复核。</li>
+    <li><b>不担保完全满足监管或税务口径。</b>各地粮食收购、计量、税务要求不同，是否合规由使用者自行确认；
+      台账报表可作为记录载体，不代替法定票证。</li>
+  </ul>
+
+  <h2><em>03</em>责任边界</h2>
+  <p>在法律允许的最大范围内，无论以何种责任理论主张，我们也<b>不赔偿</b>下列损失：</p>
+  <ul>
+    <li>磅单差错、重量或单价算错导致的结算差额、退赔、纠纷处理成本；</li>
+    <li>业务中断、收粮延误、车辆排队、粮食积压或变质带来的损失；</li>
+    <li>磅单、单据、附件照片、台账或数据库丢失、损坏、被误删；</li>
+    <li>监管处罚、检定不合格、计量或税务争议产生的罚款与费用；</li>
+    <li>第三方（硬件厂家、外设固件、Windows 更新、宽带与远程工具）造成的影响；</li>
+    <li>任何间接的、偶然的、特殊的、惩罚性的或可得利益损失。</li>
+  </ul>
+  <p>这一条对免费软件尤其讲得通：<b>免费提供的东西没有对价</b>，我们不从中按车次抽一分钱，
+  也就无法按经营损失承担责任。</p>
+
+  <h2><em>04</em>这四件事必须在你的这一边</h2>
+  <ol>
+    <li><b>计量检定。</b>地磅作为贸易结算计量器具，周期检定、铅封、日常校准、误差复核是你的法定义务。
+      软件里的称重轨迹记录是给你留痕用的，不是检定合格的替代。</li>
+    <li><b>复核与经办。</b>磅单打印前核对车号、皮毛重、扣量、金额；付款前对账单逐笔确认。
+      系统里的岗位分工和审计留痕是为了让差错可追溯，不能替你把关。</li>
+    <li><b>备份。</b>整套数据就在本机一个数据库文件加附件目录里。平时自动备份保留 30 份，
+      换机、重装、磁盘故障前请自己先复制一份到别的介质。恢复请走界面里的「系统 → 恢复备份」，
+      <b>程序开着的时候不要用文件管理器直接覆盖库文件</b>——那是库损坏最常见的原因。
+      因未备份或操作不当丢失的数据，我们不负责找回。</li>
+    <li><b>账号与个人信息。</b>岗位账号、密码、身份证与 IC 卡信息、抓拍照片由你保管和授权。
+      员工泄露、离职未收权限、把电脑借给别人用，责任在这一方。</li>
+  </ol>
+
+  <h2><em>05</em>哪些不是免责能挡掉的</h2>
+  <p>写这一节是因为「什么都想免责」的协议没有效力，也不诚实：</p>
+  <ul>
+    <li>造成人身损害的免责约定无效；因故意或者重大过失造成对方财产损失的，免责约定同样无效
+      （《民法典》第五百零六条）。</li>
+    <li>另立书面合同的服务——上门装机、调试、定制开发、技术支持——<b>按合同办事</b>。
+      合同与本页面冲突时，以合同为准。</li>
+    <li>法律不允许我们排除的其他义务。</li>
+  </ul>
+
+  <h2><em>06</em>这一页会怎么变</h2>
+  <p>口径变了我们就改这一页并在官网发布；重大改动会在页面顶注更新日期。软件本身的使用条件仍以仓库里的
+  <code>LICENSE</code>（Apache-2.0）正文为准，本页是把它和磅房现场的责任划分讲成人话，
+  不是替代那份许可证。需要走纠纷时，以条款原文为准。</p>
+
+  <p>需要装机、演示或技术支持，请按官网上的联系方式找服务人员：说清磅数、日车流量、仪表型号和打印机，
+  我们按现场给方案。</p>
+
+  <div class="foot">
+    <p>更新日期：2026 年 10 月 16 日 ｜ <a href="./privacy/">隐私政策</a> ｜ <a href="../">官网</a> ｜
+    源码：<a href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener">Gitee</a> ·
+    <a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">GitHub</a></p>
+  </div>
+</main>
+</body>
+</html>

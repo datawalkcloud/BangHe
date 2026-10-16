@@ -19,7 +19,7 @@ function SwatchCard({ preset, tokens }: { preset: { key: string; zh: string; tit
   return (
     <ToggleGroupItem
       value={preset.key}
-      title={`${preset.title} · ${preset.key}`}
+      title={preset.zh}
       className="group/sw h-auto min-w-0 shrink basis-auto flex-col items-start gap-1 rounded-none border-0 bg-transparent p-0 text-left text-xs shadow-none hover:bg-transparent"
     >
       <span
@@ -45,7 +45,7 @@ function ChartSwatchCard({ preset, tokens }: { preset: { key: string; zh: string
   return (
     <ToggleGroupItem
       value={preset.key}
-      title={`${preset.title} · ${preset.key}`}
+      title={preset.zh}
       className="group/sw h-auto min-w-0 shrink basis-auto flex-col items-start gap-1 rounded-none border-0 bg-transparent p-0 text-left text-xs shadow-none hover:bg-transparent"
     >
       <span
@@ -190,7 +190,7 @@ export function ThemeSettingsPanel() {
         <Card size="sm">
           <CardHeader>
             <CardTitle className="text-sm">预览</CardTitle>
-            <CardAction><span className="text-xs text-muted-foreground">随设置即时更新</span></CardAction>
+            <CardAction><span className="text-xs text-muted-foreground">即时更新</span></CardAction>
           </CardHeader>
           <CardContent>
             <PreviewPair palette={palette} />

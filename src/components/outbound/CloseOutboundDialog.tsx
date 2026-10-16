@@ -73,8 +73,8 @@ export function CloseOutboundDialog({
             ) : (
               <>
                 {order?.order_no} 已扣减库存。红冲会把原单标记为「已红冲」并
-                <b>另补一条对称入库流水</b>把粮记回原仓房——
-                原来那条出库流水按账本规矩保留、不涂改。
+                <b>另补一条入库流水</b>把粮记回原仓房；
+                原来那条出库记录保留、不涂改。
               </>
             )}
           </DialogDescription>
@@ -82,7 +82,7 @@ export function CloseOutboundDialog({
 
         <div className="flex flex-col gap-2">
           <span className="text-xs text-muted-foreground">
-            {mode === "void" ? "作废原因" : "红冲原因"}（必填，至少 {VOID_REASON_MIN} 个字，进审计留痕）
+            {mode === "void" ? "作废原因" : "红冲原因"}（必填，至少 {VOID_REASON_MIN} 个字）
           </span>
           <ComboBox
             aria-label={mode === "void" ? "作废原因" : "红冲原因"}

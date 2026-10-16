@@ -127,7 +127,7 @@ export function PrintPreview({
               <PrinterIcon />
               <AlertTitle>{printer.name} 不可用</AlertTitle>
               <AlertDescription className="flex items-center gap-2">
-                <span>{printer.lastError ?? "设备离线"}。作业不会被阻塞，可换用本机已连接的打印机输出。</span>
+                <span>{printer.lastError ?? "设备离线"}，可改用本机已连接的打印机输出。</span>
                 <Button size="xs" variant="outline" onClick={() => setChannel("preview")}>
                   改窗口预览打印
                 </Button>
@@ -163,9 +163,6 @@ export function PrintPreview({
                 options={(Object.keys(PRINT_CHANNEL) as PrintChannel[]).map((k) => ({ value: k, label: PRINT_CHANNEL[k] }))}
               />
             </Field>
-            <p className="pb-1 text-xs text-muted-foreground">
-              打印内容会快照进 print_log，以便日后回答"当初那张纸打的是什么"
-            </p>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>

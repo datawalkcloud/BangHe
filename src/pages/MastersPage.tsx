@@ -277,7 +277,7 @@ function VarietiesSection() {
   return (
     <div className="flex flex-col gap-3">
       <SectionBar
-        note="基准值只用于化验超标提示与定级参考，不参与自动扣量——计价引擎首版不做（02 §F4.4）。"
+        note="基准值只用于化验超标提示与定级参考，不参与自动扣量。"
         action={
           <Button
             size="sm"
@@ -299,7 +299,7 @@ function VarietiesSection() {
           <DialogHeader>
             <DialogTitle className="text-sm">{form.id == null ? "新增品种" : `编辑品种 ${form.name}`}</DialogTitle>
             <DialogDescription className="text-xs">
-              停用品种不影响历史磅单，只挡住新单。国标基准留空即"本站尚未核定"，不会写 0 进库。
+              停用只挡住新单，不影响历史磅单。基准留空表示尚未核定。
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -372,7 +372,7 @@ function VarietiesSection() {
             <DialogDescription className="text-xs">
               将彻底移除
               {pendingDelete ? <span className="font-medium"> {pendingDelete.name} · {pendingDelete.code}</span> : null}
-              。已被价目表或历史磅单引用过的品种不可删除，只能「停用」（在编辑里关掉启用，留档保追溯）。此操作不可撤销。
+              。已被价目表或历史磅单引用过的品种不可删除，只能「停用」。此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -632,7 +632,7 @@ function WarehousesSection() {
   return (
     <div className="flex flex-col gap-3">
       <SectionBar
-        note="仓房与货位是磅单「入仓去向」的备选项：多数站点制单时不登记，留空照样取号制单；只有要按去向统计的站点才需要维护到位。停用只挡住新单，历史磅单上的货位照旧可查。"
+        note="磅单「入仓去向」从这里取候选，不登记照样能制单。停用只挡住新单。"
         action={
           <Button
             size="sm"
@@ -649,7 +649,7 @@ function WarehousesSection() {
       />
       {!editable && (
         <CallOut tone="neutral" title="当前岗位只能查看">
-          仓房、货位的增改属基础档案写入，需站长岗位（02 §11 权限矩阵）。
+          需要站长岗位才能新增或修改仓房与货位。
         </CallOut>
       )}
       <DataTable
@@ -659,7 +659,7 @@ function WarehousesSection() {
         empty={
           <EmptyState
             title="还没有仓房档案"
-            description={editable ? "点右上「新增仓房」建第一处，再给它加货位；建完即时落库。" : "请以站长身份登录后维护仓房与货位。"}
+            description={editable ? "点右上「新增仓房」建第一处，再给它加货位。" : "请以站长身份登录后维护仓房与货位。"}
           />
         }
       />
@@ -725,7 +725,7 @@ function WarehousesSection() {
               {slotForm?.id == null ? `新增货位 · ${slotForm?.warehouseName}` : `编辑货位 ${slotForm?.code}`}
             </DialogTitle>
             <DialogDescription className="text-xs">
-              货位编码在同一仓房内唯一，留空即按仓房编码自动补号；简称用于磅单与看板显示，留空则用编码。
+              货位编码在同一仓房内唯一，留空自动生成；简称用于磅单显示，留空则用编码。
             </DialogDescription>
           </DialogHeader>
           {slotForm && (
@@ -800,7 +800,7 @@ function WarehousesSection() {
             <DialogDescription className="text-xs">
               将移除
               {pendingDeleteW ? <span className="font-medium"> {pendingDeleteW.name} · {pendingDeleteW.code}</span> : null}
-              及其名下货位。已被磅单、出入库流水或往来单位「常用去向」引用过的仓房不可删除，只能「停用」（在编辑里关掉启用，留档保追溯）。此操作不可撤销。
+              及其名下货位。已被磅单、出入库流水或「常用去向」引用过的仓房不可删除，只能「停用」。此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -990,7 +990,7 @@ function PricesSection() {
   return (
     <div className="flex flex-col gap-3">
       <SectionBar
-        note="调价只追加新行，不改已生效过的历史价：历史价是已结算磅单的计算依据，改了等于伪造账目（01 §F2.3）。"
+        note="调价请发布新价目，已生效过的历史价不可改。"
         action={
           <Button size="sm" disabled={!editable} onClick={() => { setForm(emptyPrice()); setOpen(true); }}>
             {editable ? <PlusIcon /> : <LockIcon />}
@@ -1000,7 +1000,7 @@ function PricesSection() {
       />
       {!editable && (
         <CallOut tone="neutral" title="当前岗位不能调价">
-          调价权限只给站长（`price.edit`）。你现在是 {actor ? actor.role : "—"}，只能查看。
+          调价需要站长岗位。你当前是 {actor ? actor.role : "—"}，只能查看。
         </CallOut>
       )}
       <DataTable
@@ -1009,7 +1009,7 @@ function PricesSection() {
         rowKey={(p) => p.id}
         defaultPageSize={100}
         rowClassName={(p) => (today >= p.effective_from && today <= p.effective_to ? undefined : "text-muted-foreground")}
-        empty={<EmptyState title="还没有价目" description="没有价目时工作台只能手工定价（建议填写改价事由留痕）。" />}
+        empty={<EmptyState title="还没有价目" description="没有价目时，工作台制单只能手工填单价。" />}
       />
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -1154,7 +1154,7 @@ function QuickOptionsSection() {
     },
     {
       key: "value",
-      header: "点一下填进文本框的那句话",
+      header: "完整内容",
       cell: (o) => <span className="text-xs text-muted-foreground">{o.value}</span>,
     },
     { key: "sort", header: "排序", align: "right", cell: (o) => <span className="tnum">{o.sort_order}</span>, sortValue: (o) => o.sort_order },
@@ -1192,16 +1192,16 @@ function QuickOptionsSection() {
   ];
 
   // 校验错误按字段归位，红框+红字直接标在简称/完整内容上
-  const qoLabelErr = form && !form.label.trim() ? "简称必填：下拉清单上就显示这几个字" : "";
-  const qoValueErr = form && !form.value.trim() ? "完整内容必填：点一下要填进文本框的就是这句话" : "";
+  const qoLabelErr = form && !form.label.trim() ? "简称必填" : "";
+  const qoValueErr = form && !form.value.trim() ? "完整内容必填" : "";
 
   /** 分组顺序按 QUICK_OPTION_KINDS（不按字母序、不按库里的 kind 字典序），与字段用侧的话术一致 */
   return (
     <div className="flex flex-col gap-3">
-      <SectionBar note="这里只预备下拉里的候选，不锁死输入：作废事由、改价事由、拒收原因等落库仍是自由文本，操作员照样能手打一句没备过的话。停用只是从清单里收起来，删除也不动历史单据——单据上存的是那句话本身，不引用这里的行。" />
+      <SectionBar note="这里只是下拉候选，事由仍可手打。停用或删除都不影响历史单据。" />
       {!editable && (
         <CallOut tone="neutral" title="当前岗位只能查看">
-          常用语的增删改属基础档案写入，需站长岗位（02 §11 权限矩阵）。
+          需要站长岗位才能维护常用语。
         </CallOut>
       )}
       {QUICK_OPTION_KINDS.map(({ kind, label, where }) => {
@@ -1234,7 +1234,7 @@ function QuickOptionsSection() {
               rowClassName={(o) => (o.is_active === 1 ? undefined : "text-muted-foreground")}
               empty={
                 <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-muted-foreground">
-                  这一类已经删空，工作台上就没有候选、只能手打。
+                  这一类已删空，工作台上只能手打。
                   <Button size="xs" variant="ghost" disabled={!editable} onClick={() => setForm(quickOptionForm(kind))}>
                     补一句
                   </Button>
@@ -1253,7 +1253,7 @@ function QuickOptionsSection() {
               {form?.id == null ? `新增常用语 · ${form ? QUICK_OPTION_KINDS.find((k) => k.kind === form.kind)?.label : ""}` : `编辑常用语「${form?.label}」`}
             </DialogTitle>
             <DialogDescription className="text-xs">
-              简称是下拉清单上看的短词，完整内容是点一下真正填进文本框、进单据与审计的那句话；两者可以不一样（简称「水分超高」，内容「水分超过拒收上限，现场退粮」）。
+              简称是下拉清单上显示的短词，完整内容是点选后填进文本框的那句话，两者可以不一样。
             </DialogDescription>
           </DialogHeader>
           {form && (
@@ -1275,7 +1275,7 @@ function QuickOptionsSection() {
               </Field>
               <Label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
                 <Switch checked={form.active} onCheckedChange={(v) => patch({ active: v === true })} aria-label="启用常用语" />
-                启用（停用只从下拉里收起来，不删历史单据上的那句话）
+                启用（停用后不再出现在下拉里）
               </Label>
             </div>
           )}
@@ -1302,7 +1302,7 @@ function QuickOptionsSection() {
             <DialogDescription className="text-xs">
               将彻底移除
               {pendingDelete ? <span className="font-medium"> {pendingDelete.label}</span> : null}
-              。单据上存的是那句文本本身、不引用这一行，所以删掉不影响任何历史单据，只是以后下拉里不再候选。需要留档的话改用「停用」。
+              。删除不影响历史单据，只是以后下拉里不再出现。需要留档请改用「停用」。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1360,14 +1360,14 @@ function SettingsSection() {
   if (!editable) {
     return (
       <CallOut tone="neutral" title="站点参数只读">
-        参数写入需要站长岗位（`setting.write`）。改动会立刻影响正在进行的过磅作业，因此不允许磅员改。
+        需要站长岗位才能改参数，改动会立刻影响正在进行的过磅作业。
       </CallOut>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <SectionBar note="每项参数都写审计日志（改前值、改后值、谁改的），日对账异常时先回来看这里。" />
+      <SectionBar note="日对账对不上时，先回这里核对参数有没有被改过。" />
       {groups.map(([group, items]) => (
         <Card key={group} size="sm" className="gap-0 p-0">
           <CardHeader className="items-center px-3 py-2">
@@ -1497,7 +1497,7 @@ function WarehouseSettingChoose({
       value={value}
       disabled={busy}
       onChange={onPick}
-      options={[{ value: "", label: "不预设（制单留未定）" }, ...options]}
+      options={[{ value: "", label: "不预设（制单时再选）" }, ...options]}
     />
   );
 }

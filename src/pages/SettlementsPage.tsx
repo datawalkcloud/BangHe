@@ -195,15 +195,15 @@ export function SettlementsPage() {
               value={money(totals.unpaid, false)}
               unit="元"
               tone={totals.unpaid > 0 ? "warning" : "success"}
-              hint={allowCredit ? "站点允许挂账" : "站点已关闭挂账"}
+              hint={allowCredit ? "允许挂账" : "已关闭挂账"}
             />
             <StatCard label="覆盖磅单" value={String(totals.orders)} unit="张" hint={`结算重量 ${weight(totals.settle_01kg)}`} />
           </StatCardGrid>
 
           {overdue.length > 0 && (
-            <CallOut tone="danger" title={`${overdue.length} 张结算单已逾期未付`}>
+            <CallOut tone="danger" title={`${overdue.length} 张挂账已逾期`}>
               最长逾期 {overdue[0].overdue_days} 天（{overdue[0].settlement.payee_name}，未付 {money(overdue[0].unpaid_fen)}）。
-              逾期口径来自站点参数「付款期限天数」，请到付款挂账页逐笔核销。
+              请到付款挂账页逐笔核销。
               <Link to="/payments" className="ml-1 underline underline-offset-2">
                 前往处理
               </Link>
@@ -213,7 +213,7 @@ export function SettlementsPage() {
           {poolOrders > 0 && (
             <CallOut
               tone="warning"
-              title={`待结算池里还压着 ${poolOrders} 张磅单（约 ${money(poolFen)}）`}
+              title={`待结算磅单 ${poolOrders} 张（约 ${money(poolFen)}）`}
               action={
                 <Button size="xs" variant="outline" onClick={() => void navigate({ to: "/workstation" })}>
                   去结算
@@ -225,7 +225,7 @@ export function SettlementsPage() {
                 .map((g) => `${g.party.name} ${g.rows.length} 张`)
                 .join("、")
                 .concat(pool.length > 4 ? ` 等 ${pool.length} 人` : "")}
-              。粮已进仓、钱未算清，当天必须结完，否则日对账不平。
+              。当天必须结完，否则日对账不平。
             </CallOut>
           )}
 
@@ -281,17 +281,17 @@ export function SettlementsPage() {
             empty={
               <EmptyState
                 title="没有符合条件的结算单"
-                description="结算单在磅房工作台凭码单生成；挂账的会停在未付款状态等核销。"
+                description="结算单在磅房工作台生成；换个状态或清空关键字再查一次。"
               />
             }
             toolbar={
               capped ? (
                 <span className="text-xs text-warning">
-                  单次最多取回 {SETTLEMENT_SCAN_LIMIT} 条，上方合计与本页金额都是部分和——请把付款状态筛成单项或缩短关键字后分段核对。
+                  单次最多取回 {SETTLEMENT_SCAN_LIMIT} 条，上方合计只是部分和；请按付款状态或关键字分段筛后再核对。
                 </span>
               ) : (
                 <span className="text-xs text-muted-foreground">
-                  合计行来自当前筛选的全集，不是本页 50 条之和；撤销的结算单保留划线记录，不物理删除。
+                  合计行是当前筛选结果的全集之和，不是本页 50 条之和；已撤销的单仍会列出。
                 </span>
               )
             }

@@ -178,7 +178,7 @@ export function StockPage() {
         title="库存账"
         description={
           tab === "balance"
-            ? `结存 = Σ入 − Σ出，按 仓房 × 品种 · 全站在库 ${ton(totalBalance)}${negative.length ? ` · ${negative.length} 格为负（超库存出库未拦）` : ""}`
+            ? `全站在库 ${ton(totalBalance)}${negative.length ? ` · ${negative.length} 格为负（超库存出库未拦）` : ""}`
             : `共 ${movementsQ.data?.total ?? 0} 条流水 · 当前筛选净变动 ${ton(moves.reduce((s, r) => s + r.signed_01kg, 0))}`
         }
         tabs={
@@ -268,7 +268,7 @@ export function StockPage() {
             {grouped.length === 0 ? (
               <EmptyState
                 title="还没有任何库存流水"
-                description="入库侧从「磅单登记入仓去向 + 结算完成」自动落账，出库侧从「出库单完成出库」落账。"
+                description="过磅结算并登记入仓去向、或完成出库单后，这里会自动出现流水。"
               />
             ) : null}
             {grouped.map((g) => (
@@ -345,8 +345,7 @@ export function StockPage() {
               </Card>
             ))}
             <p className="text-xs text-muted-foreground">
-              结存不含未结算的入仓量：扣水扣杂在结算那一刻才逐项录入，之前数量未定；已卸磅未结算的部分看「待入账」一栏。
-              货位只出现在流水里，不参与结存。红冲不改历史出库流水，另补一条对称入库行把货记回原仓房。
+              结存不含未结算入仓量，已卸磅未结算部分见「待入账」；货位不计入结存；红冲不改历史流水。
             </p>
           </div>
         ) : (

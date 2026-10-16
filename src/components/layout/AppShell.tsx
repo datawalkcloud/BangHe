@@ -355,8 +355,7 @@ function ShellContent({
       />
       {demo && (
         <div className="border-b bg-warning/10 px-4 py-1.5 text-xs text-warning">
-          浏览器演示模式：没有原生通道，<b>密码不做校验</b>，数据全是模拟。真实登录、真库与外设都要用桌面版（
-          <span className="font-mono">npm run tauri dev</span>）。
+          浏览器演示模式：没有原生通道，<b>密码不做校验</b>，数据全是模拟。真实登录、真库与外设请用桌面端。
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">

@@ -212,7 +212,7 @@ export function SettleForm({
       }),
     onSuccess: (r) => {
       if (!r) {
-        toast.error("结算失败：净重缺失或扣重后重量不大于 0");
+        toast.error("结算没有成功：净重未确定，或扣重后没有剩余重量");
         announce("结算没有成功，这张单的净重或扣重不对", `settle-bad:${order.order_no}`);
         return;
       }
@@ -263,7 +263,7 @@ export function SettleForm({
       setPkg(o.package_deduct_01kg ?? next?.default_package_deduct_01kg ?? 0);
       toast.success(
         `品种已改为「${o.variety_name ?? "未定品种"}」，${
-          l ? `单价按价目表重带为 ${fmtPrice(l.price_fen_per_ton)}` : "该品种当前没有生效价，单价已清空、请手工填价"
+          l ? `单价按价目表重带为 ${fmtPrice(l.price_fen_per_ton)}` : "该品种没有生效价，单价已清空，请手工填价"
         }`,
       );
       announce("品种改了，单价已按新品种重新带出", `settle-variety:${o.order_no}`);
@@ -284,9 +284,9 @@ export function SettleForm({
    */
   const gate: { msg: string; field?: "variety" | "price" | "method" | "payAmount" } | null =
     order.variety_id == null
-      ? { msg: "本单还没有定收购品种：请先在上面的「收购品种」里选定，才有价可依", field: "variety" }
+      ? { msg: "还没定收购品种，请先在上方「收购品种」选定", field: "variety" }
       : order.net_weight_01kg == null
-        ? { msg: "本单净重未确定，还没完成过磅" }
+        ? { msg: "本单净重未确定，还不能结算" }
         : !canSettle
           ? { msg: "当前岗位无权结算，需磅员、出纳或站长" }
           : preview.blocked
@@ -295,18 +295,18 @@ export function SettleForm({
               ? { msg: "请填写单价，或点「从价目带出」", field: "price" }
               : payNow
                   ? !can("pay.record")
-                    ? { msg: "当场付款需要出纳或站长登记，当前操作员只能挂账" }
+                    ? { msg: "当场付款需出纳或站长，当前岗位只能挂账" }
                     : // 支付方式不预选，就必得有人真选一下：钱从哪条渠道出去是台账要认的，
                       // 与"作废必须写清为什么"同一条道理——凡是能事后被追问的数，不许由默认值代答
                       method === ""
-                      ? { msg: "请选择支付方式：当场付款要记明这笔钱是怎么付的", field: "method" }
+                      ? { msg: "请选择支付方式", field: "method" }
                       : preview.payableAmountFen != null && payAmountFen > preview.payableAmountFen
-                        ? { msg: "本次实付大于应付，付款不能超过应付金额", field: "payAmount" }
+                        ? { msg: "本次实付不能大于应付", field: "payAmount" }
                         : preview.payableAmountFen != null && preview.payableAmountFen > 0 && payAmountFen <= 0
-                          ? { msg: "本次实付必须大于 0；一分钱都不付就取消「当场已付」改走挂账", field: "payAmount" }
+                          ? { msg: "本次实付要大于 0；不付款请取消「当场已付」改走挂账", field: "payAmount" }
                           : null
                   : !allowCredit
-                    ? { msg: "站点参数已关闭「允许挂账」，只能当场付清" }
+                    ? { msg: "已关闭挂账，本单只能当场付清" }
                     : null;
   /** 不放行的文案（提交闸门与语音共用）；字段级的还会长在对应控件上 */
   const blocked = gate?.msg ?? null;
@@ -324,7 +324,7 @@ export function SettleForm({
   const changedFromQc = (now: number, from: number | null) =>
     from == null || now === from
       ? undefined
-      : `已改动：化验单是 ${weight(from)}，结算与票面一律按本单算（化验单保持原值）`;
+      : `已改动：化验单为 ${weight(from)}，本单与票面按此处计算（化验单不改）`;
 
   /** 改等级：价目表带出的价跟着新等级走；手填/已偏离的价不动——那通常是现场议价的结果 */
   function changeGrade(next: string) {
@@ -387,7 +387,7 @@ export function SettleForm({
         {/* 品种是价目表唯一的锚：没定品种时不说清"为什么带不出价"，磅员会以为是价目表没维护 */}
         {order.variety_id == null && (
           <p className="text-xs text-destructive">
-            这张单制单时没定品种。单价、袋重、化验指标都跟着品种走，先在这里选定才能结算。
+            制单时没定品种，先在这里选定才能结算。
           </p>
         )}
       </div>
@@ -404,7 +404,7 @@ export function SettleForm({
         </Label>
         {qc?.grade && qc.grade !== grade && (
           <p className="text-xs text-warning">
-            化验定级 {qc.grade}，本单按 {grade || "未定级"} 结算（留痕可查）
+            化验定级 {qc.grade}，本单按 {grade || "未定级"} 结算
           </p>
         )}
       </div>
@@ -422,7 +422,7 @@ export function SettleForm({
               : deviates
                 ? "已偏离价目表现行价"
                 : listed == null && priceFenPerTon != null
-                  ? "无生效价目，手工定价"
+                  ? "无生效价，手工定价"
                   : undefined
           }
         />
@@ -436,13 +436,13 @@ export function SettleForm({
         </div>
         {showReason && (
           <div className="flex flex-col gap-1 text-xs text-warning">
-            <span>改价事由（选填，写了才随结算留痕）</span>
+            <span>改价事由（选填）</span>
             <ComboBox
               aria-label="改价事由"
               presets={priceOptions}
               value={overrideReason}
               onChange={setOverrideReason}
-              placeholder="选一条常用的，或写清楚为什么改价…"
+              placeholder="选一条常用的，或填写改价原因…"
               className="h-7 border-warning/50 text-xs"
             />
           </div>
@@ -525,7 +525,7 @@ export function SettleForm({
         </div>
         {/* 支付方式是 `Choose`（原生 select），没有 MoneyField 那样的 `hint` 位，卡点就挨着它写一行 */}
         {gate?.field === "method" && <p className="text-xs text-destructive">{gate.msg}</p>}
-        {!payNow && !allowCredit && <p className="text-xs text-warning">站点参数已关闭挂账，本单必须当场付清。</p>}
+        {!payNow && !allowCredit && <p className="text-xs text-warning">已关闭挂账，本单须当场付清。</p>}
         {canPartPay && preview.payableAmountFen != null && preview.payableAmountFen > 0 && (
           <div className="flex flex-col gap-0.5">
             <MoneyField

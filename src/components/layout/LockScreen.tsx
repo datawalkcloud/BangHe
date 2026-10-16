@@ -78,7 +78,7 @@ export function LockScreen() {
           </div>
           <DialogTitle className="text-base">已锁屏</DialogTitle>
           {/* 为什么锁的（超时 / 手动）由 store 的 notice 说清楚，这里不再自己抄一份时长 */}
-          <DialogDescription>{notice ?? "登录会话仍在，需验证身份后继续"}</DialogDescription>
+          <DialogDescription>{notice ?? "会话仍在，输入密码即可继续"}</DialogDescription>
           {actor && (
             <p className="text-xs text-muted-foreground">
               请输入 <span className="font-medium text-foreground">{actor.displayName}</span>（{ROLE[actor.role]}）的登录密码
@@ -119,7 +119,7 @@ export function LockScreen() {
             {capsOn && <p className="text-xs text-warning">大写锁定已开启，密码很可能输错了。</p>}
             <Button type="submit" disabled={busy || accountLocked || !password} className="mt-1 w-full">
               <LogInIcon data-slot="icon" />
-              {busy ? "校验中…" : "解锁继续"}
+              {busy ? "正在解锁…" : "解锁继续"}
             </Button>
             <p className="text-center text-xs text-muted-foreground">
               {demo ? "演示模式不校验密码，输入任意内容即解锁" : <>回车即解锁 <Kbd>Enter</Kbd></>}

@@ -140,13 +140,13 @@ export function QcDetailBody({
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <div className="flex flex-col gap-4">
           {report.is_effective === 0 && (
-            <CallOut tone="warning" title="本单不是当前有效质检单">
-              复检完成后本单转为留档，计价以复检单为准。留档不可删除，用于追溯当时的判定依据。
+            <CallOut tone="warning" title="非当前有效质检单">
+              复检完成后本单转为留档，计价以复检单为准；留档不可删除。
             </CallOut>
           )}
           {report.decision === "reject" && (
             <CallOut tone="danger" title="本批判价为拒收">
-              拒收原因：{orDash(report.reject_reason)}。拒收磅单不参与任何汇总统计（01 §F3.5）。
+              拒收原因：{orDash(report.reject_reason)}。拒收磅单不计入汇总统计。
             </CallOut>
           )}
 
@@ -197,9 +197,8 @@ export function QcDetailBody({
                   ]}
                 />
                 <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
-                  扣水/扣杂为化验员人工录入值，在本单里只作<span className="text-foreground">结算建议</span>：
-                  结算时若现场另有议定，改的是磅单上那一份、不会回写这张化验单（复检另立新单，本单永不改写）。
-                  水分增扣量、等级加减价的规则引擎首版不实现（02 §F4.4），因此这里的扣重不会被任何公式自动改写。
+                  扣水/扣杂为化验员录入值，只作<span className="text-foreground">结算建议</span>：
+                  结算时若现场另有议定，改磅单上那一份，本单不回写。
                 </p>
               </div>
             </section>

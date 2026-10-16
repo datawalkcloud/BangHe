@@ -212,7 +212,7 @@ export function LoginPage() {
               <AlertTitle>账号已临时锁定</AlertTitle>
               <AlertDescription>
                 连错密码次数已达上限，请 <span className="tnum font-semibold">{Math.ceil(lockedLeft / 60)}</span> 分钟后再试。
-                <span className="mt-1 block text-xs">找站长在「系统与审计 → 员工与岗位」里重置密码也可以。</span>
+                <span className="mt-1 block text-xs">也可找站长在「系统与审计 → 员工与岗位」里重置。</span>
               </AlertDescription>
             </Alert>
           )}
@@ -263,7 +263,7 @@ export function LoginPage() {
           ) : (
             <form onSubmit={submitSetup} className="flex flex-col gap-3">
               <p className="text-xs text-muted-foreground">
-                {mustSetup ? "为安全起见需要改一次密码。" : BOOTSTRAP_HINT}
+                {mustSetup ? "需要先把密码改成自己的才能进入。" : BOOTSTRAP_HINT}
               </p>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 {mustSetup ? "当前密码" : "装机初始密码"}
@@ -330,7 +330,7 @@ export function LoginPage() {
 
         {!session.demo && (
           <CardFooter className="justify-center text-xs text-muted-foreground">
-            {!import.meta.env.DEV && <>连错 5 次锁定 15 分钟；</>}登录后长期有效；无操作按站点参数设定的时长自动锁屏，输本人密码即解锁
+            {!import.meta.env.DEV && <>连错 5 次锁定 15 分钟；</>}登录状态长期有效，无操作自动锁屏后输本人密码解锁
           </CardFooter>
         )}
       </Card>

@@ -140,12 +140,12 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
           shouldFilter={false}
           className="rounded-none bg-transparent p-0 [&_[data-slot=command-input-wrapper]]:px-3 [&_[data-slot=command-input-wrapper]]:pt-3"
         >
-          <CommandInput autoFocus value={kw} onValueChange={setKw} placeholder="会打字就输单号 / 姓名 / 证号后 4 位 / 车牌" />
+          <CommandInput autoFocus value={kw} onValueChange={setKw} placeholder="单号 / 姓名 / 证号后 4 位 / 车牌" />
           <CommandList className="max-h-[320px] scroll-py-1">
             <CommandEmpty className="px-4 py-6 text-muted-foreground">
               {eff
-                ? "没有匹配结果，换个关键词或到磅单中心按日期查"
-                : "此刻没有在场单；要查历史单请输单号 / 姓名 / 证号后 4 位"}
+                ? "没有匹配结果，换个说法试试，或到磅单中心按日期查"
+                : "此刻没有在场单；输单号或姓名可查历史单"}
             </CommandEmpty>
             {(eff ? GROUP_ORDER : (["在场"] as Hit["group"][])).map((g) => {
               const rows = (eff ? hits : openHits).filter((h) => h.group === g);

@@ -42,7 +42,7 @@ export function ShortcutHelpDialog({
         <DialogHeader>
           <DialogTitle>快捷键一览</DialogTitle>
           <DialogDescription>
-            磅房要求不用鼠标也能开单到打印（05 §10-2），以下是当前生效的键位。
+            以下是当前生效的键位，不用鼠标也能从开单走到打印。
           </DialogDescription>
         </DialogHeader>
         <ul className="max-h-[60vh] overflow-y-auto">

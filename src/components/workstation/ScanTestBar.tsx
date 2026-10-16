@@ -50,7 +50,7 @@ export function ScanTestBar({ onScan, disabled }: { onScan: (raw: string) => voi
         }}
         disabled={disabled}
         aria-label="测试扫码框：贴入票面码"
-        placeholder={`贴入票面码（就是票面那行单号），例 ${CODE_EXAMPLES.order}`}
+        placeholder={`贴入票面单号，例 ${CODE_EXAMPLES.order}`}
         className="h-7 max-w-[26rem] flex-1 border-dashed text-xs"
         autoComplete="off"
         spellCheck={false}
@@ -59,7 +59,7 @@ export function ScanTestBar({ onScan, disabled }: { onScan: (raw: string) => voi
         扫一次
       </Button>
       <span className="text-[11px] text-muted-foreground">
-        光标留在这里时真枪的按键会当成打字落进本框，按回车同样等同扫码；不需要这框到「基础档案 · 参数」关掉「工作台测试扫码框」
+        光标在本框时，扫码枪的字会打到这里，按回车同样等于扫码；不需要时到「基础档案 · 参数」关掉「工作台测试扫码框」
       </span>
     </div>
   );

@@ -242,7 +242,7 @@ export function OperatorPanel() {
       {demo ? (
         <>
           <DemoPicker value={String(actor.id)} size="default" />
-          <p className="text-xs text-muted-foreground">浏览器演示模式：换人只改名单，不校验密码。</p>
+          <p className="text-xs text-muted-foreground">浏览器演示模式：换人不校验密码。</p>
         </>
       ) : (
         <div className="flex flex-wrap gap-1.5">

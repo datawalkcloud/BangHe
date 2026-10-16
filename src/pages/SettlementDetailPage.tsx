@@ -194,9 +194,9 @@ export function SettlementDetailBody({
               谁欠的了，催下去就是拿一张作废的单向客户要钱。已付的那一截仍然摊开来——
               付款流水不删，钱要追回来得有人看得见它付过。
             */
-            <CallOut tone="danger" title="本结算单已撤销，不再收钱">
-              {`它名下那张磅单已被作废，这笔应付 ${money(s.payable_fen)} 连同未付的 ${money(unpaid)} 都不再成立；要重做这一笔请另开一张磅单重新过磅结算。`}
-              {s.paid_fen > 0 ? `已付的 ${money(s.paid_fen)} 流水原样留在这里（账本不涂改），要追回走线下。` : ""}
+            <CallOut tone="danger" title="本结算单已撤销">
+              {`它名下的磅单已被作废，应付 ${money(s.payable_fen)} 与未付的 ${money(unpaid)} 都不再成立。要重做请另开磅单重新过磅结算。`}
+              {s.paid_fen > 0 ? `已付的 ${money(s.paid_fen)} 流水仍可查，要追回走线下。` : ""}
             </CallOut>
           ) : (
             s.payment_status !== "paid" && (
@@ -217,7 +217,7 @@ export function SettlementDetailBody({
                     items={[
                       { label: "结算单号", value: <span className="tnum">{s.settle_no}</span> },
                       { label: "业务日期", value: <span className="tnum">{s.business_date}</span> },
-                      { label: "收款人", value: s.payee_name },
+                      { label: "售粮人", value: s.payee_name },
                       { label: "售粮人编号", value: <span className="tnum">#{s.party_id}</span> },
                       { label: "覆盖期间", value: <span className="tnum">{`${s.period_from} ~ ${s.period_to}`}</span> },
                       { label: "主付款方式", value: s.main_method ? PAYMENT_METHOD[s.main_method] : "—" },
@@ -246,7 +246,7 @@ export function SettlementDetailBody({
               <section className="border bg-card">
                 <header className="px-3 py-2 text-sm font-semibold">
                   付款流水
-                  <span className="ml-2 text-xs font-normal text-muted-foreground">允许一笔结算单分次付款，每次追加一条</span>
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">可分次付款，每次登记一条</span>
                 </header>
                 <DataTable
                   columns={payCols}

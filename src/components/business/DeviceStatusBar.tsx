@@ -63,7 +63,7 @@ function Chip({
       <TooltipContent side="top">
         <p>{title}：{DEVICE_STATUS[status].label}</p>
         <p className="text-muted-foreground">{detail}</p>
-        <p className="text-muted-foreground">设备码 {deviceCode ?? "—"}，点击进入设备中心自检</p>
+        <p className="text-muted-foreground">设备码 {deviceCode ?? "—"}，点进设备中心可自检</p>
       </TooltipContent>
     </Tooltip>
   );
@@ -172,7 +172,7 @@ export function DeviceStatusStrip() {
 
   const scaleDetail = scale.connected
     ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg)} · ${scale.stable ? "稳" : "不稳"}`
-    : `${String(scaleCfg?.config.port ?? "COM3")} 离线，可改手录`;
+    : `${String(scaleCfg?.config.port ?? "COM3")} 离线，可改手工录入`;
 
   // 两条通道各自刚读了谁／哪张卡，底栏只放得下一句，按最近一次成功的那条说
   const readerDetail =
@@ -188,7 +188,7 @@ export function DeviceStatusStrip() {
               : "在线"
       : reader.status === "unknown"
         ? // 闸门/ Mock 的探测都带回一句原因（"台账里没有启用的证卡阅读器…"），亮灯更要说出来
-          (reader.lastProbe?.error ?? "未检测，读卡时自动探测")
+          (reader.lastProbe?.error ?? "未检测，读卡时自动再试")
         : (reader.lastProbe?.error ?? "离线，可手工输入身份证号");
 
   return (

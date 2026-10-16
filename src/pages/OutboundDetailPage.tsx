@@ -152,7 +152,7 @@ export function OutboundDetailPage() {
         label: "红冲回仓",
         actor: m.operator_name,
         tone: "warning",
-        detail: `补一条对称入库 ${ton(m.weight_01kg)}，原出库流水保留`,
+        detail: `回仓 ${ton(m.weight_01kg)}，原出库记录保留`,
       });
     }
     if (doc.stock_warning) {
@@ -160,7 +160,7 @@ export function OutboundDetailPage() {
         at: doc.completed_at ?? doc.updated_at ?? doc.created_at,
         action: "outbound.stock_warning",
         label: "超库存警示",
-        actor: "系统复算",
+        actor: "系统",
         tone: "warning",
         detail: doc.stock_warning,
       });
@@ -233,9 +233,9 @@ export function OutboundDetailPage() {
                 !can("print")
                   ? "当前岗位无打印权限"
                   : doc.net_weight_01kg == null
-                    ? "本单还没有出库净重，票面印出来是一张空单；请先称重或改单填净重"
+                    ? "本单还没有出库净重，打不出有效票据；请先称重或改单填净重"
                     : printed > 0
-                      ? `已打 ${printed} 张，本次将带「补打」角标`
+                      ? `已打 ${printed} 张，票面会标「补打」`
                       : undefined
               }
               onClick={printTicket}
@@ -268,15 +268,15 @@ export function OutboundDetailPage() {
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <div className="flex flex-col gap-4">
           {doc.stock_warning ? (
-            <CallOut tone="warning" title="本单出库时账面结存不够" icon={<AlertTriangleIcon className="size-4" />}>
+            <CallOut tone="warning" title="出库时账面结存不足" icon={<AlertTriangleIcon className="size-4" />}>
               {doc.stock_warning}
               <span className="mt-1 block text-xs text-muted-foreground">
-                出库已照常放行（现场先出粮、后补单是常态，拦下来只会逼人改数字）。这句话由服务端复算写入单据，票面与审计同步留痕。
+                出库已照常放行，请与库存账核对。
               </span>
             </CallOut>
           ) : null}
           {closed ? (
-            <CallOut tone={doc.status === "voided" ? "danger" : "warning"} title={`本单已${OUTBOUND_STATUS[doc.status].label}`}>
+            <CallOut tone={doc.status === "voided" ? "danger" : "warning"} title={`本单${OUTBOUND_STATUS[doc.status].label}`}>
               {orDash(doc.void_reason)}
             </CallOut>
           ) : null}
@@ -341,8 +341,8 @@ export function OutboundDetailPage() {
                 }
               />
               <p className="mt-2 text-xs text-muted-foreground">
-                本栏就是结存的来源：出库写一条「出仓」，红冲另补一条「红冲回仓」，
-                <b>被冲掉的那条出仓记录按账本规矩保留、不涂改</b>。想核对整个仓房的账，去
+                红冲另补一条「红冲回仓」，
+                <b>被冲掉的那条出仓记录保留、不涂改</b>。要核对整个仓房的账，去
                 <Link to="/stock" className="mx-1 underline underline-offset-2">库存账</Link>
                 按仓房与品种下钻。
               </p>

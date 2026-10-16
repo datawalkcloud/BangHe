@@ -66,21 +66,21 @@ const SCENE_COPY: Record<
   }
 > = {
   enroll: {
-    description: "放稳后不用点任何东西，系统正在连续寻卡，读到即自动带出档案。",
-    timeoutDescription: "人还没走过来？重新点一次「读卡建档」可再来一轮；也可改用手工录入证号。",
-    footerHint: "读卡只影响录入速度。读不出来可以点「手工录入」，照样能建档。",
+    description: "放稳后不用点任何东西，读到证件会自动带出档案。",
+    timeoutDescription: "重新点一次「读卡建档」再来一轮；也可改用手工录入证号。",
+    footerHint: "读不出来可以点「手工录入」，照样能建档。",
     manualLabel: "手工录入",
   },
   order: {
-    description: "放稳后不用点任何东西，系统正在连续寻卡，读到即自动填入售粮人。",
-    timeoutDescription: "人还没走过来？重新点一次「读卡」可再来一轮；也可点「搜档案」选人。",
-    footerHint: "读卡只影响录入速度。读不出来可以点「搜档案」，照样能制单。",
+    description: "放稳后不用点任何东西，读到证件会自动填入售粮人。",
+    timeoutDescription: "重新点一次「读卡」再来一轮；也可点「搜档案」选人。",
+    footerHint: "读不出来可以点「搜档案」，照样能制单。",
     manualLabel: "搜档案",
   },
   verify: {
-    description: "放稳后不用点任何东西，系统正在连续寻卡，读到即与这张档案的证号比对。",
-    timeoutDescription: "人还没走过来？重新点一次「读卡核对」可再来一轮；这一轮什么都没改。",
-    footerHint: "核对是当场比对：读到谁、对不对得上都会说清楚；读不出来不改这张档案已有的任何东西。",
+    description: "放稳后不用点任何东西，读到证件即与这张档案的证号比对。",
+    timeoutDescription: "重新点一次「读卡核对」再来一轮；这一轮什么都没改。",
+    footerHint: "只比对，不会改动这张档案里的内容。",
   },
 };
 

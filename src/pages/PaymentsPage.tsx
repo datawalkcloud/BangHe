@@ -67,7 +67,7 @@ export function PaymentsPage() {
     () => [
       { key: "pay_no", header: "付款流水号", cell: (p) => <span className="tnum">{p.pay_no}</span>, sortValue: (p) => p.pay_no },
       { key: "at", header: "付款时间", cell: (p) => <span className="tnum">{dateTime(p.paid_at)}</span>, sortValue: (p) => p.paid_at },
-      { key: "party", header: "收款人", cell: (p) => p.party_name, sortValue: (p) => p.party_name },
+      { key: "party", header: "售粮人", cell: (p) => p.party_name, sortValue: (p) => p.party_name },
       {
         key: "amount",
         header: "金额",
@@ -134,7 +134,7 @@ export function PaymentsPage() {
     }
     await exportCsvFile({
       filename: csvName(`付款流水_${from}_${to}`),
-      headers: ["付款流水号", "付款时间", "收款人", "金额元", "方式", "结算单号", "磅单号", "交易流水", "凭证号", "经手人", "状态"],
+      headers: ["付款流水号", "付款时间", "售粮人", "金额元", "方式", "结算单号", "磅单号", "交易流水", "凭证号", "经手人", "状态"],
       rows: payments.map((p) => [
         p.pay_no,
         dateTime(p.paid_at),
@@ -157,7 +157,7 @@ export function PaymentsPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="付款与挂账"
-        description={`${from} ~ ${to}：${payments.length} 笔流水共 ${money(totalFen)}${reversedFen ? `（另冲销 ${money(reversedFen)}）` : ""} · 未付清 ${credits.length} 张`}
+        description={`${from} ~ ${to}：${payments.length} 笔 · 实付合计 ${money(totalFen)}${reversedFen ? `（不含已冲销 ${money(reversedFen)}）` : ""} · 未付清 ${credits.length} 张`}
         actions={
           <Button size="sm" variant="outline" onClick={exportCsv} disabled={payments.length === 0 || !can("data.export")}>
             <DownloadIcon />
@@ -212,7 +212,7 @@ export function PaymentsPage() {
             <Card size="sm">
               <CardHeader>
                 <CardTitle className="text-sm">挂账台账</CardTitle>
-                <CardAction><span className="text-right text-xs text-muted-foreground">只列已结算未付清的单，按逾期天数倒序，先看最久的</span></CardAction>
+                <CardAction><span className="text-right text-xs text-muted-foreground">只列已结算未付清的单，按逾期天数倒序</span></CardAction>
               </CardHeader>
               <CardContent className="max-h-72 overflow-y-auto">
                 {credits.length === 0 ? (
@@ -220,8 +220,8 @@ export function PaymentsPage() {
                     title="没有未付清的结算单"
                     description={
                       pendingOrders > 0
-                        ? `已生成的结算单都已付清。另有 ${pendingOrders} 张磅单还没结算——那不算挂账，在「结算台账」的待结算池里压着。`
-                        : "已生成的结算单都已付清，待结算池也是空的。"
+                        ? `另有 ${pendingOrders} 张磅单还没结算，在「结算台账」的待结算池里。`
+                        : "待结算池也是空的。"
                     }
                   />
                 ) : (
@@ -252,8 +252,8 @@ export function PaymentsPage() {
           </div>
 
           {!allowCredit && creditTotal > 0 && (
-            <CallOut tone="danger" title="站点参数已关闭挂账，但仍有未付清的结算单">
-              这些单是在关闭挂账之前产生的。要么付款结清，要么把「允许挂账」重新打开，不要让未付清状态长期悬空。
+            <CallOut tone="danger" title="已关闭挂账，但仍有未付清的结算单">
+              这些单多为关闭挂账之前产生的。要么付清，要么重新打开「允许挂账」。
             </CallOut>
           )}
 
@@ -273,12 +273,12 @@ export function PaymentsPage() {
             empty={
               <EmptyState
                 title="该期间没有付款流水"
-                description="换一段日期试试；当场付款的单在结算单详情里登记后，这里立刻出现记录。"
+                description="换一段日期试试；在结算单详情里登记的付款会出现在这里。"
               />
             }
             toolbar={
               <span className="text-xs text-muted-foreground">
-                合计行只加有效流水，冲销的单独列出；付款一律挂在结算单上，避免同一个人两笔款对应不清。
+                合计行只加有效流水，已冲销的不计入。
               </span>
             }
           />

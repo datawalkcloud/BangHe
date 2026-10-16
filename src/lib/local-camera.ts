@@ -123,7 +123,7 @@ async function openHolder(spec: LocalCamSpec): Promise<Holder> {
 export async function acquireLocalCamera(spec: LocalCamSpec): Promise<LocalCameraHandle> {
   if (!navigator.mediaDevices?.getUserMedia) {
     // 非安全上下文（http://局域网IP 直连）与老浏览器根本没有这个 API
-    throw new DOMException("当前运行环境不提供摄像头访问（getUserMedia）", "SecurityError");
+    throw new DOMException("当前环境不提供摄像头访问", "SecurityError");
   }
   const key = spec.deviceId || spec.deviceName || "default";
   let pending = slots.get(key);

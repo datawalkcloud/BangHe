@@ -264,7 +264,7 @@ export function IdentityPanel({
       if (r.kind === "upgraded") toast.success(`证号与卡面一致，档案「${hit.name}」已转为「已核验」`);
       else if (r.kind === "failed")
         toast.warning(`「已核验」没写进档案「${hit.name}」：${r.reason}`, {
-          description: "本单照制，档案其它内容一寸未动；要到档案详情再刷一次「读卡核对」。",
+          description: "本单照制，到档案详情再刷一次「读卡核对」。",
         });
     });
     // 该带出的已经带出、该报的已经报完，这里才去补照片：档案还没有人像就把证件里这张写进去
@@ -334,7 +334,7 @@ export function IdentityPanel({
    */
   const needVariety = () => {
     setVarietyMissing(true);
-    toast.warning("请先选收购品种：制单必填（结算单价与化验指标都跟着它走）", { id: "ws-variety-required" });
+    toast.warning("请先选收购品种：制单必填", { id: "ws-variety-required" });
     announce("请先选收购品种");
     document.getElementById("ws-variety")?.focus();
   };
@@ -410,7 +410,7 @@ export function IdentityPanel({
       setIdWatching(true);
       if (opts.allowNoCard) {
         // 主按钮那一路等人是靠"卡已经在手上"，这一路没有卡：话说在前面，否则人放完证不知道还要再点一次
-        toast.info("无卡制单还差售粮人：请把身份证放上读卡器（或点「搜档案」挑一个），人出来后再点一次这颗按钮", { id: "ws-nocard-party" });
+        toast.info("无卡制单还差售粮人：请放身份证，或点「搜档案」挑一个，再点一次这颗按钮", { id: "ws-nocard-party" });
         announce("还差售粮人，请放身份证，选好以后再点一次无卡制单");
       }
       return;
@@ -696,7 +696,7 @@ export function IdentityPanel({
                   </Label>
                 </div>
                 <p className="pt-0.5 text-[11px] text-muted-foreground">
-                  需要按去向统计的站点才登记，留空照样能取号制单；此处选了只对本单生效，下一单沿用上一张的去向。
+                  留空也能取号；这里选了只对本单生效，下一单沿用上一张的去向。
                 </p>
               </>
             )}
@@ -726,7 +726,7 @@ export function IdentityPanel({
             </p>
           ) : requireCard ? (
             <p className="text-[11px] text-muted-foreground">
-              本站制单要绑流转卡：点下面的按钮会提示把 IC 卡贴到感应区。读卡器读不出卡、卡池见底时才点「无卡制单」先出号，卡事后在这张单的详情里补绑
+              本站制单要绑流转卡：把卡贴到感应区；读不出卡时可点「无卡制单」，卡事后补绑
             </p>
           ) : (
             <Button
@@ -737,7 +737,7 @@ export function IdentityPanel({
               disabled={!!blocked}
               className="h-auto w-fit p-0 text-[11px] font-normal text-muted-foreground enabled:hover:text-foreground enabled:hover:underline"
             >
-              想顺手把卡也发了？刷一张 IC 卡（选填）
+              顺带刷一张流转卡（选填）
             </Button>
           )}
           {/* 卡就位而人还没定 → 那一轮 15 秒监听就挂在这一格里：不弹窗、不挡过磅，
@@ -756,7 +756,7 @@ export function IdentityPanel({
                 onClick={() => submit({ allowNoCard: true })}
                 disabled={!!blocked || create.isPending}
                 className="h-7 shrink-0 text-xs"
-                title="读卡器读不出卡、卡池见底时的退路：先把号取出来，卡事后在这张单的详情里补绑"
+                title="读卡器读不出卡时的退路：先出号，卡事后在详情里补绑"
               >
                 无卡制单
               </Button>
@@ -965,7 +965,7 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 const SAVE_STATE: Record<Exclude<SaveStatus, "idle">, string> = {
   saving: "保存中…",
   saved: "已自动保存",
-  error: "保存失败，正在等你重改",
+  error: "保存失败",
 };
 
 /**
@@ -1051,7 +1051,7 @@ function PartyPhoneField({
           toggleLabel="数字"
           inputMode="tel"
           autoComplete="off"
-          placeholder="问一句，当场记下来"
+          placeholder="选填"
           className="min-w-0 flex-1"
           inputClassName="tnum h-7 text-xs"
         />
@@ -1067,8 +1067,8 @@ function PartyPhoneField({
       </div>
       <p className={cn("pt-0.5 text-[11px]", failed ? "text-warning" : "text-muted-foreground")}>
         {failed
-          ? "没保存上，改完再点一次保存——这个号码可能已经是别的档案在用。"
-          : "改的是这张档案，不跟着本单走；历史磅单上印过的电话不变。清空即不再登记。"}
+          ? "没保存上，改完再点一次保存。"
+          : "改的是这张档案，不跟着本单走；清空即不再登记。"}
       </p>
     </div>
   );
@@ -1186,7 +1186,7 @@ export function TarePanel({
             </QuickDetailLink>
           </p>
         )}
-        {alert && <p className="text-xs text-warning">捕获时会给出超差警告并照常入账，磅单上留醒目提醒；历史值只作参考，不替代实测。</p>}
+        {alert && <p className="text-xs text-warning">捕获时只提醒不拦单，磅单留记号；历史值仅供参考，不替代实测。</p>}
       </CardContent>
     </Card>
   );

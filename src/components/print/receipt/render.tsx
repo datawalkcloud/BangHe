@@ -541,7 +541,7 @@ export function ReceiptDocument({
             (markEmptySections ? (
               // 空的这一段不打印，但必须在预览里站住一个位置：否则"左栏第 3 块"到票上成了第 2 样，
               // 站长对着预览找不到自己刚点的那格，看起来就是"排序和预览不一致"。
-              <p className="receipt-sec-empty text-[10px] text-black/45">（{BLOCK_LABEL[sec.kind]}未填内容 · 打印时跳过本区块）</p>
+              <p className="receipt-sec-empty text-[10px] text-black/45">（{BLOCK_LABEL[sec.kind]}未填 · 打印时跳过）</p>
             ) : null)}
         </div>
       ))}

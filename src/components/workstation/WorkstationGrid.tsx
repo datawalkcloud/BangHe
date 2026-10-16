@@ -85,7 +85,7 @@ export function WorkstationGrid({
         <p className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
           <MoveHorizontalIcon className="size-3.5 shrink-0" />
           {stacked
-            ? "窗口不足 1280 px，面板先按顺序堆着——把窗口拉宽就能拖。收起仍然可用，在顶栏「面板」里。"
+            ? "窗口不足 1280 px，面板先按顺序堆着；拉宽窗口就能拖。收起在顶栏「面板」里。"
             : "拖顶部把手换位置，拖右缘 / 下缘 / 右下角改大小，点 × 收起。"}
         </p>
       )}

@@ -204,7 +204,7 @@ export function toNativePaper(paper: string | null | undefined): NativePaper {
   return paper === "thermal58" ? "p58" : "p80";
 }
 
-const NO_CHANNEL = "当前是浏览器预览，没有原生设备通道；请用「npm run tauri dev」启动桌面端后重试";
+const NO_CHANNEL = "当前是浏览器预览，没有原生设备通道；请在桌面端重试";
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<NativeResult<T>> {
   if (!runningInTauri()) return { available: false, error: NO_CHANNEL };

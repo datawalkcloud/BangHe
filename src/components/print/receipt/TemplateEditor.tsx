@@ -101,8 +101,8 @@ export function ReceiptTemplateEditor() {
   const printerNote = (() => {
     const d = printers.data;
     if (!d) return "正在查找小票机…";
-    if (!d.ok) return `没有原生设备通道：${d.error}`;
-    if (d.devices.length === 0) return "未发现可直连的小票机——USB 小票机请确认已插好并装了驱动";
+    if (!d.ok) return `设备通道不可用：${d.error}`;
+    if (d.devices.length === 0) return "未发现可直连的小票机：请确认 USB 小票机已插好并装了驱动";
     const [first, ...rest] = d.devices;
     return `小票机：${first.label}${rest.length ? ` 等 ${d.devices.length} 台` : ""}`;
   })();
@@ -146,7 +146,7 @@ export function ReceiptTemplateEditor() {
 
   function doSave() {
     if (!canEdit) {
-      toast.error("只有站长能保存小票模板（需 setting.write）");
+      toast.error("只有站长能保存小票模板");
       return;
     }
     save(draft);
@@ -171,7 +171,7 @@ export function ReceiptTemplateEditor() {
   async function doPrintTest() {
     if (!THERMAL.includes(draft.paper)) {
       toast.message("该纸型不走小票机", {
-        description: `${PAPER[draft.paper]}由系统打印队列输出，已改为窗口打印预览；小票机只吃 58 / 80 热敏。`,
+        description: `${PAPER[draft.paper]}已改为窗口打印预览，小票机只支持 58 / 80 热敏纸。`,
       });
       // 与业务打印同一条通道：预览里这块纸原样进打印文档，打出来就是右侧这一版
       const node = document.getElementById("print-root");
@@ -237,7 +237,7 @@ export function ReceiptTemplateEditor() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
         title="小票模板"
-        description={`${spec.label} · 触发于${spec.entry}。勾选字段即可自定义每张票据打印哪些数据。`}
+        description={`${spec.label} · 触发于${spec.entry}`}
         actions={
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={doPrintTest} disabled={printing !== null}>
@@ -249,7 +249,7 @@ export function ReceiptTemplateEditor() {
               variant="ghost"
               onClick={doSelfTest}
               disabled={printing !== null}
-              title="打一张自检票：一次判读通道 / 中文字库 / 栅格列数 / 切刀"
+              title="自检票：分清是机器问题还是版式问题"
             >
               {printing === "self" ? <Spinner /> : <WrenchIcon />}
               小票机自检
@@ -282,8 +282,8 @@ export function ReceiptTemplateEditor() {
 
       {!canEdit && (
         <div className="px-6 pt-3">
-          <CallOut tone="info" title="当前岗位只能预览，保存需站长权限">
-            模板改动会被本地记住，但落盘写入要 station_master。下方预览始终基于已保存版本（若有）。
+          <CallOut tone="info" title="保存需站长权限">
+            改动只在这次打开时有效，点保存也不会写入该场景的模板。
           </CallOut>
         </div>
       )}
@@ -324,7 +324,7 @@ export function ReceiptTemplateEditor() {
                   size="sm"
                   aria-label="版式"
                 />
-                <span className="text-[10px] text-muted-foreground">小票风格的行序与小票机出纸一致</span>
+                <span className="text-[10px] text-muted-foreground">热敏小票用「小票风格」</span>
               </Label>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 补打角标
@@ -349,8 +349,7 @@ export function ReceiptTemplateEditor() {
                   aria-label="小票机列数"
                 />
                 <span className="text-[10px] text-muted-foreground">
-                  票面折行几乎都是这个数比实机大。点「小票机自检」打一张，标尺折在第几格就填几——填错了票面会自己折，
-                  但不会再印出 {"&#165;"} 这类转义码。
+                  票面折行几乎都是这个数比实机大。点「小票机自检」打一张，标尺折到第几格就填几。
                 </span>
               </Label>
             </div>
@@ -386,7 +385,7 @@ export function ReceiptTemplateEditor() {
                   onRemove={() => removeSection(sec.id)}
                 />
               ))}
-              {draft.sections.length === 0 && <EmptyState title="还没有区块" description="点上方按钮添加字段区 / 表格区 / 署名区 / 条码二维码。" />}
+              {draft.sections.length === 0 && <EmptyState title="还没有区块" description="点上方按钮添加区块。" />}
             </div>
           </section>
         </div>
@@ -396,7 +395,7 @@ export function ReceiptTemplateEditor() {
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b p-3">
             <p className="text-xs text-muted-foreground">
               实时预览 · 样例数据，按真实纸张尺寸排版
-              <span className="ml-2 text-[10px]">点左栏任意区块，这里对应的那一格会描一圈；虚线框是要打印时跳过的空区块</span>
+              <span className="ml-2 text-[10px]">点左栏区块会描出票上对应那一格；虚线框是空区块，打印时跳过</span>
             </p>
             <span className="text-[10px] text-muted-foreground">{PAPER_SPEC[draft.paper].note}</span>
           </div>
@@ -485,7 +484,7 @@ function SectionEditor({
           <Input value={sec.title ?? ""} onChange={(e) => onPatch({ title: e.target.value })} className="h-7 text-xs" />
           {sec.kind === "kv" && (
             <span className="text-[10px] text-muted-foreground">
-              字段区只建一个就够：标题留空时，票面上每段的小标题由字段所属的分组自动带出，不必一段建一个区块。
+              字段区建一个就够：标题留空时，票面小标题按字段分组自动带出。
             </span>
           )}
         </Label>
@@ -563,7 +562,7 @@ function CodeEditor({
         />
         <span className="text-[10px] text-muted-foreground">
           {sec.required
-            ? "流程必备件，只读：这一栏错了照样能打票，但那张票永远扫不出单号。要改码的内容请连业务一起改（src/lib/ticket-code.ts）。"
+            ? "流程必备件，只读：这一栏错了照样能打票，但那张票永远扫不出单号。"
             : `本场景可用作载荷的字段：${codeFields.map((f) => `{{${f.key}}} ${f.label}`).join("　") || "（无）"}`}
         </span>
       </Label>
@@ -606,7 +605,7 @@ function CodeEditor({
           {bar?.shrunk
             ? "。再宽就得换纸型或只扫二维码"
             : qr?.shrunk
-              ? "。再宽就得换纸型（二维码被压过档，扫起来会更挑枪）"
+              ? "。再宽就得换纸型"
               : `；本纸型可打宽度 ${printableMm(paper).toFixed(0)}mm`}
         </p>
       )}
@@ -614,16 +613,14 @@ function CodeEditor({
         码下方印码内容
         <span className="flex h-8 items-center gap-2">
           <Switch checked={sec.qrCaption === true} onCheckedChange={(v) => onPatch({ qrCaption: v })} />
-          <span className="text-xs">{sec.qrCaption ? "印（晒白了还能手输）" : "不印"}</span>
+          <span className="text-xs">{sec.qrCaption ? "印" : "不印"}</span>
         </span>
       </Label>
       <p className="text-[10px] text-muted-foreground">
-        「码下方印码内容」出厂就是开的，它印的是码里装的原文，不是旁边那行单号——纸面晒白、码被磨花或打印头缺针时，
-        这是票上唯一还认得出是哪张单的东西。想省纸才关它。
+        建议保持开启：票面晒白或码被磨花时，还能照着这行字人工认出是哪张单。想省纸才关。
       </p>
       <p className="text-[10px] text-muted-foreground">
-        有些扫描枪（尤其老的激光枪）只认一维条码、扫二维码靠模拟图像勉强凑合。结算窗口那台枪扫不动二维码时，把这里切成
-        「二维码 + 条码都打」，客户递上来的票两种枪都能读；载荷完全不变。
+        结算窗口的枪扫不动二维码时，把码制切成「二维码 + 条码都打」，两种枪都能读。
       </p>
     </div>
   );

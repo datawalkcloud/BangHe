@@ -64,7 +64,7 @@ export function PayDialog({
           <>
             <div className="flex flex-col gap-1 border-b pb-1.5 text-xs">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-muted-foreground">收款人</span>
+                <span className="text-muted-foreground">售粮人</span>
                 <span className="truncate">{detail.settlement.payee_name}</span>
               </div>
               <div className="flex items-baseline justify-between gap-3">

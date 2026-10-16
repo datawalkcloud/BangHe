@@ -177,8 +177,8 @@ export function OutboundFormDialog({
           <DialogTitle>{editing ? `修改出库单 ${editing.order_no}` : "新建出库单"}</DialogTitle>
           <DialogDescription>
             {weighed
-              ? "本单的重量已过地磅（毛 − 皮），那一格改不动——要改重量请保存后到详情页「地磅称重」重新捕获。"
-              : "净重可以先手填，也可以到详情页用「地磅称重」现取（重车一磅毛、空车一磅皮，净重由毛减皮算出）；重量与单价随时可改，只有「完成出库」才会扣减库存并生成货款。"}
+              ? "本单重量已过地磅，这一格改不了。"
+              : "净重可先手填，也可到详情页「地磅称重」现取；只有点「完成出库」才扣库存、算货款。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -310,7 +310,7 @@ export function OutboundFormDialog({
             )}
             {weighed && (
               <span className="text-[11px] text-warning">
-                本单已过地磅：要改重量请保存后在详情页「地磅称重」里重新捕获（仪表离线可选手录）。
+                要改重量请保存后到详情页「地磅称重」重新捕获；仪表离线可手录。
               </span>
             )}
           </Label>

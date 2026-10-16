@@ -367,7 +367,7 @@ export function WorkstationPage() {
         // 三个理由都是"为什么没自动结掉"，得当场说清；接下来由结算框自己念它的话
         const why =
           action.reason === "no-price"
-            ? "本单还没有单价（该品种制单时没有生效价目）：请在结算框填单价，可点「从价目带出」"
+            ? "本单还没有单价：请在结算框填价，可点「从价目带出」"
             : action.reason === "credit-off"
               ? "本站已关闭挂账：这一单只能当场付清，请在结算框里完成"
               : "当前岗位不能结算：本单需要磅员、出纳或站长来结";
@@ -495,7 +495,7 @@ export function WorkstationPage() {
       // 称重区那一路靠它），拿它当"查无此单"的闸门等于没有闸门——窗口会弹出一个空结算框
       // 转圈，人在里面填好单价点提交，才发现单子根本不存在。
       if (!scanned) {
-        toast.error(`查不到磅单 ${no}：这张票可能是在别的电脑上结的，或码被压坏读错了单号。请到「磅单中心」核对。`, { id: `ws-scan-gone:${no}` });
+        toast.error(`查不到磅单 ${no}：可能不是本站的单，或码被压坏读错了单号。请到「磅单中心」核对。`, { id: `ws-scan-gone:${no}` });
         announce("查不到这张单，请核对票面单号", `ws-scan-gone:${no}`);
         return;
       }
@@ -506,7 +506,7 @@ export function WorkstationPage() {
       // "客户递来的就是那张磅单"。撞号时当场说破、不开框：窗口里结错一张单是真金白银，
       // 而两可这件事只有库能回答，答完就得如实报出来。
       if (await api.getOutbound(no).catch(() => null)) {
-        toast.error(`这串号 ${no} 既是一张磅单、也是一张出库单（两张纸的码长得一样，02 §F1.4）。窗口不猜：要结算请到「磅单中心」点开那张磅单再「带到工作台」；出库那张请到「库存与出库」处理。`, { id: `ws-scan-twin:${no}` });
+        toast.error(`这串号 ${no} 既是一张磅单、也是一张出库单：要结算请到「磅单中心」点开那张磅单再「带到工作台」；出库那张请到「库存与出库」处理。`, { id: `ws-scan-twin:${no}` });
         announce("这串号既是磅单也是出库单，请到界面里点开", `ws-scan-twin:${no}`);
         return;
       }
@@ -679,11 +679,10 @@ export function WorkstationPage() {
           title="磅房工作台"
           description={
             <>
-              制单后一张流转卡<b className="font-semibold">刷一次推进一步</b>：毛重 → 皮重（自动出码单，
-              已有单价即按未付款挂账、没价才弹结算框）→ 要收钱再刷一次当场结清。
+              制单后一张流转卡<b className="font-semibold">刷一次推进一步</b>：毛重 → 皮重 → 要收钱再刷一次当场结清。
               客户拿码单回来<b className="font-semibold">直接扫票面码</b>就地结算；挂账的回头收尾款，
               在「结算台账」点开那张结算单登记付款。票没带或丢了，在上方在途条点中那张单再按「去结算」。
-              <Kbd>F7</Kbd> 制单 <Kbd>空格</Kbd>/<Kbd>P</Kbd> 应急手点捕获 <Kbd>F5</Kbd> 化验 <Kbd>F9</Kbd> 打印
+              <Kbd>F7</Kbd> 制单 <Kbd>空格</Kbd>/<Kbd>P</Kbd> 捕获 <Kbd>F5</Kbd> 化验 <Kbd>F9</Kbd> 打印
             </>
           }
           actions={
@@ -760,7 +759,7 @@ export function WorkstationPage() {
       <div className="flex min-h-0 flex-1 flex-col">
         {order?.void_reason && (
           <p className="mx-2 mt-1.5 border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
-            本单已作废：{order.void_reason}（仅作留痕，如需继续作业请新建下一单）
+            本单已作废：{order.void_reason}（仅作留痕，要继续作业请新建下一单）
           </p>
         )}
         {editing && (
@@ -840,7 +839,7 @@ export function WorkstationPage() {
                 allowCredit={allowCredit}
                 defaultUnpaid={settleUnpaid}
                 onSettled={(r) => {
-                  toast.success(`已结算 ${r.order.order_no}，本单卡自动回池`);
+                  toast.success(`已结算 ${r.order.order_no}，本单流转卡已回卡池`);
                   qcClient.invalidateQueries({ queryKey: ["order", r.order.order_no] });
                   qcClient.invalidateQueries({ queryKey: ["orders"] });
                   qcClient.invalidateQueries({ queryKey: ["open-orders"] });
@@ -917,7 +916,7 @@ export function WorkstationPage() {
 function RegYieldCard() {
   return (
     <div className="flex h-full min-h-16 items-center justify-center rounded-2xl border border-dashed px-3 text-center text-xs text-muted-foreground">
-      制单弹窗已打开：读卡与取号由那一框认领，关掉这里就回到草稿态
+      制单弹窗已打开：读卡与取号在那个框里做，关掉后这里继续填写
     </div>
   );
 }

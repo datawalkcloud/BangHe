@@ -204,7 +204,7 @@ function DupAdoptHint({ text, canAdopt, onAdopt }: { text: string; canAdopt: boo
         我要变更
         <ArrowRightIcon />
       </Button>
-      <span className="text-muted-foreground">点一下改成编辑这张档案，已填的内容带过去。</span>
+      <span className="text-muted-foreground">改成编辑这张档案，已填内容会带过来。</span>
     </span>
   );
 }
@@ -268,7 +268,7 @@ export function PartiesPage() {
         });
       }
     } else {
-      toast.success("读到新证号，已按卡片信息预填建档表单", {
+      toast.success("读到新证号，已按卡片信息填好，确认后即可建档", {
         description: pending ? "身份证上的人像照片一并带出，保存后即为档案照片。" : undefined,
       });
       setForm({
@@ -410,7 +410,7 @@ export function PartiesPage() {
   function adoptParty(target: Party) {
     setForm(mergeIntoArchive(target, form));
     toast.info(`已改成变更档案「${target.name}（${target.code}）」`, {
-      description: "刚才填的内容已经带过来，没填的沿用原档案。确认无误点「保存修改」即可。",
+      description: "已填内容带过来了，没填的沿用原档案。确认无误点「保存修改」。",
     });
   }
 
@@ -497,7 +497,7 @@ export function PartiesPage() {
         <div className="flex flex-col gap-3">
           {cardError && (
             <CallOut tone="warning" title="身份证阅读器不可用">
-              {cardError}。档案仍可手工录入，读卡只影响录入速度，不影响业务连续性。
+              {cardError}。仍可手工录入档案。
             </CallOut>
           )}
           <div className="flex flex-wrap items-end gap-2">
@@ -519,7 +519,7 @@ export function PartiesPage() {
               <Input
                 value={kw}
                 onChange={(e) => setKw(e.target.value)}
-                placeholder="姓名 / 证号 / 电话 / 编码，即时过滤"
+                placeholder="姓名 / 证号 / 电话 / 编码"
                 className="h-8 text-sm"
               />
             </Label>
@@ -546,7 +546,7 @@ export function PartiesPage() {
             empty={
               <EmptyState
                 title="没有匹配的售粮人档案"
-                description="新农户第一次来售粮时需要先建档，建档后即可读卡带出默认皮重与仓房。"
+                description="新农户第一次来售粮需要先建档。"
                 action={
                   <Button
                     size="sm"
@@ -560,7 +560,7 @@ export function PartiesPage() {
                 }
               />
             }
-            toolbar={<span className="text-xs text-muted-foreground">末列「详情」在本页右侧弹出完整档案，Ctrl+点击行在新窗口并排对档；档案停用不影响历史磅单，只挡住新单。</span>}
+            toolbar={<span className="text-xs text-muted-foreground">末列「详情」在本页右侧弹出完整档案，Ctrl+点击可在新窗口并排对档。</span>}
           />
         </div>
       </div>
@@ -570,7 +570,7 @@ export function PartiesPage() {
           <DialogHeader>
             <DialogTitle className="text-sm">{form.id == null ? "新增售粮人档案" : `修改档案 ${form.name}`}</DialogTitle>
             <DialogDescription className="text-xs">
-              证号是唯一的自然人主键，重复建档会导致对账时同一个人出现两个余额。
+              同一个证号只建一份档案，重复建档会让一个人出现两个余额。
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -595,7 +595,7 @@ export function PartiesPage() {
                     ? `${form.pending_photo.label}：${baseName(form.pending_photo.path)}`
                     : form.photo_cleared
                       ? "已标记移除，保存后这张档案不再保留照片。"
-                      : "读卡建档会自动带出身份证上那张，也可本地上传 JPG / PNG / BMP。不传不影响建档与制单。"}
+                      : "读卡建档会自动带出身份证照片，也可本地上传 JPG / PNG / BMP。不传不影响建档。"}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" onClick={() => void pickPhoto()}>
@@ -646,7 +646,7 @@ export function PartiesPage() {
                 toggleLabel={isOrg ? "键盘" : "数字"}
                 inputMode={isOrg ? "text" : "numeric"}
                 autoComplete="off"
-                placeholder={isOrg ? "18 位代码" : "18 位，末位 X 不区分大小写"}
+                placeholder={isOrg ? "18 位代码" : "18 位，末位可为 X"}
                 inputClassName="tnum text-sm"
               />
               {code !== "" && (

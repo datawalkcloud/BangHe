@@ -107,7 +107,7 @@ export function PartyDetailBody({
         <PageHeader title="售粮人档案" className={headerCls} />
         <EmptyState
           title={`找不到编号 ${partyId} 的档案`}
-          description="档案可能已被删除，或这台电脑的数据与另一台不在一起。"
+          description="档案可能已被删除。"
           action={
             embedded ? undefined : (
               <Button size="sm" variant="outline" render={<Link to="/parties" />}>
@@ -141,8 +141,8 @@ export function PartyDetailBody({
   async function verifyAgainstCard(card: IdCardResult) {
     if (!p.id_card_no) {
       // 证号只出脱敏值，与本页其它地方同一口径：要录入的人手里就捏着那张证件，不必在屏幕上摊开
-      toast.warning("这张档案没登记证号，核对无从比起", {
-        description: `读到 ${card.name} · ${maskIdCard(card.id_card_no)}。要采集证号，到「农户与单位」编辑这张档案手工录入；不补上，下次这个人来刷卡建档还会另立一张新档案。`,
+      toast.warning("这张档案没登记证号，没法核对", {
+        description: `读到 ${card.name} · ${maskIdCard(card.id_card_no)}。请到「农户与单位」编辑这张档案，先把证号录进去。`,
       });
       return;
     }
@@ -168,12 +168,12 @@ export function PartyDetailBody({
       case "demo-card":
         // 演示卡不盖章：台账把这台读卡器切成 Mock 时回的就是它，拿它给档案记一笔"核验过"，
         // 正是这条标记最怕的脏数据
-        said.push("这台机此刻回的是演示卡，不给它盖「已核验」的章");
+        said.push("读卡器此刻是演示模式，没有标记「已核验」");
         break;
       case "failed":
         // 标记没写成只是这一格没升级，比对的结论仍然成立：说清"对上了、没落库、可以再刷一次"
         toast.warning("证号对上了，但「已核验」没写进档案", {
-          description: `${r.reason}；档案其它内容一寸未动，可以再刷一次。`,
+          description: `${r.reason}；可以再刷一次。`,
         });
         break;
     }
@@ -183,8 +183,8 @@ export function PartyDetailBody({
     if (!fillingPhoto) {
       said.push(
         p.photo_attachment_id != null
-          ? "照片也已经在档案里"
-          : "这次没从证件里取到照片（解码组件不配套的机型拿不到），可在档案页「上传照片」补",
+          ? "照片已经在档案里"
+          : "这张证件里没有照片，可在档案页「上传照片」补",
       );
     }
     // 只剩"标记没写成 + 照片正在补"这一种形状时 said 是空的（两句都由别的那条说），兜一句
@@ -219,10 +219,10 @@ export function PartyDetailBody({
    */
   const photoHint =
     detail.photo_attachment_id != null
-      ? "人像照片来自建档时刷的那张身份证；要换一张，到「农户与单位」编辑框里点「换一张」。"
+      ? "要换照片，到「农户与单位」编辑页里点「换一张」。"
       : detail.id_card_no
-        ? "还没有人像照片：刷一次身份证核对会自动补上，也可在编辑框里本地上传。这是选填项，不影响制单与结算。"
-        : "还没有人像照片：这张档案没登记证号，核对认不出刷到的是不是本人，也就不会替你补——先把证号采进档案，或直接在编辑框里上传一张。这是选填项，不影响制单与结算。";
+        ? "还没有照片：读卡核对时会自动补上，也可在编辑框里上传（选填，不影响制单与结算）。"
+        : "还没有照片：这张档案没登记证号，核对补不了。先录证号，或在编辑框里上传（选填，不影响制单与结算）。";
 
   const recentCols: Column<OrderRow>[] = [
     { key: "order_no", header: "磅单号", cell: (r) => <span className="tnum font-medium">{r.order_no}</span> },
@@ -289,7 +289,7 @@ export function PartyDetailBody({
           {detail.credit_fen > detail.credit_limit_fen && detail.credit_limit_fen > 0 && (
             <CallOut tone="danger" title="挂账已超额度">
               当前未付 {money(detail.credit_fen)}，超过设定额度 {money(detail.credit_limit_fen)}。
-              站点参数「允许挂账」开启时仍可结算，但建议先把挂账付清再继续收粮。
+              开了「允许挂账」仍可结算，但建议先把挂账付清再继续收粮。
             </CallOut>
           )}
 
@@ -333,7 +333,7 @@ export function PartyDetailBody({
 
             <Card2
               title="皮重档案"
-              extra={<span className="text-xs text-muted-foreground">皮重偏差是超收/少付的高发点，均值只取地磅读数</span>}
+              extra={<span className="text-xs text-muted-foreground">均值只取地磅读数</span>}
             >
               {tareList.length === 0 ? (
                 <p className="text-sm text-muted-foreground">还没有皮重记录，第一次过磅后自动生成。</p>
@@ -368,8 +368,8 @@ export function PartyDetailBody({
                     </TableBody>
                   </Table>
                   <p className="text-xs text-muted-foreground">
-                    近 5 次均值 {tareMean01kg == null ? "—" : weight(tareMean01kg)}（手录那一行不计入），
-                    比对基准来自站点参数「皮重容差比例」；磅房捕皮重超容差时<em>照常入账</em>，只在磅单上留一条醒目警示（05 §4 ②）。
+                    近 5 次均值 {tareMean01kg == null ? "—" : weight(tareMean01kg)}（手录不计入）；
+                    超容差的皮重<em>照常入账</em>，只在磅单上标一条警示。
                   </p>
                 </div>
               )}
@@ -415,8 +415,7 @@ export function PartyDetailBody({
           </Card2>
 
           <p className="text-xs text-muted-foreground">
-            提示：本页统计只覆盖 mock 保留的近期数据（{shiftDay(todayISO(), -14)} 起），
-            正式台账请以「收购台账」报表导出数为准。
+            本页只统计 {shiftDay(todayISO(), -14)} 之后的近期数据，正式数字请以「收购台账」导出为准。
           </p>
         </div>
       </div>

@@ -33,18 +33,17 @@ export function WindowBehaviorPanel() {
             <ChoiceCard
               value="exit"
               label="退出程序"
-              hint="关掉程序：地磅线程停掉，下次进来要重新登录"
+              hint="关掉程序，下次进来要重新登录"
             />
             <ChoiceCard
               value="hide"
               label="隐藏到系统托盘"
-              hint="窗口与任务栏按钮一起收起来，只在右下角托盘留个图标；点图标（或右键→显示主窗口）就回来"
+              hint="窗口收进右下角托盘，点托盘图标就回来"
             />
           </ChoiceCardGroup>
           <p className="text-xs text-muted-foreground">
-            从没设过时默认是「隐藏到系统托盘」；没有登录、或读不到这项偏好时，一律按「退出程序」处理——
-            宁可让人退得掉，也不留一个看不见的进程。
-            {behavior === "hide" && " 当前已设为隐藏：程序不会退出，收工请用托盘右键菜单里的「退出程序」。"}
+            没设置过时默认按「隐藏到系统托盘」；未登录时按「退出程序」处理。
+            {behavior === "hide" && " 已设为隐藏：程序不会退出，收工请用托盘右键菜单里的「退出程序」。"}
           </p>
         </CardContent>
       </Card>

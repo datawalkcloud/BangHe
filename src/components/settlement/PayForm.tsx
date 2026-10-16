@@ -56,7 +56,7 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
         : amountFen > left
           ? `超出未付余额 ${money(left)}`
           : "";
-  const tradeErr = method !== "" && method !== "cash" && tradeNo.trim() === "" ? "非现金付款请填交易流水号，便于对账" : "";
+  const tradeErr = method !== "" && method !== "cash" && tradeNo.trim() === "" ? "非现金付款请填写交易流水号" : "";
   const blocked = !!(amountErr || tradeErr) || method === "";
 
   /**
@@ -69,7 +69,7 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
     // 没有出票权就压根不该出纸（页头那枚「打印凭证」同样是禁用的）
     if (!can("print")) return;
     if (!station) {
-      toast.warning("结算凭证没能出纸：站点信息尚未载入，请到「结算台账」按单号补打一张");
+      toast.warning("结算凭证没能出纸：站点信息还没载入，请到「结算台账」按单号补打一张");
       return;
     }
     void printReceipt({
@@ -131,7 +131,7 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
         <Button type="button" variant="outline" className="h-8 self-stretch text-sm" onClick={() => setAmountYuan(String(left / 100))}>
           全额付清 {money(left)}
         </Button>
-        <span className="text-[11px]">尚欠 <span className="tnum">{money(left)}</span>（{rmbUpper(left)}），按未付余额一次付清最省事；改小即为分次付款。</span>
+        <span className="text-[11px]">尚欠 <span className="tnum">{money(left)}</span>（{rmbUpper(left)}），改小即为分次付款。</span>
       </div>
       <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
         付款方式
@@ -150,7 +150,7 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
           ]}
         />
       </Label>
-      {method === "" && <p className="-mt-2 text-xs text-destructive">请选择付款方式：这笔钱从哪条渠道出去，台账要认。</p>}
+      {method === "" && <p className="-mt-2 text-xs text-destructive">请选择付款方式</p>}
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
         <span>交易流水号 / 凭证号</span>
         <KeypadInput
@@ -173,7 +173,7 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
         {pay.isPending ? "登记中…" : "确认付款"}
       </Button>
       <p className="text-xs text-muted-foreground">
-        每次登记付款都会自动打一张结算凭证：凭证联交给售粮人作为收款依据，存根联财务留存。没出纸会弹预览框，手动补打即可。
+        每次登记付款都会自动打一张结算凭证：凭证联交售粮人，存根联财务留存。没出纸会弹预览框，手动补打即可。
       </p>
       {printFallback}
     </div>
