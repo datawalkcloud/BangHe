@@ -2,10 +2,11 @@ name: Release
 
 # 自动为 BangHe 构建 Windows NSIS 安装包并（打 tag 时）发布到 GitHub Releases。
 # 结构照搬 daro 的 .github/workflows/release.yml：meta 解析版本 → 平台 job 构建上传
-# → tag 触发时汇总成正式 Release，正文含下载表 + 提交清单，并校验正文链接与实际产物一致。
+# → tag 触发时汇总成 Draft Release，正文含下载表 + 提交清单，并校验正文链接与实际产物一致。
+# 本系统以 Apache-2.0 协议开源。
 #
 # 触发方式：
-#   1) 打 tag `v*`（如 v26.10.8）→ 构建安装包 + 建正式 Release 并上传产物
+#   1) 打 tag `v*`（如 v26.10.8）→ 构建安装包 + 建 Draft Release 并上传产物
 #   2) 手动 workflow_dispatch → 只构建并上传 artifacts（不发 Release），用于试跑
 #
 # 版本号唯一数据源是 package.json 的 `version`（tauri.conf.json / Cargo.toml 须与其同步，
@@ -25,14 +26,19 @@ name: Release
 #     TAURI_SIGNING_PRIVATE_KEY（生成时未设口令，且只存在签发机的用户目录下，
 #     不进仓库）；它与 tauri.conf.json plugins.updater.pubkey 里的公钥配对——
 #     私钥一换，已装出去的老客户端验签即拒装。没配私钥，构建这步直接红。
-#   - release job 把版本 + 签名 + 安装包下载地址拼成 latest.json 随 Release 上传
+#   - release job 把版本 + 签名 + 安装包镜像地址拼成 latest.json 随 Release 上传
 #     （scripts/release-notes/gen_updater_manifest.py）；客户端按 plugins.updater
 #     .endpoints 拉 releases/latest/download/latest.json（gh-proxy 镜像优先）。
-#   - latest.json 对客户端可见的前提是 Release **已发布**（Draft 拉不到）：本流水线
-#     直接建正式 Release（draft: false），推 tag 后应用内「检查更新」即可生效。
-#   - 分发面（2026-10-15 单仓化）：源码与发布产物同仓——安装包、.sig、latest.json
-#     都挂在本仓库自己的 GitHub Release 上，磅房机匿名可达；不再维护独立的公开发版仓
-#     datawalkcloud/BangHe-releases，也不再需要跨仓凭据 RELEASES_REPO_TOKEN。
+#   - latest.json 对客户端可见的前提是 Release **已发布**（Draft 拉不到）：发版后
+#     去 GitHub 把 Draft 发布出去，应用内检查更新才生效。
+#   - 分发面（2026-10-15 定，2026-10-16 主仓转开源公开后沿用）：发版产物集中放在
+#     公开发版仓 datawalkcloud/BangHe-releases（只放安装包+清单、无源码，URL 稳定、
+#     与源码仓解耦），端点与清单里的下载地址都指它；主仓 Draft 照旧留审阅。跨仓凭据 =
+#     GitHub Secret RELEASES_REPO_TOKEN（fine-grained PAT，只授公开仓 Contents 读写）。
+#   - 国内镜像（2026-10-16 加入）：GitHub 与 gh-proxy 在国内都不稳，故每次发版把主包与
+#     Gitee 版 latest.json 强推到一个公开 Gitee 仓，客户用 raw 直链匿名下载（见 release
+#     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载优先指这里；应用内
+#     自动更新通道暂仍走上面两条 endpoint，未改。
 #
 # 其他说明：
 #   - 只构建 Windows：本程序是粮站单机软件（地磅串口/读卡器/打印机），无 mac/linux 用户。
@@ -154,15 +160,15 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      # 应用内「检查更新」的更新源：版本 + minisign 签名 + 安装包下载地址拼成
-      # latest.json。源码与产物同仓，清单与安装包都挂在本仓库自己的 Release 上，
-      # 磅房机匿名可达（gh-proxy 镜像优先），端点即 releases/latest/download/latest.json。
+      # 应用内「检查更新」的更新源：版本 + minisign 签名 + 安装包镜像地址拼成
+      # latest.json。清单与安装包统一按公开发版仓 datawalkcloud/BangHe-releases 拼地址
+      # （产物与源码仓解耦、URL 稳定，磅房机匿名可达）。
       - name: 生成更新清单 latest.json
         run: |
           python3 scripts/release-notes/gen_updater_manifest.py \
             --version "${{ needs.meta.outputs.version }}" \
             --tag "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
+            --repo "datawalkcloud/BangHe-releases" \
             --sig-file "artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe.sig" \
             --output artifacts/latest.json
           echo "----- latest.json -----"
@@ -201,15 +207,86 @@ jobs:
             exit 1
           fi
 
-      # 单仓发布：安装包 + .sig + latest.json（artifacts/*）一起挂到本仓库这个正式
-      # Release 上。draft: false 是应用内「检查更新」能匿名拉到
-      # releases/latest/download/latest.json 的前提——Draft 对匿名客户端不可见。
-      - name: 发布正式 GitHub Release（含安装包与更新清单）
+      - name: 创建 Draft Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: 磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}
           body_path: release_body.md
-          draft: false
+          draft: true
           prerelease: false
           files: artifacts/*
+
+      # 公开发版仓 BangHe-releases：匿名可达的在线更新源（与主仓解耦，只放安装包与
+      # 机器读的清单）。跨仓发布要独立凭据：GitHub Secrets 配 RELEASES_REPO_TOKEN
+      # （fine-grained PAT，只授 BangHe-releases 一个仓的 Contents: Read and write）。
+      # 这一发是正式的（非 Draft）：主仓 Draft 还留着人工审正文的关口，公开仓只放
+      # 产物与清单，没有需要审的内容。
+      - name: 发布到公开发版仓 BangHe-releases（在线更新源）
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: datawalkcloud/BangHe-releases
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: 磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe
+            artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe.sig
+            artifacts/latest.json
+          body: |
+            磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}：安装包与在线更新清单（latest.json）。
+            本仓库只放发布产物、不含源码，供应用内「检查更新」匿名拉取。
+
+      # 国内高速镜像：把安装包与一份「安装包地址指向 Gitee raw」的 latest.json 推到一个
+      # 公开 Gitee 仓，客户用 raw 直链匿名下载。
+      # 为什么不走 Gitee「发行版附件」：Gitee 个人仓的 Release 二进制附件用 v5 API 上传
+      # 极不稳定（撞风控、要登录态/验证码），故改走 git——主包仅 MB 量级、远低于 Gitee
+      # 单文件 50MB 限制，用「orphan 工作树 + 强推」只留最新版（不累积历史、仓体积恒定）。
+      # 代价：Gitee 那份只保留最新版，下老版本仍回 GitHub。
+      # 同时额外推一个固定文件名 banghe-latest-windows-x64-setup.exe，官网/README 的下载
+      # 直链只认它——改版号不用动网页（带版本号的 banghe-<ver>-*.exe 仍一并保留，供追溯）。
+      # 前置（一次性）：
+      #   1) 建一个公开 Gitee 仓，命名空间填进 Secret GITEE_OWNER，默认分支须与 GITEE_BRANCH 一致；
+      #   2) GitHub Secrets 配 GITEE_USER（Gitee 登录名）/ GITEE_TOKEN（私人令牌，勾 projects）/ GITEE_OWNER。
+      # 鉴权若报 401：把 push URL 里的 ${GITEE_USER} 换成 oauth2（Gitee 支持的另一写法）。
+      - name: 同步安装包到国内 Gitee 镜像（raw 直链）
+        env:
+          GITEE_USER: ${{ secrets.GITEE_USER }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: banghe-dl
+          GITEE_BRANCH: master
+        run: |
+          set -euo pipefail
+          ver="${{ needs.meta.outputs.version }}"
+          asset="banghe-${ver}-windows-x64-setup.exe"
+          stable="banghe-latest-windows-x64-setup.exe"
+          rawbase="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/raw/${GITEE_BRANCH}"
+          dl="https://${GITEE_USER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+
+          # 用全新工作树 orphan 强推，不牵主仓 .git、也不累积历史
+          rm -rf gitee-dl && mkdir gitee-dl && cd gitee-dl
+          git init -q
+          git config user.email "ci@datawalk.cn"
+          git config user.name "BangHe CI"
+          cp "../artifacts/${asset}" .
+          # 固定文件名一份：官网/README 下载直链永远指 banghe-latest-*，改版号不用动网页
+          cp "../artifacts/${asset}" "${stable}"
+          # 造一份 Gitee 版 latest.json：只把安装包 url 换成 raw 直链，签名与版本原样保留
+          # （客户端下回来的文件仍由同一把 minisign 公钥验签，换 host 不影响验签）。
+          python3 - "$rawbase" "$asset" <<'PY'
+          import json, sys
+          base, asset = sys.argv[1], sys.argv[2]
+          m = json.load(open("../artifacts/latest.json"))
+          for plat in m.get("platforms", {}).values():
+              plat["url"] = f"{base}/{asset}"
+          json.dump(m, open("latest.json", "w"), ensure_ascii=False, indent=2)
+          print("Gitee 版安装包地址：", base + "/" + asset)
+          PY
+          printf '# 磅禾粮站收粮系统 · 下载\n\n当前版本：%s\n\n稳定直链（始终指向最新版，可直接用）：\n%s/%s\n\n本仓仅存放最新安装包与在线更新清单（latest.json），不含源码。\n' \
+            "$ver" "$rawbase" "$stable" > README.md
+          git add -A
+          git commit -qm "sync ${ver}"
+          git push -f "$dl" "HEAD:${GITEE_BRANCH}"

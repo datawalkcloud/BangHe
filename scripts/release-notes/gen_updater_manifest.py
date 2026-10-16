@@ -13,7 +13,7 @@ plugins.updater.endpoints 拉它，下载前用 plugins.updater.pubkey 验签，
 清单本身，兜不住清单里的安装包地址——所以这个地址只能选一个，选能落地的那个。
 
 注意：端点指到 releases/latest/download/latest.json，**Draft Release 拉不到**——
-release.yml 直接建正式 Release（draft: false），推 tag 后更新即对客户端生效。
+发版后在 GitHub 上把 Draft 发布（publish）出去，更新才对客户端生效。
 
 用法：
     python3 scripts/release-notes/gen_updater_manifest.py \

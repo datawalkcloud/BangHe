@@ -1,9 +1,8 @@
 [package]
 name = "banghe"
-version = "1.0.0"
-description = "磅禾粮站收粮系统 — 单机版粮站收粮过磅（Tauri 桌面端）"
-authors = ["datawalkcloud"]
-license = "Apache-2.0"
+version = "1.0.3"
+description = "A Tauri App"
+authors = ["you"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
