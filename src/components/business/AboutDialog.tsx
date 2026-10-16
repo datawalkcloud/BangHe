@@ -10,8 +10,8 @@
  *   两条外链都走 ExtLink：点开经 opener 插件默认放行的 https 白名单，不经自开命令。
  *
  * 「检查更新」走 tauri-plugin-updater：更新源与验签公钥在 tauri.conf.json 的
- * plugins.updater——清单与安装包集中在**公开发版仓 BangHe-releases**（与源码仓解耦、
- * URL 稳定），gh-proxy 镜像优先。
+ * plugins.updater——清单与安装包直接挂**本仓 datawalkcloud/BangHe 的 GitHub Release**，
+ * gh-proxy 镜像优先。
  * 流程是 opt-in 的手动检查——不开自动检查，磅房机大多不联网，开局先撞一次超时
  * 只会招人烦。Windows 下安装器拉起后本程序会退出、装完自动重启
  * （InstallOptions.restartAfterInstall 默认 true），所以「安装中」这一态出现后
@@ -32,7 +32,7 @@ import conf from "../../../src-tauri/tauri.conf.json";
 
 type Phase = "idle" | "checking" | "available" | "downloading" | "installing";
 
-/** 官网：现场支持与产品介绍的入口（安装包在公开的 BangHe-releases 仓） */
+/** 官网：现场支持与产品介绍的入口（安装包在本仓 GitHub Release / 国内 Gitee 镜像） */
 const SITE_URL = "https://bh.datawalk.cn";
 
 /** 命令层回的错误可能是裸字符串（Rust 侧约定），别把 `[object Object]` 弹给人 */
@@ -239,9 +239,9 @@ export function AboutDialog({
         )}
 
         <p className="text-xs text-muted-foreground">
-          本项目以 Apache-2.0 协议开源；安装包与在线更新清单集中在公开发版仓
-          <span className="font-mono"> BangHe-releases </span>
-          ，机房上不了网时把那个地址抄给能上网的人下载装机包即可。
+          本项目以 Apache-2.0 协议开源；安装包与在线更新清单直接挂在本仓库的 GitHub
+          <span className="font-mono"> Release </span>
+          页，机房上不了网时把那个地址抄给能上网的人下载装机包即可。
         </p>
       </DialogContent>
     </Dialog>

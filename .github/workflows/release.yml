@@ -29,12 +29,11 @@ name: Release
 #   - release job 把版本 + 签名 + 安装包镜像地址拼成 latest.json 随 Release 上传
 #     （scripts/release-notes/gen_updater_manifest.py）；客户端按 plugins.updater
 #     .endpoints 拉 releases/latest/download/latest.json（gh-proxy 镜像优先）。
-#   - latest.json 对客户端可见的前提是 Release **已发布**（Draft 拉不到）：发版后
-#     去 GitHub 把 Draft 发布出去，应用内检查更新才生效。
-#   - 分发面（2026-10-15 定，2026-10-16 主仓转开源公开后沿用）：发版产物集中放在
-#     公开发版仓 datawalkcloud/BangHe-releases（只放安装包+清单、无源码，URL 稳定、
-#     与源码仓解耦），端点与清单里的下载地址都指它；主仓 Draft 照旧留审阅。跨仓凭据 =
-#     GitHub Secret RELEASES_REPO_TOKEN（fine-grained PAT，只授公开仓 Contents 读写）。
+#   - Release 直接以 draft:false 发布到主仓（本仓已开源公开，内置 GITHUB_TOKEN 即可），
+#     latest.json 与安装包匿名可达，应用内「检查更新」即时生效，无需人工再点发布。
+#   - 分发面（2026-10-16 起）：产物直接挂主仓 datawalkcloud/BangHe 的 GitHub Release。
+#     曾用的独立公开发版仓 BangHe-releases + 跨仓 RELEASES_REPO_TOKEN 已退役（主仓公开后
+#     "匿名拉不到主仓产物"这一前提不成立）。国内加速见下方「国内镜像」。
 #   - 国内镜像（2026-10-16 加入）：GitHub 与 gh-proxy 在国内都不稳，故每次发版把主包与
 #     Gitee 版 latest.json 强推到一个公开 Gitee 仓，客户用 raw 直链匿名下载（见 release
 #     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载优先指这里；应用内
@@ -161,14 +160,14 @@ jobs:
           merge-multiple: true
 
       # 应用内「检查更新」的更新源：版本 + minisign 签名 + 安装包镜像地址拼成
-      # latest.json。清单与安装包统一按公开发版仓 datawalkcloud/BangHe-releases 拼地址
-      # （产物与源码仓解耦、URL 稳定，磅房机匿名可达）。
+      # latest.json。产物直接挂主仓自己的 GitHub Release，清单与安装包地址按本仓
+      # （${{ github.repository }}）拼；gh-proxy 镜像前缀优先，兜住国内磅房机。
       - name: 生成更新清单 latest.json
         run: |
           python3 scripts/release-notes/gen_updater_manifest.py \
             --version "${{ needs.meta.outputs.version }}" \
             --tag "${{ github.ref_name }}" \
-            --repo "datawalkcloud/BangHe-releases" \
+            --repo "${{ github.repository }}" \
             --sig-file "artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe.sig" \
             --output artifacts/latest.json
           echo "----- latest.json -----"
@@ -207,37 +206,18 @@ jobs:
             exit 1
           fi
 
-      - name: 创建 Draft Release
+      # 产物直接挂主仓自己的 GitHub Release（本仓已开源公开，内置 GITHUB_TOKEN 即可，
+      # 无需跨仓 PAT）。draft:false → latest.json 与安装包匿名可达，供应用内「检查更新」
+      # 拉 releases/latest/download/latest.json。
+      - name: 发布 GitHub Release（主仓：含产物与在线更新清单）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: 磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}
           body_path: release_body.md
-          draft: true
-          prerelease: false
-          files: artifacts/*
-
-      # 公开发版仓 BangHe-releases：匿名可达的在线更新源（与主仓解耦，只放安装包与
-      # 机器读的清单）。跨仓发布要独立凭据：GitHub Secrets 配 RELEASES_REPO_TOKEN
-      # （fine-grained PAT，只授 BangHe-releases 一个仓的 Contents: Read and write）。
-      # 这一发是正式的（非 Draft）：主仓 Draft 还留着人工审正文的关口，公开仓只放
-      # 产物与清单，没有需要审的内容。
-      - name: 发布到公开发版仓 BangHe-releases（在线更新源）
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: datawalkcloud/BangHe-releases
-          token: ${{ secrets.RELEASES_REPO_TOKEN }}
-          tag_name: ${{ github.ref_name }}
-          name: 磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}
           draft: false
           prerelease: false
-          files: |
-            artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe
-            artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe.sig
-            artifacts/latest.json
-          body: |
-            磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}：安装包与在线更新清单（latest.json）。
-            本仓库只放发布产物、不含源码，供应用内「检查更新」匿名拉取。
+          files: artifacts/*
 
       # 国内高速镜像：把安装包与一份「安装包地址指向 Gitee raw」的 latest.json 推到一个
       # 公开 Gitee 仓，客户用 raw 直链匿名下载。
