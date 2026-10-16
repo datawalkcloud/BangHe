@@ -171,7 +171,7 @@ export function AboutDialog({
             { label: "运行环境", value: desktop ? "桌面端（Tauri）" : "浏览器预览（演示模式）" },
             { label: "官网", value: <ExtLink url={SITE_URL} text="bh.datawalk.cn" what="官网地址" /> },
             { label: "应用标识", value: <span className="font-mono text-xs">{conf.identifier}</span> },
-            { label: "源码仓库", value: <ExtLink url={repoUrl} what="仓库地址" />, span: 2 },
+            { label: "开源仓库", value: <ExtLink url={repoUrl} what="仓库地址" />, span: 2 },
           ]}
         />
 
@@ -239,7 +239,7 @@ export function AboutDialog({
         )}
 
         <p className="text-xs text-muted-foreground">
-          本项目以 Apache-2.0 协议开源；安装包与在线更新清单直接挂在本仓库的 GitHub
+          本项目以 Apache-2.0 协议开源免费，软件永久免费使用；安装包与在线更新清单直接挂在本仓库的 GitHub
           <span className="font-mono"> Release </span>
           页，机房上不了网时把那个地址抄给能上网的人下载装机包即可。
         </p>
