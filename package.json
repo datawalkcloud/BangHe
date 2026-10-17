@@ -11,6 +11,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:fast": "npm run build && cargo build --profile release-fast --bins --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml",
+    "build:store": "tauri build --features store-build",
     "start:fast": "cd src-tauri && target\\release-fast\\banghe.exe",
     "preview": "vite preview",
     "tauri": "tauri"

@@ -10,8 +10,12 @@
  * 只做手动检查：磅房机大多不联网，开局自动检查只会先撞一次超时招人烦。
  * Windows 下安装器拉起后本程序即退出并自动重启（InstallOptions.restartAfterInstall 默认 true），
  * 所以「安装中」之后前端不用再调重启。浏览器预览没有原生通道，这一区如实换成一句说明。
+ *
+ * 商店版（cargo feature `store-build`）整区换成"由 Microsoft Store 负责更新"的说明：
+ * 商店要求更新走商店通道，那一侧 updater 插件在 Rust 就没注册。通道读数只问
+ * native.ts 的 updateChannel()（单源即那个 feature），这里不设第二个开关。
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,7 +23,7 @@ import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { InfoGrid } from "@/components/business/layout";
 import { fileSize } from "@/lib/format";
-import { runningInTauri } from "@/lib/native";
+import { runningInTauri, updateChannel, type UpdateChannel } from "@/lib/native";
 // 与 AppTopbar 引 package.json 同一个道理：配置在仓库里就一份，界面不改写它
 import conf from "../../../src-tauri/tauri.conf.json";
 
@@ -80,6 +84,19 @@ export function AboutDialog({
   repoUrl: string;
 }) {
   const desktop = runningInTauri();
+  // 分发通道读数：null = 还没问到手（桌面端首发一次，走的是本进程的原生命令，毫秒级；
+  // 问到手之前不渲染那一区，免得商店版先闪出一个不该有的「检查更新」按钮）
+  const [channel, setChannel] = useState<UpdateChannel | null>(null);
+  useEffect(() => {
+    if (!desktop) return;
+    let alive = true;
+    void updateChannel().then((c) => {
+      if (alive) setChannel(c);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [desktop]);
   const [phase, setPhase] = useState<Phase>("idle");
   const [updateMeta, setUpdateMeta] = useState<{ version: string; body: string | null } | null>(null);
   const [progress, setProgress] = useState<{ received: number; total: number | null } | null>(null);
@@ -178,7 +195,14 @@ export function AboutDialog({
           ]}
         />
 
-        {desktop ? (
+        {desktop && channel === "store" ? (
+          <div className="flex flex-col gap-2.5 rounded-xl border bg-muted/20 p-3">
+            <span className="text-sm font-medium">程序更新</span>
+            <p className="text-xs text-muted-foreground">
+              本版本经 Microsoft Store 分发，新版本由商店自动推送安装；要立即检查，请在商店「下载和更新」里查看。应用内不提供更新检查。
+            </p>
+          </div>
+        ) : desktop && channel === "github" ? (
           <div className="flex flex-col gap-2.5 rounded-xl border bg-muted/20 p-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium">程序更新</span>
@@ -229,9 +253,9 @@ export function AboutDialog({
 
             {phase === "installing" && <p className="text-xs">正在安装，程序会自动退出并重启。</p>}
           </div>
-        ) : (
+        ) : !desktop ? (
           <p className="text-xs text-muted-foreground">检查更新只在桌面端可用。</p>
-        )}
+        ) : null}
 
         <p className="text-xs text-muted-foreground">本项目开源免费，采用 Apache-2.0 协议。</p>
       </DialogContent>

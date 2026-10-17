@@ -2057,3 +2057,119 @@ fn app_version_is_single_sourced() {
         "顶栏里又出现了写死的版本号字面量——升版本时它不会自己变"
     );
 }
+
+/// 递归收集 `rel` 目录下所有 .ts/.tsx 文件（只给通道守卫用，不嫌多跑）
+fn ts_files(dir: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![repo_file(dir)];
+    while let Some(p) = stack.pop() {
+        for entry in std::fs::read_dir(&p).unwrap_or_else(|e| panic!("遍历 {dir} 失败：{e}")) {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("ts") | Some("tsx")
+            ) {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+/// 商店版更新通道的唯一开关。
+///
+/// Microsoft Store 要求应用更新走商店通道，所以 cargo feature `store-build` 必须
+/// 同时掐掉两处，且两处**同源**：
+///   1. lib.rs 里 updater 插件的注册被这一个 cfg 圈住（不许出现第二处注册或第二个 cfg）；
+///   2. 前端只许经 `native.ts::updateChannel()` → `app_update_channel` 命令问通道，
+///      全 src/ 里该命令名只许出现一次——谁再引环境变量/构建 define 之类的第二个开关，
+///      这条就红。
+#[test]
+fn store_build_updater_channel_is_single_switch() {
+    let cargo = read("Cargo.toml");
+    assert!(
+        re(r#"(?m)^store-build\s*=\s*\[\s*\]$"#).is_match(&cargo),
+        "Cargo.toml 必须声明顶格的 store-build 特性（商店版唯一开关）"
+    );
+
+    let lib = read("src/lib.rs");
+    assert_eq!(
+        re(r#"tauri_plugin_updater::Builder::new\(\)"#).find_iter(&lib).count(),
+        1,
+        "lib.rs 里 updater 的注册只许一处——多了就有没被闸门圈住的那一条"
+    );
+    assert_eq!(
+        re(r#"feature = "store-build""#).find_iter(&lib).count(),
+        1,
+        "lib.rs 里 feature = \"store-build\" 的闸门只许一道——闸门分散就没法保证掐干净"
+    );
+    assert!(
+        re(r#"cfg\(not\(feature = "store-build"\)\)\][\s\S]{0,120}tauri_plugin_updater::Builder::new\(\)"#)
+            .is_match(&lib),
+        "updater 的注册没有紧跟在 #[cfg(not(feature = \"store-build\"))] 之后（lib.rs）"
+    );
+    assert!(
+        lib.contains("system::app_update_channel"),
+        "app_update_channel 没进 invoke_handler——前端问不到通道"
+    );
+
+    let system = read("src/system.rs");
+    assert!(
+        re(r#"app_update_channel[\s\S]{0,200}cfg!\(feature = "store-build"\)"#).is_match(&system),
+        "app_update_channel 必须直接读同一个 cargo feature——读数与注册闸门不许分叉"
+    );
+
+    // 前端：命令名全仓库（src/）只许出现在 native.ts 一处
+    let callers: Vec<PathBuf> = ts_files("../src")
+        .into_iter()
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .unwrap_or_default()
+                .contains("app_update_channel")
+        })
+        .collect();
+    assert_eq!(
+        callers.len(),
+        1,
+        "app_update_channel 只许在 native.ts 调用一次，实际出现在：{:?}",
+        callers
+    );
+    assert!(
+        callers[0].ends_with("native.ts"),
+        "通道命令的调用点必须收在 native.ts（原生通道唯一出口），实际在 {:?}",
+        callers[0]
+    );
+    let about = read("../src/components/business/AboutDialog.tsx");
+    assert!(
+        about.contains("updateChannel()"),
+        "「关于」必须问 native.ts 的 updateChannel()，而不是自猜通道"
+    );
+    assert!(
+        !re(r"VITE_\w*(UPDATE|CHANNEL)").is_match(&read("../vite.config.ts")),
+        "vite 配置里不许引入第二个分发通道开关"
+    );
+
+    // 打包管线：npm 入口、MSIX 脚本、CI job 三处接线必须在位。
+    assert!(
+        read("../package.json").contains(r#""build:store""#),
+        "package.json 丢了 build:store（`npm run build:store` 是商店版的入口）"
+    );
+    let ps_bytes = std::fs::read(repo_file("../scripts/msix/build-msix.ps1"))
+        .unwrap_or_else(|e| panic!("读 scripts/msix/build-msix.ps1 失败：{e}"));
+    assert!(
+        ps_bytes.starts_with(&[0xEF, 0xBB, 0xBF]),
+        "build-msix.ps1 必须带 UTF-8 BOM——中文 Windows 的 PowerShell 5.1 会按 GBK 误读无 BOM 文件（历史坑）"
+    );
+    let ps1 = String::from_utf8_lossy(&ps_bytes);
+    assert!(
+        ps1.contains("--update-channel") && ps1.contains(r#"-ne "store""#),
+        "build-msix.ps1 必须保留「解包后跑包内 exe 断言通道为 store」的探针，商店版生效靠它兜底"
+    );
+    let yml = read("../.github/workflows/release.yml");
+    assert!(
+        yml.contains("npx tauri build --no-bundle --features store-build"),
+        "release.yml 的商店 job 必须用 --no-bundle --features store-build 构建——与本地同一开关"
+    );
+}

@@ -61,6 +61,9 @@ dist-verify*/
 # NSIS 打包时 Tauri 落在根目录的插件 dll
 nsis_tauri_utils.dll
 
+# CI 与本地 build 脚本汇聚安装包/MSIX 的临时目录（release.yml 各 job 的 upload 源）
+/release/
+
 # 兜底网：会话把转储直接扔在根目录（截图、tsc/cargo/vite 输出、临时脚本）
 /*.png
 /*.txt

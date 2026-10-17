@@ -1899,3 +1899,19 @@ pub async fn app_restart(app: AppHandle) -> Result<(), String> {
 pub async fn app_exit(app: AppHandle) {
     app.exit(0);
 }
+
+/// 分发通道回值：`"github"` = 常规装机包（「关于 → 检查更新」走 GitHub Releases）；
+/// `"store"` = Microsoft Store 版（updater 插件在 lib.rs 就没注册，这里如实报出来，
+/// 前端据此把「程序更新」区换成"商店负责更新"的说明）。
+///
+/// 值直接读 cargo feature——与 lib.rs 的注册闸门同源，不存在"插件拔了、界面还当
+/// 常规版"的分叉。前端不许自带第二个开关（守卫：schema_contract 的
+/// store_build_updater_channel_is_single_switch）。
+#[tauri::command]
+pub fn app_update_channel() -> &'static str {
+    if cfg!(feature = "store-build") {
+        "store"
+    } else {
+        "github"
+    }
+}

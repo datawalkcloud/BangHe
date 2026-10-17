@@ -7,6 +7,19 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+# 默认特性集 = 常规分发（GitHub Releases 自更新），与不写 --features 完全一致
+default = []
+# 商店版（Microsoft Store）构建闸门的**唯一开关**。商店要求应用更新走商店通道，
+# 装内的 GitHub Releases 检查/安装必须整体不存在：
+#   - lib.rs 在该 feature 下**不注册** tauri-plugin-updater（invoke 也找不到命令）；
+#   - 前端「关于 → 程序更新」经 app_update_channel 回值换成"商店负责更新"的说明，
+#     不给「检查更新」入口。
+# 构建口径：`npm run build:store`（即 tauri build --features store-build）。
+# 不许再加第二个通道开关（环境变量等），守卫在 schema_contract 的
+# store_build_updater_channel_is_single_switch。
+store-build = []
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.

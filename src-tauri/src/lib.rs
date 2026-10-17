@@ -61,7 +61,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     auth::set_lockout_disabled(true);
 
-    let app = tauri::Builder::default()
+    let app_builder = tauri::Builder::default()
         // 进程单实例：一台磅房机同时只许跑一份程序。地磅的 COM 口、身份证阅读器、UVC 摄像头
         // 都是独占的，站点库也不该被两个进程各写各的——所以第二次启动（双击桌面图标、开机自启
         // 撞上已经开着的实例）不再起一份，而是把已经开着的那扇主窗口叫到前台。
@@ -80,11 +80,19 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         // 只用到"选一个已存在的文件"这一个能力：备份页导入外部副本的原生文件选择框
-        .plugin(tauri_plugin_dialog::init())
-        // 更新检查（「关于 → 检查更新」）：前端 @tauri-apps/plugin-updater 拉取清单、
-        // 本插件做 minisign 验签与静默安装。更新源与公钥在 tauri.conf.json 的
-        // plugins.updater；签名私钥只存在于 GitHub Secrets，离线的本地构建不受影响。
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init());
+
+    // 更新检查（「关于 → 检查更新」）：前端 @tauri-apps/plugin-updater 拉取清单、
+    // 本插件做 minisign 验签与静默安装。更新源与公钥在 tauri.conf.json 的
+    // plugins.updater；签名私钥只存在于 GitHub Secrets，离线的本地构建不受影响。
+    //
+    // 商店版（`--features store-build`）这一行整体不存在：Microsoft Store 要求应用
+    // 更新走商店通道，指向 GitHub Releases 的装内更新必须拔掉。唯一开关就是这一个
+    // cfg——前端不许自己猜通道，只问 `system::app_update_channel`（见 Cargo.toml）。
+    #[cfg(not(feature = "store-build"))]
+    let app_builder = app_builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    let app = app_builder
         .setup(|app| {
             let dir = app
                 .path()
@@ -247,6 +255,7 @@ pub fn run() {
             system::restore_apply,
             system::app_restart,
             system::app_exit,
+            system::app_update_channel,
             prefs::prefs_read,
             prefs::prefs_write,
             titlebar::titlebar_set_dark,

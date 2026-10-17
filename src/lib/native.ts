@@ -384,3 +384,30 @@ export const nativeSerial = {
   /** 本机串口列表（添加设备表单「串口」下拉的数据源） */
   list: () => call<string[]>("serial_list"),
 };
+
+/* ------------------------------------------------------------------ *
+ * 分发通道（应用内更新的闸门读数）。
+ * 单源在 Rust：`system::app_update_channel` 直接读 cargo feature `store-build`，
+ * 与 lib.rs 里「注册/不注册 updater 插件」是同一个开关。这里缓存一次即可——
+ * 通道是构建期事实，运行期不会变。
+ * ------------------------------------------------------------------ */
+
+export type UpdateChannel = "github" | "store";
+
+let updateChannelCache: Promise<UpdateChannel> | null = null;
+
+/**
+ * 当前构建的分发通道。浏览器预览没有原生通道，按 `"github"` 处理即可
+ * （「关于」里那一区本来就只在桌面端出现，回值不参与判断）。
+ * 命令意外失败也回 `"github"`：离线装机包本该能自查更新，误关入口比误开疼。
+ */
+export function updateChannel(): Promise<UpdateChannel> {
+  if (!runningInTauri()) return Promise.resolve("github");
+  if (!updateChannelCache) {
+    updateChannelCache = (async () => {
+      const r = await call<string>("app_update_channel");
+      return r.available && r.data === "store" ? "store" : "github";
+    })();
+  }
+  return updateChannelCache;
+}

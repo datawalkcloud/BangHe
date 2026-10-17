@@ -39,6 +39,22 @@ name: Release
 #     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载优先指这里；应用内
 #     自动更新通道暂仍走上面两条 endpoint，未改。
 #
+# Microsoft Store 变体（2026-10-17 加入，build-msix-store job）：
+#   - 商店要求应用更新走商店通道，商店版用 cargo feature `store-build` 掐掉装内
+#     updater（唯一开关，见 src-tauri/Cargo.toml；前端经 app_update_channel 读数改显
+#     "商店负责更新"）。构建走 `npx tauri build --no-bundle --features store-build`
+#     ——Tauri bundler 不出 MSIX，清单与打包在 scripts/msix/build-msix.ps1。
+#   - 产物是**不签名裸包**：Partner Center 审核后由微软代签，这条路线不买代码签名证书。
+#   - 商店身份三值取 repo Variables（MSSTORE_PACKAGE_IDENTITY_NAME / MSSTORE_PUBLISHER /
+#     MSSTORE_PUBLISHER_DISPLAY_NAME，Partner Center「Product identity」页原样复制）；
+#     未配置时照常打「冒烟包」（测试身份，验证清单/MakeAppx/探针管线零回归），
+#     产物上传步骤门控跳过，不会把不可上架的包发到 Release。
+#   - 首发必须人工在 Partner Center 上传过审——官方前提「要更新的应用必须已在商店
+#     上架」，CLI/API 只做后续版本。首个过审拿到 Store product ID 后填进 repo
+#     Variable MSSTORE_PRODUCT_ID，本工作流末尾的 publish-store job 即自动把本次
+#     tag 打出的 msix 提交商店审核（msstore 自动更新目前官方只支持**免费**应用，
+#     磅禾本就免费）。发布凭据见该 job 注释的四个 Secrets。
+#
 # 其他说明：
 #   - 只构建 Windows：本程序是粮站单机软件（地磅串口/读卡器/打印机），无 mac/linux 用户。
 #   - 产物名从 NSIS 默认的中文产品名（磅禾粮站收粮系统_<ver>_x64-setup.exe）改成 ASCII，
@@ -140,6 +156,100 @@ jobs:
           # 主包与同名 .sig 一起走（release job 拿 .sig 拼 latest.json）
           path: release/banghe-*
           if-no-files-found: error
+
+  # 商店版构建：与 build-windows 同一次 checkout / 同一套依赖，只是换 cargo feature
+  # 且不进 bundler（清单见 scripts/msix/build-msix.ps1 的头注）。两个 job 并行跑，
+  # 互不干扰各自的 target/ 产物目录；release job 汇总时按 `banghe-*` 一并下载。
+  build-msix-store:
+    name: Windows x64 MSIX（商店版）
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: 依赖安装
+        run: npm ci
+
+      - name: Tauri 构建（store-build feature，不出安装包）
+        run: npx tauri build --no-bundle --features store-build
+
+      # makeappx 走 runner 自带的 Windows SDK；清单身份三值没配也不红——用测试身份打
+      # 冒烟包并跑解包探针（store-build 生效证明），只是产物不发布，见下一步门控。
+      - name: 打包 MSIX + 解包探针
+        shell: pwsh
+        env:
+          MSSTORE_PACKAGE_IDENTITY_NAME: ${{ vars.MSSTORE_PACKAGE_IDENTITY_NAME }}
+          MSSTORE_PUBLISHER: ${{ vars.MSSTORE_PUBLISHER }}
+          MSSTORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MSSTORE_PUBLISHER_DISPLAY_NAME }}
+        run: ./scripts/msix/build-msix.ps1
+
+      # 身份没配齐 → 包是测试身份的冒烟产物，不该混进面向客户/商店的 Release。
+      # `vars` 在 GitHub Actions 里对未定义的变量求值为空串，所以"三者都有"要逐个判。
+      - name: 上传商店产物
+        if: >-
+          ${{ vars.MSSTORE_PACKAGE_IDENTITY_NAME != '' &&
+               vars.MSSTORE_PUBLISHER != '' &&
+               vars.MSSTORE_PUBLISHER_DISPLAY_NAME != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: banghe-windows-x64-msix
+          path: release/banghe-*-windows-x64-store.msix
+          if-no-files-found: error
+
+  # 商店自动发布（官方文档：msstore-dev-cli/github-actions）。开关就是
+  # MSSTORE_PRODUCT_ID 这一个变量——**首个版本必须先在 Partner Center 人工上传
+  # 并过审**（官方前提「要更新的应用必须已在商店上架」），上线前不要配这个变量，
+  # 整个 job 自然跳过。配好后每次打 tag 即自动把本次 msix 提交商店审核。
+  # 官方注：msstore 经 Actions 的自动更新目前仅支持**免费**应用（磅禾本就免费）。
+  #
+  # 四个凭据（一次性配置，全在 GitHub 侧管，不进仓库）：
+  #   AZURE_AD_TENANT_ID / AZURE_AD_CLIENT_ID / AZURE_AD_CLIENT_SECRET
+  #     ← Partner Center 关联 Entra ID 后，在 Entra「应用注册」建一个应用并
+  #       在 Partner Center「用户管理 → Microsoft Entra 应用程序」里给它 **Manager** 角色；
+  #       client secret 只显示一次，直接抄进 Secret。
+  #   SELLER_ID ← Partner Center「账户设置 → 开发人员设置/标识符」的 Publisher ID。
+  publish-store:
+    name: 发布到 Microsoft Store
+    needs: build-msix-store
+    if: startsWith(github.ref, 'refs/tags/v') && vars.MSSTORE_PRODUCT_ID != ''
+    runs-on: windows-latest
+    steps:
+      # 依赖 build-msix-store 的「上传商店产物」——身份三值没配时该产物不存在，
+      # 这里下载会直接红；那是配置漏项，红得对（PRODUCT_ID 已配意味着早过了首发）。
+      - name: 下载商店 MSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: banghe-windows-x64-msix
+          path: msix
+
+      # 微软官方文档给的 CLI 安装 action（也可用 microsoft/microsoft-store-apppublisher）。
+      - name: 安装 Microsoft Store CLI
+        uses: microsoft/setup-msstore-cli@v1
+
+      - name: 提交更新到商店
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_CLIENT_ID: ${{ secrets.AZURE_AD_CLIENT_ID }}
+          AZURE_AD_CLIENT_SECRET: ${{ secrets.AZURE_AD_CLIENT_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          msstore reconfigure --tenantId $env:AZURE_AD_TENANT_ID --sellerId $env:SELLER_ID `
+            --clientId $env:AZURE_AD_CLIENT_ID --clientSecret $env:AZURE_AD_CLIENT_SECRET
+          $msix = Get-ChildItem msix\*.msix | Select-Object -First 1
+          if (-not $msix) { Write-Error "msix/ 下没有 .msix"; exit 1 }
+          msstore publish $msix.FullName -id "${{ vars.MSSTORE_PRODUCT_ID }}"
 
   release:
     name: 发布 GitHub Release
