@@ -1,0 +1,56 @@
+name: Deploy Site
+
+# 官网静态站发布线：与应用发版 release.yml（只认 v* tag）完全隔离，本线只认 site-* tag。
+# 推一个 site-* 标签（如 site-2026.10.18）→ 向 Netlify Build hook POST → 触发 bh.datawalk.cn
+# 用 master 分支内容重建发布。
+#
+# 前置（一次性）：
+#   1) Netlify 站点已连本仓库、Publish directory = site/、Production branch = master；
+#   2) 在 Netlify 站点 Settings → Build & deploy → Continuous deployment → Build hooks
+#      新建一个 hook（branch 选 master），复制其 URL；
+#   3) 在本仓库 Settings → Secrets and variables → Actions 新建 Secret，
+#      名 NETLIFY_BUILD_HOOK，值填上一步的 URL。
+#
+# Build hook URL 本身就是凭据，只存进上面的 Secret，绝不写死进这份公开工作流；
+# Secret 缺失时下方第一步判空报错退出，不静默跳过。
+#
+# 触发方式：
+#   git tag site-2026.10.18 && git push origin site-2026.10.18
+# 部署的是 master 分支内容——故 index.html 的改动必须先合进 master 再打标签。
+
+on:
+  push:
+    tags:
+      - "site-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    name: 触发 Netlify 发布
+    runs-on: ubuntu-latest
+    steps:
+      - name: 校验 Build hook Secret
+        env:
+          HOOK_URL: ${{ secrets.NETLIFY_BUILD_HOOK }}
+        run: |
+          if [ -z "${HOOK_URL:-}" ]; then
+            echo "::error::未配置仓库 Secret NETLIFY_BUILD_HOOK。请在「仓库 Settings → Secrets and variables → Actions」新建名为 NETLIFY_BUILD_HOOK 的 Secret，值为 Netlify 的 Build hooks URL（站点 Settings → Build & deploy → Continuous deployment → Build hooks）。配置后重跑本 workflow 即可。"
+            exit 1
+          fi
+
+      - name: POST Netlify Build hook
+        env:
+          HOOK_URL: ${{ secrets.NETLIFY_BUILD_HOOK }}
+        run: |
+          echo "触发 Netlify 发布：tag=${GITHUB_REF_NAME}，部署分支=master"
+          curl -sS -f -X POST "$HOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{"branch":"master"}' \
+            -w "\nHTTP %{http_code}\n"
+          echo "已触发。到 Netlify Deploys 页查看构建进度；构建完成后核对 https://bh.datawalk.cn/ 。"
