@@ -35,9 +35,10 @@ name: Release
 #     曾用的独立公开发版仓 BangHe-releases + 跨仓 RELEASES_REPO_TOKEN 已退役（主仓公开后
 #     "匿名拉不到主仓产物"这一前提不成立）。国内加速见下方「国内镜像」。
 #   - 国内镜像（2026-10-16 加入）：GitHub 与 gh-proxy 在国内都不稳，故每次发版把主包与
-#     Gitee 版 latest.json 强推到一个公开 Gitee 仓，客户用 raw 直链匿名下载（见 release
-#     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载优先指这里；应用内
-#     自动更新通道暂仍走上面两条 endpoint，未改。
+#     Gitee 版 latest.json 强推到公开 Gitee 仓 datawalkcloud/banghe-release（repo 名在
+#     env GITEE_REPO，owner 走 Secret GITEE_OWNER），客户用 raw 直链匿名下载（见 release
+#     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载与内置更新 endpoints
+#     均优先指这里（2026-10-18 起 endpoints 首位为 Gitee raw latest.json）。
 #
 # Microsoft Store 变体（2026-10-17 加入，build-msix-store job）：
 #   - 商店要求应用更新走商店通道，商店版用 cargo feature `store-build` 掐掉装内
@@ -346,7 +347,7 @@ jobs:
           GITEE_USER: ${{ secrets.GITEE_USER }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
-          GITEE_REPO: banghe-dl
+          GITEE_REPO: banghe-release
           GITEE_BRANCH: master
         run: |
           set -euo pipefail
