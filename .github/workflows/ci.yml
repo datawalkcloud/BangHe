@@ -1,0 +1,81 @@
+name: CI
+
+# 每次 push / PR 跑轻量检查，不做安装包（那归 release.yml）。
+#
+# 三道门：
+#   1. tsc --noEmit（前端类型）；
+#   2. cargo check 主 crate src-tauri（Rust 侧编译）；
+#   3. cargo test ticket-core（小票内核单测——纯 Rust，最便宜的回归防线）。
+#
+# 说明：
+#   - cargo 在本仓没有工作区根（仓库根无 Cargo.toml），src-tauri 与 crates/ticket-core
+#     各自独立，须分别 cd 进去跑，不能指望一条 workspace 命令覆盖两者。
+#   - 跑在 ubuntu：check/test 不需要 Windows，且比 windows runner 快、免并发额度。
+#     ticket-core 是纯 Rust（无系统依赖），src-tauri 的 cargo check 会拉 tauri 依赖树，
+#     故需装 Tauri 在 Linux 下的 pkg-config 依赖（见下）。若嫌这层依赖重，把
+#     src-tauri 那条 check 挪到 windows runner，别删测试。
+#   - Vite 配置遮蔽坑（见 AGENTS.md）：CI 不做 vite build，天然绕开。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: 前端类型检查 (tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 依赖安装
+        run: npm ci
+      - name: 类型检查
+        run: npx tsc --noEmit --incremental false -p tsconfig.json
+
+  backend:
+    name: Rust 编译检查 + ticket-core 单测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # tauri v2 在 Linux 下 cargo check 需要这些系统库的 pkg-config 元数据；
+      # serialport 在 Linux 后端经 libudev-sys 要 libudev.pc（首次 CI 就是红在这）。
+      - name: 安装 Tauri Linux 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            pkg-config libudev-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target, crates/ticket-core -> target
+
+      # cargo check（debug、无 custom-protocol）正常不读 frontendDist，但 tauri-build
+      # 个别版本对缺失的 ../dist 目录不宽容；CI 全新检出没有 dist/（已 gitignore），
+      # 垫一个占位，纯前端产物与此检查无关。
+      - name: 垫占位 dist（防 tauri-build 找不到 frontendDist）
+        run: |
+          [ -d dist ] || { mkdir -p dist && echo '<!doctype html>' > dist/index.html; }
+
+      - name: 主 crate 编译检查
+        working-directory: src-tauri
+        run: cargo check --all-targets
+
+      - name: ticket-core 单元测试
+        working-directory: crates/ticket-core
+        run: cargo test

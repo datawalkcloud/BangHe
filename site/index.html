@@ -1,0 +1,2179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script type="text/javascript">
+    (function(c,l,a,r,i,t,y){
+        c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+        t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+    })(window, document, "clarity", "script", "yz3w64zu6z");
+</script>
+<title>磅禾｜开源免费的粮站收粮管理系统 · 地磅 粮仓 粮站 离线 开票</title>
+<meta name="description" content="磅禾粮站收粮管理系统：地磅称重、身份证与 IC 卡、扦样化验、计价结算、票面码与经营台账接在一台机器上。断网可用，数据留在企业自己手里。">
+<meta name="keywords" content="粮站收粮系统,地磅称重软件,收粮管理软件,粮食过磅系统,粮库地磅软件,IC卡收粮,扦样化验系统,离线地磅软件,磅房软件,粮食称重结算,磅禾">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="author" content="磅禾 Datawalk">
+<link rel="canonical" href="https://bh.datawalk.cn/">
+<meta name="theme-color" content="#05241a">
+<!-- Open Graph：微信/钉钉/QQ 分享卡片 -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="磅禾">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://bh.datawalk.cn/">
+<meta property="og:title" content="磅禾｜开源免费的粮站收粮管理系统">
+<meta property="og:description" content="地磅称重、身份证与 IC 卡、扦样化验、计价结算、票面码与经营台账接在一台机器上。断网可用，数据留在企业自己手里。">
+<meta property="og:image" content="https://bh.datawalk.cn/logo.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<!-- Twitter / X 卡片 -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="磅禾｜开源免费的粮站收粮管理系统">
+<meta name="twitter:description" content="地磅称重 · IC 卡 · 扦样化验 · 计价结算 · 离线可用，数据留在自己手里。">
+<meta name="twitter:image" content="https://bh.datawalk.cn/logo.png">
+<!-- 结构化数据：让搜索引擎认出「这是一个免费桌面软件」 -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://bh.datawalk.cn/#website",
+      "url": "https://bh.datawalk.cn/",
+      "name": "磅禾",
+      "inLanguage": "zh-CN",
+      "publisher": { "@id": "https://bh.datawalk.cn/#org" }
+    },
+    {
+      "@type": "Organization",
+      "@id": "https://bh.datawalk.cn/#org",
+      "name": "磅禾",
+      "url": "https://bh.datawalk.cn/",
+      "logo": "https://bh.datawalk.cn/logo.png",
+      "sameAs": [
+        "https://github.com/datawalkcloud/BangHe",
+        "https://gitee.com/datawalkcloud/BangHe"
+      ]
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "磅禾粮站收粮系统",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Windows",
+      "url": "https://bh.datawalk.cn/",
+      "downloadUrl": "https://github.com/datawalkcloud/BangHe/releases/latest",
+      "image": "https://bh.datawalk.cn/logo.png",
+      "description": "面向乡镇粮站与个体收粮点的单机离线收粮管理系统：地磅称重、身份证与 IC 卡、扦样化验、计价结算、票面码与经营台账，断网可用，数据留在本地。",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+      "author": { "@id": "https://bh.datawalk.cn/#org" },
+      "publisher": { "@id": "https://bh.datawalk.cn/#org" },
+      "license": "https://www.gnu.org/licenses/agpl-3.0.html"
+    }
+  ]
+}
+</script>
+<link rel="icon" href="./favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="./logo.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<style>
+/* ── 令牌：与产品 src/App.css 逐值一致，官网不另起一套 ───────────────── */
+:root{
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --steel: oklch(0.97 0 0);
+  --primary: oklch(0.515 0.105 151);      /* 品牌绿，取自 logo */
+  --primary-ink: oklch(0.42 0.10 151);
+  --info: oklch(0.58 0.14 250);           /* 数据青 */
+  --warning: oklch(0.72 0.15 75);
+  /* 登录页插画那套：亮绿打底，麦金只留给高光 */
+  --grain-gold: #f2be57;
+  --leaf: #54d69b;
+  --ink-green: #05241a;
+  --ink-green-2: #0a3323;
+  --radius: 0;                            /* base-maia 直角体系 */
+  --sans: "PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono: ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+  --hair: 1px solid var(--border);
+  --page: min(1440px, calc(100vw - 88px));
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  background:var(--background); color:var(--foreground);
+  font-family:var(--sans); -webkit-font-smoothing:antialiased;
+  font-feature-settings:"tnum" 1;
+}
+a{color:inherit;text-decoration:none}
+.wrap{width:var(--page);margin-inline:auto}
+
+/* ── 顶栏：细钢线承重，不做毛玻璃 ───────────────────────────────── */
+.topbar{border-bottom:var(--hair);height:74px;position:relative;z-index:5;background:var(--background)}
+.topbar-in{height:100%;display:flex;align-items:center;gap:34px}
+.logo{display:flex;align-items:center;gap:11px;flex:0 0 auto}
+/* 图形直接用软件那枚 logo（scripts/make-app-icon.py 生成），不再手搓方印 */
+.logo-mark{width:41px;height:41px;object-fit:contain;display:block}
+.logo-txt strong{display:block;font-size:19px;letter-spacing:.14em;line-height:1.1}
+.logo-txt small{display:block;margin-top:3px;font:700 8px/1 var(--mono);letter-spacing:.3em;color:var(--primary)}
+.nav{display:flex;gap:28px;margin-left:12px}
+.nav a{font-size:14px;font-weight:600;padding:26px 0;border-bottom:2px solid transparent;color:oklch(0.35 0 0)}
+.nav a:hover,.nav a.on{color:var(--primary);border-color:var(--primary)}
+.top-actions{margin-left:auto;display:flex;align-items:center;gap:18px}
+/* 顶栏这一行不换行、且 1181 起导航就出来了，宽度本就吃紧：
+   两枚源码入口都只放品牌标（Gitee 圆环 / GitHub 猫形），名字交给 title 与 aria-label */
+.repo-links{display:flex;align-items:center;gap:8px}
+.repo-links .ico{padding:0 14px}
+.hotline{font-size:12px;color:var(--muted-foreground);line-height:1.5;text-align:right}
+.hotline b{display:block;font:700 15px/1.2 var(--mono);color:var(--foreground);letter-spacing:.02em}
+
+/* 菜单钮与抽屉：只在 .nav 收起的 ≤1180 档出现。发丝线承重，不做浮起阴影 */
+.menu-btn{display:none;align-items:center;justify-content:center;flex:0 0 auto;width:44px;height:44px;
+  padding:0;border:1px solid var(--border);background:var(--background);cursor:pointer}
+.menu-btn i{display:block;position:relative;width:18px;height:2px;background:var(--foreground)}
+.menu-btn i::before,.menu-btn i::after{content:"";position:absolute;left:0;width:18px;height:2px;
+  background:var(--foreground);transition:transform .16s ease}
+.menu-btn i::before{top:-6px}
+.menu-btn i::after{top:6px}
+.menu-btn[aria-expanded="true"]{border-color:var(--primary)}
+.menu-btn[aria-expanded="true"] i{background:transparent}
+.menu-btn[aria-expanded="true"] i::before{top:0;transform:rotate(45deg)}
+.menu-btn[aria-expanded="true"] i::after{top:0;transform:rotate(-45deg)}
+.drawer{position:absolute;left:0;right:0;top:100%;z-index:9;display:block;
+  border-bottom:var(--hair);background:var(--background)}
+.drawer[hidden]{display:none}
+.drawer-in{width:var(--page);margin-inline:auto;padding:6px 0 24px}
+.drawer-in>a{display:flex;align-items:center;min-height:48px;font-size:15px;font-weight:600;
+  border-bottom:var(--hair);color:oklch(0.25 0 0)}
+.drawer-in>a:active{color:var(--primary)}
+.drawer-cta{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.drawer-cta .btn{flex:1 1 170px}
+
+/* ── 按钮：直角、无阴影、靠色块承重 ─────────────────────────────── */
+/* 顶栏与收尾 CTA 的「技术支持」是 <button>（开弹窗），所以这里得把字体族钉住，
+   否则按钮会掉回 UA 默认字体，跟同一排的 <a class="btn"> 对不齐 */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:52px;padding:0 26px;
+  font-family:var(--sans);font-size:15px;font-weight:700;letter-spacing:.04em;border:1px solid transparent;border-radius:0;cursor:pointer;white-space:nowrap}
+.btn-solid{background:var(--primary);color:#fff}
+.btn-solid:hover{background:var(--primary-ink)}
+.btn-line{border-color:oklch(0.78 0 0);color:var(--foreground);background:transparent}
+.btn-line:hover{border-color:var(--primary);color:var(--primary)}
+.btn-sm{height:40px;padding:0 18px;font-size:13px}
+.btn i{font-style:normal;font-family:var(--mono);font-size:11px;opacity:.8}
+
+/* ── 首屏骨架 ─────────────────────────────────────────────────── */
+.hero{position:relative;overflow:hidden;border-bottom:var(--hair)}
+.hero-copy,.unit{min-width:0}
+.hero-in{position:relative;z-index:2;display:grid;grid-template-columns:minmax(470px,.78fr) minmax(560px,1.32fr);
+  gap:62px;align-items:center;padding:66px 0 0}
+
+/* 左侧文案 */
+.eyebrow{display:flex;align-items:center;gap:14px;font:700 11px/1 var(--mono);letter-spacing:.26em;color:var(--primary)}
+.eyebrow s{text-decoration:none;width:34px;height:2px;background:var(--grain-gold)}
+.eyebrow em{font-style:normal;color:var(--muted-foreground);letter-spacing:.18em}
+h1{margin:22px 0 0;font-size:clamp(40px,4.4vw,64px);line-height:1.08;letter-spacing:-.035em;font-weight:800}
+h1 span{display:block}
+h1 u{text-decoration:none;color:var(--primary)}
+.lede{margin:24px 0 0;max-width:520px;font-size:16px;line-height:2;color:oklch(0.4 0 0)}
+.lede code{font:600 15px/1 var(--mono);color:var(--foreground);letter-spacing:-.01em}
+.pledge{display:flex;flex-direction:column;gap:0;margin:32px 0 0;border-top:var(--hair)}
+.pledge li{list-style:none;display:flex;align-items:baseline;gap:14px;padding:13px 0;border-bottom:var(--hair);font-size:14.5px;font-weight:600}
+.pledge li s{text-decoration:none;flex:0 0 auto;width:13px;height:13px;background:var(--primary);position:relative;top:1px}
+.pledge li s::after{content:"";position:absolute;left:3px;top:6px;width:6px;height:3px;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg)}
+.pledge li em{font-style:normal;font-weight:400;color:var(--muted-foreground);font-size:13px;margin-left:auto;text-align:right}
+.cta{display:flex;gap:14px;margin:34px 0 0;flex-wrap:wrap}
+.spec{margin:26px 0 0;padding:0 0 40px;display:flex;flex-wrap:wrap;gap:8px 0;font:600 11.5px/1 var(--mono);
+  letter-spacing:.06em;color:var(--muted-foreground)}
+.spec span{padding-right:0}
+.spec span+span::before{content:"·";margin:0 10px;color:var(--grain-gold)}
+
+/* ── 右侧：把真界面摆成一台设备 ─────────────────────────────────── */
+/* 插图自成一套令牌：面板一律纯白，切夜班深色只改下面这两块，页面其余部分不参与 */
+.unit{
+  --background:#fff; --steel:#fff;
+  --foreground:oklch(0.145 0 0); --muted-foreground:oklch(0.556 0 0);
+  --border:oklch(0.9 0 0); --hair:1px solid var(--border);
+  --primary:oklch(0.515 0.105 151); --primary-ink:oklch(0.42 0.10 151);
+  --u-on-primary:#fff; --u-tint:oklch(0.515 0.105 151 / .1); --u-tint-line:oklch(0.515 0.105 151 / .3);
+  --u-dim:oklch(0.44 0 0); --u-soft:oklch(0.35 0 0); --u-avatar:oklch(0.72 0 0);
+  --u-frame:var(--ink-green); --u-drop:#fff; --u-edge:oklch(0.145 0 0 / .16);
+  position:relative;border:1px solid var(--u-frame);background:var(--background);color:var(--foreground);
+  box-shadow:14px 14px 0 -1px var(--u-drop), 14px 14px 0 0 var(--u-edge)}
+/* 深色档逐值取自产品 src/App.css 的 .dark，官网这台机器就是软件那台 */
+.unit[data-theme=dark]{
+  --background:oklch(0.145 0 0); --steel:oklch(0.205 0 0);
+  --foreground:oklch(0.985 0 0); --muted-foreground:oklch(0.708 0 0);
+  --border:oklch(1 0 0 / .14); --hair:1px solid var(--border);
+  --primary:oklch(0.75 0.11 151); --primary-ink:oklch(0.86 0.09 151);
+  --u-on-primary:oklch(0.24 0.06 151); --u-tint:oklch(0.75 0.11 151 / .16); --u-tint-line:oklch(0.75 0.11 151 / .4);
+  --u-dim:oklch(0.72 0 0); --u-soft:oklch(0.85 0 0); --u-avatar:oklch(0.5 0 0);
+  --u-frame:oklch(1 0 0 / .26); --u-drop:oklch(0.205 0 0); --u-edge:oklch(1 0 0 / .1)}
+.titlebar{height:38px;display:flex;align-items:center;gap:10px;padding:0 0 0 12px;
+  background:var(--background);color:var(--foreground);border-bottom:var(--hair)}
+.titlebar .tb-mark{width:13px;height:13px;background:var(--primary);position:relative}
+.titlebar .tb-mark::after{content:"";position:absolute;inset:3px 3px auto 3px;height:3px;background:var(--grain-gold)}
+.titlebar b{font-size:12.5px;font-weight:600;letter-spacing:.06em}
+.titlebar .tb-tag{font:700 9px/1 var(--mono);letter-spacing:.16em;color:var(--leaf);border:1px solid var(--u-tint-line);padding:3px 6px}
+/* 夜班深色开关：真按钮，点一下这台"设备"整块换档 */
+.tb-theme{display:inline-flex;align-items:center;gap:6px;height:23px;padding:0 7px;margin-left:2px;
+  border:1px solid var(--border);background:transparent;color:var(--u-dim);cursor:pointer;
+  font:600 10.5px/1 var(--mono);letter-spacing:.06em}
+.tb-theme:hover{border-color:var(--primary);color:var(--primary)}
+.tb-theme svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:square;stroke-linejoin:miter}
+.tb-theme .moon{display:none}
+.unit[data-theme=dark] .tb-theme .sun{display:none}
+.unit[data-theme=dark] .tb-theme .moon{display:block}
+.tb-win{margin-left:auto;display:flex;height:100%}
+.tb-win i{width:46px;border-left:1px solid var(--border);position:relative}
+.tb-win i:nth-child(1)::after{content:"";position:absolute;left:18px;right:18px;top:50%;height:1px;background:var(--u-dim)}
+.tb-win i:nth-child(2)::after{content:"";position:absolute;left:18px;right:18px;top:14px;bottom:14px;border:1px solid var(--u-dim)}
+.tb-win i:nth-child(3)::after,.tb-win i:nth-child(3)::before{content:"";position:absolute;left:18px;right:18px;top:50%;height:1px;margin-top:-.5px;background:var(--u-dim)}
+.tb-win i:nth-child(3)::before{transform:rotate(45deg)}
+.tb-win i:nth-child(3)::after{transform:rotate(-45deg)}
+
+/* 折叠档侧栏（AppShell 左列：品牌 + 三组图标 + 底部操作员） */
+.frame{display:flex;align-items:stretch;min-height:0}
+.main{display:flex;flex-direction:column;flex:1;min-width:0}
+.rail{flex:0 0 42px;display:flex;flex-direction:column;align-items:center;
+  background:var(--steel);border-right:var(--hair);padding:8px 0 9px}
+.rail .rb{width:26px;height:26px;background:var(--background);border:1px solid var(--border);
+  position:relative;margin-bottom:6px}
+.rail .rb::after{content:"";position:absolute;left:6px;right:6px;top:7px;height:8px;background:var(--primary)}
+.rail .rb::before{content:"";position:absolute;left:9px;right:9px;top:10px;height:2px;background:var(--grain-gold);z-index:1}
+.rg{display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 0}
+.rg+.rg{border-top:1px solid var(--border)}
+.rail b{width:28px;height:28px;display:grid;place-items:center;position:relative;color:var(--u-dim)}
+.rail b:hover{color:var(--foreground)}
+.rail b.on{background:var(--primary);color:var(--u-on-primary)}
+.rail b.on::before{content:"";position:absolute;left:-7px;top:5px;bottom:5px;width:2px;background:var(--primary)}
+.rail svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:square;stroke-linejoin:miter}
+.rail .rf{margin-top:auto;width:26px;height:26px;border:1px solid var(--border);background:var(--background);
+  position:relative;overflow:hidden}
+.rail .rf::after{content:"";position:absolute;left:50%;top:5px;width:9px;height:9px;margin-left:-4.5px;border-radius:50%;background:var(--u-avatar)}
+.rail .rf::before{content:"";position:absolute;left:50%;bottom:-5px;width:20px;height:13px;margin-left:-10px;border-radius:10px 10px 0 0;background:var(--u-avatar)}
+
+/* 页头那一排：真程序的动作条就在标题下面，设备灯在窗口最底下 */
+.wsbar{display:flex;align-items:stretch;height:34px;border-bottom:var(--hair);background:var(--steel);
+  font:600 10.5px/1 var(--mono);letter-spacing:.04em;color:var(--u-dim);overflow:hidden}
+.wsbar i{font-style:normal;display:flex;align-items:center;gap:6px;padding:0 11px;border-right:1px solid var(--border);white-space:nowrap}
+.wsbar i:last-child{margin-left:auto;border-right:0}
+.wsbar b{font-weight:700;color:var(--foreground);letter-spacing:-.01em}
+.wsbar .pri{background:var(--primary);color:var(--u-on-primary);border-right-color:var(--primary-ink)}
+
+/* 设备状态条（AppShell 全局底栏，不在工作台页面里） */
+.devs{display:flex;align-items:center;gap:0;height:34px;border-top:var(--hair);background:var(--steel);
+  font:600 10.5px/1 var(--mono);letter-spacing:.05em;color:var(--u-dim);overflow:hidden}
+.devs div{display:flex;align-items:center;gap:6px;padding:0 13px;height:100%;border-right:1px solid var(--border);white-space:nowrap}
+.devs div:last-child{margin-left:auto;border-right:0;color:var(--muted-foreground)}
+.led{width:7px;height:7px;background:var(--leaf);box-shadow:0 0 0 2px oklch(0.33 0.09 151 / .18)}
+.led.warn{background:var(--grain-gold);box-shadow:0 0 0 2px oklch(0.72 0.15 75 / .2)}
+/* 插图会跟着窗口一起缩，顶栏/底栏那几项排不下时宁可少摆两项，也别把「F1 快捷键一览」裁成半截。
+   1528 是 --page 撞到 1440 上限的那一档，再窄插图就开始缩水 */
+@media (max-width:1527px){.wsbar .opt,.devs .opt{display:none}}
+@media (max-width:1279px){.wsbar .opt2{display:none}}
+
+/* 主体三栏：左「身份与制单 / 皮重参考」、中「称重区 / 化验区」、右「过磅画面」竖排 */
+.body{display:grid;grid-template-columns:1fr 1.44fr 1.02fr;min-height:398px}
+.col{display:flex;flex-direction:column;min-width:0}
+.col+.col{border-left:var(--hair)}
+.pane{padding:16px 15px;border-right:var(--hair);position:relative}
+.pane:last-child{border-right:0}
+.col .pane{border-right:0;padding:11px 13px}
+.col .pane+.pane{border-top:var(--hair)}
+.col .pane.grow{flex:1}
+details.pane>summary{list-style:none;pointer-events:none}
+details.pane>summary::-webkit-details-marker{display:none}
+.pane-h{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;letter-spacing:.14em;
+  color:var(--muted-foreground);margin-bottom:9px}
+.pane-h s{text-decoration:none;font:700 9.5px/1 var(--sans);letter-spacing:.1em;color:var(--primary);border:1px solid var(--u-tint-line);padding:3px 5px}
+
+/* 读数区：刻度尺 + 大数字 */
+.readout{display:flex;gap:14px;align-items:stretch}
+.ruler{width:22px;flex:0 0 auto;border:1px solid var(--border);background:
+  repeating-linear-gradient(180deg,var(--border) 0 1px,transparent 1px 11px);position:relative}
+.ruler::after{content:"";position:absolute;left:-1px;right:-1px;height:2px;background:var(--primary);top:38%}
+.big{flex:1;min-width:0}
+.big .num{font:700 clamp(44px,4.2vw,58px)/1 var(--mono);letter-spacing:-.055em;color:var(--foreground)}
+.big .num u{text-decoration:none;font-size:.42em;letter-spacing:0;color:var(--muted-foreground);margin-left:5px}
+.big .num s{text-decoration:none;color:var(--primary)}
+.badge{display:inline-flex;align-items:center;gap:6px;margin-top:11px;padding:4px 8px;font:700 10.5px/1 var(--mono);letter-spacing:.1em}
+.badge.ok{color:var(--u-on-primary);background:var(--primary)}
+.badge.ok::before{content:"";width:5px;height:5px;background:currentColor;opacity:.9}
+.meta{margin-top:10px;display:flex;flex-direction:column;gap:7px;font:600 10.5px/1.4 var(--mono);color:var(--muted-foreground)}
+.meta i{font-style:normal;color:var(--foreground)}
+/* 称重区：读数压到本栏宽度，实测重量走键值行 */
+.pane-weigh .readout{gap:10px}
+.pane-weigh .big .num{font-size:clamp(28px,3vw,40px)}
+.pane-weigh .badge{margin-top:8px}
+.pane-weigh .kv{padding:4px 0}
+.kv b i{font-style:normal;margin-left:6px;padding:1px 4px;border:1px solid var(--border);
+  font:600 10px/1 var(--sans);color:var(--muted-foreground)}
+/* 化验指标格（真界面是 2×4 的小方格，不是键值行） */
+.flds{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.fld{border:1px solid var(--border);background:var(--steel);padding:6px 8px}
+.fld span{display:block;font:600 9.5px/1.3 var(--mono);letter-spacing:.05em;color:var(--muted-foreground);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld b{display:block;margin-top:4px;font:700 14px/1 var(--mono);letter-spacing:-.02em}
+.fld b em{font-style:normal;margin-left:3px;font:600 9px/1 var(--mono);color:var(--muted-foreground)}
+/* 面板内的小按钮 + 键帽 */
+.btnrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.btnrow b{display:inline-flex;align-items:center;gap:5px;padding:6px 8px;border:1px solid var(--border);
+  background:var(--background);font:600 11px/1 var(--sans);color:var(--u-soft);white-space:nowrap}
+.btnrow b.pri{background:var(--primary);border-color:var(--primary);color:var(--u-on-primary)}
+.btnrow b kbd{font:700 9px/1 var(--mono);border:1px solid currentColor;padding:2px 3px;opacity:.75}
+
+/* 键值行 */
+.kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--border);font-size:12.5px}
+.kv:last-child{border-bottom:0}
+.kv span{color:var(--muted-foreground)}
+.kv b{font-weight:700;font-family:var(--mono);letter-spacing:-.01em}
+.kv b.gold{color:var(--primary)}
+.tag{display:inline-block;padding:2px 6px;font:700 10px/1.5 var(--sans);letter-spacing:.08em;color:var(--primary-ink);background:var(--u-tint)}
+.person{display:flex;align-items:center;gap:9px;padding-bottom:9px;margin-bottom:4px;border-bottom:var(--hair)}
+.person .av{width:34px;height:34px;flex:0 0 auto;background:var(--steel);border:1px solid var(--border);position:relative;overflow:hidden}
+.person .av::after{content:"";position:absolute;left:50%;top:6px;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:var(--u-avatar)}
+.person .av::before{content:"";position:absolute;left:50%;bottom:-6px;width:24px;height:16px;margin-left:-12px;border-radius:12px 12px 0 0;background:var(--u-avatar)}
+.person p{margin:0;font-size:13px;font-weight:700;line-height:1.35}
+.person small{display:block;font:600 10px/1.4 var(--mono);color:var(--muted-foreground);letter-spacing:.02em}
+
+/* 过磅画面：三路实时视频。真照片做底，叠三层 CCTV 质感——噪点颗粒、扫描线、四角暗角；
+   画面持续微动 + 右下走秒时标 + 左上 REC 红点闪烁，读作「正在直播的磅区监控」而非插图 */
+.cams{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+.cams i{aspect-ratio:16/9;border:1px solid var(--border);position:relative;font-style:normal;
+  overflow:hidden;background:var(--ink-green)}
+.cams i .feed{position:absolute;inset:-4%;background-size:cover;background-position:center;
+  filter:saturate(.88) contrast(1.04) brightness(.97);animation:wsFeedDrift 11s ease-in-out infinite alternate}
+.cams i:nth-child(2) .feed{animation-duration:13s;animation-delay:-4s}
+.cams i:nth-child(3) .feed{animation-duration:9.5s;animation-delay:-7s}
+@keyframes wsFeedDrift{0%{transform:scale(1.015) translate3d(-.5%,-.4%,0)}50%{transform:scale(1.035) translate3d(.6%,.3%,0)}100%{transform:scale(1.02) translate3d(-.2%,.5%,0)}}
+/* 颗粒 + 扫描线 + 暗角 */
+.cams i .fx{position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 45%,transparent 52%,oklch(0 0 0 / .38) 100%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23n)' opacity='0.55'/></svg>"),
+    repeating-linear-gradient(0deg,oklch(0 0 0 / .22) 0 1px,transparent 1px 3px);
+  background-size:auto,70px 70px,auto;mix-blend-mode:multiply;opacity:.9}
+.unit[data-theme=dark] .cams i .fx{opacity:.75}
+/* 偶发一条亮扫描带自上而下扫过（监控刷新感） */
+.cams i .fx::after{content:"";position:absolute;left:0;right:0;height:22%;
+  background:linear-gradient(180deg,transparent,oklch(1 0 0 / .07) 45%,oklch(1 0 0 / .12) 50%,oklch(1 0 0 / .07) 55%,transparent);
+  animation:wsScanSweep 7.5s linear infinite;opacity:0}
+.cams i:nth-child(2) .fx::after{animation-duration:9s;animation-delay:2.4s}
+.cams i:nth-child(3) .fx::after{animation-duration:6.4s;animation-delay:4.8s}
+@keyframes wsScanSweep{0%{transform:translateY(-120%);opacity:0}6%{opacity:1}92%{opacity:1}100%{transform:translateY(560%);opacity:0}}
+/* REC 红点（呼吸闪烁）+ 通道标签：左下角，右下留给时标，与顶部白底机位条互不争位 */
+.cams i .tag{position:absolute;left:7px;bottom:5px;z-index:3;display:flex;align-items:center;gap:4px;
+  font:700 8px/1 var(--mono);letter-spacing:.12em;color:#fff;text-shadow:0 1px 2px oklch(0 0 0 / .8)}
+.cams i .tag::before{content:"";width:5px;height:5px;border-radius:50%;background:#ff4040;
+  box-shadow:0 0 6px #ff4040;animation:wsRec 1.5s ease-in-out infinite}
+@keyframes wsRec{0%,100%{opacity:1}50%{opacity:.25}}
+/* 右下走秒时标 + 左下机位名 */
+.cams i .ts{position:absolute;right:6px;bottom:5px;z-index:2;font:600 8.5px/1 var(--mono);
+  letter-spacing:.04em;color:#fff;text-shadow:0 1px 2px oklch(0 0 0 / .85);font-variant-numeric:tabular-nums}
+/* 曝光微闪：偶发一帧提亮，模拟枪机自动曝光跳变（位移留给 .feed 的漂移做，整格不动） */
+.cams i.live{animation:wsJitter 2.6s steps(2,end) infinite}
+.cams i.live:nth-child(2){animation-duration:3.4s;animation-delay:-1.2s}
+.cams i.live:nth-child(3){animation-duration:2.1s;animation-delay:-.7s}
+@keyframes wsJitter{0%,93%,100%{filter:none}95%{filter:brightness(1.12) contrast(.96)}97%{filter:brightness(.92)}99%{filter:none}}
+.cams i b{position:absolute;left:6px;right:6px;top:6px;padding:3px 8px;background:oklch(0.99 0 0 / .94);
+  border:1px solid oklch(0 0 0 / .22);box-shadow:0 1px 3px oklch(0 0 0 / .3);
+  z-index:3;font:700 9.5px/1 var(--sans);color:oklch(0.18 0 0);letter-spacing:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cam-cap{margin-top:7px;min-height:40px;font:600 10px/1.4 var(--mono);color:var(--muted-foreground);letter-spacing:.04em}
+.pane-cam{display:flex;flex-direction:column}
+.pane-cam .cams{flex:1;justify-content:space-between}
+.pane-cam .cam-cap{margin-top:auto;padding-top:12px}
+@media (prefers-reduced-motion:reduce){
+  .cams i .feed,.cams i .fx::after,.cams i .tag::before,.cams i.live{animation:none}
+}
+
+/* 底部在途条（真程序这排没有按钮，点中一张就是切当前单） */
+.strip{display:flex;align-items:center;gap:12px;min-height:56px;padding:9px 15px;border-top:1px solid var(--u-frame);background:var(--steel);overflow:hidden}
+.strip .lbl{flex:0 0 auto;font:700 10.5px/1 var(--mono);letter-spacing:.12em;color:var(--muted-foreground)}
+.chips{display:flex;gap:6px;min-width:0}
+.chips b{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;font:600 10.5px/1 var(--mono);letter-spacing:.02em;
+  padding:7px 8px;background:var(--background);border:1px solid var(--border);color:var(--u-soft)}
+.chips b.now{border-color:var(--primary);color:var(--primary-ink);background:var(--u-tint)}
+.chips b i{font-style:normal;font:600 10px/1 var(--sans);color:var(--muted-foreground)}
+.chips b em{font-style:normal;padding:3px 4px;font:700 9px/1 var(--mono);letter-spacing:.06em;color:var(--primary-ink);background:var(--u-tint)}
+.chips b u{font-style:normal;text-decoration:none;color:var(--grain-gold);font-weight:700}
+
+/* 道闸斜纹：首屏收口 */
+.barrier{height:8px;background:repeating-linear-gradient(135deg,var(--grain-gold) 0 16px,var(--ink-green) 16px 32px)}
+
+/* ══ 以下为整页各节 ═══════════════════════════════════════════ */
+
+/* 分节骨架：直角 + 发丝线承重，不做卡片浮起 */
+.band{border-bottom:var(--hair)}
+.band-ink{background:var(--ink-green);color:#e6efe9;border-bottom:0}
+.sec{padding:98px 0}
+.sec-head{display:grid;grid-template-columns:minmax(280px,.86fr) minmax(320px,1.14fr);gap:56px;align-items:end;margin-bottom:54px}
+.sec-head h2{margin:18px 0 0;font-size:clamp(29px,3.1vw,44px);line-height:1.16;letter-spacing:-.032em;font-weight:800}
+.sec-head h2 em{font-style:normal;color:var(--primary)}
+.sec-head p{margin:0 0 4px;color:oklch(0.42 0 0);font-size:15px;line-height:2.05}
+.band-ink .eyebrow{color:var(--leaf)}
+.band-ink .eyebrow em{color:oklch(0.7 0.03 151)}
+.band-ink .sec-head h2{color:#fff}
+.band-ink .sec-head h2 em{color:var(--grain-gold)}
+.band-ink .sec-head p{color:oklch(0.8 0.02 151)}
+
+/* 硬指标带：全部取 02 §13 非功能需求的真值 */
+.metrics{display:grid;grid-template-columns:repeat(6,1fr);border-top:1px solid var(--ink-green);border-bottom:1px solid var(--ink-green)}
+.metrics>div{padding:28px 20px 30px;border-right:1px solid var(--border)}
+.metrics>div:last-child{border-right:0}
+.metrics span{display:block;font:700 13px/1.3 var(--sans);letter-spacing:.02em;color:var(--muted-foreground)}
+.metrics b{display:block;margin-top:14px;font:700 clamp(24px,2.4vw,32px)/1 var(--mono);letter-spacing:-.05em}
+.metrics b u{text-decoration:none;font-size:.42em;letter-spacing:.02em;color:var(--muted-foreground);margin-left:4px}
+.metrics b s{text-decoration:none;color:var(--primary)}
+.metrics i{display:block;margin-top:11px;font-style:normal;font-size:12px;line-height:1.75;color:var(--muted-foreground)}
+
+/* 现场闭环：一单三步 */
+.flow{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);background:var(--border);gap:1px}
+.flow>div{background:var(--background);padding:22px 18px 26px;position:relative}
+.flow>div::before{content:"";position:absolute;left:0;top:0;width:100%;height:2px;background:var(--border)}
+.flow>div.swipe::before{background:var(--primary)}
+.flow .n{font:700 10px/1 var(--mono);letter-spacing:.16em;color:var(--muted-foreground)}
+.flow .n b{color:var(--primary);font-weight:700}
+.flow h3{margin:13px 0 9px;font-size:15.5px;letter-spacing:-.012em}
+.flow p{margin:0;font-size:12.5px;line-height:1.95;color:var(--muted-foreground)}
+.swipe-note{margin-top:16px;display:flex;flex-wrap:wrap;gap:10px 22px;font:600 11.5px/1.6 var(--sans);color:var(--muted-foreground)}
+.swipe-note s{text-decoration:none;color:var(--primary-ink);background:oklch(0.515 0.105 151 / .1);padding:3px 7px;font-weight:700}
+
+/* 硬件矩阵：窄屏横向滚，不把表格拆成断版 */
+.table-scroll{position:relative}
+.table-wrap{overflow-x:auto}
+.table-hint{display:none;margin:10px 0 0;font:600 11.5px/1.6 var(--mono);letter-spacing:.08em;color:var(--muted-foreground)}
+.matrix{width:100%;min-width:840px;border-collapse:collapse;border:1px solid var(--border);background:var(--background)}
+.matrix th,.matrix td{text-align:left;padding:17px 18px;border-bottom:var(--hair);border-right:var(--hair);vertical-align:top}
+.matrix th{font:700 10.5px/1 var(--mono);letter-spacing:.14em;color:var(--muted-foreground);background:var(--steel)}
+.matrix tr:last-child td{border-bottom:0}
+.matrix th:last-child,.matrix td:last-child{border-right:0}
+.matrix .cat{width:158px;font-weight:700;font-size:14px;letter-spacing:-.01em}
+.matrix .cat s{display:block;margin-top:7px;text-decoration:none;font:700 9.5px/1 var(--mono);letter-spacing:.12em;color:var(--primary)}
+.matrix .dev{width:270px;font-size:13px;line-height:1.95}
+.matrix .dev b{display:block;font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:-.01em;line-height:1.7}
+.matrix .dev small{display:block;margin-top:5px;color:var(--muted-foreground);font-size:11.5px}
+.matrix .how{font-size:13px;line-height:1.95;color:oklch(0.4 0 0)}
+.matrix .how ul{margin:0;padding-left:15px}
+.matrix .how li{margin:5px 0}
+.honest{margin-top:14px;font-size:12.5px;color:var(--muted-foreground);padding-left:14px;border-left:2px solid var(--grain-gold);line-height:1.9}
+
+/* 通用发丝网格卡 */
+.cols{display:grid;gap:1px;background:var(--border);border:1px solid var(--border)}
+.cols.c2{grid-template-columns:repeat(2,1fr)}
+.cols.c3{grid-template-columns:repeat(3,1fr)}
+.cols>div{background:var(--background);padding:28px 26px 30px}
+.cols .k{font:700 13px/1.3 var(--sans);letter-spacing:.02em;color:var(--primary)}
+.cols h3{margin:11px 0 10px;font-size:17px;letter-spacing:-.015em}
+.cols p{margin:0;font-size:13.5px;line-height:2;color:oklch(0.45 0 0)}
+.cols ul{margin:13px 0 0;padding:0;list-style:none}
+.cols ul li{font-size:13px;line-height:2;color:oklch(0.45 0 0);padding-left:16px;position:relative}
+.cols ul li::before{content:"";position:absolute;left:0;top:11px;width:6px;height:6px;background:var(--grain-gold)}
+
+/* 部署规格表 */
+.specs{display:grid;grid-template-columns:repeat(2,1fr);gap:0 62px}
+.specs>div{display:flex;gap:20px;padding:19px 0;border-bottom:1px solid oklch(0.3 0.03 151);align-items:baseline}
+.specs dt{flex:0 0 116px;font-size:14px;font-weight:700;letter-spacing:-.01em;color:#fff}
+.specs dd{margin:0;flex:1;font-size:13.5px;line-height:1.95;color:oklch(0.8 0.02 151)}
+.specs dd b{color:var(--grain-gold);font-family:var(--mono);font-weight:700;letter-spacing:-.01em}
+/* 对外大屏小样 */
+.wall{margin-top:46px;border:1px solid oklch(0.3 0.03 151);background:var(--ink-green-2);display:grid;grid-template-columns:repeat(4,1fr)}
+.wall>div{padding:22px 20px;border-right:1px solid oklch(0.28 0.03 151)}
+.wall>div:last-child{border-right:0}
+.wall span{display:block;font:700 9.5px/1 var(--mono);letter-spacing:.16em;color:oklch(0.66 0.03 151)}
+.wall b{display:block;margin-top:12px;font:700 clamp(22px,2.2vw,30px)/1 var(--mono);letter-spacing:-.05em;color:var(--leaf)}
+.wall b u{text-decoration:none;font-size:.4em;color:oklch(0.66 0.03 151);margin-left:4px}
+.wall-cap{margin-top:12px;font-size:12.5px;color:oklch(0.7 0.02 151)}
+
+/* 合规 */
+.law{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border)}
+.law>div{background:var(--background);padding:26px 24px}
+.law b{display:block;font-size:15.5px;letter-spacing:-.01em}
+.law p{margin:10px 0 0;font-size:13px;line-height:1.95;color:var(--muted-foreground)}
+.law i{display:block;font-style:normal;font:700 26px/1 var(--mono);letter-spacing:-.05em;color:var(--grain-gold);margin-bottom:14px}
+.src{margin-top:14px;font-size:12px;color:var(--muted-foreground)}
+.src a{color:var(--primary);border-bottom:1px solid oklch(0.515 0.105 151 / .35)}
+
+/* 版本与下载 */
+.rel{display:grid;grid-template-columns:.82fr 1.18fr;gap:1px;background:var(--border);border:1px solid var(--border)}
+.rel-side{background:var(--steel);padding:32px 30px}
+.rel-side .v{font:700 clamp(34px,3.4vw,46px)/1 var(--mono);letter-spacing:-.055em}
+.rel-side .d{margin-top:12px;font:600 11.5px/1 var(--mono);letter-spacing:.1em;color:var(--muted-foreground)}
+.rel-side ul{margin:26px 0 0;padding:0;list-style:none;font-size:12.5px;line-height:2.1;color:oklch(0.45 0 0)}
+.rel-side ul li{display:flex;justify-content:space-between;border-bottom:1px dashed var(--border);padding:5px 0}
+.rel-side ul li b{font-family:var(--mono);font-weight:700;color:var(--foreground)}
+.rel-main{background:var(--background);padding:32px 30px}
+.rel-main h3{margin:0 0 18px;font:700 10.5px/1 var(--mono);letter-spacing:.16em;color:var(--muted-foreground)}
+.rel-main ol{margin:0;padding:0;list-style:none;counter-reset:r}
+.rel-main ol li{counter-increment:r;padding:13px 0 13px 40px;border-bottom:var(--hair);position:relative;font-size:14px;line-height:1.9}
+.rel-main ol li:last-child{border-bottom:0}
+.rel-main ol li::before{content:counter(r,decimal-leading-zero);position:absolute;left:0;top:15px;font:700 11px/1 var(--mono);color:var(--primary);letter-spacing:.06em}
+.rel-main ol li s{display:block;text-decoration:none;margin-top:5px;font-size:12.5px;color:var(--muted-foreground);line-height:1.85}
+.rel-cta{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:26px}
+.rel-cta small{font-size:12px;color:var(--muted-foreground);line-height:1.7}
+
+/* FAQ */
+.faq{border-top:var(--hair)}
+.faq details{border-bottom:var(--hair)}
+.faq summary{padding:22px 40px 22px 0;font-size:15.5px;font-weight:700;letter-spacing:-.012em;cursor:pointer;position:relative;list-style:none}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";position:absolute;right:6px;top:18px;font:400 22px/1 var(--mono);color:var(--primary)}
+.faq details[open] summary::after{content:"–"}
+.faq details p{margin:0 0 24px;max-width:820px;font-size:14px;line-height:2.05;color:oklch(0.45 0 0)}
+.faq details p b{color:var(--foreground)}
+
+/* 收尾 CTA：麦金实底，道闸的那道黄 */
+.final{background:var(--grain-gold);border-bottom:0;padding:78px 0}
+.final-in{display:grid;grid-template-columns:1.3fr auto;gap:48px;align-items:center}
+.final h2{margin:0;font-size:clamp(28px,3.2vw,44px);line-height:1.24;letter-spacing:-.032em;font-weight:800;color:var(--ink-green)}
+.final p{margin:16px 0 0;max-width:640px;font-size:14.5px;line-height:2;color:oklch(0.28 0.04 100)}
+.final-cta{display:flex;flex-direction:column;gap:12px;flex:0 0 auto}
+.final-cta small{font-size:12px;line-height:1.7;color:oklch(0.28 0.04 100);margin-top:2px}
+.final .btn-solid{background:var(--ink-green)}
+.final .btn-solid:hover{background:#0a3323}
+.final .btn-line{border-color:oklch(0.28 0.05 100);color:var(--ink-green)}
+.final .btn-line:hover{background:var(--ink-green);border-color:var(--ink-green);color:#fff}
+
+/* 页脚 */
+.foot{background:var(--ink-green);color:oklch(0.84 0.02 151);padding:66px 0 0}
+.foot-grid{display:grid;grid-template-columns:1.5fr repeat(4,1fr);gap:40px;padding-bottom:52px}
+.foot .logo-txt strong{color:#fff}
+.foot-tag{margin:20px 0 0;font-size:13px;line-height:2;color:oklch(0.68 0.02 151);max-width:300px}
+.foot h4{margin:0 0 16px;font:700 10px/1 var(--mono);letter-spacing:.18em;color:var(--leaf)}
+.foot ul{margin:0;padding:0;list-style:none}
+.foot ul li{margin:9px 0;font-size:13.5px}
+.foot ul a:hover{color:#fff}
+/* 页脚「技术支持」是个按钮（点开弹窗），外观要跟同列的链接分毫不差 */
+.foot ul li button{padding:0;border:0;border-radius:0;background:none;font:inherit;color:oklch(0.84 0.02 151);cursor:pointer}
+.foot ul li button:hover{color:#fff}
+.foot-bar{border-top:1px solid oklch(0.28 0.03 151);padding:22px 0 32px;display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center;font-size:12px;color:oklch(0.6 0.02 151)}
+.foot-bar a{color:oklch(0.72 0.02 151)}
+.foot-bar a:hover{color:#fff}
+.foot-bar .sep{width:1px;height:11px;background:oklch(0.3 0.03 151)}
+
+/* 返回顶部：右下角一枚方钮，滚过首屏才出现。跟全站一样用发丝线承重，不做浮起阴影 */
+.to-top{position:fixed;right:26px;bottom:30px;z-index:8;width:46px;height:46px;display:grid;
+  place-items:center;background:var(--background);border:var(--hair);color:var(--foreground);
+  cursor:pointer;opacity:0;transform:translateY(8px);pointer-events:none;
+  transition:opacity .22s,transform .22s,border-color .16s,color .16s}
+.to-top.on{opacity:1;transform:none;pointer-events:auto}
+.to-top:hover{border-color:var(--primary);color:var(--primary)}
+.to-top svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:square;stroke-linejoin:miter}
+@media (prefers-reduced-motion:reduce){.to-top{transition:none}}
+
+/* ── 技术支持弹窗：站内写死的两条联系方式（QQ / 微信），没有后端可收表。
+   「复制」读的就是格子里那行字，换号码只改 HTML，脚本与按钮都不用动。
+   两格之间靠发丝线分栏，跟全站一样不做浮起阴影。 ─────────────────── */
+dialog.sup{width:min(620px,calc(100vw - 32px));margin:auto;padding:0;border:var(--hair);
+  background:var(--background);color:var(--foreground);font-family:var(--sans)}
+dialog.sup::backdrop{background:oklch(0.145 0 0 / .55)}
+/* 弹窗开着就不让底下那页滚。写成 CSS 而不是在 close 事件里改 style：
+   close 事件是排队任务，脚本里补一句"恢复 overflow"就有机会漏掉，页面卡在不能滚。 */
+body:has(dialog.sup[open]){overflow:hidden}
+dialog.sup[open]{animation:sup-in .16s ease-out}
+@keyframes sup-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){dialog.sup[open]{animation:none}}
+.sup-head{display:flex;align-items:flex-start;gap:18px;padding:24px 24px 22px}
+.sup-head .k{font:700 10px/1 var(--mono);letter-spacing:.22em;color:var(--primary)}
+.sup-head h3{margin:12px 0 0;font-size:22px;letter-spacing:-.02em}
+.sup-head p{margin:9px 0 0;font-size:13px;line-height:1.9;color:var(--muted-foreground)}
+.sup-x{margin-left:auto;flex:0 0 auto;width:38px;height:38px;display:grid;place-items:center;
+  border:var(--hair);border-radius:0;background:transparent;color:var(--muted-foreground);cursor:pointer}
+.sup-x:hover{border-color:var(--primary);color:var(--primary)}
+.sup-x svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:square}
+.sup-ch{display:grid;grid-template-columns:1fr 1fr;border-top:var(--hair)}
+.sup-c{padding:22px 24px 24px}
+.sup-c+.sup-c{border-left:var(--hair)}
+.sup-c .ico{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;letter-spacing:.06em;color:var(--primary)}
+.sup-c .ico svg{width:18px;height:18px;flex:0 0 auto}
+.sup-c b{display:block;margin:13px 0 12px;font:700 19px/1.35 var(--sans);letter-spacing:.01em;word-break:break-all}
+.sup-copy{height:34px;min-width:112px;padding:0 15px;text-align:center;border:var(--hair);border-radius:0;background:transparent;
+  font-family:var(--sans);font-size:12.5px;font-weight:600;letter-spacing:.04em;color:oklch(0.35 0 0);cursor:pointer}
+.sup-copy:hover{border-color:var(--primary);color:var(--primary)}
+.sup-copy[data-ok]{border-color:var(--primary);color:var(--primary)}
+.sup-c small{display:block;margin:13px 0 0;font-size:12px;line-height:1.9;color:var(--muted-foreground)}
+.sup-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:16px 24px;
+  border-top:var(--hair);background:var(--steel);font-size:12px;color:var(--muted-foreground)}
+.sup-foot .sep{width:1px;height:11px;background:var(--border)}
+@media (max-width:560px){.sup-ch{grid-template-columns:1fr}.sup-c+.sup-c{border-left:0;border-top:var(--hair)}}
+
+@media (max-width:1180px){
+  .metrics{grid-template-columns:repeat(3,1fr)}
+  .metrics>div:nth-child(3){border-right:0}
+  .metrics>div:nth-child(-n+3){border-bottom:1px solid var(--border)}
+  .flow{grid-template-columns:repeat(2,1fr)}
+  .table-hint{display:block}
+  .table-scroll::after{content:"";position:absolute;top:0;right:0;bottom:1px;width:52px;pointer-events:none;
+    background:linear-gradient(90deg,transparent,var(--background))}
+  .specs,.cols.c3,.law,.rel,.foot-grid,.wall{grid-template-columns:minmax(0,1fr)}
+  .sec-head{grid-template-columns:minmax(0,1fr);gap:22px;align-items:start}
+  .final-in{grid-template-columns:minmax(0,1fr)}
+  /* 首屏两列要 470+560+62=1092 才排得下，加上 --page 两侧 88 就是 1180；
+     实测顶栏导航也在这一档开始折行（innerWidth 1154 单行 73px，1128 起变 92px），
+     所以折叠与收导航都并到已有的 1180 档，不再新增断点 */
+  .hero-in{grid-template-columns:minmax(0,1fr);gap:44px;padding-top:48px}
+  .hero-copy,.unit{max-width:760px}
+  .nav{display:none}
+  .menu-btn{display:inline-flex}
+}
+@media (max-width:820px){
+  .sec{padding:64px 0}
+  .metrics{grid-template-columns:repeat(2,1fr)}
+  .metrics>div:nth-child(3){border-right:1px solid var(--border)}
+  .metrics>div{border-bottom:1px solid var(--border)}
+  .flow,.cols.c2,.wall{grid-template-columns:minmax(0,1fr)}
+  .foot-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .spec{padding-bottom:34px}
+}
+@media (max-width:720px){
+  :root{--page:calc(100vw - 32px)}
+  /* 首屏字号：40px 在 390 屏上三行吃掉 130px，压到 31–40px；≥721 一档原样不动 */
+  h1{font-size:clamp(31px,8.2vw,40px);letter-spacing:-.03em}
+  .sec-head h2{font-size:clamp(23px,6vw,32px);line-height:1.3}
+  .lede{font-size:15px;line-height:1.95}
+
+  /* 顶栏只留 logo 与菜单钮，两个 CTA 收进抽屉 */
+  .topbar{height:60px}
+  .topbar-in{gap:14px}
+  .hotline,.top-actions{display:none}
+  .menu-btn{margin-left:auto}
+  /* 标题栏只剩 390 宽：窗口控制三格 138 是死的，把开关的字收掉留图标 */
+  .tb-theme span{display:none}
+
+  /* 设备条：五个 nowrap 格的 min-content 641px 就是首屏被切的根因。
+     折行而不是横滑——横滑会让人怀疑后面还有没看完的东西 */
+  .devs{height:auto;flex-wrap:wrap}
+  .devs div{padding:7px 11px;border-bottom:1px solid var(--border)}
+  .devs div:last-child{margin-left:0}
+
+  /* 顶栏那一排按钮与设备条：折行而不是横滑——横滑会让人怀疑后面还有没看完的东西 */
+  .wsbar{height:auto;flex-wrap:wrap}
+  .wsbar i{padding:7px 11px;border-bottom:1px solid var(--border)}
+  .wsbar i:last-child{margin-left:0}
+
+  /* mock：中栏（称重区 / 化验区）整屏优先摆第一个，左栏身份与皮重收在后面，右栏画面垫底 */
+  .body{display:flex;flex-direction:column;min-height:0}
+  .col-m{order:-1}
+  .col-r{order:1}
+  .col+.col{border-left:0;border-top:var(--hair)}
+  .col .pane.grow{flex:0 0 auto}
+  /* 竖排到了手机上反过来摆：整屏宽度下三路并排，一格 16:9 只剩一点点高，够用 */
+  .cams{display:grid;grid-template-columns:repeat(3,1fr)}
+  .cams i b{display:none}
+  .cams i::before{left:5px;top:4px}
+  details.pane>summary{pointer-events:auto;cursor:pointer;min-height:46px;padding:15px 0 13px}
+  details.pane>summary::after{content:"+";margin-left:auto;font:400 21px/1 var(--mono);color:var(--primary)}
+  details.pane[open]>summary::after{content:"–"}
+  /* 出纸通道贴着这一栏铺满（透明），纸钉在通道下沿往上顶；竖排时这一栏只剩 153px 会把整卷裁没，
+     所以给这一栏一个恒定下限，
+     与是否正在出票无关，所以不会出现「到出票那一拍窗口长高」。
+     cams 必须同时退出 flex:1——不然多出来的高度被 16:9 的格子按宽高比换算成宽度，整栏横向撑爆 */
+  .pane-cam{min-height:470px}
+  .pane-cam .cams{flex:0 0 auto}
+
+  /* 在途条：chips 自己横滑 */
+  .strip{flex-wrap:wrap;gap:10px;padding:12px 15px}
+  .strip .lbl{margin-right:auto}
+  .chips{order:3;flex:1 1 100%;overflow-x:auto;padding-bottom:3px}
+
+  /* 页脚链接从 18px 抬到 42px，拇指点得中 */
+  .foot ul li{margin:0}
+  .foot ul a{display:block;padding:11px 0;border-bottom:1px solid oklch(0.22 0.02 151)}
+  .foot-bar{gap:2px 20px}
+  .foot-bar a{display:inline-block;padding:9px 0}
+  .foot-grid{gap:26px}
+
+  .cols>div{padding:22px 18px 24px}
+  .specs dt{flex:0 0 92px}
+  .rel-main,.rel-side{padding:24px 20px}
+}
+
+/* ══ 首屏磅单生命周期「影片」播放器 ─────────────────────────────── */
+/* 只动这台 .unit，全部复用其自带令牌；配色随 [data-theme=dark] 自动切档 */
+/* 整块画面都是「点一下切换播放」的按钮，所以给出手形；悬停只是临时掐住，不改状态，故不加任何按下态 */
+.unit{user-select:none;-webkit-user-select:none;cursor:pointer}
+.ws-off{display:none!important}
+
+/* 关键动作高亮：品牌绿描边 + 由外向内的一次呼吸光晕，不遮挡文字 */
+.unit [data-el].hot,.unit [data-pane].hot,.unit #wsLive.hot,.unit .js-now.hot{
+  position:relative;z-index:5}
+.unit [data-el].hot{outline:2px solid var(--primary);outline-offset:2px}
+.unit [data-pane].hot{box-shadow:inset 0 0 0 2px var(--primary),inset 0 0 0 3px var(--background);border-radius:2px}
+.unit #wsLive.hot{outline:2px solid var(--primary);outline-offset:5px;border-radius:2px}
+.unit .js-now.hot{outline:2px solid var(--primary);outline-offset:1px}
+.unit .flash{animation:wsFlash .6s ease 2}
+@keyframes wsFlash{0%,100%{background:transparent}45%{background:var(--u-tint)}}
+
+/* 读数滚动时点亮 */
+.unit #wsLive{transition:color .15s}
+.unit #wsLive.live{color:var(--primary)}
+
+/* 按钮“按下”一下 */
+.unit [data-el].press{animation:wsPress .28s ease-out}
+@keyframes wsPress{0%{transform:none}45%{transform:translateY(1.5px) scale(.975)}100%{transform:none}}
+
+/* 过磅抓拍定格 */
+.unit .cams i.flash .feed{animation:wsSnap .5s ease}
+@keyframes wsSnap{0%{filter:brightness(2.6) saturate(.2)}100%{filter:saturate(.88) contrast(1.04) brightness(.97)}}
+.unit .cams i.flash{outline:1px solid var(--primary)}
+
+/* 顶部解说字幕条：压在遮罩之上（它是播放器的字幕，不属于这台设备界面，不该跟着变暗） */
+.ws-cap{position:absolute;left:50%;top:48px;transform:translateX(-50%);z-index:10;
+  display:flex;align-items:center;gap:9px;max-width:88%;
+  padding:6px 12px;background:var(--ink-green);color:#fff;
+  border:1px solid var(--u-tint-line);
+  font:600 11px/1.35 var(--sans);letter-spacing:.01em;opacity:0;
+  transition:opacity .3s ease}
+.unit[data-theme=dark] .ws-cap{background:oklch(0.2 0.02 151);border-color:var(--u-tint-line)}
+.ws-cap.on{opacity:1}
+.ws-cap .wc-n{flex:0 0 auto;font:700 11px/1 var(--mono);color:var(--leaf);letter-spacing:.04em}
+.ws-cap .wc-t b{font-weight:700;color:var(--grain-gold)}
+
+/* 底部时间轴 + 播放控制 */
+.ws-tl{display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;
+  border-top:1px solid var(--u-frame);background:var(--background)}
+.ws-toggle{flex:0 0 auto;width:24px;height:24px;padding:0;border:1px solid var(--border);
+  background:var(--background);cursor:pointer;position:relative}
+.ws-toggle:hover{border-color:var(--primary)}
+.ws-toggle span{position:absolute;left:50%;top:50%;width:8px;height:8px;transform:translate(-50%,-50%)}
+.unit:not(.paused) .ws-toggle span{background:var(--primary);
+  clip-path:polygon(0 0,100% 50%,0 100%)}
+.unit.paused .ws-toggle span{background:linear-gradient(90deg,var(--primary) 0 3px,transparent 3px 5px,var(--primary) 5px 8px)}
+.ws-track{flex:1;display:flex;gap:3px;min-width:0}
+.ws-seg{position:relative;flex:1;display:flex;align-items:center;gap:5px;height:26px;min-width:0;padding:0 6px;
+  border:1px solid var(--border);background:var(--background);color:var(--u-dim);cursor:pointer;overflow:hidden;
+  font:600 10px/1 var(--mono);letter-spacing:.02em;transition:.16s}
+.ws-seg b{position:relative;z-index:1;font-weight:700;opacity:.6}
+.ws-seg span{position:relative;z-index:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:var(--sans);font-size:10px}
+.ws-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--u-tint);z-index:0}
+.ws-seg:hover{border-color:var(--primary)}
+.ws-seg.done{color:var(--u-soft);border-color:var(--u-tint-line)}
+.ws-seg.done b{opacity:1;color:var(--primary)}
+.ws-seg.cur{color:var(--u-on-primary);border-color:var(--primary);background:var(--primary)}
+.ws-seg.cur b{opacity:1;color:inherit}
+.ws-seg.cur .ws-fill{background:oklch(1 0 0 / .3)}
+.ws-tag{flex:0 0 auto;font:700 9.5px/1 var(--mono);letter-spacing:.16em;color:var(--primary);white-space:nowrap}
+.ws-tag::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--leaf);
+  margin-right:6px;vertical-align:1px;animation:wsBlink 1.4s steps(2,start) infinite}
+@keyframes wsBlink{50%{opacity:.3}}
+@media (max-width:1279px){.ws-seg span{display:none}.ws-tag{display:none}}
+
+/* 出票叠层＝贴着这一栏下沿的一条「出纸通道」：通道本身完全透明，纸只占栏宽的一小条，
+   所以过磅画面照常在上面跑（旧版是一整块铺满栏高的白托盘，等于把这一栏糊掉）。
+   通道用 top/bottom 夹死，纸钉在通道下沿＝打印机出纸口，靠 transform 自下往上顶出来，
+   顶出多少都被通道裁掉，绝不可能把这台设备撑高（此前"窗口高度变化"的根因）。 */
+.ws-ticket{position:absolute;left:0;right:0;top:0;bottom:0;z-index:6;overflow:hidden;pointer-events:none;
+  opacity:0;transition:opacity .3s ease;font-family:var(--mono)}
+.ws-ticket.show{opacity:1}
+/* 出纸口＝通道下沿那条金属缝，纸从它后面被顶出来 */
+.ws-ticket::after{content:"";position:absolute;left:calc(35% - 5px);right:-2px;bottom:0;height:5px;z-index:3;
+  background:linear-gradient(var(--u-dim),var(--border));border-radius:3px 3px 0 0}
+.unit[data-theme=dark] .ws-ticket::after{background:linear-gradient(var(--muted-foreground),var(--border))}
+
+/* ── 制单/结算弹窗：叠在设备上，半透明遮罩 + 白卡，复用 .unit 令牌 ───── */
+/* 遮罩铺满整台窗口（标题栏 38 与底部时间轴 40 是这台"设备"的外壳，不参与），
+   白卡仍只在挖掉过磅画面之后剩下的那块里居中。 */
+.ws-dlg{position:absolute;left:0;right:0;top:38px;bottom:40px;display:grid;place-items:center;z-index:9;
+  opacity:0;visibility:hidden;transition:opacity .3s ease;pointer-events:none;padding:0 calc(12px + var(--cam-w,0px)) 0 12px}
+.ws-dlg.open{opacity:1;visibility:visible}
+.ws-dlg::before{content:"";position:absolute;inset:0;background:oklch(0.15 0.01 151 / .34);z-index:-1;
+  clip-path:var(--dlg-clip,none)}
+.unit[data-theme=dark] .ws-dlg::before{background:oklch(0 0 0 / .5)}
+.ws-dlg-box{width:min(340px,100%);background:var(--background);border:1px solid var(--primary);
+  padding:14px 15px;transform:translateY(8px) scale(.98);transition:transform .32s cubic-bezier(.2,.7,.2,1);
+  box-shadow:0 18px 40px oklch(0 0 0 / .16)}
+.unit[data-theme=dark] .ws-dlg-box{background:var(--steel)}
+.ws-dlg.open .ws-dlg-box{transform:none}
+.ws-dlg-box.wide{width:min(330px,100%)}
+.ws-dlg-h{display:flex;align-items:center;gap:8px;font:700 12px/1 var(--sans);letter-spacing:.1em;
+  color:var(--foreground);padding-bottom:11px;margin-bottom:12px;border-bottom:1px solid var(--u-tint-line)}
+.ws-dlg-dot{width:9px;height:9px;border-radius:50%;background:var(--primary);flex:0 0 auto;
+  box-shadow:0 0 0 3px var(--u-tint);animation:wsDlgPulse 1.4s ease-in-out infinite}
+@keyframes wsDlgPulse{0%,100%{box-shadow:0 0 0 3px var(--u-tint)}50%{box-shadow:0 0 0 6px var(--u-tint)}}
+.ws-dlg-h b{margin-left:auto;font:700 9.5px/1 var(--mono);letter-spacing:.16em;color:var(--primary)}
+/* ── 读卡监听框：对齐产品 CardScanDialog / CardBindDialog
+   产品原样＝标题「请将…平放在读卡器感应区」＋左侧进度圆环包着「阅读器 + 感应弧 + 放上去的卡」
+   ＋右侧「正在监听感应区，请放卡…」/「N 秒后自动停止」/ 读不出来怎么办 ＋底部两颗退路钮。
+   点读卡不是扫一下，是**放上去持续监听**——这里照这个动作画，不做滑卡。 */
+.scan-desc{margin:0 0 12px;font:600 10.5px/1.5 var(--sans);color:var(--muted-foreground)}
+.scan-main{display:flex;gap:14px;align-items:center}
+.scan-ring{position:relative;width:118px;height:118px;flex:0 0 auto}
+.scan-ring>svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+.scan-ring .rbg{fill:none;stroke:var(--border);stroke-width:5}
+.scan-ring .rfg{fill:none;stroke:var(--primary);stroke-width:5;stroke-linecap:round;
+  stroke-dasharray:326.7;stroke-dashoffset:0;transition:stroke-dashoffset .9s linear}
+.scan-art{position:absolute;inset:0;display:grid;place-items:center}
+.rd{position:relative;width:56px;height:74px;border:1px solid var(--border);border-radius:8px;
+  background:var(--steel);box-shadow:3px 3px 0 -1px var(--background),3px 3px 0 0 var(--border)}
+.rd .led{position:absolute;right:6px;top:8px;display:flex;flex-direction:column;gap:3px;align-items:flex-end}
+.rd .led i{width:10px;height:3px;border-radius:2px;background:var(--border)}
+.rd .led i:first-child{background:var(--primary);animation:wsBlink 1.6s ease-in-out infinite}
+.rd>svg{position:absolute;left:6px;top:20px;width:22px;height:30px;stroke:var(--primary);fill:none;
+  stroke-width:1.8;stroke-linecap:round}
+.rd>svg path{animation:arcPulse 1.6s ease-in-out infinite}
+.rd>svg path:nth-child(2){animation-delay:.22s}
+.rd>svg path:nth-child(3){animation-delay:.44s}
+@keyframes arcPulse{0%,100%{opacity:.18}50%{opacity:.95}}
+.rd .dc{position:absolute;left:12px;bottom:5px;width:46px;height:27px;border-radius:4px;
+  border:1px solid var(--u-tint-line);background:oklch(0.97 0.02 151);
+  animation:wsBob 1.5s ease-in-out infinite}
+.unit[data-theme=dark] .rd .dc{background:oklch(0.25 0.03 151)}
+@keyframes wsBob{0%,100%{transform:translateY(-2px)}50%{transform:translateY(1px)}}
+.rd .dc::before{content:"";position:absolute;left:4px;top:5px;width:9px;height:12px;border-radius:1px;
+  background:oklch(0.72 0.12 240 / .55)}
+.rd .dc::after{content:"";position:absolute;left:17px;top:6px;right:5px;height:3px;border-radius:2px;
+  background:var(--u-tint-line);box-shadow:0 7px 0 var(--u-soft)}
+.rd.ic .dc::before{width:11px;height:9px;top:8px;border-radius:2px;border:1px solid #b8791a;
+  background:linear-gradient(135deg,var(--grain-gold),#c9871d)}
+.scan-hit .rd .dc{animation:none;border-color:var(--primary)}
+.scan-hit .rd>svg path{animation:none;opacity:1}
+.scan-hit .rd .led i:first-child{background:var(--leaf)}
+.scan-side{min-width:0}
+.scan-status{margin:0;font:600 11.5px/1.5 var(--sans);color:var(--u-soft)}
+.scan-count{margin:5px 0 0;display:flex;align-items:baseline;gap:4px;
+  font:600 10px/1.2 var(--sans);color:var(--muted-foreground)}
+.scan-count b{font:700 22px/1 var(--mono);color:var(--foreground);letter-spacing:-.02em}
+.scan-note{margin:6px 0 0;font:600 9.5px/1.5 var(--sans);color:var(--muted-foreground)}
+.scan-hit .scan-count{display:none}
+.scan-hit .scan-status{color:var(--primary)}
+.scan-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;padding-top:10px;
+  border-top:1px dashed var(--border)}
+.scan-foot b{font:600 10.5px/1 var(--sans);padding:6px 11px;border:1px solid var(--border);color:var(--u-dim)}
+.scan-foot b.pri{background:var(--primary);border-color:var(--primary);color:var(--u-on-primary)}
+.ws-idkv{display:none;margin-top:10px;padding-top:8px;border-top:1px dashed var(--border)}
+.ws-idkv.on{display:block}
+.ws-idkv>div{display:flex;justify-content:space-between;font-size:10.5px;padding:2.5px 0;color:var(--u-dim)}
+.ws-idkv>div span{font-family:var(--sans)}
+.ws-idkv>div b{font:700 10.5px/1.4 var(--mono);color:var(--foreground);letter-spacing:-.01em}
+
+/* 结算弹窗行表 */
+.setl-rows>div{display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;padding:5px 0;
+  border-bottom:1px dashed var(--border);color:var(--u-dim)}
+.setl-rows>div:last-child{border-bottom:0}
+.setl-rows span{font-family:var(--sans)}
+.setl-rows b{font:700 12px/1 var(--mono);letter-spacing:-.01em;color:var(--foreground)}
+.setl-rows .minus b{color:var(--grain-gold)}
+.setl-rows .strong{border-top:1px solid var(--border);margin-top:2px;padding-top:7px}
+.setl-rows .strong b{color:var(--primary)}
+.setl-rows .amt{margin-top:3px}
+.setl-rows .amt b{font-size:16px;color:var(--primary)}
+.setl-pay{display:flex;gap:6px;margin-top:11px}
+.pk{padding:5px 10px;font:600 10.5px/1 var(--sans);letter-spacing:.04em;border:1px solid var(--border);
+  color:var(--u-dim);background:var(--background)}
+.pk.on{background:var(--primary);color:var(--u-on-primary);border-color:var(--primary)}
+.setl-cta{margin-top:11px;text-align:center;padding:9px;font:700 12px/1 var(--sans);letter-spacing:.06em;
+  background:var(--primary);color:var(--u-on-primary);opacity:.55}
+.setl-cta.on{opacity:1;animation:ctaPop .5s ease}
+@keyframes ctaPop{0%,100%{transform:none}40%{transform:scale(.97)}}
+.setl-no{display:none;margin-top:9px;text-align:center;font:600 9.5px/1.5 var(--mono);color:var(--primary)}
+.setl-no.on{display:block}
+
+/* 卷纸：过磅单 + 付款单连在同一卷上，中间一道切刀痕。
+   出纸方向按热敏小票机来——先印的表头最先钻出出纸口、被越顶越高，所以是整卷自下往上平移，
+   不是把纸从上往下揭开。④净重一定先顶出「过磅单」那一联，停在切刀痕对齐出纸口的位置；
+   ⑦再续顶「付款单」那一联（前面那一联跟着往上走，接缝就是那道切刀痕）。
+   --cut-y 由脚本按真实布局量（字体变宽、窗口缩放都不必改数字），这里写死的数只是量不到时的兜底。 */
+.ws-ticket .wk-paper{position:absolute;left:35%;right:2px;bottom:5px;margin:0;background:var(--steel);
+  border:1px solid var(--border);border-bottom:0;padding:6px 8px 7px;box-shadow:-3px -4px 16px oklch(0 0 0 / .13);
+  transform:translateY(102%)}
+.ws-ticket.at1 .wk-paper{transform:translateY(var(--cut-y,46%))}
+.ws-ticket.at2 .wk-paper{transform:translateY(0)}
+.ws-ticket.out1 .wk-paper{animation:wkFeed1 1.5s cubic-bezier(.3,.06,.28,1) both}
+.ws-ticket.out2 .wk-paper{animation:wkFeed2 1.5s cubic-bezier(.3,.06,.28,1) both}
+@keyframes wkFeed1{from{transform:translateY(102%)}to{transform:translateY(var(--cut-y,46%))}}
+@keyframes wkFeed2{from{transform:translateY(var(--cut-y,46%))}to{transform:translateY(0)}}
+/* 时钟一冻住，纸就停在当前这一帧（悬停、点击暂停、滚出视口三道闸都算冻住） */
+.unit.frozen .wk-paper{animation-play-state:paused}
+/* 卷纸顶端＝从上一联撕下来的毛边（锯齿向上），比齐边更像热敏纸 */
+.ws-ticket .wk-paper::before{content:"";position:absolute;left:-1px;right:-1px;top:-3px;height:3px;
+  background:linear-gradient(135deg,var(--steel) 25%,transparent 0) 0 0/4px 3px repeat-x,
+             linear-gradient(225deg,var(--steel) 25%,transparent 0) 0 0/4px 3px repeat-x}
+.ws-ticket .wk-brand{text-align:center;font:700 8.5px/1.3 var(--sans);letter-spacing:.2em;color:var(--primary-ink)}
+.unit[data-theme=dark] .ws-ticket .wk-brand{color:var(--leaf)}
+.ws-ticket .wk-no{text-align:center;font:600 8px/1.3 var(--mono);color:var(--muted-foreground);margin-bottom:2px}
+.ws-ticket .wk-r{display:flex;justify-content:space-between;gap:6px;font-size:8.5px;line-height:1.3;padding:1px 0;color:var(--u-dim)}
+.ws-ticket .wk-r span{font-family:var(--sans)}
+.ws-ticket .wk-r b{font:700 8.5px/1.3 var(--mono);color:var(--foreground);letter-spacing:-.02em;text-align:right;white-space:nowrap}
+.ws-ticket .wk-amt{display:flex;justify-content:space-between;align-items:baseline;padding-top:3px;
+  border-top:1px dashed var(--border);margin-top:2px}
+.ws-ticket .wk-amt span{font:600 8.5px/1.3 var(--sans);color:var(--u-dim)}
+.ws-ticket .wk-amt b{font-size:11.5px;color:var(--primary);font-weight:700;letter-spacing:-.02em}
+/* 切刀痕：通幅锯齿刃线，上面压一枚「切刀」微型标——两张票就是从这里被切开的，但纸还连着 */
+.ws-ticket .wk-cut{position:relative;height:10px;margin:5px -8px 4px;text-align:center}
+.ws-ticket .wk-cut s{position:absolute;left:0;right:0;top:2px;height:6px;
+  background:linear-gradient(135deg,var(--border) 25%,transparent 0) 0 0/6px 6px repeat-x,
+             linear-gradient(225deg,var(--border) 25%,transparent 0) 0 0/6px 6px repeat-x}
+.ws-ticket .wk-cut i{position:relative;display:inline-flex;align-items:center;gap:4px;padding:0 5px;
+  background:var(--steel);color:var(--muted-foreground);font:600 7px/10px var(--mono);letter-spacing:.16em}
+.ws-ticket .wk-cut svg{width:9px;height:9px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round}
+.ws-ticket .wk-pay{display:flex;justify-content:space-between;align-items:center;gap:6px;
+  margin-top:5px;padding-top:5px;border-top:1px dashed var(--border)}
+.ws-ticket .wk-pay div{font:600 7.5px/1.45 var(--mono);color:var(--muted-foreground)}
+.ws-ticket .wk-pay em,.ws-ticket .wk-pay i{font-style:normal;color:var(--foreground)}
+.ws-ticket .wk-qr{width:24px;height:24px;flex:0 0 auto;border:1px solid var(--foreground);background:
+  conic-gradient(var(--foreground) 25%,transparent 0 50%,var(--foreground) 0 75%,transparent 0);
+  background-size:5px 5px}
+.ws-ticket .wk-sign{display:flex;gap:7px;margin-top:5px}
+.ws-ticket .wk-sign span{flex:1;font:600 7.5px/1.25 var(--sans);letter-spacing:.04em;color:var(--muted-foreground);
+  border-top:1px solid var(--border);padding-top:2px;text-align:center}
+
+/* 减少动效：不播影片，静态呈现这张单的完整终态（小票保留，是终态的一部分） */
+.unit.ws-static .ws-cap,.unit.ws-static .ws-tl,.unit.ws-static .ws-dlg{display:none!important}
+.unit.ws-static .ws-ticket{transition:none!important}
+.unit.ws-static .js-shot,.unit.ws-static .js-id,.unit.ws-static .js-card,.unit.ws-static .js-plate,.unit.ws-static .js-crop{display:inline!important}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="logo" href="#">
+      <img class="logo-mark" src="./logo.png" alt="">
+      <span class="logo-txt"><strong>磅禾</strong><small>BANGHE</small></span>
+    </a>
+    <nav class="nav">
+      <a class="on" href="#workstation">磅房工作台</a>
+      <a href="#hardware">硬件兼容</a>
+      <a href="#ledger">台账与结算</a>
+      <a href="#deploy">数据与部署</a>
+      <a href="#download">下载</a>
+    </nav>
+    <div class="top-actions">
+      <span class="hotline">服务与支持<b>联系服务人员</b></span>
+      <button class="btn btn-line btn-sm" type="button" data-support>获取技术支持</button>
+      <a class="btn btn-solid btn-sm" href="#download">获取安装包</a>
+      <span class="repo-links">
+        <a class="btn btn-line btn-sm ico" href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener" aria-label="在 Gitee 查看源码" title="在 Gitee 查看源码"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.984 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.016 0zm6.09 5.333c.328 0 .593.266.592.593v1.482a.594.594 0 0 1-.593.592H9.777c-.982 0-1.778.796-1.778 1.778v5.63c0 .327.266.592.593.592h5.63c.982 0 1.778-.796 1.778-1.778v-.296a.593.593 0 0 0-.592-.593h-4.15a.592.592 0 0 1-.592-.592v-1.482a.593.593 0 0 1 .593-.592h6.815c.327 0 .593.265.593.592v3.408a4 4 0 0 1-4 4H5.926a.593.593 0 0 1-.593-.593V9.778a4.444 4.444 0 0 1 4.445-4.444h8.296Z"/></svg></a>
+        <a class="btn btn-line btn-sm ico" href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener" aria-label="在 GitHub 查看源码" title="在 GitHub 查看源码"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      </span>
+    </div>
+    <button class="menu-btn" type="button" aria-label="打开菜单" aria-expanded="false" aria-controls="site-menu"><i></i></button>
+  </div>
+  <nav class="drawer" id="site-menu" aria-label="站点目录" hidden>
+    <div class="wrap drawer-in">
+      <a href="#workstation">磅房工作台</a>
+      <a href="#hardware">硬件兼容</a>
+      <a href="#ledger">台账与结算</a>
+      <a href="#deploy">数据与部署</a>
+      <a href="./brochure/">产品画册</a>
+      <a href="#download">下载</a>
+      <a href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener">Gitee 源码</a>
+      <a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener">GitHub 源码</a>
+      <div class="drawer-cta">
+        <a class="btn btn-solid btn-sm" href="#download">获取安装包</a>
+        <button class="btn btn-line btn-sm" type="button" data-support>获取技术支持</button>
+      </div>
+    </div>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap hero-in">
+
+      <div class="hero-copy">
+        <div class="eyebrow"><s></s>01<em>粮站收粮系统 · 开源免费</em></div>
+
+        <h1>
+          <span>开源免费，</span>
+          <span><u>3 分钟</u>安装完成，</span>
+          <span><u>5 分钟</u>开始过磅。</span>
+        </h1>
+
+        <p class="lede">
+          无需指定电脑、无需配置环境：<code>现有电脑双击即可安装</code>，按引导即可完成部署。
+        </p>
+
+        <ul class="pledge">
+          <li><s></s>开源免费，永久使用<em>AGPL-3.0 许可 / 无年费，不按车次计费</em></li>
+          <li><s></s>本地部署，数据不出站<em>单机运行，无需服务器</em></li>
+          <li><s></s>设备直连，无需厂家驱动<em>地磅 · 读卡器 · 摄像头 · 打印机</em></li>
+        </ul>
+
+        <div class="cta">
+          <a class="btn btn-solid" href="#download">下载 Windows 安装包 <i>V1.0.4</i></a>
+        </div>
+
+        <div class="spec">
+          <span>断网可用</span><span>单实例防误开</span>
+          <span>ESCPOS 直打</span><span>崩溃自动恢复</span><span>支持夜班深色</span>
+        </div>
+      </div>
+
+      <!-- 界面本体：一台正在收粮的工作台 -->
+      <div class="unit">
+        <div class="titlebar">
+          <span class="tb-mark" aria-hidden="true"></span>
+          <b>磅房工作台</b>
+          <button class="tb-theme" type="button" aria-pressed="false" title="切到夜班深色">
+            <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+            <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 15.5A9 9 0 019 4a8 8 0 1011.5 11.5z"/></svg>
+            <span>夜班深色</span>
+          </button>
+          <span class="tb-win"><i></i><i></i><i></i></span>
+        </div>
+
+        <div class="frame">
+        <!-- 制单①：身份证连续监听（产品同款：圆环倒计时 + 感应区放卡示意 + 退路按钮） -->
+        <div class="ws-dlg" id="wsDlgId" aria-hidden="true">
+          <div class="ws-dlg-box" id="wsIdBox">
+            <div class="ws-dlg-h"><span class="ws-dlg-dot"></span><span id="wsIdTitle">请将身份证平放在读卡器感应区</span></div>
+            <p class="scan-desc" id="wsIdDesc">放稳后不用点任何东西，读到证件会自动填入售粮人。</p>
+            <div class="scan-main">
+              <div class="scan-ring">
+                <svg viewBox="0 0 136 136" aria-hidden="true">
+                  <circle class="rbg" cx="68" cy="68" r="52"/>
+                  <circle class="rfg" id="wsIdRing" cx="68" cy="68" r="52"/>
+                </svg>
+                <div class="scan-art">
+                  <div class="rd" id="wsIdRd">
+                    <span class="led"><i></i><i></i></span>
+                    <svg viewBox="0 0 18 24" aria-hidden="true">
+                      <path d="M6.2 8.2A5 5 0 0 1 6.2 15.8"/>
+                      <path d="M8.8 5.1A9 9 0 0 1 8.8 18.9"/>
+                      <path d="M11.4 2A13 13 0 0 1 11.4 22"/>
+                    </svg>
+                    <span class="dc"></span>
+                  </div>
+                </div>
+              </div>
+              <div class="scan-side">
+                <p class="scan-status" id="wsIdStat">正在监听感应区，请放卡…</p>
+                <p class="scan-count"><b id="wsIdSec">60</b><span>秒后自动停止</span></p>
+                <p class="scan-note" id="wsIdNote">读不出来可以点「搜档案」，照样能制单。</p>
+              </div>
+            </div>
+            <div class="ws-idkv" id="wsIdKV"></div>
+            <div class="scan-foot"><b id="wsIdAlt">搜档案</b><b class="pri" id="wsIdCancel">取消监听</b></div>
+          </div>
+        </div>
+        <!-- 结算：计价明细弹窗 -->
+        <div class="ws-dlg" id="wsDlgSettle" aria-hidden="true">
+          <div class="ws-dlg-box wide">
+            <div class="ws-dlg-h"><span class="ws-dlg-dot"></span>结算单 · 计价<b id="wsSetNo">JS·000088</b></div>
+            <div class="setl-rows">
+              <div><span>净重</span><b>48 620.0 kg</b></div>
+              <div class="minus"><span>扣水</span><b>− 390.0 kg</b></div>
+              <div class="minus"><span>扣杂</span><b>− 245.0 kg</b></div>
+              <div class="strong"><span>结算重量</span><b>47 985.0 kg</b></div>
+              <div><span>等级 · 单价</span><b>二等 · 2.64 元/kg</b></div>
+              <div class="amt"><span>应付金额</span><b>¥ 126 680.40</b></div>
+            </div>
+            <div class="setl-pay"><span class="pk on">现金</span><span class="pk">扫码</span><span class="pk">转账</span></div>
+            <div class="setl-cta" id="wsSetCta">确认结算</div>
+            <div class="setl-no" id="wsSetPaid">已付款 · 结算单 JS·000088 · 付款单 FK·000213</div>
+          </div>
+        </div>
+        <!-- 折叠档侧栏：真程序收起来固定 56，只剩图标；这里按插图比例画到 42 -->
+        <div class="rail" aria-hidden="true">
+          <span class="rb"></span>
+          <div class="rg">
+            <b><svg viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v5h-7zM14 11h7v10h-7zM3 13h7v8H3z"/></svg></b>
+            <b class="on"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 6h14M5 6l-3 7h6zM19 6l-3 7h6zM7 21h10"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M9 3h6v3H9zM6 5h12v16H6zM9 11h6M9 15h6"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></svg></b>
+          </div>
+          <div class="rg">
+            <b><svg viewBox="0 0 24 24"><path d="M9 11a4 4 0 100-8 4 4 0 000 8zM2 21c0-4 3-6 7-6s7 2 7 6M17 4a4 4 0 010 7"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-6 10h16L14 9V3M7 15h10"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M3 7h16a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2zM3 7V5h13M16 13h4"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M2 6h20v12H2zM2 10h20M6 15h3"/></svg></b>
+          </div>
+          <div class="rg">
+            <b><svg viewBox="0 0 24 24"><path d="M12 5a3 3 0 00-3-2H4v16h5a3 3 0 013 2M12 5a3 3 0 013-2h5v16h-5a3 3 0 00-3 2M12 5v16"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-6M21 20H3"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v2a6 6 0 01-12 0zM12 16v5"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M12 9a3 3 0 100 6 3 3 0 000-6zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zM7 10h4M7 14h2M15 10h3M15 14h3"/></svg></b>
+            <b><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM8.5 13h7v7h-7z"/></svg></b>
+          </div>
+          <span class="rf"></span>
+        </div>
+
+        <div class="main">
+        <div class="wsbar">
+          <i>当前 <b class="js-orderno">—</b></i>
+          <i class="opt2">单证详情</i>
+          <i class="pri">制单（F7）</i>
+          <i class="opt2">隐藏画面</i>
+          <i>打印（F9）</i>
+          <i class="opt">面板</i>
+          <i class="opt">自定义布局</i>
+          <i class="opt">全屏专注（F11）</i>
+        </div>
+
+        <div class="body">
+
+          <div class="col col-l">
+            <div class="pane grow" data-pane="id">
+              <div class="pane-h">身份与制单 <s>第①刷</s></div>
+              <div class="person">
+                <span class="av" aria-hidden="true"></span>
+                <p><span class="js-name">王*海</span> <span class="tag">已制单</span><small><span class="js-id">—</span> · 售粮人</small></p>
+              </div>
+              <div class="kv"><span>收购品种</span><b class="js-crop">小麦</b></div>
+              <div class="kv"><span>车牌号</span><b class="js-plate">—</b></div>
+              <div class="kv"><span>入仓去向</span><b>1 号仓 · A 位</b></div>
+              <div class="kv"><span>流转卡</span><b class="js-card">—</b></div>
+              <div class="btnrow"><b data-el="zhi-dan">新建下一单（F7）</b><b data-el="ka">读卡换人（F8）</b></div>
+              <div class="meta"><i class="js-idmeta">等待过磅或化验。</i></div>
+            </div>
+
+            <details class="pane pane-fold" open>
+              <summary class="pane-h">皮重参考 <s>参考值</s></summary>
+              <div class="kv"><span>最近一次</span><b>13 520.0 kg</b></div>
+              <div class="kv"><span>近 5 次均值</span><b>13 480.0（13.480 t）</b></div>
+              <div class="kv"><span>容差</span><b>± 3 %</b></div>
+              <div class="kv"><span>当前偏差</span><b class="gold">+ 40.0</b></div>
+            </details>
+          </div>
+
+          <div class="col col-m">
+            <div class="pane pane-weigh grow">
+              <div class="pane-h">称重区 <s>分度 10 kg · COM3</s></div>
+              <div class="readout">
+                <span class="ruler" aria-hidden="true"></span>
+                <div class="big">
+                  <div class="num"><s id="wsLive">0.0</s><u>kg</u></div>
+                  <span class="badge wait">等待上磅</span>
+                </div>
+              </div>
+              <div class="kv" style="margin-top:8px"><span>毛重</span><b id="wsGross">—</b></div>
+              <div class="kv"><span>皮重</span><b id="wsTare">—</b></div>
+              <div class="kv"><span>净重</span><b class="gold" id="wsNet">—</b></div>
+              <div class="kv"><span>单价</span><b id="wsPrice">—</b></div>
+              <div class="btnrow">
+                <b data-el="mao">捕获毛重 <kbd>空格</kbd></b><b data-el="pi">捕获皮重 <kbd>P</kbd></b><b data-el="price">改价</b><b class="pri" data-el="to-settle">去结算（本单）</b>
+              </div>
+              <div class="meta"><i id="wsWeighMeta">读数自动接入，判稳后方可捕获。</i></div>
+            </div>
+
+            <details class="pane pane-fold" data-pane="qc" open>
+              <summary class="pane-h">化验区 <s>F5</s></summary>
+              <div class="meta" style="margin:0"><i>小麦 · 基准 水分 12.5／杂质 1.0</i></div>
+              <div class="flds">
+                <div class="fld"><span>水分(12.5)</span><b class="js-water">—</b></div>
+                <div class="fld"><span>杂质(1.0)</span><b class="js-imp">—</b></div>
+                <div class="fld"><span>扣水</span><b class="js-dw">—</b></div>
+                <div class="fld"><span>扣杂</span><b class="js-di">—</b></div>
+              </div>
+              <div class="kv" style="margin-top:8px"><span>化验定级 / 判定</span><b class="gold" id="wsGrade">待录入</b></div>
+              <div class="meta"><i id="wsQcMeta">按指标模板录入，自动出扣水扣杂。</i></div>
+            </details>
+          </div>
+
+          <div class="col col-r">
+            <div class="pane pane-cam grow" data-pane="cam">
+              <div class="pane-h">过磅画面 <s>3 / 3</s></div>
+              <div class="cams">
+                <i id="wsCam0" class="live"><span class="feed" style="background-image:url('./img/cam-head.jpg')"></span><span class="fx"></span><span class="tag">REC</span><b>磅区·车头 · <s class="js-seq">—</s></b><span class="ts">14:31:52</span></i>
+                <i id="wsCam1" class="live"><span class="feed" style="background-image:url('./img/cam-tail.jpg')"></span><span class="fx"></span><span class="tag">REC</span><b>磅区·车尾 · <s class="js-seq">—</s></b><span class="ts">14:31:52</span></i>
+                <i id="wsCam2" class="live"><span class="feed" style="background-image:url('./img/cam-room.jpg')"></span><span class="fx"></span><span class="tag">REC</span><b>磅房内 · <s class="js-seq">—</s></b><span class="ts">14:31:52</span></i>
+              </div>
+              <div class="cam-cap js-shot">等待上磅取图</div>
+              <div class="ws-ticket" id="wsTicket" aria-hidden="true">
+                <div class="wk-paper" id="wkPaper">
+                  <div>
+                    <div class="wk-brand">磅禾粮站 · 过磅单</div>
+                    <div class="wk-no">单号 01202610000014</div>
+                    <div class="wk-r"><span>售粮人</span><b>王*海</b></div>
+                    <div class="wk-r"><span>车牌·品种</span><b>鲁A·8D291·小麦</b></div>
+                    <div class="wk-r"><span>毛重</span><b id="wkGross">—</b></div>
+                    <div class="wk-r"><span>皮重</span><b id="wkTareWk">—</b></div>
+                    <div class="wk-r"><span>净重</span><b id="wkNet">—</b></div>
+                    <div class="wk-r"><span>扣水·扣杂</span><b>− 635.0 kg</b></div>
+                    <div class="wk-r"><span>结算重量</span><b id="wkQty">—</b></div>
+                    <div class="wk-r"><span>单价</span><b id="wkPrice">—</b></div>
+                    <div class="wk-amt"><span>结算金额</span><b id="wkAmt">—</b></div>
+                  </div>
+                  <div class="wk-cut" id="wkCut" aria-hidden="true"><s></s><i><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><path d="M8.3 7.7L20 18.6M8.3 16.3L20 5.4"/></svg>切刀</i></div>
+                  <div>
+                    <div class="wk-brand">磅禾粮站 · 付款单</div>
+                    <div class="wk-no" id="wkPayNo">单号 FK01202610000213</div>
+                    <div class="wk-r"><span>对应磅单</span><b>01202610000014</b></div>
+                    <div class="wk-r"><span>售粮人</span><b>王*海</b></div>
+                    <div class="wk-amt"><span>实付金额</span><b id="wkAmtPay">—</b></div>
+                    <div class="wk-pay"><div>方式 <i id="wkPay">—</i><br>凭证 <em id="wkJsNo">JS01202610000088</em><br>时间 2026-10-14 14:32</div><span class="wk-qr" aria-hidden="true"></span></div>
+                    <div class="wk-sign"><span>售粮人签字</span><span>磅房签字</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="strip">
+          <span class="lbl">在途作业 3 张</span>
+          <span class="chips">
+            <b class="now js-now">000014<i>王*海</i><em class="js-nowst">待过磅</em></b><b>000013<i>李*军</i><em>待皮重</em></b><b>000011<i>赵*田</i><em>已化验</em><i>无卡</i><u>⚠ 停留 42 分</u></b>
+          </span>
+        </div>
+
+        <div class="devs">
+          <div><span class="led"></span>磅 COM3 · <b class="js-scale">0.0</b> kg · 稳</div>
+          <div><span class="led"></span>卡 在线 · 监听身份证</div>
+          <div><span class="led"></span>像 在线</div>
+          <div><span class="led"></span>印 小票机 就绪</div>
+          <div class="opt">F1 快捷键一览</div>
+        </div>
+
+        <div class="ws-tl">
+          <button class="ws-toggle" id="wsToggle" type="button" aria-pressed="false" title="暂停演示"><span></span></button>
+          <div class="ws-track" id="wsTrack" role="tablist" aria-label="磅单生命周期步骤"></div>
+          <span class="ws-tag">LIVE 演示 · 循环</span>
+        </div>
+        </div>
+        </div>
+
+        <div class="ws-cap" id="wsCap" aria-live="polite"><span class="wc-n" id="wsCapN"></span><span class="wc-t" id="wsCapT"></span></div>
+      </div>
+
+    </div>
+  </section>
+  <div class="barrier" aria-hidden="true"></div>
+
+  <!-- 02 硬指标带：数字全部取自 02 §13 非功能需求，不是编的 -->
+  <section class="band">
+    <div class="wrap" style="padding-top:58px;padding-bottom:58px">
+      <div class="metrics">
+        <div><span>断网依赖</span><b><s>0</s></b><i>功能在无任何网络时可用，外设走本地接口</i></div>
+        <div><span>仪表帧到界面</span><b>&lt;100<u>ms</u></b><i>仪表帧到界面显示；判稳后捕获 &lt; 50 ms</i></div>
+        <div><span>组合查询</span><b>&lt;1<u>s</u></b><i>万磅单量组合查询 + 分页；单据详情 &lt; 300 ms</i></div>
+        <div><span>主流程击键</span><b>≤3<u>击</u></b><i>制单到打印主流程，小键盘可完成数值录入</i></div>
+        <div><span>保存期限</span><b>≥3<u>年</u></b><i>单据与附件保存期限；自动备份保留 30 份</i></div>
+        <div><span>单库容量</span><b>500<u>MB</u></b><i>单库容量内性能不明显衰减，不含附件</i></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 现场闭环 -->
+  <section class="band" id="workstation">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>02<em>磅房工作台</em></div>
+          <h2>从制单到结算，<br><em>单屏一气呵成</em></h2>
+        </div>
+        <p>磅房作业以效率为先，最常见的问题是数据无法对应。十个环节排在同一条流水线上：每一步均记录经办岗位、时间、设备码与抓拍，事后可追溯到具体人员与操作时间。</p>
+      </div>
+
+      <div class="flow">
+        <div><div class="n">01</div><h3>进厂登记</h3><p>车牌与售粮人先行落单，道闸抬杆。未携带证件者当场建档，车辆无需退回。</p></div>
+        <div class="swipe"><div class="n"><b>02 · 第①刷</b></div><h3>制单绑卡</h3><p>一单一卡，卡片与单据绑定而非与人绑定。刷卡即将单据关联至该卡，后续各环节均以卡定位单据。</p></div>
+        <div><div class="n">03</div><h3>认人建档</h3><p>身份证置于读卡器即自动录入，连续监听无需反复点击。一人一档，历史售粮记录当场可比。</p></div>
+        <div><div class="n">04</div><h3>扦样化验</h3><p>水分、杂质按指标模板录入，自动出扣水扣杂与化验定级，超基准当场提示。</p></div>
+        <div><div class="n">05</div><h3>定价</h3><p>单价按品种与等级带出建议值，可改；改过多少、谁改的，单上留痕。</p></div>
+        <div class="swipe"><div class="n"><b>06 · 第②刷</b></div><h3>上磅捕获</h3><p>读数自动接入，判定稳定后方可捕获；未稳定时按钮禁用并说明原因。如需手工录入，可在对应输入框直接键入，按岗位权限放行。</p></div>
+        <div><div class="n">07</div><h3>卸货回皮</h3><p>皮重由同一台仪表捕获，毛重、皮重、净重三项同源。历史皮重偏差超出容差时提示。</p></div>
+        <div class="swipe"><div class="n"><b>08 · 第③刷</b></div><h3>结算</h3><p>刷第③卡、扫描票面码或在称重区点击「去结算」，进入的都是同一张结算单。现金结算同样扫码留痕。</p></div>
+        <div><div class="n">09</div><h3>出票</h3><p>码单先出，付款凭证另行打印。针式连续纸套打一式多份，补打不重复生成流水。</p></div>
+        <div><div class="n">10</div><h3>退卡回收</h3><p>卡片回收后供下一辆车使用。为避免卡片停留在中间状态导致现场无从操作，状态机仅设三步。</p></div>
+      </div>
+      <div class="swipe-note">
+        <span>绿标三步 = 现场需要刷卡的三个环节</span>
+        <s>第①刷 绑卡</s><s>第②刷 重车</s><s>第③刷 结算</s>
+        <span>其余步骤在同一屏内完成，不切换窗口与软件</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 硬件兼容 -->
+  <section class="band" id="hardware">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>03<em>设备中心</em></div>
+          <h2>现场既有设备，<em>无需更换即可接入</em></h2>
+        </div>
+        <p>粮站的仪表、读卡器、打印机多为三年前配置，要求客户更换硬件的方案不具备可行性。磅禾无需逐型号适配：仪表按通用帧模板接入，外设走本地接口直调，接入后即可使用。</p>
+      </div>
+
+      <div class="table-scroll">
+      <div class="table-wrap">
+        <table class="matrix">
+          <thead>
+            <tr><th style="width:158px">类别</th><th style="width:270px">已支持 / 现场常见</th><th>接法与口径</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="cat">地磅称重仪表<s>scale</s></td>
+              <td class="dev"><b>耀华 XK3190 / A9 系列</b><b>大华 · 柯力</b><b>托利多 / 梅特勒</b><small>串口芯片 CH340、PL2303 均可</small></td>
+              <td class="how"><ul><li>无需逐型号适配：按<b>帧族</b>分类，通用帧模板写入设备配置，每台地磅独立一套</li><li>判稳窗口、容差、分度值均按台设置，分度值取自该台地磅的模板</li><li>连续监听与状态如实显示：无数据即显示无数据，不沿用上一个值</li></ul></td>
+            </tr>
+            <tr>
+              <td class="cat">证卡阅读器<s>idcard</s></td>
+              <td class="dev"><b>身份证 + IC 卡 双介质</b><small>一台设备、两个介质通道</small></td>
+              <td class="how"><ul><li>64 位 Sdtapi 进程内直调，不启动 x86 桥接子进程，少一层需要安装的组件</li><li>两种介质硬件互斥，一次仅解析一种，界面会明确提示当前等待的介质</li><li>放卡后连续监听，读取成功即弹出建档窗口，无需手动点击「读卡」</li></ul></td>
+            </tr>
+            <tr>
+              <td class="cat">网络摄像头<s>camera</s></td>
+              <td class="dev"><b>HTTP 抓图优先</b><b>RTSP 常驻画面</b><small>H.264 软解推帧</small></td>
+              <td class="how"><ul><li>过磅触发抓拍，最多三台各存一张，随单存证；超出限制时自动压缩，不再整张拒收</li><li>工作台可常驻显示画面，无需切换至厂家客户端</li></ul></td>
+            </tr>
+            <tr>
+              <td class="cat">票据打印<s>printer</s></td>
+              <td class="dev"><b>ESC/POS 直打</b><b>系统驱动 / PDF 静默</b><small>针式连续纸套打</small></td>
+              <td class="how"><ul><li>出纸口以设备中心配置的打印机为准，不按模板纸型推测，也不会静默改用系统默认打印机</li><li>磅单套打一式多份，针式连续纸对齐页宽</li><li>打印失败不回滚业务事务：票据可补打，款项不可重复结算</li></ul></td>
+            </tr>
+            <tr>
+              <td class="cat">扫码枪<s>scanner</s></td>
+              <td class="dev"><b>键盘 HID</b><b>串口</b><small>两条通道并存</small></td>
+              <td class="how"><ul><li>按连续输入节奏判定扫码来源，不允许手工录入单号绕过校验</li><li>票面码、上一版码、旧纸前缀码三条识别通道长期并存，旧票据仍可正常扫描</li></ul></td>
+            </tr>
+            <tr>
+              <td class="cat">喊话与提示<s>led</s></td>
+              <td class="dev"><b>话筒喊话</b><b>本机语音播报</b><small>两条独立通路</small></td>
+              <td class="how"><ul><li>放卡、判稳、超限、可结算时当场播报，仅提示需要改变操作的结论</li><li>本机无中文语音时退化为提示音与文字说明，不会静默失败</li><li>道闸、LED 屏等辅助外设按现场采购情况接入，不作强制绑定</li></ul></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      </div>
+      <p class="table-hint">← 表格可横向拖动，共三栏：类别 / 已支持 / 接法与口径 →</p>
+      <p class="honest">我们不承诺"全兼容"。仪表协议必须在现场验证：同一型号不同批次、不同接线方式，数据帧都可能不同。接入前请提供地磅型号、接线方式及一段原始数据帧，我们在设备自诊断中验证后再答复。</p>
+    </div>
+  </section>
+
+  <!-- 05 台账与追溯 -->
+  <section class="band" id="ledger">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>04<em>台账与单据</em></div>
+          <h2>台账不是月底补录的，<em>而是作业中同步形成的</em></h2>
+        </div>
+        <p>补录的台账难以与现场对应，也无法通过核查。磅禾的台账是过磅作业的副产品：单据、票据、抓拍与卡片流转记录齐备，台账即完整。</p>
+      </div>
+
+      <div class="cols c3">
+        <div>
+          <div class="k">M3 农户与往来单位</div>
+          <h3>一人一档</h3>
+          <p>售粮人和往来单位的档案、售粮履历、历史皮重与偏差参考，都在同一条时间轴上。</p>
+          <ul><li>Excel 批量导入，代售农户清单</li><li>历史皮重与偏差参考值当场可比</li><li>证号加密存储，界面按掩码显示</li></ul>
+        </div>
+        <div>
+          <div class="k">M2 过磅单据中心</div>
+          <h3>全链路时间轴</h3>
+          <p>一张磅单从制单到出票的每一步：经办人、操作时间、所用设备与抓拍图像。</p>
+          <ul><li>作废与红冲不覆盖原件，更正留痕</li><li>复检单回指原单，旧报告自动降级</li><li>补打与重打分别记录，不重复计票</li></ul>
+        </div>
+        <div>
+          <div class="k">M2 号段单号</div>
+          <h3>号段单号</h3>
+          <p>五类单据各自成段，同一事务内取号，不重号也不跳号。</p>
+          <ul><li>BD 磅单 · ZJ 质检 · JS 结算 · FK 付款 · CK 出库</li><li>站码 + 年月 + 6 位序号，月内归零</li><li>票面二维码仅含定位符，金额与证号不写入二维码</li></ul>
+        </div>
+        <div>
+          <div class="k">M4 扦样化验</div>
+          <h3>扦样化验</h3>
+          <p>指标模板、等级判定、留样复检分开管理，质检单可独立打印。</p>
+          <ul><li>水分 / 杂质 → 扣水 / 扣杂 → 定级</li><li>超基准当场提示，不阻断作业但明确告警</li><li>检测方法随单留痕</li></ul>
+        </div>
+        <div>
+          <div class="k">M7 台账与报表</div>
+          <h3>台账与报表</h3>
+          <p>收购明细台账、日报月报、品种与等级质量分析、农户售粮排行、往来对账。</p>
+          <ul><li>作业量与操作员统计，按岗位输出</li><li>导出 CSV 时在单号与证号前补一个 <b>'</b>，避免 Excel 丢失前导零与第 16 位数字</li></ul>
+        </div>
+        <div>
+          <div class="k">M11 库存与仓储</div>
+          <h3>出库与结存</h3>
+          <p>仓房、货位、批次与出入库记录统一管理：已收数量、剩余结存与所在仓房均可查询。</p>
+          <ul><li>出库单与磅单按同一规则取号，同站同月同号当场提示</li><li>库存结存按批次可追溯至来源磅单</li></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 结算与票面码 -->
+  <section class="band">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>05<em>结算与付款</em></div>
+          <h2>过磅完成先出码单，<em>款项在结算环节处理</em></h2>
+        </div>
+        <p>出票与结算刻意拆分为两个独立环节：磅房不因等待款项而堵塞，财务也不因票据已出而被动放行。两个环节各自成立，中间以票面码衔接。</p>
+      </div>
+
+      <div class="cols c2">
+        <div>
+          <div class="k">M5 票面码</div>
+          <h3>凭码结算</h3>
+          <p>票面右下角的二维码即为结算凭证，扫描后单据进入结算台。票据遗失时，可在在途列表或磅单详情中点击「带到工作台」。</p>
+          <ul><li>现金结算同样扫码，不留口头约定</li><li>二维码仅含单号，金额与证号不写入</li><li>出票、补打、套打在同一区块内完成</li></ul>
+        </div>
+        <div>
+          <div class="k">M5 结算入口</div>
+          <h3>结算只有一个入口</h3>
+          <p>结算仅在磅房工作台发生：扫描票面码、刷第③卡或在称重区点击「去结算」，三条路径进入的都是同一张结算单，不会出现两处各结算一次。</p>
+          <ul><li>补付入口三处：刷第③卡命中挂账、磅单详情付款、结算台账进入</li><li>多车次合并结算，撤销结算必须留原因</li><li>付款凭证与磅单分别打印，版式不同</li></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 07 数据与部署 -->
+  <section class="band-ink" id="deploy">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>06<em>数据与权限</em></div>
+          <h2>断网可用，<em>数据不出本机</em></h2>
+        </div>
+        <p>粮站网络不稳定，磅房作业不能中断。整套系统按无网络条件下完成当日收粮作业设计，敏感信息一律留在本地。</p>
+      </div>
+
+      <dl class="specs">
+        <div><dt>离线作业</dt><dd>功能在无任何网络时可用，外设走本地接口。断开网络仍可全程收粮，不属于降级模式。</dd></div>
+        <div><dt>本地存储</dt><dd>单文件数据库存放于本机，不建服务器、不开公网端口、<b>无外部网络上传</b>。</dd></div>
+        <div><dt>崩溃可续</dt><dd>WAL + 收敛检查点。称重中途强制断电，重启后在途磅单状态可续，已提交事务不损坏。</dd></div>
+        <div><dt>备份恢复</dt><dd>一键备份保留 <b>30 份</b>；更换电脑时整库拷贝即可。程序运行期间，界面会阻止以文件拷贝方式覆盖数据库。</dd></div>
+        <div><dt>审计留痕</dt><dd>关键操作不可改；密码 <b>argon2</b> 散列；证号等个人信息加密存储。</dd></div>
+        <div><dt>可诊断</dt><dd>结构化日志本地按天滚动，能定位到某一次异常作业；设备自诊断如实显示在线 / 离线 / 未登记。</dd></div>
+        <div><dt>夜班与大屏</dt><dd>深色档供夜班与棚下弱光环境使用；对外大屏可整屏挂墙，仅显示当日数据。</dd></div>
+        <div><dt>升级</dt><dd>迁移脚本顺序可重放，版本号单一来源；升级不改动历史单据。</dd></div>
+      </dl>
+
+      <div class="wall">
+        <div><span>今日净重</span><b>486.20<u>t</u></b></div>
+        <div><span>今日车辆</span><b>37<u>车</u></b></div>
+        <div><span>当前读数</span><b>48.620<u>t</u></b></div>
+        <div><span>待结算</span><b>4<u>单</u></b></div>
+      </div>
+      <p class="wall-cap">对外大屏样张 — 仅展示当日汇总，不提供区间选择器，也不显示单价与个人信息。</p>
+    </div>
+  </section>
+
+  <!-- 08 合规支持 -->
+  <section class="band" id="compliance">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>07<em>台账合规</em></div>
+          <h2>新规要求的台账，<em>系统在作业当场同步记录</em></h2>
+        </div>
+        <p>《粮食经营台账管理办法》2026 年 4 月 1 日施行，要求真实、可追溯、保存期限达标。这不是增加一个导出按钮即可满足的，它决定了每一张单据当场必须留存的内容。</p>
+      </div>
+
+      <div class="law">
+        <div><i>01</i><b>当场沉淀，不事后补录</b><p>台账是过磅作业的副产品。补录的台账与现场的车辆、票据、抓拍无法对应，核查时即暴露。</p></div>
+        <div><i>02</i><b>六个维度可相互对应</b><p>人 — 车 — 单 — 票 — 抓拍 — 设备码，任一维度均可查询并关联至其余五项。</p></div>
+        <div><i>03</i><b>保存 ≥ 3 年</b><p>单据与附件按不少于 3 年留存，含过磅画面与化验单；自动备份另留 30 份。</p></div>
+        <div><i>04</i><b>可对外提供</b><p>收购明细台账、日报月报、品种等级分析可直接导出，输出格式可供检查人员使用。</p></div>
+      </div>
+      <p class="src">政策原文以国家粮食和物资储备局公开发布为准 · <a href="https://www.lswz.gov.cn/" target="_blank" rel="noopener">www.lswz.gov.cn</a> · 本系统提供的是记录与留存能力，不构成合规意见。</p>
+    </div>
+  </section>
+
+  <!-- 09 版本与下载 -->
+  <section class="band" id="download">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>08<em>版本与下载</em></div>
+          <h2>安装完成即可收粮，<em>3 分钟完成配置</em></h2>
+        </div>
+        <p>开源免费（AGPL-3.0），源码同时公开在 Gitee 与 GitHub，下载安装包即可永久免费使用。国内优先走 Gitee 高速直链，GitHub 作备用；需要装机或技术支持可联系服务人员。</p>
+      </div>
+
+      <div class="rel">
+        <div class="rel-side">
+          <div class="v">V1.0.4</div>
+          <div class="d">2026 年 10 月 16 日发布</div>
+          <ul>
+            <li><span>系统</span><b>Windows 10 / 11 64 位</b></li>
+            <li><span>内存</span><b>建议 4 GB</b></li>
+            <li><span>硬盘</span><b>≥ 2 GB</b></li>
+            <li><span>数据库</span><b>嵌入式</b></li>
+            <li><span>网络</span><b>不需要</b></li>
+            <li><span>服务器</span><b>不需要</b></li>
+          </ul>
+          <div class="rel-cta">
+            <a class="btn btn-solid" href="https://gitee.com/datawalkcloud/banghe-release/raw/master/banghe-latest-windows-x64-setup.exe" target="_blank" rel="noopener">下载 Windows 安装包 <i>V1.0.4</i></a>
+            <a class="btn btn-line" href="https://github.com/datawalkcloud/BangHe/releases/latest" target="_blank" rel="noopener">GitHub 备用下载</a>
+            <small>国内优先使用上方 Gitee 高速直链；若无法访问，再使用 GitHub 下载。<br>装机与技术支持请联系服务人员。</small>
+          </div>
+        </div>
+        <div class="rel-main">
+          <h3>产品特性</h3>
+          <ol>
+            <li>单机离线可用<s>一台 Windows 电脑安装后即可收粮，不联网、不设服务器，数据仅存于本机。</s></li>
+            <li>一车一趟走完<s>制单 — 称重 — 化验 — 计价 — 付款 — 打票在同一屏完成，无需切换软件、无需事后补录。</s></li>
+            <li>既有设备可接入<s>耀华 / 柯力 / 托利多仪表、证卡阅读器、ESC/POS 票据打印机、网络摄像头，按帧模板接入，无需逐型号适配。</s></li>
+            <li>当场留证<s>过磅抓拍最多三张、化验单与码单随单留存 ≥ 3 年，车辆、票据与抓拍不一致时当场可见。</s></li>
+            <li>台账可对外提供<s>收购明细台账、日报月报、品种等级分析直接导出，Excel 打开时单号与证号位数完整。</s></li>
+            <li>升级不丢数据<s>自动备份保留 30 份，使用装机包覆盖安装即完成升级，数据库保持原样。</s></li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 FAQ -->
+  <section class="band">
+    <div class="wrap sec">
+      <div class="sec-head">
+        <div>
+          <div class="eyebrow"><s></s>09<em>常见问题</em></div>
+          <h2>使用咨询最多的九类问题</h2>
+        </div>
+        <p>可明确回答的问题列于下方，其余请直接联系服务人员。</p>
+      </div>
+
+      <div class="faq">
+        <details open><summary>没有网络时能否使用全部功能？</summary><p>可以。所有功能在无任何网络时均可使用，外设走本地接口，网络不是运行前提。需联网的仅两项：在线升级与远程协助，均可不使用。</p></details>
+        <details><summary>是否需要购买服务器？是否收取授权费？</summary><p>均不需要。磅房现有电脑即可，不建服务器、不开公网端口。软件<b>开源免费（AGPL-3.0）</b>，下载安装包即可使用，不收授权费与年费，也不按过磅车次计费。</p></details>
+        <details><summary>电脑故障或更换电脑时，数据如何处理？</summary><p>整套数据为本机一个数据库文件加附件目录。平时自动备份保留 30 份，更换电脑时将数据库与附件目录一并拷贝即可。恢复请使用界面中的「系统 → 恢复备份」，它会先收敛日志、释放句柄、将原库改名保留退路，再整份拷贝。程序运行期间请勿用文件管理器直接覆盖，这是数据库损坏最常见的原因。</p></details>
+        <details><summary>地磅仪表不在支持列表中怎么办？</summary><p>无需更换地磅。仪表按帧族适配、按通用帧模板配置，同一型号不同批次都可能不同，因此列表仅供参考。请提供地磅型号、接线方式和一段原始数据帧，我们在设备自诊断中验证后答复能否直接接入或需要调整模板。</p></details>
+        <details><summary>磅房仅一两名操作员，是否够用？</summary><p>主流程从制单到打印 ≤ 3 次击键，全表单 Tab 顺序正确，数值录入可由小键盘完成。身份证放置即自动读取、读数判稳后自动捕获、单价按品种与等级自动带出——人只负责必须由人判断的部分。另有语音提示，无需持续注视屏幕。</p></details>
+        <details><summary>票据遗失后能否继续结算？</summary><p>可以。票面码只是最便捷的一条路径。可在在途磅单列表中定位该单，或在磅单详情中点击「带到工作台」将其推入结算台。补打与重打分别记录，不会生成两张票据。</p></details>
+        <details><summary>第三方能否远程访问本机数据？</summary><p>不能。系统无外部网络上传，数据不出本机。如需远程协助，须由您在场并主动开启，结束后立即断开。密码采用 argon2 散列，证号等个人信息加密存储，界面按掩码显示。</p></details>
+        <details><summary>已有多年 Excel 台账，能否导入？</summary><p>售粮人与往来单位支持 Excel 批量导入。历史台账建议保留原表作为参考，不建议将旧账直接导入单据流：单据流中的每条记录都要求有对应的车辆、票据与抓拍，导入的旧账会形成无据可查的单据。</p></details>
+        <details><summary>如何开始使用？是否收费？</summary><p>软件完全免费，下载安装包即可使用，AGPL-3.0 开源，不收授权费与年费，也不按车次计费。如需装机，我们以现场实际设备（地磅、身份证、打印机）为准，上门或远程完成一次安装，并用您现场的三车粮走一遍全流程；后续是否需要支持由现场决定。</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 收尾 CTA -->
+  <section class="final">
+    <div class="wrap final-in">
+      <div>
+        <h2>下一车粮进厂时，<br>体验一次无需人工喊话的磅房。</h2>
+        <p>请告知地磅数量、日车流量、现有仪表型号与打印机，我们按现场情况提供方案，不发放通用报价单。</p>
+      </div>
+      <div class="final-cta">
+        <button class="btn btn-solid" type="button" data-support>获取技术支持</button>
+        <a class="btn btn-line" href="#download">下载安装包 V1.0.4</a>
+        <a class="btn btn-line" href="./brochure/">查看产品画册</a>
+        <small>安装包可直接下载；装机与演示可另行预约。</small>
+      </div>
+    </div>
+  </section>
+  <div class="barrier" aria-hidden="true"></div>
+</main>
+
+<!-- 页脚 -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <a class="logo" href="#">
+          <img class="logo-mark" src="./logo.png" alt="">
+          <span class="logo-txt"><strong>磅禾</strong><small>BANGHE</small></span>
+        </a>
+        <p class="foot-tag">开源免费的粮站收粮管理系统。地磅、证卡、化验、结算、票据接入一台电脑，断网可用，数据由企业自行掌握。</p>
+      </div>
+      <div><h4>产品</h4><ul><li><a href="#workstation">磅房工作台</a></li><li><a href="#ledger">台账与单据</a></li><li><a href="#">结算与付款</a></li><li><a href="#">出库与库存结存</a></li><li><a href="#">报表与大屏</a></li></ul></div>
+      <div><h4>硬件</h4><ul><li><a href="#hardware">称重仪表</a></li><li><a href="#hardware">证卡阅读器</a></li><li><a href="#hardware">监控摄像头</a></li><li><a href="#hardware">票据打印</a></li><li><a href="#hardware">设备自诊断</a></li></ul></div>
+      <div><h4>支持</h4><ul><li><a href="#download">下载中心</a></li><li><a href="#">更新日志</a></li><li><a href="#deploy">部署与备份</a></li><li><a href="./brochure/">产品画册</a></li><li><a href="#">操作手册</a></li><li><a href="#">常见问题</a></li></ul></div>
+      <div><h4>联系</h4><ul><li><button type="button" data-support>获取技术支持</button></li><li><a href="#download">下载中心</a></li><li><a href="#">服务时间 随装机约定</a></li><li><a href="#compliance">台账合规参考</a></li></ul></div>
+    </div>
+    <div class="foot-bar">
+      <span>© 2026 磅禾 BANGHE</span><span class="sep"></span>
+      <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">AGPL-3.0 开源协议</a><span class="sep"></span>
+      <a href="https://gitee.com/datawalkcloud/BangHe" target="_blank" rel="noopener"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px" aria-hidden="true"><path d="M11.984 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.016 0zm6.09 5.333c.328 0 .593.266.592.593v1.482a.594.594 0 0 1-.593.592H9.777c-.982 0-1.778.796-1.778 1.778v5.63c0 .327.266.592.593.592h5.63c.982 0 1.778-.796 1.778-1.778v-.296a.593.593 0 0 0-.592-.593h-4.15a.592.592 0 0 1-.592-.592v-1.482a.593.593 0 0 1 .593-.592h6.815c.327 0 .593.265.593.592v3.408a4 4 0 0 1-4 4H5.926a.593.593 0 0 1-.593-.593V9.778a4.444 4.444 0 0 1 4.445-4.444h8.296Z"/></svg>&nbsp;Gitee 仓库</a><a href="https://github.com/datawalkcloud/BangHe" target="_blank" rel="noopener"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>&nbsp;GitHub 仓库</a><span class="sep"></span>
+      <span>V1.0.4</span>
+    </div>
+  </div>
+</footer>
+
+<button class="to-top" type="button" aria-label="返回顶部" title="返回顶部">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4M5 11l7-7 7 7"/></svg>
+</button>
+
+<!-- 技术支持弹窗：联系方式站内写死，没有后端收表。
+     两格里的 <b> 就是被复制的内容——换号码只改这两行文本，脚本不用动。 -->
+<dialog class="sup" id="support" aria-labelledby="sup-title">
+  <div class="sup-head">
+    <div>
+      <span class="k">SUPPORT</span>
+      <h3 id="sup-title">技术支持</h3>
+      <p>安装部署、外设对接与日常使用中的问题，均可通过以下方式联系服务人员。</p>
+    </div>
+    <button class="sup-x" type="button" aria-label="关闭" data-sup-close>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="sup-ch">
+    <div class="sup-c">
+      <span class="ico"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/></svg>微信</span>
+      <b>sc251022</b>
+      <button class="sup-copy" type="button">复制微信号</button>
+      <small>添加时请备注粮站名称与所遇问题，便于尽快对接。</small>
+    </div>
+    <div class="sup-c">
+      <span class="ico"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.395 15.035a40 40 0 0 0-.803-2.264l-1.079-2.695c.001-.032.014-.562.014-.836C19.526 4.632 17.351 0 12 0S4.474 4.632 4.474 9.241c0 .274.013.804.014.836l-1.08 2.695a39 39 0 0 0-.802 2.264c-1.021 3.283-.69 4.643-.438 4.673.54.065 2.103-2.472 2.103-2.472 0 1.469.756 3.387 2.394 4.771-.612.188-1.363.479-1.845.835-.434.32-.379.646-.301.778.343.578 5.883.369 7.482.189 1.6.18 7.14.389 7.483-.189.078-.132.132-.458-.301-.778-.483-.356-1.233-.646-1.846-.836 1.637-1.384 2.393-3.302 2.393-4.771 0 0 1.563 2.537 2.103 2.472.251-.03.581-1.39-.438-4.673"/></svg>QQ</span>
+      <b>740360381</b>
+      <button class="sup-copy" type="button">复制QQ号</button>
+      <small>远程协助、日志与装机文件的传输，建议使用 QQ。</small>
+    </div>
+  </div>
+  <div class="sup-foot">
+    <span>服务时间 随装机约定</span><span class="sep"></span>
+    <span>软件开源免费，使用中的问题均可咨询</span>
+  </div>
+</dialog>
+
+<script>
+/* 首屏那台"设备"的夜班深色开关：只换 .unit 自己那套令牌，页面其余部分不参与。
+   档位记进 localStorage，下次进来还是上次那档；file:// 下拿不到存储就只记当次。 */
+(function () {
+  var unit = document.querySelector(".unit");
+  if (!unit) return;
+  var btn = unit.querySelector(".tb-theme");
+  if (!btn) return;
+  function set(dark) {
+    if (dark) unit.setAttribute("data-theme", "dark"); else unit.removeAttribute("data-theme");
+    btn.setAttribute("aria-pressed", dark ? "true" : "false");
+    btn.title = dark ? "切回日间配色" : "切到夜班深色";
+    try { localStorage.setItem("bh.ws.theme", dark ? "dark" : "light"); } catch (e) {}
+  }
+  var saved = null;
+  try { saved = localStorage.getItem("bh.ws.theme"); } catch (e) {}
+  set(saved === "dark");
+  btn.addEventListener("click", function () { set(!unit.hasAttribute("data-theme")); });
+})();
+
+/* 抽屉与手机首屏折叠都要读 matchMedia，纯 CSS 做不到"按视口决定 details 的默认开合"。
+   折叠只在载入时决定一次，之后不跟用户的开合较劲。 */
+(function () {
+  var btn = document.querySelector(".menu-btn"), dr = document.getElementById("site-menu");
+  if (!btn || !dr) return;
+  function set(open) {
+    dr.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.setAttribute("aria-label", open ? "关闭菜单" : "打开菜单");
+  }
+  btn.addEventListener("click", function () { set(dr.hidden); });
+  dr.addEventListener("click", function (e) { if (e.target.closest("a,button")) set(false); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !dr.hidden) set(false); });
+
+  if (window.matchMedia("(max-width:720px)").matches) {
+    var f = document.querySelectorAll("details.pane-fold");
+    for (var i = 0; i < f.length; i++) f[i].open = false;
+  }
+})();
+
+/* 返回顶部：滚过约一屏才出现。点击只发一句 scrollTo，
+   平滑与否由 html{scroll-behavior} 说了算——减少动效的偏好在那条媒体查询里已经兜住。 */
+(function () {
+  var t = document.querySelector(".to-top"), first = document.querySelector(".topbar a");
+  if (!t) return;
+  function sync() { t.classList.toggle("on", window.scrollY > window.innerHeight * .8); }
+  window.addEventListener("scroll", sync, { passive: true });
+  sync();
+  t.addEventListener("click", function () {
+    window.scrollTo({ top: 0 });
+    if (first) first.focus({ preventScroll: true });
+  });
+})();
+
+/* 技术支持弹窗：原生 <dialog> 自带焦点圈定与 Esc 关闭，这里只补三件事——
+   触发钮开合、点遮罩关闭、以及把格子里那行联系方式复制到剪贴板。
+   复制读的是 <b> 的文本，所以换号码不必动脚本；https 下走 Clipboard API，
+   拿不到权限（file:// 打开、老 WebView）退回临时 textarea + execCommand。 */
+(function () {
+  var d = document.getElementById("support");
+  if (!d) return;
+  var opener = null;
+
+  function exec(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:-2222px;top:0";
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    return ok;
+  }
+  function copy(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return exec(text); });
+    }
+    return Promise.resolve(exec(text));
+  }
+  /* 剪贴板拿不到时（file:// 直开、无焦点）退一步：把格子里那行选中，用户 Ctrl+C 就行 */
+  function pick(el) {
+    if (!el || !window.getSelection) return;
+    var r = document.createRange();
+    r.selectNodeContents(el);
+    var s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  }
+
+  var trig = document.querySelectorAll("[data-support]");
+  for (var i = 0; i < trig.length; i++) trig[i].addEventListener("click", function () {
+    opener = this;
+    d.showModal();
+  });
+  d.addEventListener("click", function (e) { if (e.target === d) d.close(); });
+  d.querySelector("[data-sup-close]").addEventListener("click", function () { d.close(); });
+  d.addEventListener("close", function () {
+    if (opener) opener.focus({ preventScroll: true });
+  });
+
+  var btn = d.querySelectorAll(".sup-copy");
+  for (var j = 0; j < btn.length; j++) btn[j].addEventListener("click", function () {
+    var b = this, label = b.textContent;
+    var cell = b.closest(".sup-c").querySelector("b");
+    copy(cell ? cell.textContent.trim() : "").then(function (ok) {
+      b.textContent = ok ? "已复制" : "手动选中复制";
+      if (ok) b.setAttribute("data-ok", "");
+      else pick(cell);
+      setTimeout(function () { b.textContent = label; b.removeAttribute("data-ok"); }, 1800);
+    });
+  });
+})();
+
+/* ══ 首屏「磅房工作台」磅单生命周期循环演示 ═════════════════════════════
+   七拍：①制单绑卡 → ②上磅捕获毛重 → ③扦样化验 → ④卸货回皮（净重一定即出磅单）→ ⑤计价结算 → ⑥付款 → ⑦出付款单。
+   每拍只高亮该环节的关键动作，顶部字幕说明在做什么；自动循环，悬停与滚出视口只是临时掐住，点击才切换播放状态，
+   时间轴点跳。尊重 prefers-reduced-motion：关闭时静态呈现这张单的完整终态。
+   出票按小票机来：纸钉在过磅画面这一栏下沿的出纸口上自下往上顶，④先顶磅单、⑦续顶付款单（接缝＝那道切刀痕）；
+   出纸通道本身透明，纸只占栏宽一小条，画面不被盖死，结算弹窗的遮罩也只压前两栏。
+   只动这台 .unit，复用其自带令牌；数值取自页面既有示意，保持业务自洽。 */
+(function () {
+  var unit = document.querySelector(".unit");
+  if (!unit) return;
+  function qa(s) { return Array.prototype.slice.call(unit.querySelectorAll(s)); }
+  function $(s) { return unit.querySelector(s); }
+  function el(k) { return k ? unit.querySelector('[data-el="' + k + '"]') : null; }
+  function pane(k) { return k ? unit.querySelector('[data-pane="' + k + '"]') : null; }
+  function txt(n, v) { if (n) n.textContent = v; }
+  function flash(n) { if (!n) return; n.classList.remove("flash"); void n.offsetWidth; n.classList.add("flash"); }
+
+  /* 这张演示单的数值：净重=毛-皮；结算重量=净重-扣水-扣杂；金额=结算重量×单价 */
+  var M = { gross: 62140, tare: 13520, net: 48620, water: 12.40, imp: 0.60, dw: 390, di: 245,
+            qty: 47985, price: 2.64, amt: 126680.40 };
+  var ORD = "01202610000014", JSD = "JS01202610000088", FKD = "FK01202610000213", SEQ = "000014";
+  function grp(v, d) {
+    var s = Math.abs(v).toFixed(d).split("."), a = s[0], i = a.length - 3;
+    while (i > 0) { a = a.slice(0, i) + " " + a.slice(i); i -= 3; }
+    return (v < 0 ? "-" : "") + a + (d ? "." + s[1] : "");
+  }
+  function money(v) { return "¥ " + grp(v, 2); }
+  var KG = function (v) { return grp(v, 1) + " kg"; };
+
+  var live = $("#wsLive"), badge = $(".badge"), gross = $("#wsGross"), tare = $("#wsTare"),
+      net = $("#wsNet"), price = $("#wsPrice"), grade = $("#wsGrade"), qcMeta = $("#wsQcMeta"),
+      wMeta = $("#wsWeighMeta"), ticket = $("#wsTicket"),
+      capEl = $("#wsCap"), capN = $("#wsCapN"), capT = $("#wsCapT"),
+      toggle = $("#wsToggle"), track = $("#wsTrack");
+  var camSeq = qa(".js-seq"), cams = qa(".cams i"),
+      shotEl = $(".js-shot"), ordEl = $(".js-orderno"), idEl = $(".js-id"),
+      cardEl = $(".js-card"), plateEl = $(".js-plate"), nameEl = $(".js-name"),
+      idMeta = $(".js-idmeta"), cropEl = $(".js-crop"),
+      nowEl = $(".js-now"), nowStEl = $(".js-nowst"), scaleEl = $(".js-scale"),
+      fWater = $(".js-water"), fImp = $(".js-imp"), fDw = $(".js-dw"), fDi = $(".js-di"),
+      wkGross = $("#wkGross"), wkTareWk = $("#wkTareWk"), wkNet = $("#wkNet"),
+      wkQty = $("#wkQty"), wkPrice = $("#wkPrice"), wkAmt = $("#wkAmt"), wkPay = $("#wkPay"),
+      wkAmtPay = $("#wkAmtPay"), wkPayNo = $("#wkPayNo"), wkJsNo = $("#wkJsNo"),
+      wkPaper = $("#wkPaper"), wkCut = $("#wkCut"),
+      dlgId = $("#wsDlgId"), idBox = $("#wsIdBox"), idTitle = $("#wsIdTitle"), idDesc = $("#wsIdDesc"),
+      idRing = $("#wsIdRing"), idRd = $("#wsIdRd"), idStat = $("#wsIdStat"), idSec = $("#wsIdSec"),
+      idNote = $("#wsIdNote"), idAlt = $("#wsIdAlt"), idCancel = $("#wsIdCancel"), idKV = $("#wsIdKV"),
+      dlgSettle = $("#wsDlgSettle"), setCta = $("#wsSetCta"), setPaid = $("#wsSetPaid"),
+      dlgs = qa(".ws-dlg"), colR = $(".col-r");
+
+  /* 遮罩铺满整台窗口，只把「过磅画面」那一栏挖开：
+     出票之后这一栏还要看车、看纸从出纸口顶出来，整块压暗就等于把打印这一步藏起来了。
+     口子取 .col-r 的真实矩形（clip-path 多边形），不再靠 right 偏移把遮罩挤窄；
+     竖排（≤720px）这一栏已换到下面，口子撤掉，遮罩恢复铺满。 */
+  var narrow = window.matchMedia("(max-width:720px)");
+  function fitDlg() {
+    for (var i = 0; i < dlgs.length; i++) {
+      var d = dlgs[i], a = d.getBoundingClientRect(), b = colR && colR.getBoundingClientRect();
+      if (narrow.matches || !b || !a.width) {
+        d.style.setProperty("--cam-w", "0px");
+        d.style.removeProperty("--dlg-clip");
+        continue;
+      }
+      var ct = Math.round(b.top - a.top), cb = Math.round(b.bottom - a.top), cl = Math.round(b.left - a.left);
+      d.style.setProperty("--cam-w", Math.round(a.right - b.left) + "px");
+      d.style.setProperty("--dlg-clip", "polygon(0 0,100% 0,100% " + ct + "px," + cl + "px " + ct + "px," +
+        cl + "px " + cb + "px,100% " + cb + "px,100% 100%,0 100%)");
+    }
+  }
+  fitDlg();
+  window.addEventListener("resize", fitDlg);
+
+  var CN = ["①", "②", "③", "④", "⑤", "⑥", "⑦"];
+  /* ①制单绑卡是全片字最多的一拍：两段感应区提示 + 两次读到回执都要读完，给到 8s；
+     ④回皮这一拍净重一定就要出磅单，纸从出纸口顶上来 1.5s 后再留两秒读票面，给到 4.6s；
+     ⑦只续出付款单那一联（磅单上一拍已经挂在出纸口了），同样 4.6s；
+     其余各拍只是看数字落位，2.4–3.2s 够了 */
+  var DUR = [8000, 3200, 2600, 4600, 3000, 2400, 4600];
+  var LABEL = ["制单绑卡", "上磅捕获", "扦样化验", "卸货回皮", "计价结算", "付款", "出票"];
+  var CAP = [
+    '制单绑卡 · 连续监听：先放<b>身份证</b>认人，再贴<b>流转白卡</b>——读到即取号，一单一卡',
+    '重车上磅 · 读数跳动，<b>判稳后捕获毛重</b>（空格）',
+    '扦样化验 · 录入水分杂质，<b>自动算扣水扣杂并定级</b>',
+    '卸货回皮 · 皮重一捕获、净重即定，<b>磅单当场从出纸口顶出</b>：毛 − 皮 ＝ 净重 48 620.0 kg',
+    '计价结算 · 弹出<b>结算单</b>：净重扣水扣杂得结算重量，× 单价算出应付金额',
+    '付款 · <b>当场付款</b>（现金／扫码），生成付款单并留痕',
+    '出票 · 付款单'
+  ];
+
+  /* 单一高亮闸：同一刻只点亮当前环节的关键动作 */
+  var hotK = null;
+  function hot(k) {
+    var prev = el(hotK) || pane(hotK); if (prev) prev.classList.remove("hot");
+    if (nowEl) nowEl.classList.remove("hot");
+    hotK = k || null; if (!k) return;
+    var t = (k === "now") ? nowEl : (el(k) || pane(k));
+    if (t) t.classList.add("hot");
+  }
+  function press(k) { var b = el(k); if (!b) return; b.classList.remove("press"); void b.offsetWidth; b.classList.add("press"); }
+  function setBadge(cls, t) { if (badge) { badge.className = "badge " + cls; badge.textContent = t; } }
+  function setNow(t) { txt(nowStEl, t); }
+  function openDlg(n) { if (n) { n.classList.add("open"); n.setAttribute("aria-hidden", "false"); } }
+  function closeDlg(n) { if (n) { n.classList.remove("open"); n.setAttribute("aria-hidden", "true"); } }
+  /* 关闭并复位所有叠层弹窗与小票（循环起点、reduced-motion、离开视口都用它） */
+  function clearOverlays() {
+    closeDlg(dlgId); closeDlg(dlgSettle);
+    stopScanTick();
+    if (idBox) idBox.classList.remove("scan-hit");
+    if (idRd) idRd.classList.remove("ic");
+    if (idKV) { idKV.classList.remove("on"); idKV.innerHTML = ""; }
+    if (setCta) setCta.classList.remove("on");
+    if (setPaid) setPaid.classList.remove("on");
+    hideTicket();
+  }
+
+  /* 读卡监听框的三态（与产品同一套话术）：id＝等身份证，ic＝等流转卡，hit＝读到 */
+  var RING_C = 326.7, scanTimer = null;
+  function stopScanTick() { if (scanTimer) { clearInterval(scanTimer); scanTimer = null; } }
+  function scanStage(kind) {
+    stopScanTick();
+    if (!idBox) return;
+    idBox.classList.remove("scan-hit");
+    if (idRd) idRd.classList.toggle("ic", kind === "ic");
+    if (idKV) { idKV.classList.remove("on"); idKV.innerHTML = ""; }
+    if (kind === "id") {
+      txt(idTitle, "请将身份证平放在读卡器感应区");
+      txt(idDesc, "放稳后不用点任何东西，读到证件会自动填入售粮人。");
+      txt(idNote, "读不出来可以点「搜档案」，照样能制单。");
+      txt(idAlt, "搜档案"); txt(idCancel, "取消监听");
+    } else {
+      txt(idTitle, "请将流转卡贴在读卡器感应区");
+      txt(idDesc, "本站制单要绑卡：贴稳后不用点任何东西，读到可用的卡就自动取号制单。");
+      txt(idNote, "读不出来可以点「手动绑卡」，照样能制单。");
+      txt(idAlt, "手动绑卡"); txt(idCancel, "取消制单");
+    }
+    txt(idStat, "正在监听感应区，请放卡…");
+    var left = 15;
+    txt(idSec, left);
+    if (idRing) idRing.style.strokeDashoffset = "0";
+    scanTimer = setInterval(function () {
+      if (!running) return;   /* 暂停时倒计时跟着停，别自己往 0 走 */
+      left -= 1; if (left < 0) left = 0;
+      txt(idSec, left);
+      if (idRing) idRing.style.strokeDashoffset = (RING_C * (1 - left / 15)).toFixed(1);
+    }, 900);
+  }
+  function scanHit(msg, rows) {
+    stopScanTick();
+    if (idBox) idBox.classList.add("scan-hit");
+    txt(idStat, msg);
+    if (idRing) idRing.style.strokeDashoffset = "0";
+    if (idKV && rows) { idKV.innerHTML = rows; idKV.classList.add("on"); }
+  }
+  function snap(anim) {
+    for (var i = 0; i < camSeq.length; i++) txt(camSeq[i], SEQ);
+    shotEl.className = "cam-cap js-shot"; txt(shotEl, "本单抓拍 3 张 · 14:31:52 随毛重一起取图");
+    if (anim) for (var j = 0; j < cams.length; j++) { cams[j].classList.remove("flash"); void cams[j].offsetWidth; cams[j].classList.add("flash"); }
+  }
+
+  /* 摄像头 OSD 时标：跟着影片主时钟走秒（暂停/悬停掐表时时钟同步停，
+     画面却仍微动——直播感不丢，字面也仍是这张单的 14:31:46 起）。循环回①复位。 */
+  var cvTs = qa(".cams .ts"), cvSec = 0, cvAcc = 0;
+  function cvPaint() {
+    var t = 14 * 3600 + 31 * 60 + 46 + cvSec, p = function (n) { return (n < 10 ? "0" : "") + n; };
+    var s = p(Math.floor(t / 3600) % 24) + ":" + p(Math.floor(t / 60) % 60) + ":" + p(t % 60);
+    for (var i = 0; i < cvTs.length; i++) txt(cvTs[i], s);
+  }
+
+  /* 读数滚动（大数字 + 底部设备条同步）：同样只认主时钟，暂停时停在当前读数上 */
+  var rafId = null;
+  function roll(to, dur, done) {
+    if (rafId) cancelAnimationFrame(rafId);
+    if (live) live.classList.add("live");
+    var spent = 0, prev = null;
+    function step(ts) {
+      var dt = prev === null ? 0 : ts - prev; prev = ts;
+      if (dt < 0) dt = 0; if (dt > 120) dt = 120;
+      if (running) spent += dt;
+      var p = spent / dur; if (p > 1) p = 1;
+      var v = (to - to * Math.pow(1 - p, 3)) / 1; // easeOutCubic
+      var s = grp(v, 1);
+      if (live) { live.textContent = s; txt(scaleEl, s); }
+      if (p < 1) rafId = requestAnimationFrame(step);
+      else { rafId = null; if (live) live.classList.remove("live"); if (done) done(); }
+    }
+    rafId = requestAnimationFrame(step);
+  }
+
+  function reset() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    for (var i = 0; i < camSeq.length; i++) txt(camSeq[i], "—");
+    for (var j = 0; j < cams.length; j++) cams[j].classList.remove("flash");
+    cvSec = 0; cvAcc = 0; cvPaint();
+    shotEl.className = "cam-cap js-shot"; txt(shotEl, "等待上磅取图");
+    txt(ordEl, "—"); txt(idEl, "—"); txt(cardEl, "—"); txt(plateEl, "—");
+    txt(nameEl, "—"); txt(cropEl, "—");
+    if (live) { live.textContent = "0.0"; live.classList.remove("live"); } txt(scaleEl, "0.0");
+    txt(gross, "—"); txt(tare, "—"); txt(net, "—"); txt(price, "—");
+    txt(fWater, "—"); txt(fImp, "—"); txt(fDw, "—"); txt(fDi, "—");
+    txt(grade, "待录入");
+    setBadge("wait", "等待上磅");
+    qcMeta.className = ""; txt(qcMeta, "按指标模板录入，自动出扣水扣杂。");
+    wMeta.className = ""; txt(wMeta, "读数自动接入，判稳后方可捕获。");
+    idMeta.className = ""; txt(idMeta, "等待过磅或化验。");
+    setNow("待过磅");
+    clearOverlays();
+    hot(null);
+  }
+
+  /* 卷纸顶到第几联：1＝磅单（④净重一定就顶出），2＝付款单（⑦接着打在磅单下面）。
+     两联之间那道切刀痕就是第一次顶纸该停在出纸口的位置，位移量按真实布局量出来的百分比——
+     字号变了、窗口窄了都不用改数字。translateY 的 % 以纸自身高度为基准，纸顶出 (1-τ) 高度正好到切刀痕。 */
+  function cutY() {
+    if (!wkPaper || !wkCut || !wkPaper.offsetHeight) return "46%";
+    return ((1 - (wkCut.offsetTop + wkCut.offsetHeight) / wkPaper.offsetHeight) * 100).toFixed(2) + "%";
+  }
+  function showTicket(stage, anim) {
+    if (!ticket) return;
+    fillTicket();   // 纸只要挂出来就必须有字：从时间轴直接跳到⑤⑥时，④那拍的填字没机会跑
+    ticket.style.setProperty("--cut-y", cutY());
+    ticket.classList.remove("out1", "out2");
+    ticket.classList.add("show", stage === 2 ? "at2" : "at1");
+    if (!anim) return;
+    void ticket.offsetWidth;   // 跳回同一拍重播时，先把上一次动画彻底摘掉才会重新顶纸
+    ticket.classList.add(stage === 2 ? "out2" : "out1");
+  }
+  function hideTicket() { if (ticket) ticket.classList.remove("show", "at1", "at2", "out1", "out2"); }
+
+  /* 把这张单的票面数字一次写全（磅单联 + 付款联两截都靠它）：
+     只由 showTicket 在量接缝、出纸之前调用，所以两条看票的路（动画、reduced-motion 静态终态）都不会拿到一张白纸 */
+  function fillTicket() {
+    if (!ticket) return;
+    txt(wkGross, grp(M.gross, 1) + " kg"); txt(wkTareWk, grp(M.tare, 1) + " kg");
+    txt(wkNet, grp(M.net, 1) + " kg"); txt(wkQty, grp(M.qty, 1) + " kg");
+    txt(wkPrice, grp(M.price, 2) + " 元/公斤"); txt(wkAmt, money(M.amt));
+    txt(wkPayNo, "单号 " + FKD); txt(wkJsNo, JSD);
+    txt(wkAmtPay, money(M.amt)); txt(wkPay, "现金 · 已付清");
+  }
+
+  /* 填这张单的最终数字（结算/付款/小票） */
+  function fillFinal() {
+    clearOverlays();
+    txt(nameEl, "王*海"); txt(idEl, "3701**********1234"); txt(plateEl, "鲁 A·8D291");
+    txt(cardEl, "IC00000127"); txt(cropEl, "小麦"); txt(ordEl, ORD);
+    txt(live, grp(M.tare, 1)); txt(scaleEl, grp(M.tare, 1));
+    txt(gross, KG(M.gross)); txt(tare, KG(M.tare)); txt(net, KG(M.net));
+    txt(price, grp(M.price, 2) + " 元/公斤");
+    txt(fWater, M.water.toFixed(2) + "%"); txt(fImp, M.imp.toFixed(2) + "%");
+    txt(fDw, grp(M.dw, 1) + "kg"); txt(fDi, grp(M.di, 1) + "kg");
+    txt(grade, "已出票");
+    snap(false);
+    showTicket(2, false);
+  }
+
+  /* 七拍：每拍设解说 + 高亮关键动作 + 动画推进界面 */
+  function enter(k, anim) {
+    txt(capN, CN[k]); capT.innerHTML = CAP[k]; capEl.classList.add("on");
+    if (k !== 0) closeDlg(dlgId);
+    if (k < 4 || k >= 6) closeDlg(dlgSettle);
+    if (k < 3) hideTicket();   // 磅单是④净重定格才出的，前面几拍（含倒着跳回来看）出纸口必须是空的
+    if (k === 0) {
+      reset();
+      hot("zhi-dan"); setBadge("wait", "已制单，等待上磅");
+      idMeta.className = ""; txt(idMeta, "刷第①卡：先读身份证认人，再贴流转白卡——读到即取号。");
+      openDlg(dlgId);
+      if (anim) {
+        /* 时间点都从本拍开头算：提示 1.8s → 读到回执停 1.8s → 换贴卡提示 2.0s → 回执停 1.8s */
+        scanStage("id");
+        after(1800, function () {
+          txt(nameEl, "王*海"); txt(idEl, "3701**********1234"); txt(plateEl, "鲁 A·8D291"); txt(cropEl, "小麦");
+          scanHit("读到证件 · 王*海 · 正在带出售粮人",
+            "<div><span>售粮人</span><b>王*海</b></div><div><span>证件号</span><b>3701**********1234</b></div>");
+        });
+        after(3600, function () { scanStage("ic"); });
+        after(5600, function () {
+          txt(cardEl, "IC00000127"); txt(ordEl, ORD);
+          scanHit("读到流转卡 · 正在取号制单",
+            "<div><span>流转卡</span><b>IC00000127</b></div><div><span>绑定单据</span><b>000014</b></div>");
+        });
+        after(7400, function () { closeDlg(dlgId); flash(idMeta); });
+      } else fillFinal();
+    } else if (k === 1) {
+      hot("mao"); setBadge("wait", "读数未稳…");
+      if (anim) roll(M.gross, 1200, function () {
+        setBadge("ok", "读数稳定，可捕获"); press("mao");
+        txt(gross, KG(M.gross)); wMeta.className = ""; txt(wMeta, "称重轨迹 · 毛重 62 140.0 · 已捕获");
+        snap(true); setNow("待回皮");
+      });
+      else { txt(live, grp(M.gross, 1)); txt(gross, KG(M.gross)); setBadge("ok", "读数稳定，可捕获"); snap(false); }
+    } else if (k === 2) {
+      hot("qc"); setBadge("ok", "毛重已捕获");
+      if (anim) {
+        var q = [["fWater", M.water.toFixed(2) + "%"], ["fImp", M.imp.toFixed(2) + "%"], ["fDw", grp(M.dw, 1) + "kg"], ["fDi", grp(M.di, 1) + "kg"]];
+        var map = { fWater: fWater, fImp: fImp, fDw: fDw, fDi: fDi };
+        q.forEach(function (it, idx) { after(idx * 260, function () { var n = map[it[0]]; if (n) { txt(n, it[1]); flash(n); } }); });
+        after(1120, function () { txt(grade, "二等 · 接收"); flash(grade); qcMeta.className = ""; txt(qcMeta, "小麦 · 水分超基准 −0.10，扣水 390.0 kg；杂质合格。"); });
+      } else { txt(fWater, M.water.toFixed(2) + "%"); txt(fImp, M.imp.toFixed(2) + "%"); txt(fDw, grp(M.dw, 1) + "kg"); txt(fDi, grp(M.di, 1) + "kg"); txt(grade, "二等 · 接收"); }
+    } else if (k === 3) {
+      hot("pi"); setBadge("wait", "回皮中…");
+      if (anim) roll(M.tare, 1000, function () {
+        setBadge("ok", "皮重已捕获"); press("pi");
+        txt(tare, KG(M.tare)); txt(net, KG(M.net)); txt(price, grp(M.price, 2) + " 元/公斤");
+        flash(net); wMeta.className = ""; txt(wMeta, "毛 62 140.0 − 皮 13 520.0 ＝ 净 48 620.0 kg");
+        /* 净重一定格就直接出磅单：产品里这是 handleNetDetermined 的静默直打，不点任何按钮 */
+        showTicket(1, true);
+        setNow("磅单已出·待结算");
+      });
+      else { txt(tare, KG(M.tare)); txt(net, KG(M.net)); txt(price, grp(M.price, 2) + " 元/公斤"); showTicket(1, false); }
+    } else if (k === 4) {
+      hot("to-settle"); setBadge("ok", "净重 48 620.0 kg");
+      showTicket(1, false);   // 磅单上一拍就挂在出纸口了，跳着看这一拍也得在
+      openDlg(dlgSettle);
+      idMeta.className = ""; txt(idMeta, "弹出结算单：净重扣水扣杂 → 结算重量 47 985.0 kg × 2.64 ＝ ¥ 126 680.40");
+      if (anim) after(900, function () { if (setCta) setCta.classList.add("on"); press("to-settle"); });
+    } else if (k === 5) {
+      hot("to-settle"); showTicket(1, false); openDlg(dlgSettle); if (setCta) setCta.classList.add("on");
+      if (anim) press("to-settle");
+      idMeta.className = ""; txt(idMeta, "已生成结算单 JS·000088 与付款单 FK·000213（现金 · 当场付清）");
+      flash(idMeta);
+      if (anim) after(500, function () { if (setPaid) setPaid.classList.add("on"); });
+      setNow("待出票");
+    } else if (k === 6) {
+      /* 出票这一拍不描边：整张卷纸本身就是焦点，描一圈反而把出纸口框成一个大绿框 */
+      hot(null); closeDlg(dlgSettle);
+      txt(grade, "已出票");
+      showTicket(2, anim);   // 付款单接着磅单下面出，接缝就是那道切刀痕
+      if (anim) after(320, function () { flash(shotEl); });
+      setNow("已出票·可退卡");
+    }
+  }
+
+  /* 时间轴 */
+  var segs = [], segFills = [];
+  (function buildTrack() {
+    if (!track) return;
+    for (var i = 0; i < CN.length; i++) {
+      (function (i) {
+        var b = document.createElement("button");
+        b.type = "button"; b.className = "ws-seg"; b.setAttribute("role", "tab");
+        b.title = CN[i] + " " + LABEL[i];
+        var fill = document.createElement("i"); fill.className = "ws-fill";
+        var nb = document.createElement("b"); nb.textContent = CN[i];
+        var sp = document.createElement("span"); sp.textContent = LABEL[i];
+        b.appendChild(fill); b.appendChild(nb); b.appendChild(sp);
+        /* 点时间轴＝跳到那一拍并清掉「点击暂停」；鼠标还压在设备上就仍按悬停停着，移开才续播 */
+        b.addEventListener("click", function (e) { e.stopPropagation(); userPaused = false; syncBtn(); go(i); gate(); });
+        track.appendChild(b); segs.push(b); segFills.push(fill);
+      })(i);
+    }
+  })();
+  function syncSeg(k) {
+    for (var i = 0; i < segs.length; i++) {
+      segs[i].classList.toggle("done", i < k);
+      segs[i].classList.toggle("cur", i === k);
+      segs[i].setAttribute("aria-selected", i === k ? "true" : "false");
+      if (i !== k) segFills[i].style.width = "0";
+    }
+  }
+
+  /* 分步计时跟着主时钟走：悬停/点暂停时这些子步骤一起停。
+     原先用的是 setTimeout——拍子停了画面还在自己往下演，"停下来看清楚"根本做不到。
+     换拍（自动进下一拍、点时间轴跳拍）时未触发的步骤一并作废，不会补进下一拍。 */
+  var sched = [];
+  function after(ms, fn) { sched.push({ left: ms, fn: fn }); }
+  function clearSched() { sched.length = 0; }
+  function tickSched(dt) {
+    if (!sched.length) return;
+    var due = [];
+    for (var i = sched.length - 1; i >= 0; i--) {
+      sched[i].left -= dt;
+      if (sched[i].left <= 0) { due.unshift(sched[i].fn); sched.splice(i, 1); }
+    }
+    for (var j = 0; j < due.length; j++) due[j]();
+  }
+
+  /* 播放内核：时钟走不走由三道闸与门决定（点击暂停 / 鼠标悬停 / 滚出视口），
+     但「播放状态」只有点击会改——悬停只是临时掐住，移开就续上，不去动按钮的按下态。 */
+  var k = 0, acc = 0, last = 0, running = false, userPaused = false, hover = false, offscreen = false;
+  var queued = false;
+  function go(i) { k = i; acc = 0; last = performance.now(); clearSched(); enter(i, true); syncSeg(i); }
+  function frame(ts) {
+    queued = false;
+    if (!running) return;
+    var dt = ts - last; last = ts; if (dt < 0) dt = 0; if (dt > 120) dt = 120;
+    acc += dt;
+    cvAcc += dt; if (cvAcc >= 1000) { cvAcc -= 1000; cvSec += 1; cvPaint(); }
+    var d = DUR[k];
+    if (segFills[k]) segFills[k].style.width = Math.min(1, acc / d) * 100 + "%";
+    if (acc >= d) {
+      if (segFills[k]) segFills[k].style.width = "0";
+      k = (k + 1) % CN.length; acc = 0; clearSched(); enter(k, true); syncSeg(k);
+    } else tickSched(dt);
+    kick();
+  }
+  /* 全片只留一条 rAF 链：闸开时若上一帧的回调还挂在队列里（鼠标一秒内划进划出就会这样），
+     再 request 一次会让回调翻倍。计时本身不受影响（多出来的那条 dt=0），但白白多烧 CPU。 */
+  function kick() { if (queued) return; queued = true; requestAnimationFrame(frame); }
+  function syncBtn() {
+    unit.classList.toggle("paused", userPaused);
+    if (!toggle) return;
+    toggle.setAttribute("aria-pressed", userPaused ? "true" : "false");
+    toggle.title = userPaused ? "继续演示" : "暂停演示";
+  }
+  function gate() {
+    var on = !userPaused && !hover && !offscreen;
+    if (on === running) return;
+    running = on;
+    /* .frozen 只管 CSS 那头的顶纸动画（.paused 是「按钮显示成暂停」，悬停不该碰，所以分两个类） */
+    unit.classList.toggle("frozen", !on);
+    if (on) { last = performance.now(); kick(); }
+  }
+
+  /* 控制：悬停＝临时停下，点击（画面任意处或那颗钮）＝切换播放状态 */
+  unit.addEventListener("mouseenter", function () { hover = true; gate(); });
+  unit.addEventListener("mouseleave", function () { hover = false; gate(); });
+  function flip() { userPaused = !userPaused; syncBtn(); gate(); }
+  unit.addEventListener("click", function (e) { if (e.target.closest("button,a")) return; flip(); });
+  if (toggle) toggle.addEventListener("click", function (e) { e.stopPropagation(); flip(); });
+
+  var started = false;
+  function boot() {
+    if (started) return; started = true;
+    go(0);
+    if ("IntersectionObserver" in window) {
+      var io = new IntersectionObserver(function (es) {
+        es.forEach(function (en) { offscreen = !en.isIntersecting; gate(); });
+      }, { threshold: 0.2 });
+      io.observe(unit);
+    } else gate();
+  }
+
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    unit.classList.add("ws-static"); fillFinal(); setBadge("ok", "净重 48 620.0 kg"); setNow("已出票·可退卡");
+  } else {
+    if (document.readyState === "complete") boot();
+    else window.addEventListener("load", boot);
+  }
+})();
+</script>
+</body>
+</html>

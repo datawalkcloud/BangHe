@@ -1,0 +1,208 @@
+/**
+ * 站点参数的展示字典（03 §9.3 与 §9.3.1）。
+ *
+ * 拆出来是因为一次对键：库里 22 个参数键与 `src/mock/masters.ts` 那份 mock 字典
+ * 有 5 个是「同一个参数两个名字」（`tare_tolerance_ratio` / `tare_tolerance_pct`、
+ * `payment_due_days` / `payment_due_warn_hours`、`capture_keep_days` /
+ * `attachment_keep_days`、`print_copies` / `print_default_copies`、
+ * `allow_credit` / `settlement_allow_part_pay`），还有 8 个纯界面参数库里根本没有。
+ * 谁的口径都不许在前端再拼一层映射表——那是把对不上的键名长期养在代码里。
+ * 所以定死：**键名与单位一律向 §9.3.1 靠**（缺的键由 `0006_settings_parity.sql` 补进库），
+ * 这份目录只留「界面怎么显示」，值全部来自库里。
+ *
+ * 单位约定沿用库里的定点写法，界面上必须写出来，否则站长填 3 还是 300 全靠猜：
+ * `_pct` 是 0.01%（300 = 3.00%）、`_01kg` 是 0.1kg（100 = 10kg）、时效用小时、
+ * 留存与留样用自然日、判稳窗口用毫秒。
+ */
+import type { AppSetting } from "@/mock/types";
+import { CODE_EXAMPLES } from "@/lib/ticket-code";
+
+/** 目录里的一项 = `AppSetting` 去掉值，再加一份演示值 */
+type CatalogEntry = Omit<AppSetting, "value"> & {
+  /** 只在浏览器演示模式用；桌面端一律被库里的真值顶掉。
+   *  数值刻意与 `0002_seed.sql` / `0006_settings_parity.sql` 抄同一份（改过值的键
+   *  跟最后一次迁移，如 `attachment_max_kb` 走 0031），
+   *  免得演示看熟的数和上线后看到的数对不上。 */
+  demo: string;
+};
+
+/** `master_settings` 返回的一行：库里就只有这四列 */
+export type SettingRow = {
+  key: string;
+  value: string;
+  value_type: string;
+  description: string;
+};
+
+export const SETTINGS_GROUP: Record<AppSetting["group"], string> = {
+  doc: "单证与编号",
+  weigh: "过磅计量",
+  settle: "结算与付款",
+  print: "打印与联次",
+  retain: "留样与数据保留",
+  session: "登录与锁屏",
+  other: "其它参数",
+};
+
+/** 顺序即界面顺序：同组内按这里排，不按库里的字母序（键名首字母没有业务含义） */
+export const SETTINGS_CATALOG: CatalogEntry[] = [
+  {
+    key: "station_name", demo: "", label: "站点名称", group: "doc", kind: "text",
+    hint: "打印抬头与磅单第一行",
+  },
+  {
+    key: "doc_no_seq_len", demo: "6", label: "流水号位数", group: "doc", kind: "number",
+    hint: "每个站点、每种票、每个月各自从零起号",
+  },
+
+  // 分度值与对齐方式不在这一页：它是**设备属性**，写在这台磅的帧模板 align 段里
+  // （04 §2.3，设备中心的判稳依据那一行显示的就是它）。0002 时代的
+  // `scale_division_01kg` / `weight_rounding_mode` 两枚站点参数只驱动过称重区标题那行字、
+  // 不驱动任何计算，已由 0032 退役；这里再摆一行"改了也不生效"的可配项，就是下一轮的第二真相。
+  { key: "stable_window_ms", demo: "1500", label: "判稳窗口（毫秒）", group: "weigh", kind: "number" },
+  {
+    key: "stable_tolerance_01kg", demo: "50", label: "判稳波动容差（0.1kg）", group: "weigh", kind: "number",
+    hint: "50 即 5 kg",
+  },
+  {
+    key: "tare_tolerance_pct", demo: "300", label: "皮重偏差容差（0.01%）", group: "weigh", kind: "number",
+    hint: "300 即 ±3.00%，超出照常捕获，只在磅单上警示",
+  },
+  { key: "open_order_alert_minutes", demo: "30", label: "在途停留提醒（分钟）", group: "weigh", kind: "number" },
+  { key: "capture_on_gross", demo: "true", label: "毛重抓拍", group: "weigh", kind: "bool" },
+  { key: "capture_on_tare", demo: "true", label: "皮重抓拍", group: "weigh", kind: "bool" },
+  {
+    key: "card_flow_mode", demo: "auto", label: "流转卡模式", group: "weigh", kind: "select",
+    options: [
+      { value: "auto", label: "启用：刷卡自动推进" },
+      { value: "off", label: "不启用：手工点选" },
+    ],
+  },
+  {
+    key: "card_pool_warn_free", demo: "5", label: "空闲卡预警阈值（张）", group: "weigh", kind: "number",
+    hint: "空闲卡低于此数时，看板与流转卡页黄色提示",
+  },
+  {
+    key: "card_release_on_terminal", demo: "true", label: "终态自动回收卡", group: "weigh", kind: "bool",
+    hint: "关掉后，结算或作废仍需人工刷一次卡才回池",
+  },
+  {
+    key: "card_swipe_debounce_ms", demo: "1500", label: "刷卡去抖窗口（毫秒）", group: "weigh", kind: "number",
+    hint: "同一张卡在这个时间里重复命中只算一刷",
+  },
+  // 演示值取 false 是例外（库里默认 true）：浏览器预览压根没有 IC 通道，
+  // 按库里的强制口径演示里连单都制不出来。桌面端读库里真值，不受这行影响。
+  {
+    key: "card_required_on_create", demo: "false", label: "制单必须绑卡", group: "weigh", kind: "bool",
+    hint: "开：制单前必须先读到卡。关：可无卡制单，卡事后在磅单详情补绑",
+  },
+  {
+    key: "card_auto_register", demo: "true", label: "允许使用未登记的流转卡", group: "weigh", kind: "bool",
+    hint: "开：刷到没登记的卡当场自动入库并接着用。关：必须先到「流转卡」页登记",
+  },
+  {
+    // 候选是仓房档案（会增删改停用），不是目录里能写死的静态 options——界面按 kind="warehouse" 现取现列
+    key: "default_warehouse_id", demo: "", label: "制单默认仓房", group: "weigh", kind: "warehouse",
+    hint: "多仓站的新磅单默认带出这里选的仓房，磅员可当场改。留空＝不预设",
+  },
+  {
+    key: "reader_prompt_voice", demo: "true", label: "磅房语音提示", group: "weigh", kind: "bool",
+    hint: "放卡提示与工作台的每步结果都念出来；关掉只是这台机不出声，操作不受影响",
+  },
+  {
+    // 演示值取 true 是刻意的（库里默认 false）：浏览器里没有扫码枪，这一框是那里唯一的
+    // 扫码入口；桌面装机按库里的真值走，交出去的生产机默认干干净净不出现这一框。
+    key: "scan_test_input", demo: "true", label: "工作台测试扫码框", group: "weigh", kind: "bool",
+    hint: `工作台底部多一个输入框，把票上那行单号（例 ${CODE_EXAMPLES.order}）贴进去按回车，等同扫一下枪；没有扫码枪的机器用这个`,
+  },
+
+  { key: "settlement_allow_part_pay", demo: "true", label: "允许挂账（部分付款）", group: "settle", kind: "bool" },
+  {
+    key: "payment_due_warn_hours", demo: "72", label: "付款时效预警（小时）", group: "settle", kind: "number",
+    hint: "72 即 3 天，超期进入看板告警",
+  },
+  { key: "settle_merge_by_day", demo: "true", label: "同人同日合并结算", group: "settle", kind: "bool" },
+  {
+    key: "moisture_deduct_manual", demo: "true", label: "扣水按人工录入", group: "settle", kind: "bool",
+    hint: "扣水比例由化验员手填，系统不自动扣",
+  },
+  { key: "impurity_deduct_manual", demo: "true", label: "扣杂按人工录入", group: "settle", kind: "bool" },
+
+  {
+    key: "print_paper", demo: "A4", label: "码单纸型", group: "print", kind: "select",
+    options: [
+      { value: "A4", label: "A4 激光" },
+      { value: "dot241", label: "241 针式" },
+      { value: "thermal58", label: "58 热敏" },
+      { value: "thermal80", label: "80 热敏" },
+    ],
+    hint: "工作台不弹预览，直接送进打印机",
+  },
+  { key: "print_default_copies", demo: "3", label: "联数（存根/财务/客户）", group: "print", kind: "number" },
+  { key: "reprint_need_auth", demo: "true", label: "补打需站长授权", group: "print", kind: "bool" },
+
+  {
+    key: "attachment_max_kb", demo: "2048", label: "抓拍图落库上限（KB）", group: "retain", kind: "number",
+    hint: "超过这个大小的抓拍图会被压缩入库；调小省磁盘",
+  },
+  {
+    key: "attachment_keep_days", demo: "3650", label: "抓拍留存（天）", group: "retain", kind: "number",
+    hint: "3650 即 10 年",
+  },
+  { key: "retention_sample_days", demo: "30", label: "留样保存（天）", group: "retain", kind: "number" },
+  { key: "pii_encrypt_enabled", demo: "true", label: "证号与照片加密存储", group: "retain", kind: "bool" },
+  {
+    key: "backup_dir", demo: "", label: "备份目录", group: "retain", kind: "text",
+    hint: "留空即应用数据目录下的 backup",
+  },
+  { key: "backup_keep_count", demo: "30", label: "备份保留份数", group: "retain", kind: "number" },
+  {
+    key: "backup_auto_interval_days", demo: "1", label: "自动备份间隔（天）", group: "retain", kind: "number",
+    hint: "到间隔天数才补一份；填 0 按 1 天处理",
+  },
+  {
+    key: "idle_lock_minutes", demo: "60", label: "无操作自动锁屏（分钟）", group: "session", kind: "select",
+    options: [
+      { value: "5", label: "5 分钟" },
+      { value: "10", label: "10 分钟" },
+      { value: "30", label: "30 分钟" },
+      { value: "60", label: "1 小时" },
+      { value: "120", label: "2 小时" },
+      { value: "180", label: "3 小时" },
+      { value: "0", label: "从不" },
+    ],
+    hint: "到点只是锁屏：输本人密码即解锁，正在录的单据不丢；选「从不」则不自动锁屏",
+  },
+];
+
+/** 浏览器演示模式：目录 + 演示值，字段形状与桌面端返回的 `AppSetting` 完全一致 */
+export function demoSettings(): AppSetting[] {
+  return SETTINGS_CATALOG.map(({ demo, ...meta }) => ({ ...meta, value: demo }));
+}
+
+/**
+ * 库里的行与目录合并成页面要的 `AppSetting`。
+ *
+ * 目录里没有的键**不丢掉**：迁移新加一个键而忘了补目录时，宁可让它带着库里的
+ * `description` 出现在最后一组里，也不要让站长以为库里根本没有这个参数。
+ * 反过来目录里有、库里没有的键照旧渲染但值为空，并在提示里点破——静默少一项
+ * 比多一项难查得多。
+ */
+export function mergeSettings(rows: SettingRow[]): AppSetting[] {
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const known = SETTINGS_CATALOG.map(({ demo: _demo, ...meta }) => {
+    const row = byKey.get(meta.key);
+    byKey.delete(meta.key);
+    if (row) return { ...meta, value: row.value } as AppSetting;
+    return { ...meta, value: "", hint: `${meta.hint ? `${meta.hint}；` : ""}库里没有这个键，改了也不生效` } as AppSetting;
+  });
+  const extras: AppSetting[] = Array.from(byKey.values()).map((r) => ({
+    key: r.key,
+    value: r.value,
+    label: r.description || r.key,
+    group: "other",
+    kind: r.value_type === "bool" ? "bool" : r.value_type === "int" ? "number" : "text",
+    hint: `参数说明待补充（值类型 ${r.value_type}）`,
+  }));
+  return [...known, ...extras];
+}

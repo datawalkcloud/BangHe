@@ -1,0 +1,298 @@
+/**
+ * 关于本程序：帮助菜单「关于…」点开的这一张。
+ *
+ * 界面上每一行字都取自既有单源，这里不抄第二份：产品名 / 版权 / 一句话简介来自
+ * src-tauri/tauri.conf.json；版本号由 AppTopbar——schema_contract::app_version_is_single_sourced
+ * 点名的那份导入——以 prop 传入；GitHub 仓库地址取 package.json 的 repository 字段。
+ * 唯一的例外是技术支持的微信 / QQ：静态站读不到应用常量，只能各留一份，见下方 SUPPORT_* 注释。
+ * 外链一律走 ExtLink（opener 插件默认放行的 https 白名单），不经自开命令。
+ *
+ * 「检查更新」走 tauri-plugin-updater，更新源与验签公钥在 tauri.conf.json 的 plugins.updater。
+ * 只做手动检查：磅房机大多不联网，开局自动检查只会先撞一次超时招人烦。
+ * Windows 下安装器拉起后本程序即退出并自动重启（InstallOptions.restartAfterInstall 默认 true），
+ * 所以「安装中」之后前端不用再调重启。浏览器预览没有原生通道，这一区如实换成一句说明。
+ *
+ * 商店版（cargo feature `store-build`）整区换成"由 Microsoft Store 负责更新"的说明：
+ * 商店要求更新走商店通道，那一侧 updater 插件在 Rust 就没注册。通道读数只问
+ * native.ts 的 updateChannel()（单源即那个 feature），这里不设第二个开关。
+ */
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
+import { InfoGrid } from "@/components/business/layout";
+import { fileSize } from "@/lib/format";
+import { runningInTauri, updateChannel, type UpdateChannel } from "@/lib/native";
+// 与 AppTopbar 引 package.json 同一个道理：配置在仓库里就一份，界面不改写它
+import conf from "../../../src-tauri/tauri.conf.json";
+
+type Phase = "idle" | "checking" | "available" | "downloading" | "installing";
+
+/** 官网：产品介绍的入口 */
+const SITE_URL = "https://bh.datawalk.cn";
+
+/** 源码仓的国内镜像（GitHub 那份由 package.json 的 repository 单源提供） */
+const GITEE_REPO_URL = "https://gitee.com/datawalkcloud/BangHe";
+
+/**
+ * 技术支持的两条通道。站内那份在 site/index.html 的「技术支持」弹窗里（两格 <b>），
+ * 静态站读不到应用的常量、应用也读不到站，改号码时两处一起改。
+ */
+const SUPPORT_WECHAT = "sc251022";
+const SUPPORT_QQ = "740360381";
+
+/**
+ * 一行联系方式 + 一颗复制钮：磅房机上徒手敲一串 QQ 号不现实。
+ * 剪贴板不可用（非安全上下文、窗口没焦点等）不装成功——把号码原样亮在提示里，人还能选中复制。
+ */
+function SupportLine({ id, what }: { id: string; what: string }) {
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(id);
+      toast.success(`${what}已复制：${id}`);
+    } catch {
+      toast.error(`没能复制，${what}：${id}`);
+    }
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="tnum">{id}</span>
+      <Button type="button" size="xs" variant="ghost" onClick={() => void copy()}>
+        复制
+      </Button>
+    </span>
+  );
+}
+
+/** 命令层回的错误可能是裸字符串（Rust 侧约定），别把 `[object Object]` 弹给人 */
+function errText(e: unknown): string {
+  return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * 可点开的对外链接：桌面端交给你 opener 插件的 https 白名单，浏览器预览退回新开标签。
+ * 打不开（没装默认浏览器等）不装成功——把地址原样亮在提示里，人还能选中复制。
+ */
+function ExtLink({ url, text, what }: { url: string; text?: string; what: string }) {
+  const desktop = runningInTauri();
+  async function open() {
+    if (!desktop) {
+      window.open(url, "_blank", "noopener");
+      return;
+    }
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(url);
+    } catch {
+      toast.error(`没能唤起浏览器，${what}：${url}`);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void open()}
+      className="break-all text-left font-mono text-xs underline underline-offset-2 hover:opacity-80"
+      title="在浏览器打开"
+    >
+      {text ?? url}
+    </button>
+  );
+}
+
+export function AboutDialog({
+  open,
+  onOpenChange,
+  version,
+  repoUrl,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** package.json 的 version，AppTopbar 传入——版本号守卫钉在那一处导入上 */
+  version: string;
+  /** package.json 的 repository.url，同上 */
+  repoUrl: string;
+}) {
+  const desktop = runningInTauri();
+  // 分发通道读数：null = 还没问到手（桌面端首发一次，走的是本进程的原生命令，毫秒级；
+  // 问到手之前不渲染那一区，免得商店版先闪出一个不该有的「检查更新」按钮）
+  const [channel, setChannel] = useState<UpdateChannel | null>(null);
+  useEffect(() => {
+    if (!desktop) return;
+    let alive = true;
+    void updateChannel().then((c) => {
+      if (alive) setChannel(c);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [desktop]);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [updateMeta, setUpdateMeta] = useState<{ version: string; body: string | null } | null>(null);
+  const [progress, setProgress] = useState<{ received: number; total: number | null } | null>(null);
+  // Update 在 Rust 侧持有资源（清单与已下载字节），不装就得 close，别攥着不放手
+  const updateRef = useRef<Update | null>(null);
+
+  /** 放弃这次更新机会：释放资源、回到初始态 */
+  function dismissUpdate() {
+    void updateRef.current?.close();
+    updateRef.current = null;
+    setUpdateMeta(null);
+    setProgress(null);
+    setPhase("idle");
+  }
+
+  function handleOpenChange(next: boolean) {
+    // 关框时把「发现了但没装」的更新放掉；下载/安装中的状态保留，重开还能看到进度
+    if (!next && phase === "available") dismissUpdate();
+    onOpenChange(next);
+  }
+
+  async function checkUpdate() {
+    setPhase("checking");
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const found = await check({ timeout: 15_000 });
+      if (!found) {
+        setPhase("idle");
+        toast.success(`已是最新版本（当前 ${version}）`);
+        return;
+      }
+      updateRef.current = found;
+      setUpdateMeta({ version: found.version, body: found.body ?? null });
+      setPhase("available");
+    } catch (e) {
+      setPhase("idle");
+      toast.error(`检查更新失败：${errText(e)}（可能没连上网，或更新源暂时不可用）`);
+    }
+  }
+
+  async function installUpdate() {
+    const u = updateRef.current;
+    if (!u) return;
+    setPhase("downloading");
+    setProgress({ received: 0, total: null });
+    try {
+      await u.downloadAndInstall(
+        (event: DownloadEvent) => {
+          if (event.event === "Started") {
+            setProgress({ received: 0, total: event.data.contentLength ?? null });
+          } else if (event.event === "Progress") {
+            setProgress((p) => ({ received: (p?.received ?? 0) + event.data.chunkLength, total: p?.total ?? null }));
+          } else if (event.event === "Finished") {
+            setPhase("installing");
+          }
+        },
+        { timeout: 300_000 },
+      );
+      // Windows 下安装器拉起后本程序即退出、装完自动重启；能执行到这句说明
+      // 安装器已经离场，弹窗里的文字只是给"重启前的最后一屏"看的
+      setPhase("installing");
+    } catch (e) {
+      toast.error(`下载或安装失败：${errText(e)}`);
+      dismissUpdate();
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-[460px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-3">
+            <img src="/logo.png" alt={conf.productName} className="size-12 object-contain" />
+            <span className="flex min-w-0 flex-col gap-1">
+              <span>{conf.productName}</span>
+              <span className="tnum text-xs font-normal text-muted-foreground">版本 {version}</span>
+            </span>
+          </DialogTitle>
+          <DialogDescription>{conf.bundle.longDescription}</DialogDescription>
+        </DialogHeader>
+        <InfoGrid
+          cols={2}
+          items={[
+            { label: "出品 / 版权", value: conf.bundle.copyright },
+            { label: "官网", value: <ExtLink url={SITE_URL} text="bh.datawalk.cn" what="官网地址" /> },
+            {
+              label: "开源仓库",
+              value: (
+                <span className="inline-flex items-center gap-3">
+                  <ExtLink url={GITEE_REPO_URL} text="Gitee 源码仓库" what="Gitee 仓库地址" />
+                  <ExtLink url={repoUrl} text="GitHub 源码仓库" what="GitHub 仓库地址" />
+                </span>
+              ),
+              span: 2,
+            },
+            { label: "技术支持 · 微信", value: <SupportLine id={SUPPORT_WECHAT} what="微信号" /> },
+            { label: "技术支持 · QQ", value: <SupportLine id={SUPPORT_QQ} what="QQ 号" /> },
+          ]}
+        />
+        <p className="text-xs text-muted-foreground">装机、外设对接与日常使用中的问题，都可通过以上方式联系服务人员。</p>
+
+        {desktop && channel === "store" ? (
+          <div className="flex flex-col gap-2.5 rounded-xl border bg-muted/20 p-3">
+            <span className="text-sm font-medium">程序更新</span>
+            <p className="text-xs text-muted-foreground">
+              本版本经 Microsoft Store 分发，新版本由商店自动推送安装；要立即检查，请在商店「下载和更新」里查看。应用内不提供更新检查。
+            </p>
+          </div>
+        ) : desktop && channel === "github" ? (
+          <div className="flex flex-col gap-2.5 rounded-xl border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">程序更新</span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={phase === "checking" || phase === "downloading" || phase === "installing"}
+                onClick={() => void checkUpdate()}
+              >
+                {phase === "checking" ? "检查中…" : "检查更新"}
+              </Button>
+            </div>
+
+            {phase === "idle" && (
+              <p className="text-xs text-muted-foreground">
+                发现新版点「下载并安装」，装完自动重启到新版；离线电脑用装机包覆盖安装同样能升级。
+              </p>
+            )}
+
+            {phase === "available" && updateMeta && (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm">
+                  发现新版本 <span className="tnum font-medium">{updateMeta.version}</span>
+                </p>
+                {updateMeta.body && <p className="whitespace-pre-line text-xs text-muted-foreground">{updateMeta.body}</p>}
+                <div className="flex items-center gap-2">
+                  <Button size="xs" onClick={() => void installUpdate()}>
+                    下载并安装
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={dismissUpdate}>
+                    暂不更新
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {phase === "downloading" && progress && (
+              <div className="flex flex-col gap-1.5">
+                {progress.total != null && (
+                  <Progress value={Math.min(100, Math.round((progress.received / progress.total) * 100))} />
+                )}
+                <p className="text-xs text-muted-foreground">
+                  下载中 {fileSize(progress.received)}
+                  {progress.total != null ? ` / ${fileSize(progress.total)}` : ""}
+                </p>
+              </div>
+            )}
+
+            {phase === "installing" && <p className="text-xs">正在安装，程序会自动退出并重启。</p>}
+          </div>
+        ) : !desktop ? (
+          <p className="text-xs text-muted-foreground">检查更新只在桌面端可用。</p>
+        ) : null}
+
+        <p className="text-xs text-muted-foreground">本项目以 AGPL-3.0 协议开源，免费使用与商用；再分发须以同协议开源。</p>
+      </DialogContent>
+    </Dialog>
+  );
+}

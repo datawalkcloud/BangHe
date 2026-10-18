@@ -1,0 +1,10 @@
+[package]
+name = "escpos-probe"
+version = "0.1.0"
+edition = "2021"
+description = "斯普瑞特(SPRT) 80mm 小票机现场自检工装：枚举设备 / 查状态 / 打自检票或样例码单 / 导出字节"
+
+[dependencies]
+# 票面排版来自 ticket-core（与主程序同一份实现），这里只留设备选择与参数解析
+ticket-core = { path = "../../crates/ticket-core" }
+escpos = { version = "0.20", features = ["usbprint"] }

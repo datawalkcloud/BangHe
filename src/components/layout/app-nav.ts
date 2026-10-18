@@ -1,0 +1,89 @@
+/**
+ * 侧栏导航配置（05 §2 应用骨架）。
+ *
+ * Alt+1..9 按 items 的**展开顺序**跳转，所以这里的顺序就是快捷键顺序，
+ * 调整顺序等于改快捷键，必须同步改 §5 的表格与顶栏的「快捷键一览」。
+ *
+ * 说明：/masters 与 /reports 在路由表里是动态段，侧栏要"点基础档案永远落在品种页"，
+ * 因此这里存的是**已展开的真实 URL**而非路由 pattern。跳转统一走 useGo()，
+ * 路径写错由路由的 defaultNotFoundComponent 兜底成中文空态，不会白屏。
+ */
+import {
+  BarChart3Icon,
+  BookOpenIcon,
+  BoxesIcon,
+  ClipboardListIcon,
+  CreditCardIcon,
+  FlaskConicalIcon,
+  LayoutDashboardIcon,
+  PackageOpenIcon,
+  PlugZapIcon,
+  ScaleIcon,
+  Settings2Icon,
+  UsersIcon,
+  WalletIcon,
+} from "lucide-react";
+import type { ComponentType } from "react";
+
+export interface NavEntry {
+  label: string;
+  /** 已展开的真实 URL */
+  href: string;
+  /** 高亮前缀，/masters/prices 也要点亮"基础档案" */
+  match: string;
+  icon: ComponentType<{ className?: string }>;
+  hint?: string;
+}
+
+function item(
+  label: string,
+  href: string,
+  icon: ComponentType<{ className?: string }>,
+  hint: string,
+): NavEntry {
+  const seg = href.split("/").filter(Boolean);
+  // /masters/prices 这类多段路径，高亮只看第一段
+  return { label, href, icon, hint, match: seg.length ? `/${seg[0]}` : "/" };
+}
+
+export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
+  {
+    label: "作业",
+    items: [
+      item("首页看板", "/", LayoutDashboardIcon, "今日收购概览与告警"),
+      item("磅房作业", "/workstation", ScaleIcon, "读卡 · 过磅 · 化验 · 打印 · 结算"),
+      item("磅单中心", "/orders", ClipboardListIcon, "全部过磅单查询与打印"),
+      item("出库单据", "/outbound", PackageOpenIcon, "销售出库与登记出库、扣库存"),
+    ],
+  },
+  {
+    label: "往来",
+    items: [
+      item("农户单位", "/parties", UsersIcon, "售粮人档案与履历"),
+      item("化验作业", "/qc", FlaskConicalIcon, "待检队列与质检单"),
+      item("结算中心", "/settlements", WalletIcon, "合并结算与结算单"),
+      item("付款挂账", "/payments", CreditCardIcon, "付款登记、挂账超期"),
+    ],
+  },
+  {
+    label: "管理",
+    items: [
+      item("基础档案", "/masters/varieties", BookOpenIcon, "品种、仓房、价目、参数"),
+      item("台账报表", "/reports/ledger", BarChart3Icon, "监管台账与统计分析"),
+      item("设备中心", "/devices", PlugZapIcon, "地磅、读卡、抓拍、打印"),
+      item("系统设置", "/system/audit", Settings2Icon, "操作留痕、备份、人员权限"),
+      item("流转卡片", "/cards", CreditCardIcon, "卡池登记、注销、空闲预警"),
+      item("库存台账", "/stock", BoxesIcon, "仓房 × 品种结存与出入库流水"),
+    ],
+  },
+];
+
+/** 展开后的平铺列表，Alt+N 用 */
+export const NAV_FLAT: NavEntry[] = NAV_GROUPS.flatMap((g) => g.items);
+
+export function isNavActive(entry: NavEntry, pathname: string): boolean {
+  if (entry.match === "/") return pathname === "/";
+  // 首页看板只在根路径高亮；其余按一级前缀高亮，
+  // 但 /orders/$no 这类详情仍归属其前缀，符合"我在哪个模块"的直觉
+  return pathname === entry.href || pathname.startsWith(`${entry.match}/`) || pathname === entry.match;
+}

@@ -1,0 +1,19 @@
+[package]
+name = "ticket-core"
+version = "0.1.0"
+edition = "2021"
+description = "热敏小票 ESC/POS 排版与设备访问的单一实现：被 Tauri 主程序与 tools/escpos-probe 共用，避免两处各写一套票面"
+
+[lib]
+name = "ticket_core"
+crate-type = ["rlib"]
+
+[dependencies]
+escpos = { version = "0.20", features = ["usbprint"] }
+encoding_rs = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+# 只给 tests 用：守住「前端 JSON → PrintLine」这条跨语言契约。
+# 内部标签枚举（#[serde(tag = "kind")]）的 unit variant 是需要实测确认的一环。
+[dev-dependencies]
+serde_json = "1"

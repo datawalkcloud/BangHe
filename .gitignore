@@ -1,0 +1,101 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Rust 编译产物（Tauri 主程序、tools 下的现场工装、共享 crate 工作区）
+src-tauri/target/
+tools/*/target/
+tools/*/*.bin
+crates/*/target/
+
+# `npx tauri icon` 会顺手生成移动端图标集，本项目只出桌面包（bundle.targets = nsis）
+src-tauri/icons/ios/
+src-tauri/icons/android/
+
+# 真机读卡时精伦 SavePhoto.dll 会往 Sdtapi.dll 同目录落一份身份证照片（含个人信息），别提交
+src-tauri/resources/sdtapi/photo.*
+
+# ---------------------------------------------------------------------------
+# AI 会话 / 冒烟验证产生的一次性产物
+#
+# 约定：临时产物一律落到仓库根的 `.scratch/`（写命令的同事请先看
+# .workbuddy/memory/topics/toolchain.md 的"临时产物落盘"一节），别往根目录散落。
+#
+# 两类规则分工清楚：
+#   带前导 `/` = 只匹配仓库根一层，是"会话没守规矩"时的兜底网，不会波及
+#                src/、scripts/、crates/、docs/ 里的同名文件；
+#   不带前导 `/` = 任何层级都算垃圾（工具状态目录、验证构建目录、增量缓存）。
+# 新增一类临时产物，往这里加一条，别在别处散落建规则。
+# ---------------------------------------------------------------------------
+
+# 临时产物统一落点
+/.scratch/
+
+# 工具状态目录与 AI 生成素材（任何层级）
+.workbuddy/
+.qwen-scratch/
+vibe_images/
+_qa/
+__pycache__/
+*.pyc
+
+# 验证构建目录（任何层级）
+dist-verify*/
+
+# TypeScript 增量缓存；vite.config.ts 被 tsc 顺手编译出的同名 js/d.ts
+# （Vite 找配置的顺序里 .js 在 .ts 之前，留着它会静默吃掉对 .ts 的修改）
+*.tsbuildinfo
+/vite.config.js
+/vite.config.d.ts
+
+# NSIS 打包时 Tauri 落在根目录的插件 dll
+nsis_tauri_utils.dll
+
+# CI 与本地 build 脚本汇聚安装包/MSIX 的临时目录（release.yml 各 job 的 upload 源）
+/release/
+
+# 兜底网：会话把转储直接扔在根目录（截图、tsc/cargo/vite 输出、临时脚本）
+/*.png
+/*.txt
+/*.ps1
+/_*
+/build-*
+/cargo-*
+/tsc-*
+/vite-*
+/win-*
+/git-status*
+/data-table-diff.txt
+/tauri-dev-crash.txt
+/probe.txt
+/tw-verify.*
+/.tmp-*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ���ع���/������ʱת���������
+src-tauri/_cargo*.txt
+
+# ������������(δ����,�����)
+����-�ͻ�����.html
+
+output/

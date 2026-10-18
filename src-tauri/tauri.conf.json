@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "磅禾粮站收粮系统",
+  "mainBinaryName": "banghe",
+  "version": "1.1.0",
+  "identifier": "cn.datawalk.bh",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "磅禾粮站收粮系统",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1280,
+        "minHeight": 760,
+        "resizable": true,
+        "maximized": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2NjQ1NDY4NDI2NkY5RTgKUldUbytXWkNhRlJrcG1pcHFUcGE0SkhXNUhYT1JaUUJUTzV1TGFHTHl4SzFLd3ZQVnlPMmJjaGoK",
+      "endpoints": [
+        "https://gh-proxy.com/https://github.com/datawalkcloud/BangHe/releases/latest/download/latest.json",
+        "https://github.com/datawalkcloud/BangHe/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": {
+      "resources/sdtapi/Sdtapi.dll": "sdtapi/Sdtapi.dll",
+      "resources/sdtapi/Dewlt.dll": "sdtapi/Dewlt.dll",
+      "resources/sdtapi/SavePhoto.dll": "sdtapi/SavePhoto.dll",
+      "resources/sdtapi/routon.ini": "sdtapi/routon.ini"
+    },
+    "publisher": "磅禾",
+    "copyright": "© 磅禾",
+    "category": "Business",
+    "shortDescription": "粮站收粮过磅管理系统",
+    "longDescription": "单机版粮站收粮过磅：制单、称重、化验、计价结算、付款、台账报表与小票打印，全部离线可用。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "wix": {
+        "language": ["zh-CN"]
+      },
+      "nsis": {
+        "template": null,
+        "headerImage": null,
+        "sidebarImage": null,
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "nsis-hooks.nsh",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

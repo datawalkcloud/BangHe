@@ -1,0 +1,383 @@
+name: Release
+
+# 自动为 BangHe 构建 Windows NSIS 安装包并（打 tag 时）发布到 GitHub Releases。
+# 结构照搬 daro 的 .github/workflows/release.yml：meta 解析版本 → 平台 job 构建上传
+# → tag 触发时汇总成 Draft Release，正文含下载表 + 提交清单，并校验正文链接与实际产物一致。
+# 本系统以 AGPL-3.0 协议开源。
+#
+# 触发方式：
+#   1) 打 tag `v*`（如 v26.10.8）→ 构建安装包 + 建 Draft Release 并上传产物
+#   2) 手动 workflow_dispatch → 只构建并上传 artifacts（不发 Release），用于试跑
+#
+# 版本号唯一数据源是 package.json 的 `version`（tauri.conf.json / Cargo.toml 须与其同步，
+# meta job 会交叉校验，不一致直接失败——历史上三份手动改漏过）。tag 只决定是否发布 Release。
+#
+# 交付物只有主安装包（2026-10-11 决定）：
+#   - 主包 banghe-<ver>-windows-x64-setup.exe（~7 MB，webviewInstallMode 为
+#     downloadBootstrapper，首次启动联网拉 WebView2）。
+#   - WebView2 离线运行库**不随 Release 上传**（曾试自动拉微软 fwlink，204 MB 挂在
+#     每次发布上没有意义）：正文里只链接微软官方下载页，无外网的磅房机自行取一次
+#     带着走（见 gen_release_notes.py 的 OFFLINE_NOTE）。
+#   别为"离线可用"把 webviewInstallMode 改回 offlineInstaller（那会让主包回到 211 MB）。
+#
+# 应用内更新通道（「关于 → 检查更新」，2026-10-14 加入）：
+#   - 构建期以 --config 注入 createUpdaterArtifacts，NSIS 主包旁多出同名 .sig
+#     （minisign 分离签名）。签名私钥只存在于 GitHub Secrets 的
+#     TAURI_SIGNING_PRIVATE_KEY（生成时未设口令，且只存在签发机的用户目录下，
+#     不进仓库）；它与 tauri.conf.json plugins.updater.pubkey 里的公钥配对——
+#     私钥一换，已装出去的老客户端验签即拒装。没配私钥，构建这步直接红。
+#   - release job 把版本 + 签名 + 安装包镜像地址拼成 latest.json 随 Release 上传
+#     （scripts/release-notes/gen_updater_manifest.py）；客户端按 plugins.updater
+#     .endpoints 拉 releases/latest/download/latest.json（gh-proxy 镜像优先）。
+#   - Release 直接以 draft:false 发布到主仓（本仓已开源公开，内置 GITHUB_TOKEN 即可），
+#     latest.json 与安装包匿名可达，应用内「检查更新」即时生效，无需人工再点发布。
+#   - 分发面（2026-10-16 起）：产物直接挂主仓 datawalkcloud/BangHe 的 GitHub Release。
+#     曾用的独立公开发版仓 BangHe-releases + 跨仓 RELEASES_REPO_TOKEN 已退役（主仓公开后
+#     "匿名拉不到主仓产物"这一前提不成立）。国内加速见下方「国内镜像」。
+#   - 国内镜像（2026-10-16 加入）：GitHub 与 gh-proxy 在国内都不稳，故每次发版把主包与
+#     Gitee 版 latest.json 强推到公开 Gitee 仓 datawalkcloud/banghe-release（repo 名在
+#     env GITEE_REPO，owner 走 Secret GITEE_OWNER），客户用 raw 直链匿名下载（见 release
+#     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载与内置更新 endpoints
+#     均优先指这里（2026-10-18 起 endpoints 首位为 Gitee raw latest.json）。
+#
+# Microsoft Store 变体（2026-10-17 加入，build-msix-store job）：
+#   - 商店要求应用更新走商店通道，商店版用 cargo feature `store-build` 掐掉装内
+#     updater（唯一开关，见 src-tauri/Cargo.toml；前端经 app_update_channel 读数改显
+#     "商店负责更新"）。构建走 `npx tauri build --no-bundle --features store-build`
+#     ——Tauri bundler 不出 MSIX，清单与打包在 scripts/msix/build-msix.ps1。
+#   - 产物是**不签名裸包**：Partner Center 审核后由微软代签，这条路线不买代码签名证书。
+#   - 商店身份三值取 repo Variables（MSSTORE_PACKAGE_IDENTITY_NAME / MSSTORE_PUBLISHER /
+#     MSSTORE_PUBLISHER_DISPLAY_NAME，Partner Center「Product identity」页原样复制）；
+#     未配置时照常打「冒烟包」（测试身份，验证清单/MakeAppx/探针管线零回归），
+#     产物上传步骤门控跳过，不会把不可上架的包发到 Release。
+#   - 首发必须人工在 Partner Center 上传过审——官方前提「要更新的应用必须已在商店
+#     上架」，CLI/API 只做后续版本。首个过审拿到 Store product ID 后填进 repo
+#     Variable MSSTORE_PRODUCT_ID，本工作流末尾的 publish-store job 即自动把本次
+#     tag 打出的 msix 提交商店审核（msstore 自动更新目前官方只支持**免费**应用，
+#     磅禾本就免费）。发布凭据见该 job 注释的四个 Secrets。
+#
+# 其他说明：
+#   - 只构建 Windows：本程序是粮站单机软件（地磅串口/读卡器/打印机），无 mac/linux 用户。
+#   - 产物名从 NSIS 默认的中文产品名（磅禾粮站收粮系统_<ver>_x64-setup.exe）改成 ASCII，
+#     避免 Release asset 链接的 URL 编码问题。
+#   - 未做代码签名（certificateThumbprint: null），用户首启会遇 SmartScreen 提示。
+#   - Release 正文由 scripts/release-notes/gen_release_notes.py 生成，本地可预览
+#     （产物表格里的大小/SHA 会显示为占位 —）：
+#     python scripts/release-notes/gen_release_notes.py --tag v26.10.8 --version 26.10.8 \
+#       --repo datawalkcloud/BangHe --output .scratch/release_body.md
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./package.json').version")"
+          t="$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")"
+          c="$(node -p "require('fs').readFileSync('src-tauri/Cargo.toml','utf8').match(/^version = \"([^\"]+)\"/m)[1]")"
+          if [ "$v" != "$t" ] || [ "$v" != "$c" ]; then
+            echo "版本三处不同步: package.json=$v tauri.conf.json=$t Cargo.toml=$c"; exit 1
+          fi
+          if [[ "${{ github.ref_type }}" == "tag" && "${{ github.ref_name }}" != "v$v" ]]; then
+            echo "tag ${{ github.ref_name }} 与版本 v$v 不一致，请对齐后重新打 tag"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "版本号: $v"
+
+  build-windows:
+    name: Windows x64 NSIS 安装包
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: 依赖安装
+        run: npm ci
+
+      # 走与本地完全一致的路径：tauri build 自带 beforeBuildCommand (tsc && vite build)，
+      # 产物落 src-tauri/target/release/bundle/nsis/磅禾粮站收粮系统_<ver>_x64-setup.exe。
+      # 与本地唯一的差别是 --config 注入 createUpdaterArtifacts：构建期给 NSIS 主包出
+      # minisign 分离签名（应用内「检查更新」的验签依据）。
+      - name: Tauri 构建（前端 + Release 二进制 + NSIS 打包 + 更新包签名）
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # 密钥生成时未设口令：显式给空串，避免 bundler 转 prompt（CI 里没人应答）
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      - name: 校验并规整产物名
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.meta.outputs.version }}"
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter "*_x64-setup.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "bundle/nsis 下未找到 *-x64-setup.exe"; exit 1 }
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item $exe.FullName "release/banghe-$ver-windows-x64-setup.exe"
+          $sig = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter "*_x64-setup.exe.sig" | Select-Object -First 1
+          if (-not $sig) { Write-Error "未找到更新包签名 *_x64-setup.exe.sig——TAURI_SIGNING_PRIVATE_KEY 没配或 createUpdaterArtifacts 没开"; exit 1 }
+          Copy-Item $sig.FullName "release/banghe-$ver-windows-x64-setup.exe.sig"
+          $out = Get-Item "release/banghe-$ver-windows-x64-setup.exe"
+          "打包完成: $($out.Name) ($([math]::Round($out.Length/1MB,1)) MB) + 签名 $($sig.Name)  [源文件: $($exe.Name)]"
+          # 主包应是 MB 量级；若哪天体积回到 200MB 说明 webviewInstallMode 被改回
+          # offlineInstaller（拆包决定被推翻），这里直接失败提醒，而不是无声发个大包。
+          if ($out.Length -gt 60MB) { Write-Error "主包体积异常 ($([math]::Round($out.Length/1MB)) MB)，检查 tauri.conf.json 的 webviewInstallMode"; exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: banghe-windows-x64
+          # 主包与同名 .sig 一起走（release job 拿 .sig 拼 latest.json）
+          path: release/banghe-*
+          if-no-files-found: error
+
+  # 商店版构建：与 build-windows 同一次 checkout / 同一套依赖，只是换 cargo feature
+  # 且不进 bundler（清单见 scripts/msix/build-msix.ps1 的头注）。两个 job 并行跑，
+  # 互不干扰各自的 target/ 产物目录；release job 汇总时按 `banghe-*` 一并下载。
+  build-msix-store:
+    name: Windows x64 MSIX（商店版）
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: 依赖安装
+        run: npm ci
+
+      - name: Tauri 构建（store-build feature，不出安装包）
+        run: npx tauri build --no-bundle --features store-build
+
+      # makeappx 走 runner 自带的 Windows SDK；清单身份三值没配也不红——用测试身份打
+      # 冒烟包并跑解包探针（store-build 生效证明），只是产物不发布，见下一步门控。
+      - name: 打包 MSIX + 解包探针
+        shell: pwsh
+        env:
+          MSSTORE_PACKAGE_IDENTITY_NAME: ${{ vars.MSSTORE_PACKAGE_IDENTITY_NAME }}
+          MSSTORE_PUBLISHER: ${{ vars.MSSTORE_PUBLISHER }}
+          MSSTORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MSSTORE_PUBLISHER_DISPLAY_NAME }}
+        run: ./scripts/msix/build-msix.ps1
+
+      # 身份没配齐 → 包是测试身份的冒烟产物，不该混进面向客户/商店的 Release。
+      # `vars` 在 GitHub Actions 里对未定义的变量求值为空串，所以"三者都有"要逐个判。
+      - name: 上传商店产物
+        if: >-
+          ${{ vars.MSSTORE_PACKAGE_IDENTITY_NAME != '' &&
+               vars.MSSTORE_PUBLISHER != '' &&
+               vars.MSSTORE_PUBLISHER_DISPLAY_NAME != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: banghe-windows-x64-msix
+          path: release/banghe-*-windows-x64-store.msix
+          if-no-files-found: error
+
+  # 商店自动发布（官方文档：msstore-dev-cli/github-actions）。开关就是
+  # MSSTORE_PRODUCT_ID 这一个变量——**首个版本必须先在 Partner Center 人工上传
+  # 并过审**（官方前提「要更新的应用必须已在商店上架」），上线前不要配这个变量，
+  # 整个 job 自然跳过。配好后每次打 tag 即自动把本次 msix 提交商店审核。
+  # 官方注：msstore 经 Actions 的自动更新目前仅支持**免费**应用（磅禾本就免费）。
+  #
+  # 四个凭据（一次性配置，全在 GitHub 侧管，不进仓库）：
+  #   AZURE_AD_TENANT_ID / AZURE_AD_CLIENT_ID / AZURE_AD_CLIENT_SECRET
+  #     ← Partner Center 关联 Entra ID 后，在 Entra「应用注册」建一个应用并
+  #       在 Partner Center「用户管理 → Microsoft Entra 应用程序」里给它 **Manager** 角色；
+  #       client secret 只显示一次，直接抄进 Secret。
+  #   SELLER_ID ← Partner Center「账户设置 → 开发人员设置/标识符」的 Publisher ID。
+  publish-store:
+    name: 发布到 Microsoft Store
+    needs: build-msix-store
+    if: startsWith(github.ref, 'refs/tags/v') && vars.MSSTORE_PRODUCT_ID != ''
+    runs-on: windows-latest
+    steps:
+      # 依赖 build-msix-store 的「上传商店产物」——身份三值没配时该产物不存在，
+      # 这里下载会直接红；那是配置漏项，红得对（PRODUCT_ID 已配意味着早过了首发）。
+      - name: 下载商店 MSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: banghe-windows-x64-msix
+          path: msix
+
+      # 微软官方文档给的 CLI 安装 action（也可用 microsoft/microsoft-store-apppublisher）。
+      - name: 安装 Microsoft Store CLI
+        uses: microsoft/setup-msstore-cli@v1
+
+      - name: 提交更新到商店
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_CLIENT_ID: ${{ secrets.AZURE_AD_CLIENT_ID }}
+          AZURE_AD_CLIENT_SECRET: ${{ secrets.AZURE_AD_CLIENT_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          msstore reconfigure --tenantId $env:AZURE_AD_TENANT_ID --sellerId $env:SELLER_ID `
+            --clientId $env:AZURE_AD_CLIENT_ID --clientSecret $env:AZURE_AD_CLIENT_SECRET
+          $msix = Get-ChildItem msix\*.msix | Select-Object -First 1
+          if (-not $msix) { Write-Error "msix/ 下没有 .msix"; exit 1 }
+          msstore publish $msix.FullName -id "${{ vars.MSSTORE_PRODUCT_ID }}"
+
+  release:
+    name: 发布 GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [meta, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      # 生成提交清单要读「上一个 tag → 当前 tag」的完整历史，浅克隆拿不到。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: banghe-*
+          path: artifacts
+          merge-multiple: true
+
+      # 应用内「检查更新」的更新源：版本 + minisign 签名 + 安装包镜像地址拼成
+      # latest.json。产物直接挂主仓自己的 GitHub Release，清单与安装包地址按本仓
+      # （${{ github.repository }}）拼；gh-proxy 镜像前缀优先，兜住国内磅房机。
+      - name: 生成更新清单 latest.json
+        run: |
+          python3 scripts/release-notes/gen_updater_manifest.py \
+            --version "${{ needs.meta.outputs.version }}" \
+            --tag "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --sig-file "artifacts/banghe-${{ needs.meta.outputs.version }}-windows-x64-setup.exe.sig" \
+            --output artifacts/latest.json
+          echo "----- latest.json -----"
+          cat artifacts/latest.json
+
+      # 正文的链接校验只认 releases/download/ 域名，微软官方页链接不在校验范围。
+
+      - name: 生成 Release 正文（下载表格 + 提交清单）
+        run: |
+          python3 scripts/release-notes/gen_release_notes.py \
+            --tag "${{ github.ref_name }}" \
+            --version "${{ needs.meta.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --artifacts-dir artifacts \
+            --output release_body.md
+          echo "----- release_body.md -----"
+          cat release_body.md
+
+      # 正文里的下载链接是按约定拼的，不是从 artifacts 列出来的；产物改名/漏传时链接会 404。
+      # 这里逐个比对正文文件名与实际产物，不合格就中断发布。
+      - name: 校验正文里的下载链接
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r name; do
+            [ -z "$name" ] && continue
+            if [ ! -f "artifacts/$name" ]; then
+              echo "::error::$name 出现在正文里，但 artifacts 中没有这个文件"
+              missing=1
+            else
+              echo "OK  $name"
+            fi
+          done < <(grep -oE 'releases/download/[^/]+/[A-Za-z0-9._-]+' release_body.md | sed 's|.*/||' | sort -u)
+          if [ "$missing" -ne 0 ]; then
+            echo "正文与实际产物不一致：产物改名后需同步 scripts/release-notes/gen_release_notes.py 的 DOWNLOAD_FILES。"
+            exit 1
+          fi
+
+      # 产物直接挂主仓自己的 GitHub Release（本仓已开源公开，内置 GITHUB_TOKEN 即可，
+      # 无需跨仓 PAT）。draft:false → latest.json 与安装包匿名可达，供应用内「检查更新」
+      # 拉 releases/latest/download/latest.json。
+      - name: 发布 GitHub Release（主仓：含产物与在线更新清单）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 磅禾粮站收粮系统 ${{ needs.meta.outputs.version }}
+          body_path: release_body.md
+          draft: false
+          prerelease: false
+          files: artifacts/*
+
+      # 国内高速镜像：把安装包与一份「安装包地址指向 Gitee raw」的 latest.json 推到一个
+      # 公开 Gitee 仓，客户用 raw 直链匿名下载。
+      # 为什么不走 Gitee「发行版附件」：Gitee 个人仓的 Release 二进制附件用 v5 API 上传
+      # 极不稳定（撞风控、要登录态/验证码），故改走 git——主包仅 MB 量级、远低于 Gitee
+      # 单文件 50MB 限制，用「orphan 工作树 + 强推」只留最新版（不累积历史、仓体积恒定）。
+      # 代价：Gitee 那份只保留最新版，下老版本仍回 GitHub。
+      # 同时额外推一个固定文件名 banghe-latest-windows-x64-setup.exe，官网/README 的下载
+      # 直链只认它——改版号不用动网页（带版本号的 banghe-<ver>-*.exe 仍一并保留，供追溯）。
+      # 前置（一次性）：
+      #   1) 建一个公开 Gitee 仓，命名空间填进 Secret GITEE_OWNER，默认分支须与 GITEE_BRANCH 一致；
+      #   2) GitHub Secrets 配 GITEE_USER（Gitee 登录名）/ GITEE_TOKEN（私人令牌，勾 projects）/ GITEE_OWNER。
+      # 鉴权若报 401：把 push URL 里的 ${GITEE_USER} 换成 oauth2（Gitee 支持的另一写法）。
+      - name: 同步安装包到国内 Gitee 镜像（raw 直链）
+        env:
+          GITEE_USER: ${{ secrets.GITEE_USER }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: banghe-release
+          GITEE_BRANCH: master
+        run: |
+          set -euo pipefail
+          ver="${{ needs.meta.outputs.version }}"
+          asset="banghe-${ver}-windows-x64-setup.exe"
+          stable="banghe-latest-windows-x64-setup.exe"
+          rawbase="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/raw/${GITEE_BRANCH}"
+          dl="https://${GITEE_USER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+
+          # 用全新工作树 orphan 强推，不牵主仓 .git、也不累积历史
+          rm -rf gitee-dl && mkdir gitee-dl && cd gitee-dl
+          git init -q
+          git config user.email "ci@datawalk.cn"
+          git config user.name "BangHe CI"
+          cp "../artifacts/${asset}" .
+          # 固定文件名一份：官网/README 下载直链永远指 banghe-latest-*，改版号不用动网页
+          cp "../artifacts/${asset}" "${stable}"
+          # 造一份 Gitee 版 latest.json：只把安装包 url 换成 raw 直链，签名与版本原样保留
+          # （客户端下回来的文件仍由同一把 minisign 公钥验签，换 host 不影响验签）。
+          python3 - "$rawbase" "$asset" <<'PY'
+          import json, sys
+          base, asset = sys.argv[1], sys.argv[2]
+          m = json.load(open("../artifacts/latest.json"))
+          for plat in m.get("platforms", {}).values():
+              plat["url"] = f"{base}/{asset}"
+          json.dump(m, open("latest.json", "w"), ensure_ascii=False, indent=2)
+          print("Gitee 版安装包地址：", base + "/" + asset)
+          PY
+          printf '# 磅禾粮站收粮系统 · 下载\n\n当前版本：%s\n\n稳定直链（始终指向最新版，可直接用）：\n%s/%s\n\n本仓仅存放最新安装包与在线更新清单（latest.json），不含源码。\n' \
+            "$ver" "$rawbase" "$stable" > README.md
+          git add -A
+          git commit -qm "sync ${ver}"
+          git push -f "$dl" "HEAD:${GITEE_BRANCH}"

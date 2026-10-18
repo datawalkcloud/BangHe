@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# 图片、下载直链允许抓取，不参与收录
+Sitemap: https://bh.datawalk.cn/sitemap.xml
