@@ -34,7 +34,11 @@ if (-not (Test-Path $Exe)) {
 $conf = [System.IO.File]::ReadAllText((Join-Path $root "src-tauri/tauri.conf.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
 $semver = $conf.version           # x.y.z（schema_contract 已保证三段）
 $pkgVer = "$semver.0"             # MSIX 清单吃四段 a.b.c.0
-$displayName = $conf.productName
+# 商店要求清单 DisplayName 必须与 Partner Center 已保留的产品名逐字一致（实测不符会在
+# 「包验证」页报「使用了你未保留的显示名称」）。桌面 productName 常比保留名长（如
+# 「磅禾粮站收粮系统」 vs 保留名「磅禾」），故此处允许 MSSTORE_PACKAGE_DISPLAY_NAME 覆盖；
+# 未设时退回 productName（冒烟包/CI 未注入时行为不变）。
+$displayName = if ($env:MSSTORE_PACKAGE_DISPLAY_NAME) { $env:MSSTORE_PACKAGE_DISPLAY_NAME } else { $conf.productName }
 
 # 商店身份：三个值同时有才算真身份，否则退回测试身份（调用方按 vars 门控上传）
 $name = $env:MSSTORE_PACKAGE_IDENTITY_NAME
