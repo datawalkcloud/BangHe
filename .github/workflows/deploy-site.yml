@@ -15,13 +15,16 @@ name: Deploy Site
 # Secret 缺失时下方第一步判空报错退出，不静默跳过。
 #
 # 触发方式：
-#   git tag site-2026.10.18 && git push origin site-2026.10.18
-# 部署的是 master 分支内容——故 index.html 的改动必须先合进 master 再打标签。
+#   A) 打 tag 发版：git tag site-2026.10.18 && git push origin site-2026.10.18
+#   B) 手动发版：本 Actions 页面点 "Run workflow"（workflow_dispatch），免打 tag 直接发 master
+# 部署的是 master 分支内容——故 index.html 的改动必须先合进 master 再触发。
+# （配合仓库根 netlify.toml 的 ignore="exit 0"：普通 push 不再自动发版，只认这两条 hook 线。）
 
 on:
   push:
     tags:
       - "site-*"
+  workflow_dispatch:
 
 permissions:
   contents: read
