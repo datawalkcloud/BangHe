@@ -1,0 +1,21 @@
+# Netlify 站点配置
+#
+# 目的：关掉「push 到 master 就自动部署」。此后所有非 hook 构建一律跳过，
+# 发布只走显式的 build hook 线：
+#   ① 打 tag：推 site-* tag → .github/workflows/deploy-site.yml → POST build hook
+#   ② 手动：  deploy-site.yml 的 workflow_dispatch 按钮 → 同样 POST build hook
+#
+# 原理（Netlify 官方语义）：
+#   - ignore 命令 exit 0 = 跳过本次构建；exit 1 = 继续构建。
+#   - build hook 触发的构建【不受 ignore 影响】（官方文档明说），无论此处返回什么都照建。
+#   故这里对普通 git push（以及 UI 的 Deploy site 按钮）一律 exit 0 跳过；
+#   想发布就走上面的 hook 线，hook 天生绕过 ignore，必定发版。
+#
+# 备注：曾试过用 NETLIFY_BUILD_SOURCE=git 来「只跳 push、保留 UI 按钮」，但实测该变量
+#   在本账户为空（且它本就未列入官方环境变量文档），规则 fail-open 失效。UI 的 Deploy site
+#   按钮会被此 exit 0 一并跳过，改用 workflow_dispatch 作为手动发布入口。
+#
+# 前置：Netlify 站点须已连本仓库、构建保持 active（切勿 Stop builds / 断开仓库，否则
+#   build hook 也会失效）。Publish directory 在 UI 里保持 site/，本文件只声明 ignore。
+[build]
+  ignore = "exit 0"
