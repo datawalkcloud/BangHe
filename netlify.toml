@@ -1,0 +1,15 @@
+# Netlify 站点配置
+#
+# 目的：只关掉「push 到 master 就自动部署」，同时保留两种主动发布：
+#   ① 手动：Netlify UI → Deploys → Trigger deploy → Deploy site
+#   ② 显式：推 site-* tag → .github/workflows/deploy-site.yml → POST build hook
+#
+# 原理（Netlify 官方语义 + 事实标准变量）：
+#   - ignore 命令 exit 0 = 跳过本次构建；exit 1 = 继续构建。
+#   - build hook 触发的构建【不受 ignore 影响】（官方文档明说），无论此处返回什么都照建。
+#   - NETLIFY_BUILD_SOURCE 标识本次构建来源：git push 时为 "git"，UI 手动为 "ui"，
+#     API/CLI 为 "api"/"cli"。（注意：该变量未列入当前公开环境变量文档，属事实标准；
+#     本规则是 fail-open 的——若该变量为空/不存在，判 false → exit 1 → 照常构建，不会误伤。）
+#   故：来源==git 才跳过（exit 0），其余一律放行（exit 1），build hook 天生绕过。
+[build]
+  ignore = '[ "$NETLIFY_BUILD_SOURCE" = "git" ] && exit 0 || exit 1'
