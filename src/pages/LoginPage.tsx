@@ -50,6 +50,15 @@ function useCountdown(iso: string | null): number {
 /** 本机记住上一次登录成功的人：磅房里天天登的都是同一两个名字 */
 const LAST_USER_KEY = "banghe.login.last-username";
 
+/** 与 Rust `auth::ADMIN_USERNAME`（`src-tauri/src/auth.rs`）同步：种子 `0002_seed.sql` 写死的默认管理员登录名。 */
+const ADMIN_USERNAME = "admin";
+
+/** 首启要求装机人**亲手打一遍**默认管理员登录名——让他牢牢记住"下次登录用它"。
+ *  与 Rust `auth::first_run_username_matches` 同一口径：trim + 大小写不敏感。 */
+function firstRunUsernameMatches(input: string): boolean {
+  return input.trim().toLowerCase() === ADMIN_USERNAME;
+}
+
 function lastLoginUsername(): string | null {
   try {
     return window.localStorage.getItem(LAST_USER_KEY);
@@ -78,7 +87,8 @@ export function LoginPage() {
   const passwordField = useRef<HTMLInputElement>(null);
 
   const mustSetup = !!session.session?.actor.mustChangePwd;
-  const mode: "signin" | "setup" = mustSetup || result?.needsPasswordSetup === true ? "setup" : "signin";
+  const firstRun = session.firstRunNeedsSetup && !session.session;
+  const mode: "signin" | "setup" | "firstrun" = firstRun ? "firstrun" : mustSetup || result?.needsPasswordSetup === true ? "setup" : "signin";
 
   // 进入页面 / 切换模式时聚焦第一个字段（05 §10-2）。绝不能把 password、username 放进依赖：
   // 那样每敲一个字都会重新 focus 回 firstField（登录名框），把光标从密码框抢走。
@@ -177,6 +187,31 @@ export function LoginPage() {
   /** 新密码够长、两次一致、且那一栏里确实有"要交上去的旧密码" */
   const setupReady = !busy && !!current && fresh.length >= PWD_MIN_LEN && fresh === again;
 
+  /** 首启设密：装机人须亲手敲对默认管理员登录名，才让提交；成功后写 LAST_USER_KEY，下次进登录页就是预填的 */
+  async function submitFirstRun(e?: FormEvent) {
+    e?.preventDefault();
+    if (busy) return;
+    if (!firstRunUsernameMatches(username)) return;
+    if (fresh !== again) return;
+    setBusy(true);
+    setResult(null);
+    const outcome = await session.firstRunSetup(fresh);
+    if (outcome.ok) {
+      try {
+        // 用规范化的 "admin" 写回，别把装机人可能打错的 "ADMIN" / " Admin " 带进 localStorage，
+        // 否则下次登录页预填的还是错的
+        window.localStorage.setItem(LAST_USER_KEY, ADMIN_USERNAME);
+      } catch {
+        /* 记不住不影响设密本身 */
+      }
+      session.setNotice(null);
+      await navigate({ to: "/" });
+    } else {
+      setResult({ ok: false, error: outcome.error ?? "设置密码未完成", session: null, needsPasswordSetup: null, attemptsLeft: null, lockedUntil: null });
+    }
+    setBusy(false);
+  }
+
   return (
     <div className="relative flex h-svh w-full items-center justify-center overflow-auto p-6">
       {/* 整页背景插画。fixed 而不是 absolute：这层不跟着卡片内容滚，窗口再矮也不会露出一截底色 */}
@@ -188,7 +223,11 @@ export function LoginPage() {
           <img src="/logo.png" alt="磅禾" className="size-14 object-contain" />
           <CardTitle className="text-base">{station?.name ?? "磅禾粮站"}</CardTitle>
           <CardDescription>
-            {mode === "signin" ? "收粮计量结算系统 · 请登录后继续" : "首次使用请先设置本站登录密码"}
+            {mode === "firstrun"
+              ? "首次使用 · 为本站管理员（admin）设置登录密码"
+              : mode === "signin"
+                ? "收粮计量结算系统 · 请登录后继续"
+                : "首次使用请先设置本站登录密码"}
           </CardDescription>
         </CardHeader>
 
@@ -225,7 +264,69 @@ export function LoginPage() {
             </Alert>
           )}
 
-          {mode === "signin" ? (
+          {mode === "firstrun" ? (
+            <form onSubmit={submitFirstRun} className="flex flex-col gap-3">
+              <p className="text-xs text-muted-foreground">
+                这是首次启动。请先输入默认管理员登录名 <code className="font-mono">{ADMIN_USERNAME}</code>，再设一个密码——<b>下次登录就用这个名字和密码</b>。
+              </p>
+              {result && !result.ok && result.error && (
+                <Alert variant="destructive">
+                  <AlertCircleIcon />
+                  <AlertTitle>设置未完成</AlertTitle>
+                  <AlertDescription>{result.error}</AlertDescription>
+                </Alert>
+              )}
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                请在下方输入管理员用户名 {ADMIN_USERNAME}
+                <Input
+                  ref={firstField}
+                  className="text-base font-mono"
+                  value={username}
+                  spellCheck={false}
+                  autoComplete="username"
+                  onChange={(e) => setUsername(e.target.value)}
+                  aria-invalid={username !== "" && !firstRunUsernameMatches(username) ? true : undefined}
+                />
+                {username !== "" && !firstRunUsernameMatches(username) && (
+                  <span className="text-destructive">默认管理员登录名是 {ADMIN_USERNAME}，请照它输入</span>
+                )}
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                新密码（至少 {PWD_MIN_LEN} 位）
+                <Input
+                  type="password"
+                  className="text-base"
+                  value={fresh}
+                  aria-invalid={fresh.length > 0 && fresh.length < PWD_MIN_LEN ? true : undefined}
+                  autoComplete="new-password"
+                  onChange={(e) => setFresh(e.target.value)}
+                  onKeyUp={(e) => setCapsOn(e.getModifierState?.("CapsLock") ?? false)}
+                />
+                {fresh.length > 0 && fresh.length < PWD_MIN_LEN && <span className="text-destructive">密码太短，至少 {PWD_MIN_LEN} 位</span>}
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                再输入一次
+                <Input
+                  type="password"
+                  className="text-base"
+                  value={again}
+                  aria-invalid={again !== "" && fresh !== again ? true : undefined}
+                  autoComplete="new-password"
+                  onChange={(e) => setAgain(e.target.value)}
+                />
+                {again !== "" && fresh !== again && <span className="text-destructive">两次输入的密码不一致</span>}
+              </Label>
+              {capsOn && <p className="text-xs text-warning">大写锁定已开启，密码很可能输错了。</p>}
+              <Button
+                type="submit"
+                disabled={busy || !firstRunUsernameMatches(username) || fresh.length < PWD_MIN_LEN || fresh !== again}
+                className="mt-1 w-full"
+              >
+                <KeyRoundIcon data-slot="icon" />
+                {busy ? "保存中…" : "设置并进入"}
+              </Button>
+            </form>
+          ) : mode === "signin" ? (
             <form onSubmit={submitSignIn} className="flex flex-col gap-3">
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 登录名

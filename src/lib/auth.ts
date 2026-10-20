@@ -47,6 +47,11 @@ export interface ActionOutcome {
   error: string | null;
 }
 
+/** 开机首启检测回执：admin 是否仍是占位哈希 → 登录页该直接进「设置密码」屏 */
+export interface FirstRunOutcome {
+  needsSetup: boolean;
+}
+
 export type Channel = "native" | "demo";
 
 export type AuthCall<T> = { channel: Channel; data?: T; error?: string };
@@ -145,6 +150,24 @@ export async function unlock(password: string): Promise<AuthCall<LoginOutcome>> 
 export async function setPassword(old: string, fresh: string): Promise<AuthCall<ActionOutcome>> {
   if (!runningInTauri()) return demoUnsupported();
   return invoke<ActionOutcome>("auth_change_password", { old, new: fresh });
+}
+
+/**
+ * 开机首启检测：默认管理员 admin 是否仍是占位哈希。
+ * 命中则登录页直接进「设置密码」屏，**不要求装机初始密码**。
+ * superadmin 是技术后门（仍用 banghe@2026），不参与此判断。
+ * 浏览器演示模式没有真实账号，一律回 `needsSetup:false`，登录页照旧走演示登入。
+ */
+export async function firstRunState(): Promise<FirstRunOutcome> {
+  if (!runningInTauri()) return { needsSetup: false };
+  const r = await invoke<FirstRunOutcome>("auth_first_run_state");
+  return r.data ?? { needsSetup: false };
+}
+
+/** 首启为 admin 设密码：不需要旧密码，成功后后端直接建会话（自动登入）。 */
+export async function firstRunSetup(newPassword: string): Promise<AuthCall<LoginOutcome>> {
+  if (!runningInTauri()) return demoUnsupported();
+  return invoke<LoginOutcome>("auth_first_run_setup", { newPassword });
 }
 
 export async function resetPassword(target: number): Promise<AuthCall<ActionOutcome>> {

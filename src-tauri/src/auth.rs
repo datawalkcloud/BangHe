@@ -76,6 +76,20 @@ pub fn bootstrap_password() -> &'static str {
     "banghe@2026"
 }
 
+/// 站点管理员账号（0002 种出）。首装时它的 `password_hash` 仍是 [`PWD_UNSET`]，
+/// 走 [`first_run_setup`] 直接设密、**不要装机初始密码**（见 [`first_run_needs_setup`]）——
+/// 这是粮站管理员的上线路径。预留超管 `superadmin` 不在此列，它仍用 [`bootstrap_password`]
+/// 作技术后门（`0003`），与员工新账号 / 站长重置后的首登共用同一套初始密码规则。
+pub const ADMIN_USERNAME: &str = "admin";
+
+/// 首启设密时，界面要求装机人**亲手核对一遍默认管理员登录名**——只有输对这个名字才允许
+/// 提交，让他记住"下次登录用的是这个"。磅房机全键盘作业，允许末尾空格；大小写不敏感
+/// （与 [`precheck`] 里 `auth_login` 的 `username.trim()` 后走 `WHERE username = ?1` 一致，
+/// 不引入第二份匹配口径）。
+pub fn first_run_username_matches(input: &str) -> bool {
+    input.trim().eq_ignore_ascii_case(ADMIN_USERNAME)
+}
+
 /// 密码错与"用户不存在"逐字相同（规矩 4）。测试也引用这一份，避免文案分叉。
 pub const NO_DETAIL: &str = "用户名或密码不正确";
 
@@ -157,6 +171,13 @@ impl LoginOutcome {
 pub struct ActionOutcome {
     pub ok: bool,
     pub error: Option<String>,
+}
+
+/// `auth_first_run_state` 的回执：告诉前端开机后该不该直接进「设置 admin 密码」屏。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRunOutcome {
+    pub needs_setup: bool,
 }
 
 #[derive(Debug)]
@@ -497,14 +518,7 @@ fn conclude(
         role: account.role,
         must_change_pwd: account.must_change_pwd || is_unset,
     };
-    let session = (kind == Kind::Login).then(|| Session {
-        actor: actor.clone(),
-        session_id: new_session_id(),
-        issued_at: stamp.clone(),
-        last_seen_at: stamp,
-        idle_ttl_secs: idle_ttl_from_settings(conn),
-        locked: false,
-    });
+    let session = (kind == Kind::Login).then(|| build_session(conn, &actor, &stamp));
     audit(
         conn,
         Some(actor.id),
@@ -523,6 +537,18 @@ fn conclude(
         needs_password_setup: Some(is_unset),
         attempts_left: Some(MAX_FAILED),
         locked_until: None,
+    }
+}
+
+/// 用最新状态拼一条会话。登录与首启设密共用同一构造路径，避免两处字段漂移。
+fn build_session(conn: &Connection, actor: &AuthProfile, stamp: &str) -> Session {
+    Session {
+        actor: actor.clone(),
+        session_id: new_session_id(),
+        issued_at: stamp.to_string(),
+        last_seen_at: stamp.to_string(),
+        idle_ttl_secs: idle_ttl_from_settings(conn),
+        locked: false,
     }
 }
 
@@ -616,6 +642,74 @@ pub fn reset_password(conn: &Connection, actor: &AuthProfile, target: i64) -> Ac
     }
 }
 
+/// 首启检测：admin 仍是占位符 → 需要直接进「设置密码」屏，**免装机初始密码**。
+/// 纯函数，单测直接对着内存库跑，不经过 Tauri 命令。superadmin 是技术后门，不参与判断。
+pub fn first_run_needs_setup(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT password_hash FROM user_account WHERE username = ?1 AND deleted_at IS NULL",
+        params![ADMIN_USERNAME],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .is_some_and(|hash| hash == PWD_UNSET)
+}
+
+/// 首启为 admin 设置登录密码：不校验旧密码（此刻根本还没有），只要求新密码合规，
+/// 设完**直接建会话**进系统（3A）——不必再用刚设的密码回登录页登一次。
+///
+/// 命中条件极窄：admin 存在、在职、未被删、且哈希仍是占位符。任一不满足都拒，
+/// 改过密码之后这条通道永久关闭（占位符已被换成 argon2 串）。
+pub fn first_run_setup(conn: &Connection, new: &str) -> LoginOutcome {
+    if new.chars().count() < PWD_MIN_LEN {
+        return LoginOutcome::denied(format!("密码至少 {PWD_MIN_LEN} 位"));
+    }
+    if new == PWD_UNSET || new == bootstrap_password() {
+        return LoginOutcome::denied("不能沿用装机初始密码，请另设一个");
+    }
+    let account = match load_account(conn, ADMIN_USERNAME) {
+        Ok(Some(a)) => a,
+        Ok(None) => return LoginOutcome::denied("没有默认管理员账号，请联系技术人员"),
+        Err(e) => return LoginOutcome::denied(format!("读取账号失败：{e}")),
+    };
+    if !account.is_active || account.deleted {
+        return LoginOutcome::denied(format!("「{}」已停用，请联系技术人员", account.username));
+    }
+    if account.password_hash != PWD_UNSET {
+        // 竞态兜底：正常流程走不到这里（界面只在占位符时才开这一屏）
+        return LoginOutcome::denied("该账号已设置过密码，请直接用新密码登录");
+    }
+    let hashed = match hash_password(new) {
+        Ok(h) => h,
+        Err(e) => return LoginOutcome::denied(e),
+    };
+    let stamp = now_iso();
+    if let Err(e) = conn.execute(
+        "UPDATE user_account SET password_hash = ?1, must_change_pwd = 0, failed_count = 0, locked_until = NULL, last_login_at = ?2, updated_at = ?2 WHERE id = ?3",
+        params![hashed, stamp, account.id],
+    ) {
+        return LoginOutcome::denied(format!("写入密码失败：{e}"));
+    }
+    let actor = AuthProfile {
+        id: account.id,
+        username: account.username,
+        display_name: account.display_name,
+        role: account.role,
+        must_change_pwd: false,
+    };
+    let session = build_session(conn, &actor, &stamp);
+    // 两步留痕：设密本身一条（动作码与常规改密同源），登录一条带会话号串起后续作业
+    audit(conn, Some(actor.id), &actor.display_name, "first_run.setup", Some(actor.id), Some("首启设置管理员密码"), true, None);
+    audit(conn, Some(actor.id), &actor.display_name, "login", Some(actor.id), Some("首启设密后自动登录"), true, Some(&session.session_id));
+    LoginOutcome {
+        ok: true,
+        error: None,
+        session: Some(session),
+        needs_password_setup: Some(false),
+        attempts_left: Some(MAX_FAILED),
+        locked_until: None,
+    }
+}
+
 /// 留痕：`idle=true` 是空闲锁屏前的记一笔（会话并没被清掉），`idle=false` 是主动登出。
 pub fn logout(conn: &Connection, actor: &AuthProfile, session_id: &str, idle: bool) -> ActionOutcome {
     audit(
@@ -666,6 +760,30 @@ pub async fn auth_login(app: AppHandle, username: String, password: String) -> R
     .await
     .map_err(|e| format!("登录任务失败：{e}"))?;
 
+    if let Some(session) = outcome.session.clone() {
+        *guard(&store) = Some(session);
+    }
+    Ok(outcome)
+}
+
+/// 开机首启检测：admin 是否仍是占位哈希。命中则登录页直接进「设置密码」屏（免初始密码）。
+#[tauri::command]
+pub async fn auth_first_run_state(app: AppHandle) -> Result<FirstRunOutcome, String> {
+    let (pool, _) = handles(&app)?;
+    let needs_setup = tauri::async_runtime::spawn_blocking(move || locked(&pool, first_run_needs_setup))
+        .await
+        .map_err(|e| format!("首启检测失败：{e}"))?;
+    Ok(FirstRunOutcome { needs_setup })
+}
+
+/// 首启为 admin 设密码并直接登入。新密码的 argon2 哈希在 `spawn_blocking` 里算，
+/// 与登录一样不在持锁状态下烧 CPU（模块头规矩 3）。
+#[tauri::command]
+pub async fn auth_first_run_setup(app: AppHandle, new_password: String) -> Result<LoginOutcome, String> {
+    let (pool, store) = handles(&app)?;
+    let outcome = tauri::async_runtime::spawn_blocking(move || locked(&pool, |conn| first_run_setup(conn, &new_password)))
+        .await
+        .map_err(|e| format!("首启设密任务失败：{e}"))?;
     if let Some(session) = outcome.session.clone() {
         *guard(&store) = Some(session);
     }

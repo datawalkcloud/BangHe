@@ -91,6 +91,8 @@ interface SessionState {
   locked: boolean;
   /** 上一次动作的回执文案（登录失败原因、锁定倒计时等），由登录页消费后清空 */
   notice: string | null;
+  /** 首启标记：admin 仍是占位哈希 → 登录页直接进「设置密码」屏，免装机初始密码 */
+  firstRunNeedsSetup: boolean;
   /** 组件内用法：`const canPrint = useSession((s) => s.can("print"))` */
   can: (permission: string) => boolean;
   boot: () => Promise<void>;
@@ -105,6 +107,8 @@ interface SessionState {
   /** 锁屏解锁：只验本人密码，会话与审计链不变；失败回执带剩余次数 / 锁定时间 */
   unlock: (password: string) => Promise<LoginOutcome>;
   setPassword: (old: string, fresh: string) => Promise<ActionOutcome>;
+  /** 首启为 admin 设密码：无旧密码，成功后后端直接发会话 → 就地登入并清首启标记 */
+  firstRunSetup: (fresh: string) => Promise<LoginOutcome>;
   setNotice: (text: string | null) => void;
 }
 
@@ -124,6 +128,7 @@ export const useSession = create<SessionState>((set, get) => ({
   session: null,
   locked: false,
   notice: null,
+  firstRunNeedsSetup: false,
   can: (permission) => roleAllows(get().session?.actor, permission),
 
   boot: () => {
@@ -135,11 +140,15 @@ export const useSession = create<SessionState>((set, get) => ({
           set({ phase: "out", session: null, locked: false, demo: false, notice: r.error });
           return;
         }
+        // 没有会话时问一次首启检测：admin 仍是占位哈希 → 登录页直接进设密屏。
+        // 有会话（已登录）就不必问，省一次 IPC。演示模式 firstRunState 恒回 false。
+        const needsSetup = r.data ? false : (await auth.firstRunState()).needsSetup;
         set({
           phase: r.data ? "in" : "out",
           session: r.data ?? null,
           locked: r.data?.locked ?? false,
           demo: r.channel === "demo",
+          firstRunNeedsSetup: needsSetup,
         });
       })();
     }
@@ -230,6 +239,27 @@ export const useSession = create<SessionState>((set, get) => ({
     if (outcome.ok) {
       const s = get().session;
       if (s) set({ session: { ...s, actor: { ...s.actor, mustChangePwd: false } } });
+    }
+    return outcome;
+  },
+
+  firstRunSetup: async (fresh) => {
+    const r = await auth.firstRunSetup(fresh);
+    const outcome: LoginOutcome =
+      r.data ??
+      ({
+        ok: false,
+        error: r.error ?? "设置密码未完成",
+        session: null,
+        needsPasswordSetup: null,
+        attemptsLeft: null,
+        lockedUntil: null,
+      } satisfies LoginOutcome);
+    if (outcome.ok && outcome.session) {
+      // 后端已建会话（auth_first_run_setup 里写进 store），这里同步投影并清首启标记
+      set({ phase: "in", session: outcome.session, locked: false, firstRunNeedsSetup: false, notice: null });
+    } else {
+      set({ notice: outcome.error });
     }
     return outcome;
   },

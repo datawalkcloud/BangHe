@@ -93,14 +93,63 @@ fn superadmin_is_seeded_and_usable_only_via_install_bootstrap() {
 }
 
 #[test]
-fn admin_seed_still_ships_without_a_usable_hash() {
+fn admin_seed_ships_as_placeholder_and_takes_first_run_setup() {
     let conn = db();
     // schema_contract 已经在结构上钉过一次，这里钉的是行为：占位符不是密码
     assert!(text_of(&conn, "admin", "password_hash").unwrap().starts_with('!'));
     let wrong = login(&conn, "admin", "");
     assert!(!wrong.ok);
-    let right = login(&conn, "admin", auth::bootstrap_password());
-    assert!(right.ok, "admin 与 superadmin 共用同一条首启规则：{:?}", right.error);
+    // 首启检测：admin 仍是占位符 → 登录页直接进免密码的设密屏
+    assert!(auth::first_run_needs_setup(&conn), "首装时 admin 应触发设密屏");
+    // 免装机初始密码：走 first_run_setup 直接设密并自动登入
+    let outcome = auth::first_run_setup(&conn, "banghe-admin-2026");
+    assert!(outcome.ok, "首启设密应成功：{:?}", outcome.error);
+    let session = outcome.session.expect("设完直接发会话");
+    assert_eq!(session.actor.username, "admin");
+    assert!(!session.actor.must_change_pwd, "已设好密码，不再强改");
+    // 设完之后首启通道永久关闭
+    assert!(!auth::first_run_needs_setup(&conn), "admin 已有真实密码，不该再进设密屏");
+    // admin 用新密码正常登录，装机初始密码对它永久失效
+    let after = login(&conn, "admin", "banghe-admin-2026");
+    assert!(after.ok, "新密码应能登录：{:?}", after.error);
+    let old = login(&conn, "admin", auth::bootstrap_password());
+    assert!(!old.ok, "admin 不再认装机初始密码");
+}
+
+#[test]
+fn first_run_username_matches_the_default_admin_only() {
+    // 大小写不敏感 + trim：装机人输 "ADMIN " 也算他记住了；输别的都不放行
+    assert!(auth::first_run_username_matches("admin"));
+    assert!(auth::first_run_username_matches("Admin"));
+    assert!(auth::first_run_username_matches("  ADMIN  "));
+    assert!(!auth::first_run_username_matches(""));
+    assert!(!auth::first_run_username_matches("superadmin"), "后门账号不能被当成默认管理员通过");
+    assert!(!auth::first_run_username_matches("administrator"));
+    assert!(!auth::first_run_username_matches("站 长"), "display_name 不是登录名");
+}
+
+#[test]
+fn first_run_setup_validates_and_refuses_reuse_after_set() {
+    let conn = db();
+    // 太短拒
+    let short = auth::first_run_setup(&conn, "123");
+    assert!(!short.ok);
+    assert!(short.error.unwrap().contains(&PWD_MIN_LEN.to_string()));
+    assert!(auth::first_run_needs_setup(&conn), "设密失败不碰占位符，仍在首启态");
+    // 沿用装机初始密码拒
+    let reuse_boot = auth::first_run_setup(&conn, auth::bootstrap_password());
+    assert!(!reuse_boot.ok, "不许把初始密码原样设成 admin 的密码");
+    // 正常设一次
+    assert!(auth::first_run_setup(&conn, "site-2026").ok);
+    // 第二次再调 → 已被拒（占位符不在了）
+    let second = auth::first_run_setup(&conn, "another-2026");
+    assert!(!second.ok, "首启设密只能命中占位符账号");
+    // superadmin 不受影响：仍是技术后门，用装机初始密码可登
+    let su = login(&conn, "superadmin", auth::bootstrap_password());
+    assert!(su.ok, "superadmin 后门不动：{:?}", su.error);
+    assert_eq!(su.needs_password_setup, Some(true), "superadmin 首登仍走装机初始密码 + 强制改密");
+    // superadmin 不参与首启检测：admin 已设密码后，first_run_needs_setup 应为 false
+    assert!(!auth::first_run_needs_setup(&conn), "首启检测只看 admin，superadmin 是占位符也不该拉起设密屏");
 }
 
 // ---------------------------------------------------------------- 防枚举与锁定

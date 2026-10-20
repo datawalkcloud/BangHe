@@ -161,6 +161,8 @@ pub fn run() {
             camera_stream::camera_stream_stop,
             camera_stream::camera_stream_status,
             auth::auth_login,
+            auth::auth_first_run_state,
+            auth::auth_first_run_setup,
             auth::auth_session,
             auth::auth_touch,
             auth::auth_lock,
