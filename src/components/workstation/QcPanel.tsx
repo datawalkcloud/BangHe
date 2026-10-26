@@ -449,7 +449,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
           })}
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+        <div className="grid grid-cols-2 sm:grid-cols-5 items-end gap-1.5">
           <Label
             className="flex flex-col gap-0.5 text-xs text-muted-foreground"
             title="化验定级按国标判定，复检另立新单；这一车按几等结钱在计算单的「结算等级」里定。"

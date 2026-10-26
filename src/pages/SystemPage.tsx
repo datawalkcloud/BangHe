@@ -26,6 +26,7 @@ import { dateTime, fileSize, money, orDash, shiftDay, sinceText, todayISO, weigh
 import { csvName } from "@/lib/csv";
 import { exportCsvFile } from "@/lib/export-csv";
 import { runningInTauri } from "@/lib/native";
+import { resetPassword } from "@/lib/auth";
 import { RESTORE_CONFIRM_TEXT, systemApi, type AuditRow, type BackupFile, type HealthReport, type Preflight, type RestoreResult, type VerifyReport } from "@/lib/system-native";
 import { searchKeyword } from "@/lib/ticket-code";
 import { SETTLEMENT_SCAN_LIMIT } from "@/lib/reports-native";
@@ -213,6 +214,9 @@ function StaffSection() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<StaffForm>({ id: null, username: "", display_name: "", role: "weigher", phone: "", active: true });
   const patch = (p: Partial<StaffForm>) => setForm((f) => ({ ...f, ...p }));
+  // 重置密码只在桌面端摆出来：浏览器演示没有真密码，按"没有通道的动作不摆假按钮"处理
+  const desktop = runningInTauri();
+  const [resetTarget, setResetTarget] = useState<UserAccount | null>(null);
 
   const save = useMutation({
     mutationFn: () =>
@@ -233,6 +237,20 @@ function StaffSection() {
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
     },
     onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  });
+
+  const reset = useMutation({
+    mutationFn: async (u: UserAccount) => {
+      const r = await resetPassword(u.id);
+      if (r.error) throw new Error(r.error);
+      if (!r.data?.ok) throw new Error(r.data?.error ?? "重置失败");
+      return u;
+    },
+    onSuccess: (u) => {
+      toast.success(`「${u.display_name}」的密码已重置为待设置，下次登录须改密`);
+      setResetTarget(null);
+    },
+    onError: (e: Error) => toast.error(`重置失败：${e.message}`),
   });
 
   const columns: Column<UserAccount>[] = [
@@ -264,25 +282,40 @@ function StaffSection() {
       key: "op",
       header: "操作",
       cell: (u) => (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={!editable}
-          onClick={(e) => {
-            e.stopPropagation();
-            setForm({
-              id: u.id,
-              username: u.username,
-              display_name: u.display_name,
-              role: u.role,
-              phone: u.phone,
-              active: u.is_active === 1,
-            });
-            setOpen(true);
-          }}
-        >
-          编辑
-        </Button>
+        <span className="flex items-center gap-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!editable}
+            onClick={(e) => {
+              e.stopPropagation();
+              setForm({
+                id: u.id,
+                username: u.username,
+                display_name: u.display_name,
+                role: u.role,
+                phone: u.phone,
+                active: u.is_active === 1,
+              });
+              setOpen(true);
+            }}
+          >
+            编辑
+          </Button>
+          {desktop && (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={!editable}
+              onClick={(e) => {
+                e.stopPropagation();
+                setResetTarget(u);
+              }}
+            >
+              重置密码
+            </Button>
+          )}
+        </span>
       ),
     },
   ];
@@ -426,6 +459,26 @@ function StaffSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={resetTarget != null} onOpenChange={(v) => { if (!v) setResetTarget(null); }}>
+        <DialogContent className="max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="text-sm">重置 {resetTarget?.display_name} 的密码</DialogTitle>
+            <DialogDescription className="text-xs">
+              重置后「{resetTarget?.display_name}」的密码回到装机初始密码，下次登录会被强制改密；
+              改密之前，知道初始密码的人也能登进这个账号。继续？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setResetTarget(null)}>
+              取消
+            </Button>
+            <Button disabled={reset.isPending} onClick={() => resetTarget && reset.mutate(resetTarget)}>
+              {reset.isPending ? "重置中…" : "确认重置"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -469,6 +522,7 @@ const AUDIT_ACTION: Record<string, string> = {
   "device.update": "改设备配置",
   "staff.create": "新增员工",
   "staff.update": "修改员工",
+  "password.reset": "重置员工密码",
 };
 
 const AUDIT_RESULT: Record<AuditLog["result"], { label: string; tone: "success" | "warning" | "danger" }> = {

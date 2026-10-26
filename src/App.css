@@ -251,7 +251,14 @@
    每个文字按钮、每个行内图标按钮都变成一颗浮起的小卡片。 */
 button[data-slot="button"]:not([data-day]):not([data-variant="ghost"]):not([data-variant="link"]),
 input[data-slot="input"],
-textarea[data-slot="textarea"] {
+textarea[data-slot="textarea"],
+/* 化验区的数值格（NumField）渲染成 InputGroup（外层 div 才是那只带边框的盒子，内层
+   input 是 border-0 bg-transparent 的裸输入），下拉（Choose）渲染成 select-trigger 按钮。
+   两者都不是上面三个 data-slot，若不并进来，在 Nova/Sera/Mira 这类"边框靠 1px 阴影环表达、
+   表面靠 component-surface 抬起来"的主题下就会只剩一条 border-input 细线，跟同一屏里走
+   真 Input/Textarea 的 ComboBox（气味、拒收原因）明显不一致。描在容器本体上，与内层裸输入无关。 */
+div[data-slot="input-group"],
+button[data-slot="select-trigger"] {
   box-shadow: var(--component-shadow);
 }
 
@@ -264,8 +271,15 @@ textarea[data-slot="textarea"] {
 }
 
 input[data-slot="input"],
-textarea[data-slot="textarea"] {
+textarea[data-slot="textarea"],
+div[data-slot="input-group"],
+button[data-slot="select-trigger"] {
   background-color: var(--component-surface);
+}
+/* 上面把 surface 钉成未分层声明后，会盖过 select-trigger 自带的深色 hover 工具类
+   （未分层永远压过分层），所以把那条 hover 也照原口径补回来，别把选中项的悬停反馈弄没。 */
+.dark button[data-slot="select-trigger"]:hover {
+  background-color: color-mix(in oklab, var(--input) 50%, transparent);
 }
 
 /* 录入文字的颜色必须钉死在 --foreground 上，不能让输入框从祖先继承。

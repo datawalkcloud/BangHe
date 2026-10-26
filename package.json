@@ -6,7 +6,7 @@
     "type": "git",
     "url": "https://github.com/datawalkcloud/BangHe"
   },
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

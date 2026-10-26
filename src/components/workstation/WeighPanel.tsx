@@ -483,7 +483,6 @@ export function WeighPanel({
           {/* 右侧：本单已取重量明细 + 捕获操作（填掉读数右边的空白） */}
           <div className="flex shrink-0 min-w-[220px] flex-col justify-center gap-1.5 border-t sm:border-l sm:border-t-0 pt-1.5 sm:pt-0 sm:pl-2.5">
             <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-medium text-muted-foreground border-b pb-0.5">本单实测重量</span>
               {/*
                 毛重 / 皮重这两行**本身就是手录的入口**（2026-10-09 改版，原来那块「手工录入读数」
                 开关连同它下面两个框一起撤了）：没捕过的格子直接是录入框，照仪表小票敲数、按回车即落库；
@@ -494,7 +493,7 @@ export function WeighPanel({
                 const v01 = adopted01(type);
                 const captured = v01 != null;
                 return (
-                  <div key={type} className="flex items-center justify-between gap-2 text-xs">
+                  <div key={type} className="flex items-center justify-between gap-2 text-sm">
                     <span className="shrink-0 text-muted-foreground">{CELL_LABEL[type]}</span>
                     {cellIsOpen(type) ? (
                       <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
@@ -551,9 +550,9 @@ export function WeighPanel({
                   </div>
                 );
               })}
-              <div className="flex items-center justify-between gap-2 text-xs border-t pt-0.5">
+              <div className="flex items-center justify-between gap-2 text-sm border-t pt-0.5">
                 <span className="font-semibold text-foreground">净重</span>
-                <span className="tnum font-bold text-primary text-sm">
+                <span className="tnum font-bold text-primary text-base">
                   {order?.net_weight_01kg != null ? weight(order.net_weight_01kg) : "—"}
                 </span>
               </div>
@@ -562,7 +561,7 @@ export function WeighPanel({
                 缺价标红——只有制单时该品种没有现行价目才会走到这一步（有现行价目的单制单就带上了），
                 而**捕毛重之前这一格必须有价**（`lib/weigh-gate.ts` 那道闸），所以它不是提醒，是前置条件。
               */}
-              <div className="flex items-center justify-between gap-2 text-xs border-t pt-0.5">
+              <div className="flex items-center justify-between gap-2 text-sm border-t pt-0.5">
                 <span className="text-muted-foreground">单价</span>
                 {order?.price_fen_per_ton != null ? (
                   <span className="tnum font-semibold text-foreground">{fmtPrice(order.price_fen_per_ton)}</span>

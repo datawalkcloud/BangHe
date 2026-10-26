@@ -617,7 +617,7 @@ export function IdentityPanel({
 
         <div className="grid gap-1">
           <Label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-            收购品种 <span className="text-warning">*</span>
+            <span>收购品种 <span className="text-warning">*</span></span>
             {/* 沿用的上一张单的品种已经预填（`emptyDraft` 的初值），多数时候磅员不用动这一格 */}
             <Choose
               aria-label="收购品种"

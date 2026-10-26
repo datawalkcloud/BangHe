@@ -95,7 +95,9 @@ function NumInput({
   return (
     <InputGroup
       className={cn(
-        "h-auto rounded-none border transition-colors",
+        // 圆角不写死 rounded-none：让 InputGroup 基类的 rounded-4xl 生效，随主题圆角档走，
+        // 与同屏的 Input / SelectTrigger / ComboBox 一致（写死方角会在换圆角主题时露馅）
+        "h-auto border transition-colors",
         size === "default" ? "h-9" : "h-8 text-xs",
         invalid
           ? "border-destructive ring-1 ring-destructive/40"
