@@ -1,0 +1,7 @@
+# 官网镜像（deploy/site/Dockerfile）的构建上下文白名单：
+# 只需要 site/ 静态文件和 deploy/site/ 里的 nginx 配置，其余全部排除。
+# 注意：这是仓库根目前唯一的镜像构建；将来若新增其它 Dockerfile，
+# 需重新设计这份规则，否则会被这里的白名单饿死。
+*
+!site
+!deploy

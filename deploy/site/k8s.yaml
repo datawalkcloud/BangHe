@@ -1,0 +1,143 @@
+# 官网静态站的 k8s 清单：Namespace + Deployment + Service + Ingress。
+#
+# 镜像已按现有 ACR 实例配好：
+#   公网（推镜像/本地拉）：crpi-gr7j2r1czfy1t1uu.cn-hangzhou.personal.cr.aliyuncs.com
+#   VPC（集群内拉取）    ：crpi-gr7j2r1czfy1t1uu-vpc.cn-hangzhou.personal.cr.aliyuncs.com
+#   当前固定版本           ：springhgui/banghe-site:site-2026.11.05
+# 换版本时同步改 image 与下面的 set image 示例，别长期停在 latest。
+#
+# 用前改两处：
+#   1) Ingress 的 host 与 TLS secret：换成实际域名和证书 Secret（当前按 bh.datawalk.cn）；
+#   2) imagePullSecrets：ACR 私有仓库需要拉取凭证，命令见下。
+#      若部署到已有拉取凭证的命名空间（如生产 qiyun 已有 qiyun-harbor），直接改引用。
+#
+# 私有仓库拉取凭证（在目标 k8s 命名空间执行一次，用户名/密码用 ACR 访问凭证）：
+#   kubectl -n banghe-site create secret docker-registry acr-pull \
+#     --docker-server=crpi-gr7j2r1czfy1t1uu-vpc.cn-hangzhou.personal.cr.aliyuncs.com \
+#     --docker-username=springhgui \
+#     --docker-password='<ACR_PASSWORD>'
+# ACR 仓库设为公开时，可删掉 spec.template.spec.imagePullSecrets。
+#
+# 应用 / 更新：
+#   kubectl apply -f deploy/site/k8s.yaml
+#   kubectl -n banghe-site set image deployment/banghe-site \
+#     nginx=crpi-gr7j2r1czfy1t1uu-vpc.cn-hangzhou.personal.cr.aliyuncs.com/springhgui/banghe-site:sha-xxxx
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: banghe-site
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: banghe-site
+  namespace: banghe-site
+  labels:
+    app.kubernetes.io/name: banghe-site
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: banghe-site
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: banghe-site
+    spec:
+      imagePullSecrets:
+        - name: acr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: crpi-gr7j2r1czfy1t1uu-vpc.cn-hangzhou.personal.cr.aliyuncs.com/springhgui/banghe-site:site-2026.11.05
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: banghe-site
+  namespace: banghe-site
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: banghe-site
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: banghe-site
+  namespace: banghe-site
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # 生产集群已在用 cert-manager，证书按需自动签发
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  # 阿里云 ACK 若装的是 ALB Ingress，改成 alb 并调整注解
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - bh.datawalk.cn
+      secretName: bh-datawalk-cn-tls
+  rules:
+    - host: bh.datawalk.cn
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: banghe-site
+                port:
+                  name: http

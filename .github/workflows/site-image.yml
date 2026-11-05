@@ -1,0 +1,99 @@
+name: Build Site Image
+
+# 官网容器镜像线：构建 → 推送阿里云 ACR（k8s 从这里拉镜像）。
+# 与 deploy-site.yml（Netlify）互不影响：同一批 site-* tag 会同时触发两条线。
+#
+# 账号与仓库（不含敏感信息，直接写死）：
+#   registry: crpi-gr7j2r1czfy1t1uu.cn-hangzhou.personal.cr.aliyuncs.com（公网端点，推镜像用）
+#   镜像:     springhgui/banghe-site
+#   集群内拉取走同实例的 VPC 端点（见 deploy/site/k8s.yaml）。GitHub runner 在 VPC 外，
+#   推镜像只能用上面的公网域名，两者不要混用。
+#
+# 前置（一次性）：
+#   仓库 Settings → Secrets and variables → Actions → Secrets 新建 ACR_PASSWORD，
+#   值为 ACR 个人版「访问凭证」的密码（用户名固定 springhgui，已写在下方 env）。
+#   ACR 端无需先建仓库：命名空间下首次 push 会自动创建仓库（2026-11-05 实测通过）。
+#
+# 触发：推 site-* tag，或在 Actions 页面手动 Run workflow（构建 master 当前提交）。
+# 产物 tag：site-xxxx（tag 触发时）、sha-<短哈希>、latest。
+#
+# 触发：推 site-* tag，或在 Actions 页面手动 Run workflow（构建 master 当前提交）。
+# 产物 tag：site-xxxx（tag 触发时）、sha-<短哈希>、latest。
+
+on:
+  push:
+    tags:
+      - "site-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: crpi-gr7j2r1czfy1t1uu.cn-hangzhou.personal.cr.aliyuncs.com
+  REGISTRY_USERNAME: springhgui
+  IMAGE: crpi-gr7j2r1czfy1t1uu.cn-hangzhou.personal.cr.aliyuncs.com/springhgui/banghe-site
+
+jobs:
+  build-push:
+    name: 构建并推送镜像
+    runs-on: ubuntu-latest
+    steps:
+      - name: 校验 ACR 配置
+        env:
+          ACR_PASS: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          if [ -z "${ACR_PASS:-}" ]; then
+            echo "::error::缺少仓库 Secret ACR_PASSWORD。到「仓库 Settings → Secrets and variables → Actions」新建，值为 ACR 访问凭证密码（用户名 springhgui），配置后重跑。"
+            exit 1
+          fi
+          echo "目标镜像：${IMAGE}"
+
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录阿里云 ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: 生成镜像元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=tag
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/site/Dockerfile
+          # k8s 节点是 ARM 时再改成 linux/arm64 或加多架构
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # buildx 默认附带 provenance 清单，ACR 个人版会拒收
+          # （unknown manifest class for application/vnd.oci.empty.v1+json），必须关闭
+          provenance: false
+
+      - name: 输出镜像地址
+        run: |
+          echo "### 已推送镜像" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "部署到 k8s 时用上面的 sha-* 或 site-* tag 固定版本，别长期用 latest。" >> "$GITHUB_STEP_SUMMARY"
