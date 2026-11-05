@@ -3,7 +3,7 @@
 # 镜像已按现有 ACR 实例配好：
 #   公网（推镜像/本地拉）：crpi-gr7j2r1czfy1t1uu.cn-hangzhou.personal.cr.aliyuncs.com
 #   VPC（集群内拉取）    ：crpi-gr7j2r1czfy1t1uu-vpc.cn-hangzhou.personal.cr.aliyuncs.com
-#   当前固定版本           ：springhgui/banghe-site:site-2026.11.05
+#   当前固定版本           ：springhgui/banghe-site:sha-6e005f1（GitHub Actions 构建）
 # 换版本时同步改 image 与下面的 set image 示例，别长期停在 latest。
 #
 # 用前改两处：
@@ -61,7 +61,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: nginx
-          image: crpi-gr7j2r1czfy1t1uu-vpc.cn-hangzhou.personal.cr.aliyuncs.com/springhgui/banghe-site:site-2026.11.05
+          image: crpi-gr7j2r1czfy1t1uu-vpc.cn-hangzhou.personal.cr.aliyuncs.com/springhgui/banghe-site:sha-6e005f1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
