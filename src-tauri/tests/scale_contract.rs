@@ -1087,20 +1087,24 @@ fn unknown_driver_has_no_preset() {
 
 // =============================================== 顶松 DS822 连续发送（2026-11-19 现场抓包）
 
-/// 现场 COM6（9600/8/None/1）抓到的一帧原始字节，**不含**帧间那个分隔空格：
-/// `E` `A` `a` `+` `006946` `3` `0000000` `b` = 6.946 t。
+/// 现场 COM6（9600/8/None/1）十六进制抓包里的一帧，22 字节，66 帧帧帧相同（空磅）：
+/// `02 41 61 2B 30*6 33 30*7 62 20 48 03` = `STX Aa + 000000 3 0000000 b <空格> 校验 ETX`。
 fn ds822_captured_frame() -> Vec<u8> {
-    b"EAa+00694630000000b".to_vec()
+    vec![
+        0x02, b'A', b'a', b'+', b'0', b'0', b'0', b'0', b'0', b'0', b'3', b'0', b'0', b'0', b'0',
+        b'0', b'0', b'0', b'b', b' ', 0x48, 0x03,
+    ]
 }
 
-/// 造一帧进流：6 位重量数字就是 kg（小数位数标志位固定 `3`、单位吨，`006946`/10³ t = 6946 kg），
-/// 尾随空格是流里的真分隔符——模板按它切帧，不给它就一帧都切不出来。
-/// 帧首那个字节按抓包固定写成 `E`：它的规则还没从十六进制抓包里核实，模板 `checksum="none"` 不参与判定。
+/// 造一帧进流：`STX Aa <符号> <6 位重量> <小数位数=3> <7 个 0> b <空格> <异或> ETX`。
+/// 帧内数字是**吨**（`006946`/10³ = 6.946 t = 6946 kg）；那个空格是帧内尾巴，不是帧间分隔符。
+/// 异或覆盖**含 STX、含空格**的前 20 字节——帧尾两字节（校验 + ETX）不在覆盖范围内。
 fn ds822_frame(kg: i64, sign: char) -> Vec<u8> {
-    let mut f = b"EAa".to_vec();
-    f.push(sign as u8);
-    f.extend(format!("{:06}30000000b", kg.abs()).as_bytes());
-    f.push(b' ');
+    let mut f: Vec<u8> = vec![0x02, b'A', b'a', sign as u8];
+    f.extend(format!("{:06}30000000b ", kg.abs()).as_bytes());
+    let xored = f.iter().fold(0u8, |a, b| a ^ *b);
+    f.push(xored);
+    f.push(0x03);
     f
 }
 
@@ -1111,19 +1115,52 @@ fn ds822_core() -> StreamCore {
 }
 
 #[test]
-fn ds822_captured_frame_reads_6946_kg() {
-    let tpl = dingsong_ds822_cont();
-    // 006946 ÷ 10³ = 6.946 t，unit="t" → 6946 kg = 69460 个 0.1 kg
-    assert_eq!(parse_weight(&ds822_captured_frame(), &tpl.payload).unwrap(), 69_460);
+fn ds822_captured_frame_reads_zero_with_no_error() {
+    // 这一条就是现场报错的那一帧：修复前按 xor_ascii_hex 判「帧尾 ASCII 校验「H」应为 6A」，
+    // 整台磅一个读数都下不来
+    let mut core = ds822_core();
+    let evs = core.feed(&ds822_captured_frame(), 1000);
+    assert_eq!(evs.len(), 1, "切帧 + 异或校验 + 小数位取数三段一起过：{evs:?}");
+    assert!(evs[0].connected);
+    assert_eq!(evs[0].weight_01kg, 0, "空磅读数 0，且是真读出来的 0，不是坏帧兜底");
+    assert_eq!(evs[0].error_kind, None, "不该有任何错误：{:?}", evs[0].error);
 }
 
 #[test]
-fn ds822_decimal_flag_is_the_byte_right_after_the_six_weight_digits() {
+fn ds822_checksum_anchors_to_the_earlier_ascii_capture() {
+    // 同一台磅早先用 ASCII 显示抓过 006942 / 006946 两帧，行首各自露出 'A' / 'E'。
+    // 按本规则现算正好是 0x41 / 0x45 → 那两位不是帧首字段，是上一帧的帧尾异或字节。
+    // 这条把 ds822_frame 的自算校验钉在真机数据上，防止"自造自验"。
+    assert_eq!(ds822_frame(6942, '+')[20], 0x41, "抓包里的 'A'");
+    assert_eq!(ds822_frame(6946, '+')[20], 0x45, "抓包里的 'E'");
+    assert_eq!(ds822_captured_frame()[20], 0x48, "十六进制抓包里的 'H'");
+}
+
+#[test]
+fn ds822_checksum_body_must_include_both_stx_and_the_inner_space() {
+    // 覆盖范围差一个字节就不认：只少 STX → 0x4A，只少那个空格 → 0x6A（现场报错里那句"应为 6A"
+    // 正是漏了 STX 与空格的那算法）。把校验字节换成这两个值，必须判坏帧而不是照称。
+    for (wrong, why) in [(0x4Au8, "不含起始符"), (0x6Au8, "不含帧内空格"), (0x49u8, "整体错一位")] {
+        let mut f = ds822_frame(6946, '+');
+        f[20] = wrong;
+        let mut core = ds822_core();
+        let evs = core.feed(&f, 1000);
+        assert!(
+            evs.iter().any(|e| e.error_kind.as_deref() == Some("BadFrame")),
+            "{why}：校验字节 0x{wrong:02X} 本该判坏帧，实际 {evs:?}"
+        );
+        assert!(evs.iter().all(|e| e.weight_01kg == 0), "{why}：校验不过绝不能当成一次读数");
+    }
+}
+
+#[test]
+fn ds822_weight_digits_are_the_six_bytes_after_the_sign() {
     let tpl = dingsong_ds822_cont();
-    // 抓包里这一位恒为 '3' 而重量数字在跳 → 它是"小数点从右数几位"，不是重量的第 7 位。
-    // 下标含帧首校验字节：E A a + 0 0 6 9 4 6 [3] → 第 10 字节。
+    // 抓包里 index 10 恒为 '3' 而重量数字在跳 → 它是"小数点从右数几位"，不是重量的第 7 位。
+    // 下标含起始符：STX A a + 0 0 6 9 4 6 [3] → 第 10 字节。
     assert_eq!(tpl.payload.decimal_count_index, Some(10));
-    assert_eq!(tpl.payload.sign_index, 3, "符号位在第 4 字节（前面是校验 + 地址头 Aa）");
+    assert_eq!(tpl.payload.sign_index, 3, "符号位在第 4 字节（前面是 STX + 地址头 Aa）");
+    assert_eq!(parse_weight(&ds822_frame(6946, '+'), &tpl.payload).unwrap(), 69_460);
     assert_eq!(parse_weight(&ds822_frame(1234, '+'), &tpl.payload).unwrap(), 12_340);
     assert_eq!(parse_weight(&ds822_frame(500, '+'), &tpl.payload).unwrap(), 5_000);
 }
@@ -1135,7 +1172,8 @@ fn ds822_negative_sign_is_kept() {
 }
 
 #[test]
-fn ds822_stream_splits_on_the_space_separator() {
+fn ds822_stream_splits_on_stx_etx_with_no_gap() {
+    // 抓包里 03 之后紧跟下一个 02，帧间没有分隔符；空格在帧内，切完不该留残字节
     let mut core = ds822_core();
     let mut bytes = ds822_frame(6946, '+');
     bytes.extend(ds822_frame(6944, '+'));
@@ -1144,25 +1182,31 @@ fn ds822_stream_splits_on_the_space_separator() {
     assert!(evs[0].connected);
     assert_eq!(evs[0].weight_01kg, 69_460);
     assert_eq!(evs[0].error_kind, None);
-    assert_eq!(core.buffer_len(), 0, "分隔符切完不该留残字节");
+    assert_eq!(core.buffer_len(), 0, "STX/ETX 切完不该留残字节");
     let evs = core.feed(&ds822_frame(6944, '+'), 1200);
     assert_eq!(evs.len(), 1, "到 200 ms 该把第二帧发出去：{evs:?}");
     assert_eq!(evs[0].weight_01kg, 69_440);
 }
 
 #[test]
-fn ds822_wrong_separator_yields_no_reading_then_offline() {
-    // 万一那台其实用 \r\n 分隔：按空格切一帧都凑不出来，宁可报离线，
-    // 也不要定长切帧把两个重量粘成一帧、照样报个像样的读数。
+fn ds822_half_frame_waits_then_offline() {
+    // 只有前半截（没有 ETX）：留着等下一包，一个字节都不能当读数发出去；一直等不到就该喊离线
     let mut core = ds822_core();
-    let mut bytes = ds822_captured_frame();
-    bytes.extend(b"\r\n");
-    bytes.extend(ds822_captured_frame());
-    bytes.extend(b"\r\n");
-    assert!(core.feed(&bytes, 1000).is_empty(), "分隔符不对时绝不能下发读数");
+    let cut = ds822_frame(6946, '+')[..12].to_vec();
+    assert!(core.feed(&cut, 1000).is_empty(), "半帧绝不能下发读数");
     let ev = core.watchdog(6000).expect("一帧都没解析出来，5 秒后该喊离线");
     assert_eq!(ev.error_kind.as_deref(), Some("Offline"));
     assert!(!ev.connected);
+}
+
+#[test]
+fn ds822_yaohua_equal_frame_is_not_read_as_this_instrument() {
+    // 万一现场把仪表输出格式切成耀华那种 `=+  0.0kg US\r\n`：这挡按 STX 找帧，一帧都切不出来，
+    // 只会报离线——绝不会拿另一个量纲的帧凑出个看着像数的读数。
+    let mut core = ds822_core();
+    let evs = core.feed(b"=+  0.0kg US\r\n=+  0.0kg US\r\n", 1000);
+    assert!(evs.is_empty(), "没有 STX 就该一帧都切不出来：{evs:?}");
+    assert_eq!(core.buffer_len(), 0, "无起始符的字节整段丢掉，不让缓冲区无上限长大");
 }
 
 #[test]
@@ -1183,16 +1227,20 @@ fn ds822_flat_ledger_form_gets_the_preset() {
     assert_eq!(tpl.transport.port, "COM6");
     assert_eq!(tpl.transport.baud, 9600);
     assert_eq!(tpl.framing.mode, "delimited");
-    assert_eq!(tpl.framing.start, "", "DS822 帧没有起始符");
-    assert_eq!(tpl.framing.terminator, " ");
-    assert_eq!(tpl.framing.checksum, "none", "帧首校验字节的规则未经十六进制抓包核实，先不校验");
+    assert_eq!(tpl.framing.start, "\u{02}", "十六进制抓包确认帧帧以 STX 开头");
+    assert_eq!(tpl.framing.terminator, "\u{03}", "以 ETX 结尾，帧间没有分隔符");
+    assert_eq!(tpl.framing.checksum, "xor8_incl_start", "末字节原始异或，且覆盖范围含起始符");
     assert_eq!(tpl.payload.unit, "t", "帧内数字的量纲是吨，不是柯力那种 kg");
-    assert_eq!(parse_weight(&ds822_captured_frame(), &tpl.payload).unwrap(), 69_460);
+    // 套完预设还能直接把现场那一帧跑成 0 kg（校验/切帧都在流水线里验过）
+    let mut core = StreamCore::new(tpl.clone(), "scale2", 2);
+    let evs = core.feed(&ds822_captured_frame(), 1000);
+    assert_eq!(evs.len(), 1, "扁平表单套出来的模板要能直接吃真帧：{evs:?}");
+    assert_eq!(evs[0].error_kind, None, "{:?}", evs[0].error);
 }
 
 // ================================ 柯力 D2008「连续方式 TF=0」（复用耀华那一档模板，单独立型号）
 
-/// 柯力 D2008 手册「连续方式(TF=0)」的样例帧：发送 `+20.00` →
+/// 柯力 D2008 手册「连续方式」的样例帧：发送 `+20.00` →
 /// `02 2B 30 30 32 30 30 30 32 31 42 03` = `STX` `+` `002000` `2`(小数位数) `1B`(异或) `ETX`。
 /// 异或核对：`+`~小数位这 8 字节（2B 30 30 32 30 30 30 32）异或 = 0x1B → ASCII `"1B"`。
 /// 手册自己写明"此协议格式同上海耀华 A2"，所以这挡驱动不另写解析，只借用耀华模板。
@@ -1244,17 +1292,37 @@ fn keli_flat_ledger_form_gets_the_shared_preset() {
 }
 
 #[test]
-fn keli_frame_with_nonzero_tf_is_a_bad_frame_not_a_plausible_reading() {
-    // 现场那台若没把仪表参数 TF 设成 0，这条模板不会称出个"缩小 1000 倍但看着像数"的读数：
-    // 小数位数那一位一变，手册规定的异或值就跟着变（0x1B → 0x1A），帧尾仍按原样发 → 判坏帧、看得见。
-    let mut tf3 = keli_manual_sample_frame();
-    tf3[8] = b'3';
+fn keli_live_com5_frame_passes_and_divides_by_its_own_tf_flag() {
+    // 2026-11-19 现场 COM5 十六进制抓包：43 帧帧帧相同
+    // `02 2B 30 31 31 35 36 30 33 31 42 03` = STX `+` `011560` `3`(小数位) `1B`(异或) ETX，
+    // 异或 43/43 全过 → 耀华那套切帧 + xor_ascii_hex + 小数位取数对这台直接可用，不用改代码。
+    let frame: Vec<u8> = vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'3', b'1', b'B', 0x03];
     let mut tpl = yaohua_xk3190_cont();
     tpl.transport.port = "COM5".into();
     let mut core = StreamCore::new(tpl, "scale1", 1);
-    let evs = core.feed(&tf3, 1000);
-    assert!(evs.iter().any(|e| e.error_kind.as_deref() == Some("BadFrame")), "{evs:?}");
-    assert!(evs.iter().all(|e| e.weight_01kg == 0), "TF 对不上时绝不能当成一次读数下发");
+    let evs = core.feed(&frame, 1000);
+    assert_eq!(evs.len(), 1, "切帧 + 校验 + 取数三段一起过：{evs:?}");
+    assert_eq!(evs[0].error_kind, None, "现场原帧不该报任何错：{:?}", evs[0].error);
+    // 011560 ÷ 10³ = 11.560，unit=kg → 115.6 → 116 个 0.1 kg
+    assert_eq!(evs[0].weight_01kg, 116);
+}
+
+#[test]
+fn keli_tf_flag_is_inside_its_own_checksum_so_only_unit_can_be_wrong() {
+    // 仪表算异或时把"小数位数"那一位一起算进去，所以 TF 设成几都自洽、都校验得过：
+    // 同一串 011560 配 TF=0（异或 1B → 18）读出来是 11560 kg，配 TF=3 是 11.56 kg，
+    // 差 1000 倍却**没有任何坏帧提示**。这条钉住"量纲只能靠 payload.unit 对上仪表面板单位"，
+    // 别指望校验和或判稳能挡住单位填错。
+    let tf0: Vec<u8> = vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'0', b'1', b'8', 0x03];
+    let tf3: Vec<u8> = vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'3', b'1', b'B', 0x03];
+    let tpl = yaohua_xk3190_cont();
+    assert_eq!(parse_weight(&tf0, &tpl.payload).unwrap(), 115_600);
+    assert_eq!(parse_weight(&tf3, &tpl.payload).unwrap(), 116);
+    for f in [tf0, tf3] {
+        let mut core = StreamCore::new(tpl.clone(), "scale1", 1);
+        let evs = core.feed(&f, 1000);
+        assert_eq!(evs[0].error_kind, None, "两种 TF 各自与自己的异或自洽 → 都该判好帧：{evs:?}");
+    }
 }
 
 // ============================================================ 判稳依据快照（设备中心取证用）

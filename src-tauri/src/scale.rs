@@ -98,7 +98,7 @@ pub struct Framing {
     pub max_len: usize,
     /// `mode="fixed_len"` 时的定长（含起始符与结尾校验字节）
     pub fixed_len: usize,
-    /// `none` | `sum8` | `sum8_comp` | `xor8`
+    /// `none` | `sum8` | `sum8_comp` | `xor8` | `xor8_incl_start` | `xor_ascii_hex`
     pub checksum: String,
 }
 
@@ -1162,6 +1162,7 @@ impl StreamCore {
 /// 帧尾校验和。
 ///
 /// - `sum8` / `sum8_comp` / `xor8`：`body` = 去掉起始符与终止符后的中段，**最后一字节**为原始校验字节。
+/// - `xor8_incl_start`（顶松 DS822 连续帧）：同 `xor8`，但**起始符本身也计入异或**。
 /// - `xor_ascii_hex`（耀华 XK3190-A9 连续帧）：校验 = 中段各字节异或，输出成**终止符前的两个
 ///   ASCII 十六进制字符**（高字节在前、大小写不敏感），而不是一个原始字节。
 fn verify_checksum(frame: &[u8], framing: &Framing) -> Result<(), String> {
@@ -1193,19 +1194,21 @@ fn verify_checksum(frame: &[u8], framing: &Framing) -> Result<(), String> {
             ))
         }
     } else {
-        if end <= head + 1 {
+        let body_from = if kind == "xor8_incl_start" { 0 } else { head };
+        if end <= body_from + 1 {
             return Err("帧太短，没有校验字节的位置".into());
         }
-        let body = &frame[head..end - 1];
+        let body = &frame[body_from..end - 1];
         let got = frame[end - 1];
         let sum: u8 = body.iter().fold(0u8, |a, b| a.wrapping_add(*b));
         let want = match kind.as_str() {
             "sum8" => sum,
             "sum8_comp" => sum.wrapping_neg(),
-            "xor8" => body.iter().fold(0u8, |a, b| a ^ *b),
+            "xor8" | "xor8_incl_start" => body.iter().fold(0u8, |a, b| a ^ *b),
             other => {
                 return Err(format!(
-                    "不支持的校验方式「{other}」，可选 none/sum8/sum8_comp/xor8/xor_ascii_hex"
+                    "不支持的校验方式「{other}」，\
+                     可选 none/sum8/sum8_comp/xor8/xor8_incl_start/xor_ascii_hex"
                 ));
             }
         };
@@ -1322,9 +1325,13 @@ pub fn capture_align(conn: &Connection) -> Align {
 /// 这是"通用帧模板 + 型号预设"里的**预设**：现场只填 `port`/`baud` 就能跑；要微调仍可在
 /// `config_json` 写完整的嵌套模板（那时 [`maybe_apply_driver_preset`] 不再套本预设）。
 ///
-/// 同样适用于**柯力 D2008 的「连续方式 TF=0」**：其手册给的帧
+/// 同样适用于**柯力 D2008 的「连续方式」**：其手册给的帧
 /// `02 2B 30 30 32 30 30 30 32 31 42 03`（发送 +20.00，异或 `0x1B`）与本档逐字节同构，
 /// 手册自己也写明"此协议格式同上海耀华 A2"——所以 [`driver_preset`] 让 `keli_d2008` 复用本模板。
+/// 2026-11-19 现场 COM5 又抓到 43 帧 `02 2B 30 31 31 35 36 30 33 31 42 03`（`011560` + 小数位 `3`
+/// → 11.560），异或 43/43 全过：**小数位数是帧里自带的一位**，现场把仪表 TF 设成几都不用改代码。
+/// 唯一要核的是 `unit`——它说的是帧内数字自身的单位（耀华那台实测是 kg），
+/// 若该仪表面板按吨显示且小数点 3 位，同一帧就是 11.560 t = 11560 kg，差 1000 倍且**校验抓不出来**。
 pub fn yaohua_xk3190_cont() -> FrameTemplate {
     FrameTemplate {
         transport: Transport {
@@ -1368,25 +1375,26 @@ pub fn yaohua_xk3190_cont() -> FrameTemplate {
 
 /// 顶松 DS822 **连续发送**这一档的帧模板（04 §2.2 A 族）。
 ///
-/// 依据是 2026-11-19 现场用串口助手在 COM6（9600/8/None/1）抓到的原始流，一帧 19 字节：
-/// `EAa+00694630000000b`，逐字节：
-///  - 0：随重量数字变化的字节，形态像**帧首异或校验**（重量位变 1，它跟着变 0x04/0x01）；
-///    `verify_checksum` 只认"末字节原始校验"和"终止符前两字符 ASCII 十六进制"两档，
-///    认不了帧首那一位，所以这里 `checksum="none"` 不校验（代价：坏帧只能靠判稳与数字区
-///    宽度守卫挡，等帧监视器复核到真规则再补一档）。
+/// 依据是 2026-11-19 现场在 COM6（9600/8/None/1）以十六进制显示抓的 1452 字节：66 帧、
+/// 帧帧相同（空磅），一帧 22 字节
+/// `02 41 61 2B 30 30 30 30 30 30 33 30 30 30 30 30 30 30 62 20 48 03`，
+/// 即 `STX Aa + 000000 3 0000000 b <空格> <校验> ETX`，逐字节：
+///  - 0、21：起始符 STX、结束符 ETX——66 帧无一例外，所以按 STX/ETX 切帧；
+///    `max_len=24` 只留 2 字节余量，粘帧或波特率不对时切出来的超长帧直接判垃圾。
 ///  - 1..2：恒定 `Aa`（41 61），仪表地址/命令头，本路不取。
 ///  - 3：符号位 `+`/`-`。
 ///  - 4..9：6 位重量数字，高位在前。
-///  - 10：**小数位数标志位**——抓到的所有帧里恒为 `3`，而 4..9 在 006942~006954 之间跳，
-///    所以它不是重量的第 7 位，是"小数点从右数几位"，与耀华 A9 同一套口径。
-///  - 11..17：7 个 `0`，形态像皮重字段，本路不取（净重由我们自己按毛-皮算）。
-///  - 18：结尾字符 `b`/`B`。
-///  - 帧间分隔：0x20 空格。截图里"每行正好 3 帧"是 20 字符按显示宽度换行的结果，
-///    说明分隔符是流里的真字节，不是串口助手加的。
+///  - 10：**小数位数标志位**，抓到的帧里恒为 `3`，与耀华 A9 同一套口径；
+///    重量 = 4..9 / 10^该位数，数字扫描到此为止，不把这一位吃进重量。
+///  - 11..17：7 个 `0`，形态像皮重/累计字段，本路不取（净重由我们自己按毛-皮算）。
+///  - 18..19：`b` + 0x20 空格，是帧内的固定尾巴，**不是帧间分隔符**。
+///  - 20：**原始异或校验字节**，覆盖范围含起始符、也含 19 那个空格：
+///    `xor(frame[0..20]) = 0x48 = 'H'`，66/66 帧全中；去掉 STX 得 0x4A、去掉空格得 0x6A，
+///    两者都对不上，所以用本轮新加的 `checksum="xor8_incl_start"` 一档。
 ///
-/// 分隔符按空格切而不是按定长切，是**故意的**：万一现场那台其实是 `\r\n` 或没有分隔符，
-/// 定长切帧会永久错位、把两个数字粘成一帧照样算出个像样的读数；按分隔符切则一帧都切不出来，
-/// 5 秒后底栏直接报离线——宁可看得见，也不要静默称错车。
+/// 上一版是按串口助手的 ASCII 显示（`EAa+00694630000000b`）反推的，那会儿把 19 那个帧内
+/// 空格当成了帧间分隔符，还把行首的 `A`/`E` 当成帧首字段——其实它们是**上一帧的校验字节**：
+/// 按本规则 006942→0x41 `'A'`、006946→0x45 `'E'`，两帧各自命中，才确认校验在帧尾而非帧首。
 ///
 /// `unit="t"`：帧内数字配小数位标志得到的是**吨**（`006946` + `3` = 6.946 t = 6946 kg），
 /// 与仪表面板"仪表单位＝吨"一致。这台和柯力 D2008（同族耀华帧，量纲是 kg）正好互为对照：
@@ -1405,12 +1413,12 @@ pub fn dingsong_ds822_cont() -> FrameTemplate {
         },
         framing: Framing {
             mode: "delimited".into(),
-            start: String::new(),
-            terminator: " ".into(),
+            start: "\u{02}".into(),
+            terminator: "\u{03}".into(),
             encoding: "ascii".into(),
             max_len: 24,
             fixed_len: 0,
-            checksum: "none".into(),
+            checksum: "xor8_incl_start".into(),
         },
         payload: Payload {
             sign_index: 3,
@@ -1440,8 +1448,8 @@ pub fn dingsong_ds822_cont() -> FrameTemplate {
 pub fn driver_preset(driver: &str) -> Option<FrameTemplate> {
     match driver.trim().to_ascii_lowercase().as_str() {
         "yaohua_xk3190" | "yaohua_xk3190_cont" | "xk3190" => Some(yaohua_xk3190_cont()),
-        // 复用耀华模板，前提是仪表面板参数 TF（小数点位数）设成 0；TF=2/3/4/5/7 是别的帧形，
-        // 套这份模板会校验不过并持续报坏帧（看得见，不会称错车）
+        // 与耀华逐字节同构（小数位数那一位由帧自带，仪表 TF 设成几都吃得下），单独立一挡只为让
+        // 现场按仪表牌子选得到；要核的是面板显示单位 ↔ payload.unit，见 yaohua_xk3190_cont 文档
         "keli_d2008" | "kelid2008_cont" | "d2008" => Some(yaohua_xk3190_cont()),
         "ds822" | "dingsong_ds822" => Some(dingsong_ds822_cont()),
         _ => None,
