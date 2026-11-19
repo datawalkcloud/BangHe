@@ -64,7 +64,7 @@ export function ReceiptTemplateEditor() {
    */
   const [activeSection, setActiveSection] = useState<string | null>(null);
 
-  // 切换场景时载入该场景当前生效模板（用户覆盖优先；effectiveTemplate 会补回流程必备区块）
+  // 切换场景时载入该场景当前生效模板（用户覆盖优先；effectiveTemplate 会补回出库码单的必备码）
   useEffect(() => {
     setDraft(effectiveTemplate(scenario));
     // 区块 id 是"每个场景各自一套"，留着上一个场景的选中会把高亮指到不存在的那一格
@@ -124,7 +124,8 @@ export function ReceiptTemplateEditor() {
     });
   }
   function removeSection(id: string) {
-    // 必备区块（码单上的凭票码）不给删：删了这张票就到窗口扫不出来，主路径直接断
+    // 带必备标记的区块（出库码单的凭单码）不给删：删了这张纸在系统里就查不到。
+    // 磅单那枚凭票码已改为可选，走同一条删除路径
     setDraft((d) => ({ ...d, sections: d.sections.filter((s) => s.id !== id || s.required) }));
   }
   function addSection(kind: BlockKind) {
@@ -457,7 +458,7 @@ function SectionEditor({
         <span className="flex items-center gap-1.5">
           <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{BLOCK_LABEL[sec.kind]}</span>
           {sec.required && (
-            <span className="rounded border border-primary/40 px-1.5 py-0.5 text-[10px] text-primary" title="结算窗口要靠它扫码找单，删不掉">
+            <span className="rounded border border-primary/40 px-1.5 py-0.5 text-[10px] text-primary" title="流程必备件，编辑器里删不掉">
               必备
             </span>
           )}
@@ -514,9 +515,9 @@ function SectionEditor({
 /**
  * 码区块：能改的是"出哪种码、码画多大、要不要在旁边印一行字"，不改载荷。
  *
- * 载荷（`{{ticket_code}}`）是结算窗口扫码定位单据的唯一依据，改错一个字符的票仍然印得出来、
- * 只是永远扫不到单——这种错在票面上完全看不出来，等到客户站在窗口才发现。所以必备区块的载荷
- * 一律只读；站长自己新加的码（收款码、小程序码之类）没有这个风险，放开编辑。
+ * 必备区块（出库码单的凭单码）的载荷一律只读：改错一个字符的票仍然印得出来、只是永远扫不到单，
+ * 这种错在票面上完全看不出来，等到窗口才发现。站长自己新加的码（收款码、小程序码之类）、
+ * 以及磅单那枚已改为可选的凭票码没有这道锁，放开编辑。
  *
  * 尺寸这一档从前只管 A4 与预览（小票机恒用固件默认的 4 点），现在三条出纸路都读它，
  * 所以下面报出来的毫米数在热敏纸上也成立。

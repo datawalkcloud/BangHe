@@ -186,6 +186,17 @@ ok(
   String(SCENARIOS.settlement_voucher.resolveField("settle_code", settleCtx)) === "—" && String(SCENARIOS.settlement_voucher.resolveField("ticket_code", settleCtx)) === "—",
 );
 ok("F5 过磅单出厂那枚凭票码仍是二维码（不被顺手改掉）", (codeSec.codeStyle ?? "qr") === "qr", codeSec.codeStyle);
+// 过磅单的码已改为可选（2026-11-19）：出厂默认照旧带着它，但编辑器里删掉之后取模板不许再补回。
+// 出库码单那枚凭单码仍是必备件——删了要补回。两条都落在 normalizeTemplate 里，松一条现场就变样。
+const weighNoCode = { ...tpl, sections: tpl.sections.filter((s) => s.kind !== "qr") };
+ok("F5b 过磅单出厂仍带码（默认行为不变）", tpl.sections.some((s) => s.kind === "qr"));
+ok("F5c 过磅单的码删了就删了：取用模板时不再兜底补回", !normalizeTemplate(weighNoCode).sections.some((s) => s.kind === "qr"));
+const obTpl = defaultTemplate("outbound_order");
+ok(
+  "F5d 出库码单的凭单码仍是必备件：删掉取用时补回",
+  obTpl.sections.some((s) => s.kind === "qr" && s.required) &&
+    normalizeTemplate({ ...obTpl, sections: obTpl.sections.filter((s) => s.kind !== "qr") }).sections.some((s) => s.kind === "qr"),
+);
 // **带码的票每多一种，"一串号是不是磅单"就多一个反例**：各票种共用同一个号形（`next_no`，
 // 票种键 BD / CK / JS… 各自从 1 排起，同站同月必然出现同号），而本版载荷里没有票种位。
 // 磅房那条路的底线是"只认磅单"，所以这里钉的是**配对关系**：除了磅单，哪一种票的出厂默认带码，
