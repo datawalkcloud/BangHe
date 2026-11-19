@@ -198,6 +198,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0032_retire_scale_align_settings.sql",
         sql: include_str!("migrations/0032_retire_scale_align_settings.sql"),
     },
+    Migration {
+        name: "0033_auto_print_switches.sql",
+        sql: include_str!("migrations/0033_auto_print_switches.sql"),
+    },
 ];
 
 /// 需要在**事务外关掉外键**才能跑的脚本，按文件名点名。

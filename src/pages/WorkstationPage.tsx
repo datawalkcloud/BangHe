@@ -162,6 +162,9 @@ export function WorkstationPage() {
    * 浏览器演示）在工作台底部挂一个测试扫码框。关掉时那一整条不渲染，界面与从前逐字一致。
    */
   const scanTestInput = useSetting("scan_test_input").bool;
+  // 自动出码单默认开：参数还没读回来时 raw 是 undefined，不能按"缺省关"把升级后的
+  // 第一趟过磅静默吞掉（与 useVoicePrompt 同一条道理），只认显式的 "false"
+  const autoPrintWeigh = useSetting("auto_print_weigh_order").raw !== "false";
 
   /**
    * 制单草稿：左栏「身份与制单」面板自己的表单状态（没单时是草稿，取号成功即切成摘要态）。
@@ -300,7 +303,9 @@ export function WorkstationPage() {
    * 票面才是库里那张单的真值；取不到（离线 / 单被删）就照缓存印，宁可旧一点也不能不出票。
    */
   const triggerPrint = useCallback(
-    async (no?: string | null) => {
+    async (no?: string | null, opts?: { auto?: boolean }) => {
+      // 站点关掉自动出码单时只拦"过完磅自己出纸"那一路；F9 / 顶部按钮 / 凭票打印不带 auto，照打
+      if (opts?.auto && !autoPrintWeigh) return;
       const target = no ?? order?.order_no;
       if (!target) return;
       try {
@@ -323,7 +328,7 @@ export function WorkstationPage() {
       setPrintTarget(target);
       setPrintSeq((n) => n + 1);
     },
-    [order, qcClient],
+    [order, qcClient, autoPrintWeigh],
   );
 
   /**
@@ -459,7 +464,7 @@ export function WorkstationPage() {
         // 客户手里不能空着手上路，只是金额按化验建议标「预估」；再把人放到结算框前改扣项。
         toast.error("自动挂账没有成功：本单扣重吃光了净重，请手动结算这一单");
         announce("自动挂账没有成功，请手动结算这一单", `ws-auto-bad:${o.order_no}`);
-        void triggerPrint(o.order_no);
+        void triggerPrint(o.order_no, { auto: true });
         goOrder(o.order_no);
         setSettleUnpaid(true);
         setSettleNo(o.order_no);
@@ -468,7 +473,7 @@ export function WorkstationPage() {
       toast.success(`已过磅并按未付款挂账 ${r.order.order_no}`, {
         description: `应付 ${money(r.settlement.payable_fen)}，结算单 ${r.settlement.settle_no}：客户拿好票，之后到「付款与挂账」凭它核销。`,
       });
-      announce("过磅完成，这一单已挂账，请拿好票", `ws-auto-settle:${r.order.order_no}`);
+      announce(autoPrintWeigh ? "过磅完成，这一单已挂账，请拿好票" : "过磅完成，这一单已挂账", `ws-auto-settle:${r.order.order_no}`);
       for (const key of [
         ["order", r.order.order_no],
         ["orders"],
@@ -481,14 +486,14 @@ export function WorkstationPage() {
       }
       // 票面要印的是**结算后的确定金额**：`triggerPrint` 自己会在出票前把这一单拉成最新的
       // （见那里的注释），这里不必再等一遍——出票永远印库里那一行，不印结算前的「预估」。
-      void triggerPrint(r.order.order_no);
+      void triggerPrint(r.order.order_no, { auto: true });
     },
     // 自动那条路走不通就退回人工：把人放到结算框前，别让他对着一个没结上的单猜原因。
     // 票仍要出——捕获是有效的，客户手里不能空着手上路，只是金额按化验建议标「预估」。
     onError: (e: Error, o) => {
       toast.warning(`自动挂账没有成功：${e.message || "请手动结算这一单"}`);
       announce("自动挂账没有成功，请手动结算这一单", `ws-auto-fail:${o.order_no}`);
-      void triggerPrint(o.order_no);
+      void triggerPrint(o.order_no, { auto: true });
       goOrder(o.order_no);
       setSettleUnpaid(true);
       setSettleNo(o.order_no);
@@ -520,7 +525,7 @@ export function WorkstationPage() {
       const action = postWeighAction(o, { canSettle: maySettle || mayCreditSettle, allowCredit });
       if (action.kind === "none") return;
       if (action.kind === "dialog") {
-        void triggerPrint(o.order_no);
+        void triggerPrint(o.order_no, { auto: true });
         goOrder(o.order_no);
         setSettleUnpaid(true);
         setSettleNo(o.order_no);

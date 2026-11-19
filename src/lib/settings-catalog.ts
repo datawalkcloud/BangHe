@@ -148,6 +148,14 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
   },
   { key: "print_default_copies", demo: "3", label: "联数（存根/财务/客户）", group: "print", kind: "number" },
   { key: "reprint_need_auth", demo: "true", label: "补打需站长授权", group: "print", kind: "bool" },
+  {
+    key: "auto_print_weigh_order", demo: "true", label: "过磅完成自动出码单", group: "print", kind: "bool",
+    hint: "关：过完磅不自动出纸，F9 / 顶部「打印」/ 结算弹窗「凭票打印」仍可手动出票",
+  },
+  {
+    key: "auto_print_settlement_voucher", demo: "true", label: "付款后自动打印结算凭证", group: "print", kind: "bool",
+    hint: "关：登记付款后不自动出纸，结算单详情页「打印凭证」仍可手动出票",
+  },
 
   {
     key: "attachment_max_kb", demo: "2048", label: "抓拍图落库上限（KB）", group: "retain", kind: "number",

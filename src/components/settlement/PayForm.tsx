@@ -22,7 +22,7 @@ import type { PaymentMethod } from "@/lib/constants";
 import { PAYMENT_METHOD } from "@/lib/constants";
 import { money, rmbUpper } from "@/lib/format";
 import { unpaidFen } from "@/lib/settle-gate";
-import { useStaffNames, useStation } from "@/hooks/useLookups";
+import { useStaffNames, useStation, useSetting } from "@/hooks/useLookups";
 import { actorId, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,9 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
   const names = useStaffNames();
   const can = useSession((s) => s.can);
   const { data: station } = useStation();
+  // 默认开：参数还没读回来时 raw 是 undefined，只认显式 "false"，
+  // 不能按"缺省关"把升级后第一笔付款的凭据静默吞掉
+  const autoPrintVoucher = useSetting("auto_print_settlement_voucher").raw !== "false";
   const queryClient = useQueryClient();
   const settleNo = settlement.settle_no;
   const left = unpaidFen(settlement);
@@ -66,6 +69,8 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
    * 分次付款时每笔都有一张纸，农户每拿一笔钱都握得住凭据。
    */
   const printVoucher = (paid: Settlement) => {
+    // 站点关掉自动出凭证就不出纸；详情页「打印凭证」是手动路，不受这枚开关影响
+    if (!autoPrintVoucher) return;
     // 没有出票权就压根不该出纸（页头那枚「打印凭证」同样是禁用的）
     if (!can("print")) return;
     if (!station) {
@@ -173,7 +178,9 @@ export function PayForm({ settlement, onPaid }: { settlement: Settlement; onPaid
         {pay.isPending ? "登记中…" : "确认付款"}
       </Button>
       <p className="text-xs text-muted-foreground">
-        每次登记付款都会自动打一张结算凭证：凭证联交售粮人，存根联财务留存。没出纸会弹预览框，手动补打即可。
+        {autoPrintVoucher
+          ? "每次登记付款都会自动打一张结算凭证：凭证联交售粮人，存根联财务留存。没出纸会弹预览框，手动补打即可。"
+          : "站点已关闭自动打印结算凭证：登记后不出纸，需要凭据时到结算单详情点「打印凭证」手动出票。"}
       </p>
       {printFallback}
     </div>
