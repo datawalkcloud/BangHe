@@ -62,15 +62,18 @@ export function AppTopbar({
   onToggleSidebar,
   onOpenSearch,
   onToggleDisplay,
+  aboutOpen,
+  onAboutOpenChange,
 }: {
   onToggleSidebar: () => void;
   onOpenSearch: () => void;
   onToggleDisplay: () => void;
+  /** 「关于」由 AppShell 持有开关；侧栏「服务 → 技术支持」已改为独立页面 */
+  aboutOpen: boolean;
+  onAboutOpenChange: (open: boolean) => void;
 }) {
   const navigate = useNavigate();
   const [helpOpen, setHelpOpen] = useState(false);
-  /** 「关于」：品牌、版本、仓库地址的展示位，字段单源见 AboutDialog 头注 */
-  const [aboutOpen, setAboutOpen] = useState(false);
   /** 新建过磅单：与工作台「制单」同一张 RegistrationDialog，任何页面都能直接开单 */
   const [regOpen, setRegOpen] = useState(false);
   const { data: parties = [] } = useQuery({ queryKey: ["parties", ""], queryFn: () => api.listParties("") });
@@ -168,7 +171,7 @@ export function AppTopbar({
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               {/* 版本与仓库地址以 pkg（这份守卫钉住的导入）传入，产品名/版权取 tauri.conf.json */}
-              <DropdownMenuItem onClick={() => setAboutOpen(true)}>
+              <DropdownMenuItem onClick={() => onAboutOpenChange(true)}>
                 <InfoIcon />
                 关于…
               </DropdownMenuItem>
@@ -192,7 +195,7 @@ export function AppTopbar({
 
       <ShortcutHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
 
-      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} version={pkg.version} repoUrl={pkg.repository.url} />
+      <AboutDialog open={aboutOpen} onOpenChange={onAboutOpenChange} version={pkg.version} repoUrl={pkg.repository.url} />
     </>
   );
 }

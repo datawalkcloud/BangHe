@@ -4,44 +4,30 @@
  * 界面上每一行字都取自既有单源，这里不抄第二份：产品名 / 版权 / 一句话简介来自
  * src-tauri/tauri.conf.json；版本号由 AppTopbar——schema_contract::app_version_is_single_sourced
  * 点名的那份导入——以 prop 传入；GitHub 仓库地址取 package.json 的 repository 字段。
- * 唯一的例外是技术支持的微信 / QQ：静态站读不到应用常量，只能各留一份，见下方 SUPPORT_* 注释。
+ * 技术支持的微信 / QQ 取 lib/support.ts（与「服务 → 技术支持」页共用；站内另有一份）。
  * 外链一律走 ExtLink（opener 插件默认放行的 https 白名单），不经自开命令。
  *
- * 「检查更新」走 tauri-plugin-updater，更新源与验签公钥在 tauri.conf.json 的 plugins.updater。
- * 只做手动检查：磅房机大多不联网，开局自动检查只会先撞一次超时招人烦。
- * Windows 下安装器拉起后本程序即退出并自动重启（InstallOptions.restartAfterInstall 默认 true），
- * 所以「安装中」之后前端不用再调重启。浏览器预览没有原生通道，这一区如实换成一句说明。
- *
- * 商店版（cargo feature `store-build`）整区换成"由 Microsoft Store 负责更新"的说明：
- * 商店要求更新走商店通道，那一侧 updater 插件在 Rust 就没注册。通道读数只问
- * native.ts 的 updateChannel()（单源即那个 feature），这里不设第二个开关。
+ * 更新面板与「服务 → 技术支持」页共用 UpdatePanel（检查 / 下载 / 安装 / 商店版说明都在那里）。
+ * 通道读数只问 native.ts 的 updateChannel()（单源即 cargo feature `store-build`），
+ * 这里不设第二个开关——schema_contract::store_build_updater_channel_is_single_switch
+ * 钉着本文件必须自己问一次。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { InfoGrid } from "@/components/business/layout";
-import { fileSize } from "@/lib/format";
+import { UpdatePanel } from "@/components/business/UpdatePanel";
 import { runningInTauri, updateChannel, type UpdateChannel } from "@/lib/native";
+import { SUPPORT_QQ, SUPPORT_WECHAT } from "@/lib/support";
 // 与 AppTopbar 引 package.json 同一个道理：配置在仓库里就一份，界面不改写它
 import conf from "../../../src-tauri/tauri.conf.json";
-
-type Phase = "idle" | "checking" | "available" | "downloading" | "installing";
 
 /** 官网：产品介绍的入口 */
 const SITE_URL = "https://bh.datawalk.cn";
 
 /** 源码仓的国内镜像（GitHub 那份由 package.json 的 repository 单源提供） */
 const GITEE_REPO_URL = "https://gitee.com/datawalkcloud/BangHe";
-
-/**
- * 技术支持的两条通道。站内那份在 site/index.html 的「技术支持」弹窗里（两格 <b>），
- * 静态站读不到应用的常量、应用也读不到站，改号码时两处一起改。
- */
-const SUPPORT_WECHAT = "sc251022";
-const SUPPORT_QQ = "740360381";
 
 /**
  * 一行联系方式 + 一颗复制钮：磅房机上徒手敲一串 QQ 号不现实。
@@ -64,11 +50,6 @@ function SupportLine({ id, what }: { id: string; what: string }) {
       </Button>
     </span>
   );
-}
-
-/** 命令层回的错误可能是裸字符串（Rust 侧约定），别把 `[object Object]` 弹给人 */
-function errText(e: unknown): string {
-  return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
 }
 
 /**
@@ -128,75 +109,8 @@ export function AboutDialog({
       alive = false;
     };
   }, [desktop]);
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [updateMeta, setUpdateMeta] = useState<{ version: string; body: string | null } | null>(null);
-  const [progress, setProgress] = useState<{ received: number; total: number | null } | null>(null);
-  // Update 在 Rust 侧持有资源（清单与已下载字节），不装就得 close，别攥着不放手
-  const updateRef = useRef<Update | null>(null);
-
-  /** 放弃这次更新机会：释放资源、回到初始态 */
-  function dismissUpdate() {
-    void updateRef.current?.close();
-    updateRef.current = null;
-    setUpdateMeta(null);
-    setProgress(null);
-    setPhase("idle");
-  }
-
-  function handleOpenChange(next: boolean) {
-    // 关框时把「发现了但没装」的更新放掉；下载/安装中的状态保留，重开还能看到进度
-    if (!next && phase === "available") dismissUpdate();
-    onOpenChange(next);
-  }
-
-  async function checkUpdate() {
-    setPhase("checking");
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const found = await check({ timeout: 15_000 });
-      if (!found) {
-        setPhase("idle");
-        toast.success(`已是最新版本（当前 ${version}）`);
-        return;
-      }
-      updateRef.current = found;
-      setUpdateMeta({ version: found.version, body: found.body ?? null });
-      setPhase("available");
-    } catch (e) {
-      setPhase("idle");
-      toast.error(`检查更新失败：${errText(e)}（可能没连上网，或更新源暂时不可用）`);
-    }
-  }
-
-  async function installUpdate() {
-    const u = updateRef.current;
-    if (!u) return;
-    setPhase("downloading");
-    setProgress({ received: 0, total: null });
-    try {
-      await u.downloadAndInstall(
-        (event: DownloadEvent) => {
-          if (event.event === "Started") {
-            setProgress({ received: 0, total: event.data.contentLength ?? null });
-          } else if (event.event === "Progress") {
-            setProgress((p) => ({ received: (p?.received ?? 0) + event.data.chunkLength, total: p?.total ?? null }));
-          } else if (event.event === "Finished") {
-            setPhase("installing");
-          }
-        },
-        { timeout: 300_000 },
-      );
-      // Windows 下安装器拉起后本程序即退出、装完自动重启；能执行到这句说明
-      // 安装器已经离场，弹窗里的文字只是给"重启前的最后一屏"看的
-      setPhase("installing");
-    } catch (e) {
-      toast.error(`下载或安装失败：${errText(e)}`);
-      dismissUpdate();
-    }
-  }
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[460px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
@@ -227,69 +141,9 @@ export function AboutDialog({
             { label: "技术支持 · QQ", value: <SupportLine id={SUPPORT_QQ} what="QQ 号" /> },
           ]}
         />
-        <p className="text-xs text-muted-foreground">装机、外设对接与日常使用中的问题，都可通过以上方式联系服务人员。</p>
+        <p className="text-xs text-muted-foreground">装机、外设对接、定制开发与日常使用中的需求，都可通过以上方式联系服务人员。</p>
 
-        {desktop && channel === "store" ? (
-          <div className="flex flex-col gap-2.5 rounded-xl border bg-muted/20 p-3">
-            <span className="text-sm font-medium">程序更新</span>
-            <p className="text-xs text-muted-foreground">
-              本版本经 Microsoft Store 分发，新版本由商店自动推送安装；要立即检查，请在商店「下载和更新」里查看。应用内不提供更新检查。
-            </p>
-          </div>
-        ) : desktop && channel === "github" ? (
-          <div className="flex flex-col gap-2.5 rounded-xl border bg-muted/20 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium">程序更新</span>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={phase === "checking" || phase === "downloading" || phase === "installing"}
-                onClick={() => void checkUpdate()}
-              >
-                {phase === "checking" ? "检查中…" : "检查更新"}
-              </Button>
-            </div>
-
-            {phase === "idle" && (
-              <p className="text-xs text-muted-foreground">
-                发现新版点「下载并安装」，装完自动重启到新版；离线电脑用装机包覆盖安装同样能升级。
-              </p>
-            )}
-
-            {phase === "available" && updateMeta && (
-              <div className="flex flex-col gap-2">
-                <p className="text-sm">
-                  发现新版本 <span className="tnum font-medium">{updateMeta.version}</span>
-                </p>
-                {updateMeta.body && <p className="whitespace-pre-line text-xs text-muted-foreground">{updateMeta.body}</p>}
-                <div className="flex items-center gap-2">
-                  <Button size="xs" onClick={() => void installUpdate()}>
-                    下载并安装
-                  </Button>
-                  <Button size="xs" variant="ghost" onClick={dismissUpdate}>
-                    暂不更新
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {phase === "downloading" && progress && (
-              <div className="flex flex-col gap-1.5">
-                {progress.total != null && (
-                  <Progress value={Math.min(100, Math.round((progress.received / progress.total) * 100))} />
-                )}
-                <p className="text-xs text-muted-foreground">
-                  下载中 {fileSize(progress.received)}
-                  {progress.total != null ? ` / ${fileSize(progress.total)}` : ""}
-                </p>
-              </div>
-            )}
-
-            {phase === "installing" && <p className="text-xs">正在安装，程序会自动退出并重启。</p>}
-          </div>
-        ) : !desktop ? (
-          <p className="text-xs text-muted-foreground">检查更新只在桌面端可用。</p>
-        ) : null}
+        <UpdatePanel version={version} channel={channel} active={open} />
 
         <p className="text-xs text-muted-foreground">本项目以 AGPL-3.0 协议开源，免费使用与商用；再分发须以同协议开源。</p>
       </DialogContent>

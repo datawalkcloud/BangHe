@@ -16,6 +16,7 @@ import {
   CreditCardIcon,
   FlaskConicalIcon,
   LayoutDashboardIcon,
+  LifeBuoyIcon,
   PackageOpenIcon,
   PlugZapIcon,
   ScaleIcon,
@@ -75,6 +76,12 @@ export const NAV_GROUPS: { label: string; items: NavEntry[] }[] = [
       item("流转卡片", "/cards", CreditCardIcon, "卡池登记、注销、空闲预警"),
       item("库存台账", "/stock", BoxesIcon, "仓房 × 品种结存与出入库流水"),
     ],
+  },
+  {
+    label: "服务",
+    // 二次开发提示：AGPL 允许移除本入口，但分发须遵守协议；若要保留，请把联系方式
+    // （src/lib/support.ts）换成你自己的。完整前提见 SupportPage 文件头说明。
+    items: [item("技术支持", "/support", LifeBuoyIcon, "微信 · QQ 联系方式与远程协助")],
   },
 ];
 

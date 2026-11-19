@@ -44,6 +44,7 @@ import { OutboundPage } from "@/pages/OutboundPage";
 import { OutboundDetailPage } from "@/pages/OutboundDetailPage";
 import { StockPage } from "@/pages/StockPage";
 import { SystemPage, type SystemSection } from "@/pages/SystemPage";
+import { SupportPage } from "@/pages/SupportPage";
 import { useSession } from "@/store/session";
 
 /** 会话状态 → 能不能进业务页。`mustChangePwd` 视同未登录：进了也只能看，不如先把密码设了 */
@@ -168,6 +169,9 @@ const devicesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/devi
 
 const cardsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/cards", component: CardsPage });
 
+// 付费服务与售后入口；二次开发可移除，但分发须遵守 AGPL-3.0（见 SupportPage 文件头说明）
+const supportRoute = createRoute({ getParentRoute: () => rootRoute, path: "/support", component: SupportPage });
+
 const systemRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/system/$section",
@@ -191,7 +195,7 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
-const routeTree = rootRoute.addChildren([loginRoute, indexRoute, workstationRoute, ordersRoute, orderDetailRoute, outboundRoute, outboundDetailRoute, stockRoute, partiesRoute, partyDetailRoute, qcRoute, qcDetailRoute, settlementsRoute, settlementDetailRoute, paymentsRoute, mastersRoute, reportsRoute, devicesRoute, cardsRoute, systemRoute]);
+const routeTree = rootRoute.addChildren([loginRoute, indexRoute, workstationRoute, ordersRoute, orderDetailRoute, outboundRoute, outboundDetailRoute, stockRoute, partiesRoute, partyDetailRoute, qcRoute, qcDetailRoute, settlementsRoute, settlementDetailRoute, paymentsRoute, mastersRoute, reportsRoute, devicesRoute, cardsRoute, supportRoute, systemRoute]);
 
 export const router = createRouter({
   routeTree,

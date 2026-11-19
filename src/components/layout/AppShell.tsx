@@ -49,7 +49,7 @@ import { GlobalSearch } from "@/components/business/GlobalSearch";
 import { QuickDetailSheet } from "@/components/business/QuickDetailSheet";
 import { AppTopbar } from "@/components/layout/AppTopbar";
 import { LockScreen } from "@/components/layout/LockScreen";
-import { NAV_FLAT, NAV_GROUPS, isNavActive } from "@/components/layout/app-nav";
+import { NAV_FLAT, NAV_GROUPS, isNavActive, type NavEntry } from "@/components/layout/app-nav";
 import { cn } from "cn";
 import { DisplayView } from "@/components/business/DisplayView";
 import { toggleDisplayWindow } from "@/lib/display-window";
@@ -92,7 +92,7 @@ function Nav({ roomy }: { roomy: boolean }) {
   const navigate = useNavigate();
   const { state } = useSidebar();
   const showShortcut = state === "expanded" && roomy;
-  const go = (href: string) => void navigate({ to: href as never });
+  const select = (entry: NavEntry) => void navigate({ to: entry.href as never });
   return (
     <SidebarContent className="gap-0">
       {NAV_GROUPS.map((g, gi) => (
@@ -102,13 +102,13 @@ function Nav({ roomy }: { roomy: boolean }) {
           <SidebarGroupContent>
             <SidebarMenu>
               {g.items.map((item) => {
-                const idx = NAV_FLAT.findIndex((n) => n.href === item.href);
+                const idx = NAV_FLAT.indexOf(item);
                 return (
-                  <SidebarMenuItem key={item.href}>
+                  <SidebarMenuItem key={item.label}>
                     <SidebarMenuButton
                       isActive={isNavActive(item, pathname)}
                       tooltip={`${item.label}${idx >= 0 && idx < 9 ? ` (Alt+${idx + 1})` : ""}`}
-                      onClick={() => go(item.href)}
+                      onClick={() => select(item)}
                     >
                       <item.icon />
                       <span>{item.label}</span>
@@ -131,6 +131,8 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [display, setDisplay] = useState(false);
+  /** 「关于」弹窗：顶栏「帮助 → 关于…」打开；侧栏「服务 → 技术支持」是独立页面 */
+  const [aboutOpen, setAboutOpen] = useState(false);
   const navigate = useNavigate();
   const demo = useSession((s) => s.demo);
   // 展开宽度拖到哪就记到哪（跟着账号走），拖完刷新还在原处
@@ -269,7 +271,14 @@ export function AppShell() {
             <OperatorFooter />
           </Sidebar>
           <SidebarInset className="flex h-svh min-w-0 flex-1 flex-col overflow-hidden">
-            <ShellContent toggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} onToggleDisplay={() => void toggleDisplay()} demo={demo} />
+            <ShellContent
+              toggleSidebar={toggleSidebar}
+              onOpenSearch={() => setSearchOpen(true)}
+              onToggleDisplay={() => void toggleDisplay()}
+              aboutOpen={aboutOpen}
+              onAboutOpenChange={setAboutOpen}
+              demo={demo}
+            />
           </SidebarInset>
         </>
       ) : (
@@ -321,7 +330,14 @@ export function AppShell() {
           />
           <ResizablePanel id="main" minSize="20rem">
             <SidebarInset className="h-full min-w-0 overflow-hidden">
-              <ShellContent toggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} onToggleDisplay={() => void toggleDisplay()} demo={demo} />
+              <ShellContent
+                toggleSidebar={toggleSidebar}
+                onOpenSearch={() => setSearchOpen(true)}
+                onToggleDisplay={() => void toggleDisplay()}
+                aboutOpen={aboutOpen}
+                onAboutOpenChange={setAboutOpen}
+                demo={demo}
+              />
             </SidebarInset>
           </ResizablePanel>
         </ResizablePanelGroup>
@@ -339,11 +355,15 @@ function ShellContent({
   toggleSidebar,
   onOpenSearch,
   onToggleDisplay,
+  aboutOpen,
+  onAboutOpenChange,
   demo,
 }: {
   toggleSidebar: () => void;
   onOpenSearch: () => void;
   onToggleDisplay: () => void;
+  aboutOpen: boolean;
+  onAboutOpenChange: (open: boolean) => void;
   demo: boolean;
 }) {
   return (
@@ -352,6 +372,8 @@ function ShellContent({
         onToggleSidebar={toggleSidebar}
         onOpenSearch={onOpenSearch}
         onToggleDisplay={onToggleDisplay}
+        aboutOpen={aboutOpen}
+        onAboutOpenChange={onAboutOpenChange}
       />
       {demo && (
         <div className="border-b bg-warning/10 px-4 py-1.5 text-xs text-warning">

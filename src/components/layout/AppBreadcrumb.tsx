@@ -92,6 +92,8 @@ export function getBreadcrumbItems(pathname: string, search?: Record<string, unk
     const label = REPORTS_KINDS[kind] || kind;
     items.push({ label: "台账报表", href: "/reports/ledger" });
     items.push({ label });
+  } else if (pathname === "/support") {
+    items.push({ label: "技术支持" });
   } else if (pathname === "/devices") {
     items.push({ label: "设备中心" });
   } else if (pathname.startsWith("/system/")) {
