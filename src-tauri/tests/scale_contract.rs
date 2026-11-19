@@ -13,8 +13,9 @@ use rusqlite::{params, Connection};
 
 use banghe_lib::db;
 use banghe_lib::scale::{
-    capture_align, dingsong_ds822_cont, driver_preset, frame_display, load_config, load_device, parse_hex,
-    parse_template, parse_weight, resolve_template, split_frames, split_frames_ex, yaohua_xk3190_cont, Align, Framing,
+    capture_align, dingsong_ds822_cont, driver_preset, frame_display, keli_d2008_cont, load_config, load_device,
+    parse_hex, parse_template, parse_weight, resolve_template, split_frames, split_frames_ex, yaohua_xk3190_cont,
+    Align, Framing,
     Judgement, Payload, ScaleEvent, Stability, StabilityJudge, StreamCore, FrameTemplate, Transport,
 };
 
@@ -1238,38 +1239,39 @@ fn ds822_flat_ledger_form_gets_the_preset() {
     assert_eq!(evs[0].error_kind, None, "{:?}", evs[0].error);
 }
 
-// ================================ 柯力 D2008「连续方式 TF=0」（复用耀华那一档模板，单独立型号）
+// ============ 柯力 D2008「连续方式」（帧形同耀华、单独立型号，但量纲按现场面板是吨）
 
 /// 柯力 D2008 手册「连续方式」的样例帧：发送 `+20.00` →
 /// `02 2B 30 30 32 30 30 30 32 31 42 03` = `STX` `+` `002000` `2`(小数位数) `1B`(异或) `ETX`。
 /// 异或核对：`+`~小数位这 8 字节（2B 30 30 32 30 30 30 32）异或 = 0x1B → ASCII `"1B"`。
-/// 手册自己写明"此协议格式同上海耀华 A2"，所以这挡驱动不另写解析，只借用耀华模板。
+/// 手册自己写明"此协议格式同上海耀华 A2"，所以这挡驱动不另写解析，只借用耀华帧形。
 fn keli_manual_sample_frame() -> Vec<u8> {
     vec![0x02, b'+', b'0', b'0', b'2', b'0', b'0', b'0', b'2', b'1', b'B', 0x03]
 }
 
-#[test]
-fn keli_d2008_preset_is_the_yaohua_template_verbatim() {
-    // 单独立一档只是为了让现场按仪表牌子选得到，不是给它另一套解析——两处必须逐字段相同，
-    // 否则以后改耀华预设会悄悄漏掉柯力这挡
-    assert_eq!(driver_preset("keli_d2008").unwrap(), yaohua_xk3190_cont());
-    assert_eq!(driver_preset("d2008"), driver_preset("keli_d2008"), "别名也要认");
+/// 2026-11-19 现场 COM5（柯力 D2008-W，9600/8/None/1）十六进制抓包：43 帧帧帧相同
+/// `02 2B 30 31 31 35 36 30 33 31 42 03` = `STX` `+` `011560` `3`(小数位数) `1B`(异或) `ETX`，
+/// 异或 43/43 全过；现场对表这台是 **11.56 吨**。
+fn keli_live_frame_com5() -> Vec<u8> {
+    vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'3', b'1', b'B', 0x03]
 }
 
 #[test]
-fn keli_manual_sample_frame_reads_20_kg_through_the_pipeline() {
+fn keli_manual_sample_frame_shares_the_yaohua_frame_shape() {
+    // 手册样例帧（发送 +20.00）逐字节走耀华那档：切帧、xor_ascii_hex、小数位取数三段全过。
+    // 这条只证"帧形同构"；数值多大取决于 unit，现场那台的量纲由下面两条钉死。
     let mut tpl = yaohua_xk3190_cont();
     tpl.transport.port = "COM5".into();
     let mut core = StreamCore::new(tpl, "scale1", 1);
     let evs = core.feed(&keli_manual_sample_frame(), 1000);
     assert_eq!(evs.len(), 1, "切帧 + 异或校验 + 小数位取数三段一起过：{evs:?}");
     assert!(evs[0].connected);
-    assert_eq!(evs[0].weight_01kg, 200, "手册样例 +20.00 → 200 个 0.1 kg");
+    assert_eq!(evs[0].weight_01kg, 200, "手册样例 +20.00 按 kg 档 = 200 个 0.1 kg");
     assert_eq!(evs[0].error_kind, None, "不该有任何错误：{:?}", evs[0].error);
 }
 
 #[test]
-fn keli_flat_ledger_form_gets_the_shared_preset() {
+fn keli_flat_ledger_form_gets_the_ton_preset() {
     let conn = db_conn();
     insert_device(
         &conn,
@@ -1286,35 +1288,58 @@ fn keli_flat_ledger_form_gets_the_shared_preset() {
     assert_eq!(tpl.framing.start, "\u{02}");
     assert_eq!(tpl.framing.checksum, "xor_ascii_hex");
     assert_eq!(tpl.payload.decimal_count_index, Some(8));
-    // 帧内那 6 位数字的量纲是 kg（仪表面板显示"吨"只是显示单位）：填成 t 会把读数放大 1000 倍
-    assert_eq!(tpl.payload.unit, "kg");
-    assert_eq!(parse_weight(&keli_manual_sample_frame(), &tpl.payload).unwrap(), 200);
+    // 现场那台 D2008 按吨显示（2026-11-19 对表：实际 11.56 吨）→ 帧内数字的量纲是 t，
+    // 套耀华那档的 kg 会把读数缩小 1000 倍
+    assert_eq!(tpl.payload.unit, "t");
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &tpl.payload).unwrap(), 115_600);
 }
 
 #[test]
-fn keli_live_com5_frame_passes_and_divides_by_its_own_tf_flag() {
-    // 2026-11-19 现场 COM5 十六进制抓包：43 帧帧帧相同
-    // `02 2B 30 31 31 35 36 30 33 31 42 03` = STX `+` `011560` `3`(小数位) `1B`(异或) ETX，
-    // 异或 43/43 全过 → 耀华那套切帧 + xor_ascii_hex + 小数位取数对这台直接可用，不用改代码。
-    let frame: Vec<u8> = vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'3', b'1', b'B', 0x03];
-    let mut tpl = yaohua_xk3190_cont();
+fn keli_d2008_preset_differs_from_yaohua_only_in_the_unit() {
+    // 两档必须只差 payload.unit 这一处：帧形（STX/ETX、xor_ascii_hex、小数位下标、分度）任何
+    // 别的漂移都说明有人改了耀华预设却漏改柯力，或反过来
+    let k = keli_d2008_cont();
+    let y = yaohua_xk3190_cont();
+    assert_eq!(k.framing, y.framing);
+    assert_eq!(k.transport, y.transport);
+    assert_eq!(k.stability, y.stability);
+    assert_eq!(k.align, y.align);
+    assert_eq!(k.query, y.query);
+    assert_eq!(k.payload.unit, "t");
+    assert_eq!(k.payload.decimal_count_index, y.payload.decimal_count_index);
+    let mut same_except_unit = y.payload.clone();
+    same_except_unit.unit = "t".into();
+    assert_eq!(k.payload, same_except_unit);
+    assert_eq!(driver_preset("d2008"), Some(k), "别名要指到同一档");
+}
+
+#[test]
+fn keli_live_com5_frame_reads_the_ton_digits() {
+    // 现场 COM5 抓包 43 帧帧帧相同，异或 43/43 全过；对表实际 11.56 吨。
+    // 011560 ÷ 10³ = 11.560，柯力档 unit=t → 11560 kg = 115_600 个 0.1 kg
+    let mut tpl = keli_d2008_cont();
     tpl.transport.port = "COM5".into();
     let mut core = StreamCore::new(tpl, "scale1", 1);
-    let evs = core.feed(&frame, 1000);
+    let evs = core.feed(&keli_live_frame_com5(), 1000);
     assert_eq!(evs.len(), 1, "切帧 + 校验 + 取数三段一起过：{evs:?}");
     assert_eq!(evs[0].error_kind, None, "现场原帧不该报任何错：{:?}", evs[0].error);
-    // 011560 ÷ 10³ = 11.560，unit=kg → 115.6 → 116 个 0.1 kg
-    assert_eq!(evs[0].weight_01kg, 116);
+    assert_eq!(evs[0].weight_01kg, 115_600);
+    // 反证（就是现场看到的那条 11.6 kg）：同一帧套耀华档，校验照样全过、读数缩小 1000 倍。
+    // 量纲错不会报错，只会静默称错车——所以这两档必须分开，不能让柯力复用耀华预设。
+    let mut core_kg = StreamCore::new(yaohua_xk3190_cont(), "scale1", 1);
+    let evs_kg = core_kg.feed(&keli_live_frame_com5(), 1000);
+    assert_eq!(evs_kg[0].error_kind, None, "kg 档照样校验得过：{:?}", evs_kg[0].error);
+    assert_eq!(evs_kg[0].weight_01kg, 116, "11.6 kg 这条错读数的出处，别让它再发生");
 }
 
 #[test]
 fn keli_tf_flag_is_inside_its_own_checksum_so_only_unit_can_be_wrong() {
     // 仪表算异或时把"小数位数"那一位一起算进去，所以 TF 设成几都自洽、都校验得过：
-    // 同一串 011560 配 TF=0（异或 1B → 18）读出来是 11560 kg，配 TF=3 是 11.56 kg，
-    // 差 1000 倍却**没有任何坏帧提示**。这条钉住"量纲只能靠 payload.unit 对上仪表面板单位"，
-    // 别指望校验和或判稳能挡住单位填错。
+    // 同一串 011560 配 TF=0（异或 1B → 18）按 kg 档读出来是 11560 kg，配 TF=3 是 11.56 kg，
+    // 差 1000 倍却**没有任何坏帧提示**（柯力档同样差 1000 倍，只是基准换成吨）。
+    // 这条钉住"量纲只能靠 payload.unit 对上仪表面板单位"，别指望校验和或判稳能挡住单位填错。
     let tf0: Vec<u8> = vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'0', b'1', b'8', 0x03];
-    let tf3: Vec<u8> = vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'3', b'1', b'B', 0x03];
+    let tf3 = keli_live_frame_com5();
     let tpl = yaohua_xk3190_cont();
     assert_eq!(parse_weight(&tf0, &tpl.payload).unwrap(), 115_600);
     assert_eq!(parse_weight(&tf3, &tpl.payload).unwrap(), 116);

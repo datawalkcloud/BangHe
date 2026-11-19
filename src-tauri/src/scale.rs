@@ -1325,13 +1325,13 @@ pub fn capture_align(conn: &Connection) -> Align {
 /// 这是"通用帧模板 + 型号预设"里的**预设**：现场只填 `port`/`baud` 就能跑；要微调仍可在
 /// `config_json` 写完整的嵌套模板（那时 [`maybe_apply_driver_preset`] 不再套本预设）。
 ///
-/// 同样适用于**柯力 D2008 的「连续方式」**：其手册给的帧
+/// 帧形同样适用于**柯力 D2008 的「连续方式」**：其手册给的帧
 /// `02 2B 30 30 32 30 30 30 32 31 42 03`（发送 +20.00，异或 `0x1B`）与本档逐字节同构，
-/// 手册自己也写明"此协议格式同上海耀华 A2"——所以 [`driver_preset`] 让 `keli_d2008` 复用本模板。
-/// 2026-11-19 现场 COM5 又抓到 43 帧 `02 2B 30 31 31 35 36 30 33 31 42 03`（`011560` + 小数位 `3`
-/// → 11.560），异或 43/43 全过：**小数位数是帧里自带的一位**，现场把仪表 TF 设成几都不用改代码。
-/// 唯一要核的是 `unit`——它说的是帧内数字自身的单位（耀华那台实测是 kg），
-/// 若该仪表面板按吨显示且小数点 3 位，同一帧就是 11.560 t = 11560 kg，差 1000 倍且**校验抓不出来**。
+/// 手册自己也写明"此协议格式同上海耀华 A2"。2026-11-19 现场又抓到 43 帧
+/// `02 2B 30 31 31 35 36 30 33 31 42 03`（`011560` + 小数位 `3`），异或 43/43 全过：
+/// **小数位数是帧里自带的一位**，现场把仪表 TF 设成几都不用改代码。
+/// 但 `keli_d2008` 走的是 [`keli_d2008_cont`]，不复用本档：本档 `unit="kg"` 有 2026-09-12
+/// 耀华实机 62 kg 顶着，而现场那台 D2008 按吨显示，同一帧必须读成 11.560 t = 11560 kg。
 pub fn yaohua_xk3190_cont() -> FrameTemplate {
     FrameTemplate {
         transport: Transport {
@@ -1370,6 +1370,23 @@ pub fn yaohua_xk3190_cont() -> FrameTemplate {
             mode: "nearest_div".into(),
         },
         query: Query::default(),
+    }
+}
+
+/// 柯力 D2008 **连续方式**这一档：帧形与 [`yaohua_xk3190_cont`] 逐字节同构（手册自写
+/// "此协议格式同上海耀华 A2"），**只有 `payload.unit` 不同**。
+///
+/// 2026-11-19 现场抓包定死了这一处差别：一帧 `02 2B 30 31 31 35 36 30 33 31 42 03`
+/// = `STX` `+` `011560` `3`(小数位数) `1B`(异或) `ETX`，43 帧帧帧相同、异或 43/43 全过；
+/// 现场对表确认这台实际是 **11.56 吨**，而按 `unit="kg"` 会读成 11.56 kg——差 1000 倍，
+/// 且小数位数那一位被仪表算进它自己的异或里，**校验与判稳都拦不住这种量纲错**，只能这样单独一档。
+///
+/// 小数位数是帧里自带的一位（这里 `3`，手册样例是 `2`），所以仪表面板 TF 设成几都不用改代码、
+/// 也不会报坏帧——模板照那一位定标；`unit` 说的是"帧内数字自身的单位"，必须等于仪表面板显示单位。
+pub fn keli_d2008_cont() -> FrameTemplate {
+    FrameTemplate {
+        payload: Payload { unit: "t".into(), ..yaohua_xk3190_cont().payload },
+        ..yaohua_xk3190_cont()
     }
 }
 
@@ -1448,9 +1465,8 @@ pub fn dingsong_ds822_cont() -> FrameTemplate {
 pub fn driver_preset(driver: &str) -> Option<FrameTemplate> {
     match driver.trim().to_ascii_lowercase().as_str() {
         "yaohua_xk3190" | "yaohua_xk3190_cont" | "xk3190" => Some(yaohua_xk3190_cont()),
-        // 与耀华逐字节同构（小数位数那一位由帧自带，仪表 TF 设成几都吃得下），单独立一挡只为让
-        // 现场按仪表牌子选得到；要核的是面板显示单位 ↔ payload.unit，见 yaohua_xk3190_cont 文档
-        "keli_d2008" | "kelid2008_cont" | "d2008" => Some(yaohua_xk3190_cont()),
+        // 帧形与耀华同构、单独立一档：现场那台 D2008 按吨显示，量纲（payload.unit）与耀华不同
+        "keli_d2008" | "kelid2008_cont" | "d2008" => Some(keli_d2008_cont()),
         "ds822" | "dingsong_ds822" => Some(dingsong_ds822_cont()),
         _ => None,
     }
