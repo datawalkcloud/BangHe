@@ -126,7 +126,8 @@ pub struct Payload {
     pub decimal_count_index: Option<i32>,
     /// 扫描途中可跳过的填充字符（空格填充的仪表用 `" "`)
     pub skip_chars: String,
-    /// 单位换算：`kg`（默认）| `g` | `t` | `0.1kg`
+    /// 单位换算：`kg`（默认）| `g` | `t` | `0.1kg`。这是**帧内数字自身的量纲**，不是界面显示单位；
+    /// 设备中心「重量单位」那一栏（扁平键 `unit`）就是覆盖它的入口，见 [`maybe_apply_driver_preset`]
     pub unit: String,
     /// 预留：仪表状态字节下标（04 §2.2 B 族"稳定才发"用 [`Payload::stable_flag`]）
     pub status_bytes: Vec<u8>,
@@ -477,6 +478,24 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 // ====================================================================== 取数
 
+/// `payload.unit` → 把帧内数字换算到 0.1 kg 的因子 `(num, den)`，即 `weight_01kg = 帧内数字 × num / den`。
+///
+/// **单位说的是"帧内数字自身的量纲"，不是界面显示单位**（04 §2.3）：同一串 `011560` 配小数位 `3`，
+/// `kg` 是 11.56 kg、`t` 是 11.56 t = 11560 kg，差 1000 倍。选错的后果之所以抓不住，是因为仪表把
+/// 小数位数那一位算进了它自己的异或里，两种解释都自洽、都过校验与判稳——只能靠对表把单位配对。
+///
+/// 认不出的取值回 `None`：[`parse_weight`] 逐帧报中文短句，[`resolve_template`] 在开串口之前就拒掉，
+/// 两处共用这一份合法集合，别各写一份 match（改一边漏一边就是"配置能吃、读数静默错"）。
+fn unit_factor(unit: &str) -> Option<(i64, i64)> {
+    match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "kg" => Some((10, 1)),
+        "0.1kg" | "dag" | "d" => Some((1, 1)),
+        "g" => Some((1, 100)),
+        "t" => Some((10_000, 1)),
+        _ => None,
+    }
+}
+
 /// 位置化取出 `weight_01kg`（0.1 kg 整数；负数=负读数，回皮/空磅负值用）。
 ///
 /// 失败回中文短句，调用方按坏帧计数（§2.4 C1）。
@@ -601,15 +620,9 @@ pub fn parse_weight(frame: &[u8], payload: &Payload) -> Result<i64, String> {
         }
     };
     // 再按单位换算到 0.1 kg（§2.3：无小数点时按 kg 直接换算；有小数点时量级由点定死）
-    let (factor_num, factor_den): (i64, i64) = match payload.unit.trim().to_ascii_lowercase().as_str() {
-        "" | "kg" => (10, 1),
-        "0.1kg" | "dag" | "d" => (1, 1),
-        "g" => (1, 100),
-        "t" => (10_000, 1),
-        other => {
-            return Err(format!("不认识的单位「{other}」，模板 unit 只支持 kg/g/t/0.1kg"));
-        }
-    };
+    let (factor_num, factor_den) = unit_factor(&payload.unit).ok_or_else(|| {
+        format!("不认识的单位「{}」，模板 unit 只支持 kg/g/t/0.1kg", payload.unit.trim())
+    })?;
     let scale = den * factor_den;
     let scaled = num.saturating_mul(factor_num);
     let value_01kg = (scaled + scale / 2) / scale; // 四舍五入到 0.1 kg
@@ -807,6 +820,10 @@ pub struct ScaleEvent {
     pub samples: Vec<i64>,
     pub mean_01kg: i64,
     pub division_01kg: i64,
+    /// 这一帧按什么量纲解析出来的（`payload.unit`，如 `kg` / `t`）。`weight_01kg` 本身永远是 0.1 kg，
+    /// 这个字段只告诉界面"仪表面板上那个数是以什么为单位显示的"，界面据此决定写 kg 还是吨。
+    /// 没单位可说（还没收到过帧）时是空串，界面按 kg 显示。
+    pub unit: String,
     pub frame_count: u64,
     pub err_count: u64,
     // ---- 判稳依据快照：设备中心帧监视器解释"为什么还在波动中"就靠这五项 ----
@@ -844,6 +861,7 @@ impl Default for ScaleEvent {
             samples: Vec::new(),
             mean_01kg: 0,
             division_01kg: 100,
+            unit: String::new(),
             frame_count: 0,
             err_count: 0,
             spread_01kg: 0,
@@ -1143,6 +1161,9 @@ impl StreamCore {
             samples: self.judge.window(),
             mean_01kg: self.last_mean,
             division_01kg: self.tpl.align.division_01kg,
+            // 生效量纲随帧下发：界面不能去看台账的 `config.unit`——那一格可能没填（跟随型号预设），
+            // 而预设的 unit 在 Rust 这张表里，前端抄一份就是第三处真相（同 `division_01kg` 的口径）
+            unit: self.tpl.payload.unit.clone(),
             frame_count: self.frame_count,
             err_count: self.err_count,
             spread_01kg,
@@ -1505,6 +1526,15 @@ fn maybe_apply_driver_preset(
         if let Some(s) = map.get("stop_bits").and_then(json_u8) {
             preset.transport.stop_bits = s;
         }
+        // 重量单位：设备中心那一栏「跟随型号 / 千克 / 吨」。**空串与缺键都不覆盖**，让型号预设
+        // （耀华 kg、柯力与顶松 t）说了算；现场手选过一次就以手选为准——同一型号换了一块按千克
+        // 显示的面板时，不必回来改代码。非法取值不在这里静默回落，由 [`resolve_template`] 在开串口
+        // 之前拒掉：单位配错是 1000 倍量纲错，校验与判稳都拦不住，只能响。
+        if let Some(u) = map.get("unit").and_then(|v| v.as_str()) {
+            if !u.trim().is_empty() {
+                preset.payload.unit = u.trim().to_string();
+            }
+        }
     }
     Ok(preset)
 }
@@ -1572,6 +1602,15 @@ pub fn resolve_template(row: &DeviceRow) -> Result<FrameTemplate, String> {
         return Err(format!(
             "这台磅「{}」的 payload.decimal_places={} 过大（重量小数位最多 6）",
             row.name, tpl.payload.decimal_places
+        ));
+    }
+    // 量纲在开串口之前就验：认不出单位时逐帧报错会被「连续 20 帧解析不出有效重量」那条笼统提示
+    // 盖掉，现场只会以为是帧格式不对，看不出是单位那一栏填了个不是单位的东西。
+    if unit_factor(&tpl.payload.unit).is_none() {
+        return Err(format!(
+            "这台磅「{}」的重量单位「{}」不认识，请在设备中心选「千克 kg」或「吨 t」（帧模板 payload.unit 只支持 kg/g/t/0.1kg）",
+            row.name,
+            tpl.payload.unit.trim()
         ));
     }
     if tpl.framing.max_len > 1024 {

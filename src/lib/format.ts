@@ -24,9 +24,32 @@ function nil(v: number | null | undefined): v is null | undefined {
   return v === null || v === undefined || Number.isNaN(v);
 }
 
-/** 0.1kg → "12,345.6 kg" */
-export function weight(v01kg: number | null | undefined, withUnit = true): string {
+/**
+ * 这一列数按什么单位说。注意它**只是显示口径**：`_01kg` 那一列永远是 0.1 kg 定点整数，
+ * 换单位不动数值，只动除数与后缀。
+ *
+ * 值的来源是 Rust 帧模板的 `payload.unit`（仪表**帧内数字**的量纲，随 `device://scale`
+ * 的 `unit` 字段下发），不是界面自己选的显示偏好——量纲配错是 1000 倍且校验抓不住
+ * （04 §2.3），所以界面只转述后端解析这一帧时用的那个单位，绝不自己猜。
+ */
+export type WeightUnit = "kg" | "t";
+
+/** Rust 事件里的 `unit` → 显示单位；空串（还没收到过帧）与 kg 之外的冷门取值一律按 kg */
+export function weightUnit(unit: string | null | undefined): WeightUnit {
+  const u = (unit ?? "").trim().toLowerCase();
+  return u === "t" || u === "吨" ? "t" : "kg";
+}
+
+/** 单位后缀本身（大字与单位分两处排版时用，如设备中心那一格） */
+export function weightUnitLabel(unit: WeightUnit): string {
+  return unit === "t" ? "t" : "kg";
+}
+
+/** 0.1kg → "12,345.6 kg"；`unit="t"` → "12.346 t"（三位小数=1 kg，正是这类帧的末位分辨率） */
+export function weight(v01kg: number | null | undefined, withUnit = true, unit: WeightUnit = "kg"): string {
   if (nil(v01kg)) return EMPTY;
+  // 吨那一档直接走 `ton`：同一份换算在这个文件里只许有一处（÷10000 + 三位小数）
+  if (unit === "t") return ton(v01kg, withUnit);
   const kg = v01kg / 10;
   return `${group(kg, 1)}${withUnit ? " kg" : ""}`;
 }

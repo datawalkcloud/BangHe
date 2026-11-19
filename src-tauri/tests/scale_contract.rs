@@ -765,7 +765,7 @@ fn event_field_names_are_exactly_what_the_frontend_wires() {
     for key in ["connected", "on_scale", "weight_01kg", "aligned_01kg", "stable", "raw_frame", "at", "error"] {
         assert!(obj.contains_key(key), "缺字段 {key}：实际 {obj:?}");
     }
-    for key in ["error_kind", "code", "device_id", "port", "samples", "mean_01kg", "division_01kg", "frame_count", "err_count"] {
+    for key in ["error_kind", "code", "device_id", "port", "samples", "mean_01kg", "division_01kg", "unit", "frame_count", "err_count"] {
         assert!(obj.contains_key(key), "附加字段 {key} 丢了：实际 {obj:?}");
     }
     assert!(!obj.contains_key("onScale") && !obj.contains_key("weight01kg"), "事件一律 snake_case，不得混 camelCase");
@@ -777,6 +777,7 @@ fn event_field_names_are_exactly_what_the_frontend_wires() {
     assert_eq!(obj["error"], serde_json::Value::Null);
     assert!(obj["at"].as_str().map(|s| !s.is_empty()).unwrap_or(false), "at 必须是本地 ISO 串");
     assert_eq!(obj["division_01kg"].as_i64(), Some(100));
+    assert_eq!(obj["unit"].as_str(), Some("kg"), "随帧下去的量纲就是模板的 payload.unit");
     // 反过来说明与 ScaleState 的对应关系（前端接线时按这份改名）
     assert_eq!(ev.weight_01kg, 2537);
     assert_eq!(ev.samples.len(), 1);
@@ -1350,8 +1351,144 @@ fn keli_tf_flag_is_inside_its_own_checksum_so_only_unit_can_be_wrong() {
     }
 }
 
-// ============================================================ 判稳依据快照（设备中心取证用）
+// ================================= 设备中心「重量单位」：扁平表单的 unit 覆盖型号预设（②+③）
 
+/// 现场在设备中心填完「串口 + 单位」这一屏之后，台账真正跑出来的模板。`extra` 是多加的键。
+fn flat_scale_tpl(conn: &Connection, code: &str, driver: &str, extra: &str) -> FrameTemplate {
+    let cfg = format!(r#"{{ "port": "COM5", "baud": "9600"{extra} }}"#);
+    insert_device(conn, code, "1 号地磅", "scale", driver, &cfg, 0, 1);
+    let (_row, tpl) = load_config(conn, code)
+        .unwrap_or_else(|e| panic!("{code} 该跑出模板：{e}"))
+        .unwrap_or_else(|| panic!("{code} 台账里刚插进去：{cfg}"));
+    tpl
+}
+
+#[test]
+fn the_unit_column_overrides_the_model_preset_both_ways() {
+    let conn = db_conn();
+    // 耀华那档预设是 kg：现场把同一块面板切成按吨显示时，在设备中心点「吨 t」就该对上，
+    // 不必回来改代码——这一条就是「重量单位」这一栏存在的理由
+    let ton = flat_scale_tpl(&conn, "scale_y_t", "yaohua_xk3190", r#", "unit": "t""#);
+    assert_eq!(ton.payload.unit, "t");
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &ton.payload).unwrap(), 115_600);
+    // 反方向也要走得通：柯力预设是 t，换一块按千克显示的面板时点「千克 kg」得真的小 1000 倍，
+    // 别做成"只会往吨补、不会回落"
+    let kg = flat_scale_tpl(&conn, "scale_k_kg", "keli_d2008", r#", "unit": "kg""#);
+    assert_eq!(kg.payload.unit, "kg");
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &kg.payload).unwrap(), 116);
+    // 覆盖只动量纲这一格：帧形、小数位下标、分度、串口参数一律照旧
+    assert_eq!(kg.framing, keli_d2008_cont().framing);
+    assert_eq!(kg.payload.decimal_count_index, Some(8));
+    assert_eq!(kg.transport.port, "COM5");
+    assert_eq!(kg.align.division_01kg, 100);
+}
+
+#[test]
+fn a_blank_unit_column_follows_the_model_preset() {
+    let conn = db_conn();
+    // 设备中心的「跟随型号」就是不写这个键；1.2.2 之前的旧台账那一格是空串。两种都必须让预设
+    // 说了算——空串若被当成一个"单位"盖上去，耀华能蒙对（预设本就是 kg），柯力与顶松立刻缩 1000 倍
+    for (code, extra) in [
+        ("scale_p_absent", ""),
+        ("scale_p_empty", r#", "unit": """#),
+        ("scale_p_space", r#", "unit": "  ""#),
+    ] {
+        let tpl = flat_scale_tpl(&conn, code, "keli_d2008", extra);
+        assert_eq!(tpl.payload.unit, "t", "「{extra}」属跟随型号，不该改成别的东西");
+        assert_eq!(parse_weight(&keli_live_frame_com5(), &tpl.payload).unwrap(), 115_600);
+    }
+    // 手输的大写与首尾空格算同一个单位（前端存的是 kg/t，这一条是给手工改库的人留的）
+    let ton_shout = flat_scale_tpl(&conn, "scale_p_upper", "keli_d2008", r#", "unit": " T ""#);
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &ton_shout.payload).unwrap(), 115_600);
+    let kg_shout = flat_scale_tpl(&conn, "scale_p_upper_kg", "keli_d2008", r#", "unit": "Kg""#);
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &kg_shout.payload).unwrap(), 116);
+}
+
+#[test]
+fn a_unit_the_parser_does_not_know_is_refused_before_the_port_opens() {
+    let conn = db_conn();
+    // 量纲错是 1000 倍、且校验与判稳都拦不住，所以配错单位必须响，而不是等读线程攒够
+    // 「连续 20 帧解析不出有效重量」——那条笼统提示会把人引向"帧格式不对"
+    insert_device(
+        &conn,
+        "scale_bad_unit",
+        "1 号地磅",
+        "scale",
+        "keli_d2008",
+        r#"{ "port": "COM5", "unit": "斤" }"#,
+        0,
+        1,
+    );
+    let e = load_config(&conn, "scale_bad_unit").unwrap_err();
+    assert!(
+        e.contains("重量单位") && e.contains("斤") && e.contains("千克 kg") && e.contains("吨 t"),
+        "要指得出改哪一栏：{e}"
+    );
+    assert!(e.chars().count() <= 120, "命令层的提示不能写成长文：{e}");
+    assert!(!e.contains("::") && !e.contains("Error") && !e.contains('{'), "不得泄漏内部信息：{e}");
+    // 写了完整 payload 段的（帧监视器手调过）走同一道门：一处拦一处放就是"配置能吃、读数静默错"
+    insert_device(
+        &conn,
+        "scale_bad_unit_nested",
+        "手调模板的磅",
+        "scale",
+        "yaohua_xk3190",
+        &DOC_TEMPLATE.replace(r#""unit": "kg""#, r#""unit": "ton""#),
+        0,
+        1,
+    );
+    let row = load_device(&conn, "scale_bad_unit_nested").unwrap().unwrap();
+    let e = resolve_template(&row).unwrap_err();
+    assert!(e.contains("重量单位") && e.contains("ton"), "嵌套模板那一侧同样要拦：{e}");
+}
+
+#[test]
+fn the_unit_gate_admits_every_unit_the_parser_knows() {
+    // 这道门是把"认不出"挡下来，不是把合法集合窄到只剩 kg/t：帧模板历史上还认 g、0.1kg、dag、d
+    //（耀华那档的"十分之一千克"），窄掉等于把老台账关在门外
+    let conn = db_conn();
+    for u in ["", "kg", "g", "t", "0.1kg", "dag", "d"] {
+        let code = format!("scale_ok_unit_{}", u.replace('.', "_"));
+        insert_device(
+            &conn,
+            &code,
+            "单位合法的磅",
+            "scale",
+            "generic",
+            &DOC_TEMPLATE.replace(r#""unit": "kg""#, &format!(r#""unit": "{u}""#)),
+            0,
+            1,
+        );
+        assert!(load_config(&conn, &code).unwrap().is_some(), "「{u}」是合法单位，别被新加的这道门挡住");
+    }
+}
+
+#[test]
+fn the_effective_unit_rides_on_every_frame_event() {
+    // 界面写 kg 还是吨只认帧上这一个字段：台账「跟随型号」时 config.unit 是空的，而预设的量纲
+    // 在 Rust 这张表里——前端抄一份就是第三处真相（与 `division_01kg` 同一口径）
+    let conn = db_conn();
+    let mut core = StreamCore::new(flat_scale_tpl(&conn, "scale_ev_t", "keli_d2008", ""), "scale1", 1);
+    let evs = core.feed(&keli_live_frame_com5(), 1000);
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert_eq!((evs[0].weight_01kg, evs[0].unit.as_str()), (115_600, "t"));
+    // 手选覆盖后随帧下去的也是覆盖后的值，不是型号预设
+    let mut core_kg = StreamCore::new(
+        flat_scale_tpl(&conn, "scale_ev_kg", "keli_d2008", r#", "unit": "kg""#),
+        "scale1",
+        1,
+    );
+    let evs_kg = core_kg.feed(&keli_live_frame_com5(), 1000);
+    assert_eq!((evs_kg[0].weight_01kg, evs_kg[0].unit.as_str()), (116, "kg"));
+    // 顶松那档同理（它的量纲来自抓包，不是从耀华抄的）
+    let mut core_ds = StreamCore::new(flat_scale_tpl(&conn, "scale_ev_ds", "dingsong_ds822", ""), "scale2", 2);
+    let evs_ds = core_ds.feed(&ds822_frame(6946, '+'), 1000);
+    assert_eq!((evs_ds[0].weight_01kg, evs_ds[0].unit.as_str()), (69_460, "t"));
+    // 还没收到过帧（离线/演示）时后端没单位可说 → 空串，界面退回 kg，与改造前一模一样
+    assert_eq!(ScaleEvent::default().unit, "");
+}
+
+// ============================================================ 判稳依据快照（设备中心取证用）
 /// 造一帧 A9 连续帧：`STX` `符号` `6 位整数 kg` `小数位数=0` `两字符 ASCII 十六进制异或` `ETX`。
 /// 校验按真机同规则现算（符号位~小数位这 8 字节异或），kg=62 时正好等于现场抓到的 `1F`。
 fn a9_frame_kg(kg: i64) -> Vec<u8> {
