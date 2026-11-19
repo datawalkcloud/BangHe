@@ -1214,7 +1214,6 @@ export function DevicesPage() {
                 ) : (
                   <p className="text-xs text-muted-foreground">{serialHint ?? "尚未扫描到本机串口，可在下方手动输入。"}</p>
                 )}
-                <p className="text-xs text-muted-foreground">浏览器预览里扫不到串口，只能手动填写。</p>
               </div>
             )}
 
