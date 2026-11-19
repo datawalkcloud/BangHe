@@ -492,25 +492,35 @@ export function ReceiptDocument({
       {receipt ? (
         <>
           <header className="text-center">
-            {/* 站名倍宽倍高：与小票机 `wide:2 tall:2` 同档，热敏票的第一眼要认出是哪家的票 */}
-            <h1 className="text-[24px] font-bold leading-[1.2]">{station.name}</h1>
-            <p className="mt-0.5 font-bold">{template.title}</p>
+            {/* 站名倍宽倍高：与小票机 `wide:2 tall:2` 同档，热敏票的第一眼要认出是哪家的票。
+                模板可关（showStationName）；缺省视为展示，老模板没这个字段照旧印 */}
+            {template.showStationName !== false && <h1 className="text-[24px] font-bold leading-[1.2]">{station.name}</h1>}
+            {template.showTitle !== false && <p className="mt-0.5 font-bold">{template.title}</p>}
             {showReprint && <p className="font-bold">【补打，已经站长授权】</p>}
-            {template.copyNote && <p>{template.copyNote}</p>}
+            {template.showCopyNote !== false && template.copyNote && <p>{template.copyNote}</p>}
           </header>
           <Rule layout={layout} />
           {/* 票头到"单号 / 日期"为止：热敏机打的就是这几行（`escpos.ts` 的票头），
               地址电话不往里塞——58mm 上它们要占掉三四行，而这行信息对"拿票去结算"毫无用处。
-              A4 / 241 的单据风格仍然带地址电话，那边有纸宽。 */}
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="shrink-0">单号</span>
-            <span className="min-w-0 text-right font-mono">{docNo}</span>
-          </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="shrink-0">日期</span>
-            <span className="min-w-0 text-right font-mono">{dateText}</span>
-          </div>
-          <Rule layout={layout} />
+              A4 / 241 的单据风格仍然带地址电话，那边有纸宽。
+              单号与日期都可被模板关掉；两个都关时不打中间那条分隔线（否则虚线叠虚线） */}
+          {(template.showDocNo !== false || template.showDocDate !== false) && (
+            <>
+              {template.showDocNo !== false && (
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="shrink-0">单号</span>
+                  <span className="min-w-0 text-right font-mono">{docNo}</span>
+                </div>
+              )}
+              {template.showDocDate !== false && (
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="shrink-0">日期</span>
+                  <span className="min-w-0 text-right font-mono">{dateText}</span>
+                </div>
+              )}
+              <Rule layout={layout} />
+            </>
+          )}
         </>
       ) : (
         <>
@@ -518,13 +528,13 @@ export function ReceiptDocument({
             <span className="absolute top-2 right-3 border border-black px-1.5 py-0.5 text-[11px] font-bold">补 打</span>
           )}
           <header className="text-center">
-            <h1 className="text-[19px] font-bold tracking-[0.12em]">{station.name}</h1>
-            <p className="mt-0.5 text-[15px] font-bold tracking-[0.3em]">{template.title}</p>
+            {template.showStationName !== false && <h1 className="text-[19px] font-bold tracking-[0.12em]">{station.name}</h1>}
+            {template.showTitle !== false && <p className="mt-0.5 text-[15px] font-bold tracking-[0.3em]">{template.title}</p>}
             <p className="mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-0.5 text-[11px]">
-              <span>单据号：{docNo}</span>
-              <span>业务日期：{dateText}</span>
-              {station.address && <span>地址：{station.address}</span>}
-              {station.phone && <span>电话：{station.phone}</span>}
+              {template.showDocNo !== false && <span>单据号：{docNo}</span>}
+              {template.showDocDate !== false && <span>业务日期：{dateText}</span>}
+              {template.showStationAddress !== false && station.address && <span>地址：{station.address}</span>}
+              {template.showStationPhone !== false && station.phone && <span>电话：{station.phone}</span>}
             </p>
           </header>
           <div className="mt-3 border-t-2 border-black" />
@@ -551,12 +561,12 @@ export function ReceiptDocument({
       </div>
       {receipt ? (
         <footer>
-          {template.copyNote && <p className="text-center">{template.copyNote}</p>}
+          {template.showCopyNote !== false && template.copyNote && <p className="text-center">{template.copyNote}</p>}
           <p className="text-right font-mono text-[11px]">{station.code}</p>
         </footer>
       ) : (
         <footer className="mt-1.5 flex items-center justify-between text-[10px]">
-          <span>{template.copyNote}</span>
+          {template.showCopyNote !== false && <span>{template.copyNote}</span>}
           <span>本单一式三联，涂改无效</span>
           <span>{station.code}</span>
         </footer>

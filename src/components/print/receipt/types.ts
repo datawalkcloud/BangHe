@@ -172,6 +172,31 @@ export interface ReceiptTemplate {
   copyNote: string;
   /** 是否允许在票面上显示「补打」角标（补打场景由打印入口传入，这里只是开关） */
   showReprintBadge: boolean;
+  /**
+   * 票头站点名是否展示。缺省视为展示（取用侧判 `!== false`）：这个字段出现之前存下来的
+   * 模板里没有它，而"热敏票第一眼认出是哪家的票"从来是票头的本职，老站点不能一升级就没了抬头。
+   * 预览（`render.tsx` 两种版式）与热敏直打（`escpos.ts` 票头）认同一个开关，不许分叉。
+   */
+  showStationName?: boolean;
+  /**
+   * 单据风格（A4 / 241）票头的地址是否展示。缺省视为展示（`!== false`，理由同站点名）。
+   * 小票风格（热敏）票头本来就不印地址电话——58mm 上要占三四行，对"拿票去结算"毫无用处
+   * （见 `render.tsx` 票头注释），这个开关不负责把它们新加到热敏票上。
+   */
+  showStationAddress?: boolean;
+  /** 单据风格票头的电话是否展示。缺省视为展示，其余同 `showStationAddress`。 */
+  showStationPhone?: boolean;
+  /** 票头票据标题（如「收购码单（过磅单）」）是否展示。缺省视为展示（`!== false`）。 */
+  showTitle?: boolean;
+  /**
+   * 联次说明是否展示。小票风格票头与票尾各印一次、单据风格在票尾——那是同一句话的两处落点，
+   * 算同一个东西，开关一起关。缺省视为展示。
+   */
+  showCopyNote?: boolean;
+  /** 票头单号是否展示。缺省视为展示；预览与热敏直打认同一个开关。 */
+  showDocNo?: boolean;
+  /** 票头日期是否展示。缺省视为展示；预览与热敏直打认同一个开关。 */
+  showDocDate?: boolean;
   sections: ReceiptSection[];
   updatedAt: string;
 }

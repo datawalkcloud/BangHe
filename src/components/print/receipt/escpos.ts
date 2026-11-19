@@ -66,17 +66,26 @@ export function receiptLines(
   const out: NativePrintLine[] = [];
 
   /* ---------------------------------------------------------------- 票头 */
-  // 站名倍宽倍高：热敏票的第一眼必须能认出是哪家的票
-  out.push({ kind: "text", text: ctx.station.name, align: "center", bold: true, wide: 2, tall: 2 });
-  out.push({ kind: "text", text: template.title, align: "center", bold: true });
+  // 站名倍宽倍高：热敏票的第一眼必须能认出是哪家的票。模板可关（showStationName），
+  // 缺省视为展示——预览（render.tsx）与这里认同一个开关，不许分叉
+  if (template.showStationName !== false) {
+    out.push({ kind: "text", text: ctx.station.name, align: "center", bold: true, wide: 2, tall: 2 });
+  }
+  if (template.showTitle !== false) {
+    out.push({ kind: "text", text: template.title, align: "center", bold: true });
+  }
   if (template.showReprintBadge && ctx.reprint) {
     out.push({ kind: "text", text: "【补打，已经站长授权】", align: "center", bold: true });
   }
-  if (template.copyNote) out.push({ kind: "text", text: template.copyNote, align: "center" });
+  if (template.showCopyNote !== false && template.copyNote) out.push({ kind: "text", text: template.copyNote, align: "center" });
   out.push({ kind: "rule" });
-  out.push({ kind: "kv", label: "单号", value: docNo });
-  out.push({ kind: "kv", label: "日期", value: dateText });
-  out.push({ kind: "rule" });
+  // 单号与日期都可被模板关掉；两个都关时不再打第二条分隔线（与 render.tsx 同一条规则，
+  // 否则虚线叠虚线，票面凭空多一截空白）
+  const showDocNo = template.showDocNo !== false;
+  const showDocDate = template.showDocDate !== false;
+  if (showDocNo) out.push({ kind: "kv", label: "单号", value: docNo });
+  if (showDocDate) out.push({ kind: "kv", label: "日期", value: dateText });
+  if (showDocNo || showDocDate) out.push({ kind: "rule" });
 
   /* -------------------------------------------------------------- 各区块 */
   for (const sec of template.sections) {
@@ -179,7 +188,7 @@ export function receiptLines(
 
   /* ---------------------------------------------------------------- 票尾 */
   out.push({ kind: "rule" });
-  if (template.copyNote) out.push({ kind: "text", text: template.copyNote, align: "center" });
+  if (template.showCopyNote !== false && template.copyNote) out.push({ kind: "text", text: template.copyNote, align: "center" });
   // 站点编码右对齐：换机器、换站点时这是定位的第一线索（与 write_weigh_ticket 同处理）
   out.push({ kind: "text", text: ctx.station.code, align: "right" });
 

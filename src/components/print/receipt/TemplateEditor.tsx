@@ -334,6 +334,59 @@ export function ReceiptTemplateEditor() {
                   <span className="text-xs">{draft.showReprintBadge ? "显示" : "隐藏"}</span>
                 </span>
               </Label>
+              {/* 票头三项：关掉的是票头本来就有的东西，不是往热敏票上加新行。
+                  地址 / 电话只在单据风格（A4 / 241）票头出现，小票风格票头不印它们 */}
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                站点名
+                <span className="flex h-8 items-center gap-2">
+                  <Switch checked={draft.showStationName !== false} onCheckedChange={(v) => patch({ showStationName: v })} />
+                  <span className="text-xs">{draft.showStationName !== false ? "显示" : "隐藏"}</span>
+                </span>
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                站点地址
+                <span className="flex h-8 items-center gap-2">
+                  <Switch checked={draft.showStationAddress !== false} onCheckedChange={(v) => patch({ showStationAddress: v })} />
+                  <span className="text-xs">{draft.showStationAddress !== false ? "显示" : "隐藏"}</span>
+                </span>
+                <span className="text-[10px] text-muted-foreground">地址 / 电话只出现在单据风格（A4 / 241）票头，热敏小票票头不印这两行</span>
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                站点电话
+                <span className="flex h-8 items-center gap-2">
+                  <Switch checked={draft.showStationPhone !== false} onCheckedChange={(v) => patch({ showStationPhone: v })} />
+                  <span className="text-xs">{draft.showStationPhone !== false ? "显示" : "隐藏"}</span>
+                </span>
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                票据标题
+                <span className="flex h-8 items-center gap-2">
+                  <Switch checked={draft.showTitle !== false} onCheckedChange={(v) => patch({ showTitle: v })} />
+                  <span className="text-xs">{draft.showTitle !== false ? "显示" : "隐藏"}</span>
+                </span>
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                联次说明
+                <span className="flex h-8 items-center gap-2">
+                  <Switch checked={draft.showCopyNote !== false} onCheckedChange={(v) => patch({ showCopyNote: v })} />
+                  <span className="text-xs">{draft.showCopyNote !== false ? "显示" : "隐藏"}</span>
+                </span>
+                <span className="text-[10px] text-muted-foreground">票头与票尾的联次说明一起隐藏</span>
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                单号
+                <span className="flex h-8 items-center gap-2">
+                  <Switch checked={draft.showDocNo !== false} onCheckedChange={(v) => patch({ showDocNo: v })} />
+                  <span className="text-xs">{draft.showDocNo !== false ? "显示" : "隐藏"}</span>
+                </span>
+              </Label>
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                日期
+                <span className="flex h-8 items-center gap-2">
+                  <Switch checked={draft.showDocDate !== false} onCheckedChange={(v) => patch({ showDocDate: v })} />
+                  <span className="text-xs">{draft.showDocDate !== false ? "显示" : "隐藏"}</span>
+                </span>
+              </Label>
               <Label className="col-span-2 flex flex-col gap-1 text-xs text-muted-foreground">
                 小票机列数（汉字占 2 列）
                 <Choose
