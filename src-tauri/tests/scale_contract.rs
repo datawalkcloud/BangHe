@@ -13,9 +13,10 @@ use rusqlite::{params, Connection};
 
 use banghe_lib::db;
 use banghe_lib::scale::{
-    capture_align, driver_preset, frame_display, load_config, load_device, parse_hex, parse_template, parse_weight,
-    resolve_template, split_frames, split_frames_ex, yaohua_xk3190_cont, Align, Framing, Judgement, Payload,
-    ScaleEvent, Stability, StabilityJudge, StreamCore, FrameTemplate, Transport,
+    capture_align, dingsong_ds822_cont, driver_preset, frame_display, keli_d2008_cont, load_config, load_device,
+    parse_hex, parse_template, parse_weight, resolve_template, split_frames, split_frames_ex, yaohua_xk3190_cont,
+    Align, Framing,
+    Judgement, Payload, ScaleEvent, Stability, StabilityJudge, StreamCore, FrameTemplate, Transport,
 };
 
 // ------------------------------------------------------------------ 测试用模板
@@ -764,7 +765,7 @@ fn event_field_names_are_exactly_what_the_frontend_wires() {
     for key in ["connected", "on_scale", "weight_01kg", "aligned_01kg", "stable", "raw_frame", "at", "error"] {
         assert!(obj.contains_key(key), "缺字段 {key}：实际 {obj:?}");
     }
-    for key in ["error_kind", "code", "device_id", "port", "samples", "mean_01kg", "division_01kg", "frame_count", "err_count"] {
+    for key in ["error_kind", "code", "device_id", "port", "samples", "mean_01kg", "division_01kg", "unit", "frame_count", "err_count"] {
         assert!(obj.contains_key(key), "附加字段 {key} 丢了：实际 {obj:?}");
     }
     assert!(!obj.contains_key("onScale") && !obj.contains_key("weight01kg"), "事件一律 snake_case，不得混 camelCase");
@@ -776,6 +777,7 @@ fn event_field_names_are_exactly_what_the_frontend_wires() {
     assert_eq!(obj["error"], serde_json::Value::Null);
     assert!(obj["at"].as_str().map(|s| !s.is_empty()).unwrap_or(false), "at 必须是本地 ISO 串");
     assert_eq!(obj["division_01kg"].as_i64(), Some(100));
+    assert_eq!(obj["unit"].as_str(), Some("kg"), "随帧下去的量纲就是模板的 payload.unit");
     // 反过来说明与 ScaleState 的对应关系（前端接线时按这份改名）
     assert_eq!(ev.weight_01kg, 2537);
     assert_eq!(ev.samples.len(), 1);
@@ -1081,10 +1083,412 @@ fn full_nested_template_is_never_overwritten_by_the_preset() {
 fn unknown_driver_has_no_preset() {
     assert!(driver_preset("toledo").is_none(), "没预设的驱动完全按 config_json 走");
     assert!(driver_preset("yaohua_xk3190").is_some());
+    assert!(driver_preset("dingsong_ds822").is_some());
+    assert!(driver_preset("ds822").is_some(), "现场抄的是仪表型号，别名也要认");
+}
+
+// =============================================== 顶松 DS822 连续发送（2026-11-19 现场抓包）
+
+/// 现场 COM6（9600/8/None/1）十六进制抓包里的一帧，22 字节，66 帧帧帧相同（空磅）：
+/// `02 41 61 2B 30*6 33 30*7 62 20 48 03` = `STX Aa + 000000 3 0000000 b <空格> 校验 ETX`。
+fn ds822_captured_frame() -> Vec<u8> {
+    vec![
+        0x02, b'A', b'a', b'+', b'0', b'0', b'0', b'0', b'0', b'0', b'3', b'0', b'0', b'0', b'0',
+        b'0', b'0', b'0', b'b', b' ', 0x48, 0x03,
+    ]
+}
+
+/// 造一帧进流：`STX Aa <符号> <6 位重量> <小数位数=3> <7 个 0> b <空格> <异或> ETX`。
+/// 帧内数字是**吨**（`006946`/10³ = 6.946 t = 6946 kg）；那个空格是帧内尾巴，不是帧间分隔符。
+/// 异或覆盖**含 STX、含空格**的前 20 字节——帧尾两字节（校验 + ETX）不在覆盖范围内。
+fn ds822_frame(kg: i64, sign: char) -> Vec<u8> {
+    let mut f: Vec<u8> = vec![0x02, b'A', b'a', sign as u8];
+    f.extend(format!("{:06}30000000b ", kg.abs()).as_bytes());
+    let xored = f.iter().fold(0u8, |a, b| a ^ *b);
+    f.push(xored);
+    f.push(0x03);
+    f
+}
+
+fn ds822_core() -> StreamCore {
+    let mut tpl = dingsong_ds822_cont();
+    tpl.transport.port = "COM6".into();
+    StreamCore::new(tpl, "scale2", 2)
+}
+
+#[test]
+fn ds822_captured_frame_reads_zero_with_no_error() {
+    // 这一条就是现场报错的那一帧：修复前按 xor_ascii_hex 判「帧尾 ASCII 校验「H」应为 6A」，
+    // 整台磅一个读数都下不来
+    let mut core = ds822_core();
+    let evs = core.feed(&ds822_captured_frame(), 1000);
+    assert_eq!(evs.len(), 1, "切帧 + 异或校验 + 小数位取数三段一起过：{evs:?}");
+    assert!(evs[0].connected);
+    assert_eq!(evs[0].weight_01kg, 0, "空磅读数 0，且是真读出来的 0，不是坏帧兜底");
+    assert_eq!(evs[0].error_kind, None, "不该有任何错误：{:?}", evs[0].error);
+}
+
+#[test]
+fn ds822_checksum_anchors_to_the_earlier_ascii_capture() {
+    // 同一台磅早先用 ASCII 显示抓过 006942 / 006946 两帧，行首各自露出 'A' / 'E'。
+    // 按本规则现算正好是 0x41 / 0x45 → 那两位不是帧首字段，是上一帧的帧尾异或字节。
+    // 这条把 ds822_frame 的自算校验钉在真机数据上，防止"自造自验"。
+    assert_eq!(ds822_frame(6942, '+')[20], 0x41, "抓包里的 'A'");
+    assert_eq!(ds822_frame(6946, '+')[20], 0x45, "抓包里的 'E'");
+    assert_eq!(ds822_captured_frame()[20], 0x48, "十六进制抓包里的 'H'");
+}
+
+#[test]
+fn ds822_checksum_body_must_include_both_stx_and_the_inner_space() {
+    // 覆盖范围差一个字节就不认：只少 STX → 0x4A，只少那个空格 → 0x6A（现场报错里那句"应为 6A"
+    // 正是漏了 STX 与空格的那算法）。把校验字节换成这两个值，必须判坏帧而不是照称。
+    for (wrong, why) in [(0x4Au8, "不含起始符"), (0x6Au8, "不含帧内空格"), (0x49u8, "整体错一位")] {
+        let mut f = ds822_frame(6946, '+');
+        f[20] = wrong;
+        let mut core = ds822_core();
+        let evs = core.feed(&f, 1000);
+        assert!(
+            evs.iter().any(|e| e.error_kind.as_deref() == Some("BadFrame")),
+            "{why}：校验字节 0x{wrong:02X} 本该判坏帧，实际 {evs:?}"
+        );
+        assert!(evs.iter().all(|e| e.weight_01kg == 0), "{why}：校验不过绝不能当成一次读数");
+    }
+}
+
+#[test]
+fn ds822_weight_digits_are_the_six_bytes_after_the_sign() {
+    let tpl = dingsong_ds822_cont();
+    // 抓包里 index 10 恒为 '3' 而重量数字在跳 → 它是"小数点从右数几位"，不是重量的第 7 位。
+    // 下标含起始符：STX A a + 0 0 6 9 4 6 [3] → 第 10 字节。
+    assert_eq!(tpl.payload.decimal_count_index, Some(10));
+    assert_eq!(tpl.payload.sign_index, 3, "符号位在第 4 字节（前面是 STX + 地址头 Aa）");
+    assert_eq!(parse_weight(&ds822_frame(6946, '+'), &tpl.payload).unwrap(), 69_460);
+    assert_eq!(parse_weight(&ds822_frame(1234, '+'), &tpl.payload).unwrap(), 12_340);
+    assert_eq!(parse_weight(&ds822_frame(500, '+'), &tpl.payload).unwrap(), 5_000);
+}
+
+#[test]
+fn ds822_negative_sign_is_kept() {
+    let tpl = dingsong_ds822_cont();
+    assert_eq!(parse_weight(&ds822_frame(6946, '-'), &tpl.payload).unwrap(), -69_460, "回皮的负读数不能当正数");
+}
+
+#[test]
+fn ds822_stream_splits_on_stx_etx_with_no_gap() {
+    // 抓包里 03 之后紧跟下一个 02，帧间没有分隔符；空格在帧内，切完不该留残字节
+    let mut core = ds822_core();
+    let mut bytes = ds822_frame(6946, '+');
+    bytes.extend(ds822_frame(6944, '+'));
+    let evs = core.feed(&bytes, 1000);
+    assert_eq!(evs.len(), 1, "两帧同一毫秒，第二帧该被 10 帧/秒节流挡掉：{evs:?}");
+    assert!(evs[0].connected);
+    assert_eq!(evs[0].weight_01kg, 69_460);
+    assert_eq!(evs[0].error_kind, None);
+    assert_eq!(core.buffer_len(), 0, "STX/ETX 切完不该留残字节");
+    let evs = core.feed(&ds822_frame(6944, '+'), 1200);
+    assert_eq!(evs.len(), 1, "到 200 ms 该把第二帧发出去：{evs:?}");
+    assert_eq!(evs[0].weight_01kg, 69_440);
+}
+
+#[test]
+fn ds822_half_frame_waits_then_offline() {
+    // 只有前半截（没有 ETX）：留着等下一包，一个字节都不能当读数发出去；一直等不到就该喊离线
+    let mut core = ds822_core();
+    let cut = ds822_frame(6946, '+')[..12].to_vec();
+    assert!(core.feed(&cut, 1000).is_empty(), "半帧绝不能下发读数");
+    let ev = core.watchdog(6000).expect("一帧都没解析出来，5 秒后该喊离线");
+    assert_eq!(ev.error_kind.as_deref(), Some("Offline"));
+    assert!(!ev.connected);
+}
+
+#[test]
+fn ds822_yaohua_equal_frame_is_not_read_as_this_instrument() {
+    // 万一现场把仪表输出格式切成耀华那种 `=+  0.0kg US\r\n`：这挡按 STX 找帧，一帧都切不出来，
+    // 只会报离线——绝不会拿另一个量纲的帧凑出个看着像数的读数。
+    let mut core = ds822_core();
+    let evs = core.feed(b"=+  0.0kg US\r\n=+  0.0kg US\r\n", 1000);
+    assert!(evs.is_empty(), "没有 STX 就该一帧都切不出来：{evs:?}");
+    assert_eq!(core.buffer_len(), 0, "无起始符的字节整段丢掉，不让缓冲区无上限长大");
+}
+
+#[test]
+fn ds822_flat_ledger_form_gets_the_preset() {
+    // 现场在设备中心只填端口/波特率（扁平表单），驱动选 dingsong_ds822 → 自动套上抓包模板
+    let conn = db_conn();
+    insert_device(
+        &conn,
+        "scaleDS822",
+        "2 号地磅",
+        "scale",
+        "dingsong_ds822",
+        r#"{ "port": "COM6", "baud": "9600", "frameFamily": "A" }"#,
+        0,
+        1,
+    );
+    let (_row, tpl) = load_config(&conn, "scaleDS822").unwrap().expect("扁平表单也要跑出 DS822 模板");
+    assert_eq!(tpl.transport.port, "COM6");
+    assert_eq!(tpl.transport.baud, 9600);
+    assert_eq!(tpl.framing.mode, "delimited");
+    assert_eq!(tpl.framing.start, "\u{02}", "十六进制抓包确认帧帧以 STX 开头");
+    assert_eq!(tpl.framing.terminator, "\u{03}", "以 ETX 结尾，帧间没有分隔符");
+    assert_eq!(tpl.framing.checksum, "xor8_incl_start", "末字节原始异或，且覆盖范围含起始符");
+    assert_eq!(tpl.payload.unit, "t", "帧内数字的量纲是吨，不是柯力那种 kg");
+    // 套完预设还能直接把现场那一帧跑成 0 kg（校验/切帧都在流水线里验过）
+    let mut core = StreamCore::new(tpl.clone(), "scale2", 2);
+    let evs = core.feed(&ds822_captured_frame(), 1000);
+    assert_eq!(evs.len(), 1, "扁平表单套出来的模板要能直接吃真帧：{evs:?}");
+    assert_eq!(evs[0].error_kind, None, "{:?}", evs[0].error);
+}
+
+// ============ 柯力 D2008「连续方式」（帧形同耀华、单独立型号，但量纲按现场面板是吨）
+
+/// 柯力 D2008 手册「连续方式」的样例帧：发送 `+20.00` →
+/// `02 2B 30 30 32 30 30 30 32 31 42 03` = `STX` `+` `002000` `2`(小数位数) `1B`(异或) `ETX`。
+/// 异或核对：`+`~小数位这 8 字节（2B 30 30 32 30 30 30 32）异或 = 0x1B → ASCII `"1B"`。
+/// 手册自己写明"此协议格式同上海耀华 A2"，所以这挡驱动不另写解析，只借用耀华帧形。
+fn keli_manual_sample_frame() -> Vec<u8> {
+    vec![0x02, b'+', b'0', b'0', b'2', b'0', b'0', b'0', b'2', b'1', b'B', 0x03]
+}
+
+/// 2026-11-19 现场 COM5（柯力 D2008-W，9600/8/None/1）十六进制抓包：43 帧帧帧相同
+/// `02 2B 30 31 31 35 36 30 33 31 42 03` = `STX` `+` `011560` `3`(小数位数) `1B`(异或) `ETX`，
+/// 异或 43/43 全过；现场对表这台是 **11.56 吨**。
+fn keli_live_frame_com5() -> Vec<u8> {
+    vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'3', b'1', b'B', 0x03]
+}
+
+#[test]
+fn keli_manual_sample_frame_shares_the_yaohua_frame_shape() {
+    // 手册样例帧（发送 +20.00）逐字节走耀华那档：切帧、xor_ascii_hex、小数位取数三段全过。
+    // 这条只证"帧形同构"；数值多大取决于 unit，现场那台的量纲由下面两条钉死。
+    let mut tpl = yaohua_xk3190_cont();
+    tpl.transport.port = "COM5".into();
+    let mut core = StreamCore::new(tpl, "scale1", 1);
+    let evs = core.feed(&keli_manual_sample_frame(), 1000);
+    assert_eq!(evs.len(), 1, "切帧 + 异或校验 + 小数位取数三段一起过：{evs:?}");
+    assert!(evs[0].connected);
+    assert_eq!(evs[0].weight_01kg, 200, "手册样例 +20.00 按 kg 档 = 200 个 0.1 kg");
+    assert_eq!(evs[0].error_kind, None, "不该有任何错误：{:?}", evs[0].error);
+}
+
+#[test]
+fn keli_flat_ledger_form_gets_the_ton_preset() {
+    let conn = db_conn();
+    insert_device(
+        &conn,
+        "scaleKeli",
+        "1 号地磅",
+        "scale",
+        "keli_d2008",
+        r#"{ "port": "COM5", "baud": "9600", "frameFamily": "A" }"#,
+        0,
+        1,
+    );
+    let (_row, tpl) = load_config(&conn, "scaleKeli").unwrap().expect("选柯力 D2008 也要跑出模板");
+    assert_eq!(tpl.transport.port, "COM5");
+    assert_eq!(tpl.framing.start, "\u{02}");
+    assert_eq!(tpl.framing.checksum, "xor_ascii_hex");
+    assert_eq!(tpl.payload.decimal_count_index, Some(8));
+    // 现场那台 D2008 按吨显示（2026-11-19 对表：实际 11.56 吨）→ 帧内数字的量纲是 t，
+    // 套耀华那档的 kg 会把读数缩小 1000 倍
+    assert_eq!(tpl.payload.unit, "t");
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &tpl.payload).unwrap(), 115_600);
+}
+
+#[test]
+fn keli_d2008_preset_differs_from_yaohua_only_in_the_unit() {
+    // 两档必须只差 payload.unit 这一处：帧形（STX/ETX、xor_ascii_hex、小数位下标、分度）任何
+    // 别的漂移都说明有人改了耀华预设却漏改柯力，或反过来
+    let k = keli_d2008_cont();
+    let y = yaohua_xk3190_cont();
+    assert_eq!(k.framing, y.framing);
+    assert_eq!(k.transport, y.transport);
+    assert_eq!(k.stability, y.stability);
+    assert_eq!(k.align, y.align);
+    assert_eq!(k.query, y.query);
+    assert_eq!(k.payload.unit, "t");
+    assert_eq!(k.payload.decimal_count_index, y.payload.decimal_count_index);
+    let mut same_except_unit = y.payload.clone();
+    same_except_unit.unit = "t".into();
+    assert_eq!(k.payload, same_except_unit);
+    assert_eq!(driver_preset("d2008"), Some(k), "别名要指到同一档");
+}
+
+#[test]
+fn keli_live_com5_frame_reads_the_ton_digits() {
+    // 现场 COM5 抓包 43 帧帧帧相同，异或 43/43 全过；对表实际 11.56 吨。
+    // 011560 ÷ 10³ = 11.560，柯力档 unit=t → 11560 kg = 115_600 个 0.1 kg
+    let mut tpl = keli_d2008_cont();
+    tpl.transport.port = "COM5".into();
+    let mut core = StreamCore::new(tpl, "scale1", 1);
+    let evs = core.feed(&keli_live_frame_com5(), 1000);
+    assert_eq!(evs.len(), 1, "切帧 + 校验 + 取数三段一起过：{evs:?}");
+    assert_eq!(evs[0].error_kind, None, "现场原帧不该报任何错：{:?}", evs[0].error);
+    assert_eq!(evs[0].weight_01kg, 115_600);
+    // 反证（就是现场看到的那条 11.6 kg）：同一帧套耀华档，校验照样全过、读数缩小 1000 倍。
+    // 量纲错不会报错，只会静默称错车——所以这两档必须分开，不能让柯力复用耀华预设。
+    let mut core_kg = StreamCore::new(yaohua_xk3190_cont(), "scale1", 1);
+    let evs_kg = core_kg.feed(&keli_live_frame_com5(), 1000);
+    assert_eq!(evs_kg[0].error_kind, None, "kg 档照样校验得过：{:?}", evs_kg[0].error);
+    assert_eq!(evs_kg[0].weight_01kg, 116, "11.6 kg 这条错读数的出处，别让它再发生");
+}
+
+#[test]
+fn keli_tf_flag_is_inside_its_own_checksum_so_only_unit_can_be_wrong() {
+    // 仪表算异或时把"小数位数"那一位一起算进去，所以 TF 设成几都自洽、都校验得过：
+    // 同一串 011560 配 TF=0（异或 1B → 18）按 kg 档读出来是 11560 kg，配 TF=3 是 11.56 kg，
+    // 差 1000 倍却**没有任何坏帧提示**（柯力档同样差 1000 倍，只是基准换成吨）。
+    // 这条钉住"量纲只能靠 payload.unit 对上仪表面板单位"，别指望校验和或判稳能挡住单位填错。
+    let tf0: Vec<u8> = vec![0x02, b'+', b'0', b'1', b'1', b'5', b'6', b'0', b'0', b'1', b'8', 0x03];
+    let tf3 = keli_live_frame_com5();
+    let tpl = yaohua_xk3190_cont();
+    assert_eq!(parse_weight(&tf0, &tpl.payload).unwrap(), 115_600);
+    assert_eq!(parse_weight(&tf3, &tpl.payload).unwrap(), 116);
+    for f in [tf0, tf3] {
+        let mut core = StreamCore::new(tpl.clone(), "scale1", 1);
+        let evs = core.feed(&f, 1000);
+        assert_eq!(evs[0].error_kind, None, "两种 TF 各自与自己的异或自洽 → 都该判好帧：{evs:?}");
+    }
+}
+
+// ================================= 设备中心「重量单位」：扁平表单的 unit 覆盖型号预设（②+③）
+
+/// 现场在设备中心填完「串口 + 单位」这一屏之后，台账真正跑出来的模板。`extra` 是多加的键。
+fn flat_scale_tpl(conn: &Connection, code: &str, driver: &str, extra: &str) -> FrameTemplate {
+    let cfg = format!(r#"{{ "port": "COM5", "baud": "9600"{extra} }}"#);
+    insert_device(conn, code, "1 号地磅", "scale", driver, &cfg, 0, 1);
+    let (_row, tpl) = load_config(conn, code)
+        .unwrap_or_else(|e| panic!("{code} 该跑出模板：{e}"))
+        .unwrap_or_else(|| panic!("{code} 台账里刚插进去：{cfg}"));
+    tpl
+}
+
+#[test]
+fn the_unit_column_overrides_the_model_preset_both_ways() {
+    let conn = db_conn();
+    // 耀华那档预设是 kg：现场把同一块面板切成按吨显示时，在设备中心点「吨 t」就该对上，
+    // 不必回来改代码——这一条就是「重量单位」这一栏存在的理由
+    let ton = flat_scale_tpl(&conn, "scale_y_t", "yaohua_xk3190", r#", "unit": "t""#);
+    assert_eq!(ton.payload.unit, "t");
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &ton.payload).unwrap(), 115_600);
+    // 反方向也要走得通：柯力预设是 t，换一块按千克显示的面板时点「千克 kg」得真的小 1000 倍，
+    // 别做成"只会往吨补、不会回落"
+    let kg = flat_scale_tpl(&conn, "scale_k_kg", "keli_d2008", r#", "unit": "kg""#);
+    assert_eq!(kg.payload.unit, "kg");
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &kg.payload).unwrap(), 116);
+    // 覆盖只动量纲这一格：帧形、小数位下标、分度、串口参数一律照旧
+    assert_eq!(kg.framing, keli_d2008_cont().framing);
+    assert_eq!(kg.payload.decimal_count_index, Some(8));
+    assert_eq!(kg.transport.port, "COM5");
+    assert_eq!(kg.align.division_01kg, 100);
+}
+
+#[test]
+fn a_blank_unit_column_follows_the_model_preset() {
+    let conn = db_conn();
+    // 设备中心的「跟随型号」就是不写这个键；1.2.2 之前的旧台账那一格是空串。两种都必须让预设
+    // 说了算——空串若被当成一个"单位"盖上去，耀华能蒙对（预设本就是 kg），柯力与顶松立刻缩 1000 倍
+    for (code, extra) in [
+        ("scale_p_absent", ""),
+        ("scale_p_empty", r#", "unit": """#),
+        ("scale_p_space", r#", "unit": "  ""#),
+    ] {
+        let tpl = flat_scale_tpl(&conn, code, "keli_d2008", extra);
+        assert_eq!(tpl.payload.unit, "t", "「{extra}」属跟随型号，不该改成别的东西");
+        assert_eq!(parse_weight(&keli_live_frame_com5(), &tpl.payload).unwrap(), 115_600);
+    }
+    // 手输的大写与首尾空格算同一个单位（前端存的是 kg/t，这一条是给手工改库的人留的）
+    let ton_shout = flat_scale_tpl(&conn, "scale_p_upper", "keli_d2008", r#", "unit": " T ""#);
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &ton_shout.payload).unwrap(), 115_600);
+    let kg_shout = flat_scale_tpl(&conn, "scale_p_upper_kg", "keli_d2008", r#", "unit": "Kg""#);
+    assert_eq!(parse_weight(&keli_live_frame_com5(), &kg_shout.payload).unwrap(), 116);
+}
+
+#[test]
+fn a_unit_the_parser_does_not_know_is_refused_before_the_port_opens() {
+    let conn = db_conn();
+    // 量纲错是 1000 倍、且校验与判稳都拦不住，所以配错单位必须响，而不是等读线程攒够
+    // 「连续 20 帧解析不出有效重量」——那条笼统提示会把人引向"帧格式不对"
+    insert_device(
+        &conn,
+        "scale_bad_unit",
+        "1 号地磅",
+        "scale",
+        "keli_d2008",
+        r#"{ "port": "COM5", "unit": "斤" }"#,
+        0,
+        1,
+    );
+    let e = load_config(&conn, "scale_bad_unit").unwrap_err();
+    assert!(
+        e.contains("重量单位") && e.contains("斤") && e.contains("千克 kg") && e.contains("吨 t"),
+        "要指得出改哪一栏：{e}"
+    );
+    assert!(e.chars().count() <= 120, "命令层的提示不能写成长文：{e}");
+    assert!(!e.contains("::") && !e.contains("Error") && !e.contains('{'), "不得泄漏内部信息：{e}");
+    // 写了完整 payload 段的（帧监视器手调过）走同一道门：一处拦一处放就是"配置能吃、读数静默错"
+    insert_device(
+        &conn,
+        "scale_bad_unit_nested",
+        "手调模板的磅",
+        "scale",
+        "yaohua_xk3190",
+        &DOC_TEMPLATE.replace(r#""unit": "kg""#, r#""unit": "ton""#),
+        0,
+        1,
+    );
+    let row = load_device(&conn, "scale_bad_unit_nested").unwrap().unwrap();
+    let e = resolve_template(&row).unwrap_err();
+    assert!(e.contains("重量单位") && e.contains("ton"), "嵌套模板那一侧同样要拦：{e}");
+}
+
+#[test]
+fn the_unit_gate_admits_every_unit_the_parser_knows() {
+    // 这道门是把"认不出"挡下来，不是把合法集合窄到只剩 kg/t：帧模板历史上还认 g、0.1kg、dag、d
+    //（耀华那档的"十分之一千克"），窄掉等于把老台账关在门外
+    let conn = db_conn();
+    for u in ["", "kg", "g", "t", "0.1kg", "dag", "d"] {
+        let code = format!("scale_ok_unit_{}", u.replace('.', "_"));
+        insert_device(
+            &conn,
+            &code,
+            "单位合法的磅",
+            "scale",
+            "generic",
+            &DOC_TEMPLATE.replace(r#""unit": "kg""#, &format!(r#""unit": "{u}""#)),
+            0,
+            1,
+        );
+        assert!(load_config(&conn, &code).unwrap().is_some(), "「{u}」是合法单位，别被新加的这道门挡住");
+    }
+}
+
+#[test]
+fn the_effective_unit_rides_on_every_frame_event() {
+    // 界面写 kg 还是吨只认帧上这一个字段：台账「跟随型号」时 config.unit 是空的，而预设的量纲
+    // 在 Rust 这张表里——前端抄一份就是第三处真相（与 `division_01kg` 同一口径）
+    let conn = db_conn();
+    let mut core = StreamCore::new(flat_scale_tpl(&conn, "scale_ev_t", "keli_d2008", ""), "scale1", 1);
+    let evs = core.feed(&keli_live_frame_com5(), 1000);
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert_eq!((evs[0].weight_01kg, evs[0].unit.as_str()), (115_600, "t"));
+    // 手选覆盖后随帧下去的也是覆盖后的值，不是型号预设
+    let mut core_kg = StreamCore::new(
+        flat_scale_tpl(&conn, "scale_ev_kg", "keli_d2008", r#", "unit": "kg""#),
+        "scale1",
+        1,
+    );
+    let evs_kg = core_kg.feed(&keli_live_frame_com5(), 1000);
+    assert_eq!((evs_kg[0].weight_01kg, evs_kg[0].unit.as_str()), (116, "kg"));
+    // 顶松那档同理（它的量纲来自抓包，不是从耀华抄的）
+    let mut core_ds = StreamCore::new(flat_scale_tpl(&conn, "scale_ev_ds", "dingsong_ds822", ""), "scale2", 2);
+    let evs_ds = core_ds.feed(&ds822_frame(6946, '+'), 1000);
+    assert_eq!((evs_ds[0].weight_01kg, evs_ds[0].unit.as_str()), (69_460, "t"));
+    // 还没收到过帧（离线/演示）时后端没单位可说 → 空串，界面退回 kg，与改造前一模一样
+    assert_eq!(ScaleEvent::default().unit, "");
 }
 
 // ============================================================ 判稳依据快照（设备中心取证用）
-
 /// 造一帧 A9 连续帧：`STX` `符号` `6 位整数 kg` `小数位数=0` `两字符 ASCII 十六进制异或` `ETX`。
 /// 校验按真机同规则现算（符号位~小数位这 8 字节异或），kg=62 时正好等于现场抓到的 `1F`。
 fn a9_frame_kg(kg: i64) -> Vec<u8> {

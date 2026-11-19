@@ -58,6 +58,12 @@ export interface ScaleState {
   mean01kg: number;
   /** 分度（0.1 kg） */
   division01kg: number;
+  /**
+   * 这一帧按什么量纲解析出来的（Rust `payload.unit`，`kg` / `t`）。显示成 `11,560.0 kg` 还是
+   * `11.560 t` 由它决定——`weight01kg` 本身永远是 0.1 kg 定点，换单位不动数值只动除数。
+   * 空串 = 还没收到过真帧（浏览器预览 / 刚启动），界面按 kg 显示。
+   */
+  unit: string;
   /** 窗口极差（0.1 kg） */
   spread01kg: number;
   /** 窗口首尾帧实际时长（ms） */
@@ -244,6 +250,7 @@ const initialScale: ScaleState = {
   /** 全 0 = 还没收到过真帧；这些数只由后端那一帧带来，界面不自己抄一份默认值 */
   mean01kg: 0,
   division01kg: 0,
+  unit: "",
   spread01kg: 0,
   windowMs: 0,
   windowFrames: 0,
@@ -643,6 +650,7 @@ export const useDeviceStore = create<DeviceHubState>((set, get) => ({
         port: r.port,
         mean01kg: r.mean01kg,
         division01kg: r.division01kg,
+        unit: r.unit,
         spread01kg: r.spread01kg,
         windowMs: r.windowMs,
         windowFrames: r.windowFrames,

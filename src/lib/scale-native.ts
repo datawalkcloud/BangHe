@@ -47,6 +47,8 @@ export interface ScaleFrame {
   samples: number[];
   mean_01kg: number;
   division_01kg: number;
+  /** 这一帧按什么量纲解析（Rust `payload.unit`：`kg` / `t`）。空串 = 旧版后端或还没收到过帧 */
+  unit?: string;
   /** 判稳依据快照（与 Rust `scale::ScaleEvent` 逐字一致）：极差 / 窗口时长 / 帧数下限 / 容差 / 所需时长 */
   spread_01kg: number;
   window_ms: number;
@@ -74,6 +76,8 @@ export interface ScaleReading {
   samples: number[];
   mean01kg: number;
   division01kg: number;
+  /** 生效量纲（`format.weightUnit` 认的那个口径）：界面显示 kg 还是 t 由它说，不由界面猜 */
+  unit: string;
   spread01kg: number;
   windowMs: number;
   windowFrames: number;
@@ -139,6 +143,8 @@ export function toReading(f: ScaleFrame): ScaleReading {
     samples: f.samples ?? [],
     mean01kg: f.mean_01kg,
     division01kg: f.division_01kg,
+    // 旧版后端不带这个字段：空串让 `format.weightUnit` 落到 kg，与改造前的显示完全一致
+    unit: f.unit ?? "",
     spread01kg: f.spread_01kg ?? 0,
     windowMs: f.window_ms ?? 0,
     windowFrames: f.window_frames ?? 0,

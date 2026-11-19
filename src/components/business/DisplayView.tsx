@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "@/lib/api";
 import { runningInTauri } from "@/lib/native";
 import { DEFAULT_MODE, THEME_MODE_KEY } from "@/lib/theme";
-import { money, ton, weight } from "@/lib/format";
+import { money, ton, weight, weightUnit } from "@/lib/format";
 import { resolveRange } from "@/lib/date-range";
 import { useDeviceStore, useScaleTick } from "@/store/device";
 import { Button } from "@/components/ui/button";
@@ -63,7 +63,7 @@ export function DisplayView({ onExit }: { onExit: () => void }) {
     <div className="fixed inset-0 flex flex-col items-center justify-center gap-6 bg-background px-8">
       <p className="text-2xl font-medium text-muted-foreground">{data?.summary ? "今日收购合计" : "加载中…"}</p>
       <p className="tnum text-center text-[clamp(72px,14vw,220px)] leading-none font-bold tabular-nums">
-        {weight(scale.weight01kg)}
+        {weight(scale.weight01kg, true, weightUnit(scale.unit))}
       </p>
       <p className={cn("text-lg", scale.stable ? "text-success" : "text-warning")}>
         {scale.connected ? (scale.stable ? "● 读数稳定" : "○ 读数变动中，请等车辆停稳") : "— 仪表离线 —"}

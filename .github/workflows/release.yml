@@ -28,7 +28,8 @@ name: Release
 #     私钥一换，已装出去的老客户端验签即拒装。没配私钥，构建这步直接红。
 #   - release job 把版本 + 签名 + 安装包镜像地址拼成 latest.json 随 Release 上传
 #     （scripts/release-notes/gen_updater_manifest.py）；客户端按 plugins.updater
-#     .endpoints 拉 releases/latest/download/latest.json（gh-proxy 镜像优先）。
+#     .endpoints 逐个尝试，首位是 Gitee 镜像仓的 raw latest.json，GitHub（gh-proxy
+#     镜像 + 直连）只作兜底。
 #   - Release 直接以 draft:false 发布到主仓（本仓已开源公开，内置 GITHUB_TOKEN 即可），
 #     latest.json 与安装包匿名可达，应用内「检查更新」即时生效，无需人工再点发布。
 #   - 分发面（2026-10-16 起）：产物直接挂主仓 datawalkcloud/BangHe 的 GitHub Release。
@@ -38,7 +39,8 @@ name: Release
 #     Gitee 版 latest.json 强推到公开 Gitee 仓 datawalkcloud/banghe-release（repo 名在
 #     env GITEE_REPO，owner 走 Secret GITEE_OWNER），客户用 raw 直链匿名下载（见 release
 #     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载与内置更新 endpoints
-#     均优先指这里（2026-10-18 起 endpoints 首位为 Gitee raw latest.json）。
+#     均优先指这里（2026-11-19 落地：tauri.conf.json endpoints 首位改为本镜像的
+#     raw latest.json，此前只有注释声称优先、配置里仍是 gh-proxy 打头）。
 #
 # Microsoft Store 变体（2026-10-17 加入，build-msix-store job）：
 #   - 商店要求应用更新走商店通道，商店版用 cargo feature `store-build` 掐掉装内
@@ -381,3 +383,18 @@ jobs:
           git add -A
           git commit -qm "sync ${ver}"
           git push -f "$dl" "HEAD:${GITEE_BRANCH}"
+
+          # 推完按客户端实际拉的那个地址回读一次版本号。endpoints 首位是本镜像，
+          # 「HTTP 200 但内容还是旧版」等于把新版对客户端藏起来（后面的 GitHub 兜底
+          # 根本不会被访问），所以这一步红了就当发版没完成，别让它悄悄过去。
+          ok=0
+          for _ in 1 2 3 4 5; do
+            if curl -fsSL "${rawbase}/latest.json" \
+              | grep -Eq "\"version\":[[:space:]]*\"${ver}\""; then
+              ok=1
+              break
+            fi
+            sleep 3
+          done
+          [ "$ok" = 1 ] || { echo "::error::Gitee raw latest.json 回读不到版本 ${ver}，客户端会停在旧版"; exit 1; }
+          echo "Gitee 更新清单已生效：${rawbase}/latest.json（版本 ${ver}）"

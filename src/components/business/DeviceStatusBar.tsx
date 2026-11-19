@@ -17,7 +17,7 @@ import { ClockIcon, KeyboardIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDeviceStore } from "@/store/device";
 import { useActor } from "@/store/session";
-import { weight } from "@/lib/format";
+import { weight, weightUnit } from "@/lib/format";
 import { DEVICE_STATUS } from "@/lib/constants";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -170,8 +170,10 @@ export function DeviceStatusStrip() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [hintOpen, setHintOpen] = useState(false);
 
+  // 单位跟着后端解析这一帧用的量纲走（`scale.unit` ← 帧模板 payload.unit）：
+  // 磅房看的是仪表面板，面板写吨而底栏报 11,560.0 kg 会被当成错数，反过来会把 11.56 吨看成 11.56 公斤
   const scaleDetail = scale.connected
-    ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg)} · ${scale.stable ? "稳" : "不稳"}`
+    ? `${String(scaleCfg?.config.port ?? "COM3")} · ${weight(scale.weight01kg, true, weightUnit(scale.unit))} · ${scale.stable ? "稳" : "不稳"}`
     : `${String(scaleCfg?.config.port ?? "COM3")} 离线，可改手工录入`;
 
   // 两条通道各自刚读了谁／哪张卡，底栏只放得下一句，按最近一次成功的那条说

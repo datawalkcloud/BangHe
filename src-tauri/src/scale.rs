@@ -98,7 +98,7 @@ pub struct Framing {
     pub max_len: usize,
     /// `mode="fixed_len"` 时的定长（含起始符与结尾校验字节）
     pub fixed_len: usize,
-    /// `none` | `sum8` | `sum8_comp` | `xor8`
+    /// `none` | `sum8` | `sum8_comp` | `xor8` | `xor8_incl_start` | `xor_ascii_hex`
     pub checksum: String,
 }
 
@@ -126,7 +126,8 @@ pub struct Payload {
     pub decimal_count_index: Option<i32>,
     /// 扫描途中可跳过的填充字符（空格填充的仪表用 `" "`)
     pub skip_chars: String,
-    /// 单位换算：`kg`（默认）| `g` | `t` | `0.1kg`
+    /// 单位换算：`kg`（默认）| `g` | `t` | `0.1kg`。这是**帧内数字自身的量纲**，不是界面显示单位；
+    /// 设备中心「重量单位」那一栏（扁平键 `unit`）就是覆盖它的入口，见 [`maybe_apply_driver_preset`]
     pub unit: String,
     /// 预留：仪表状态字节下标（04 §2.2 B 族"稳定才发"用 [`Payload::stable_flag`]）
     pub status_bytes: Vec<u8>,
@@ -477,6 +478,24 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 // ====================================================================== 取数
 
+/// `payload.unit` → 把帧内数字换算到 0.1 kg 的因子 `(num, den)`，即 `weight_01kg = 帧内数字 × num / den`。
+///
+/// **单位说的是"帧内数字自身的量纲"，不是界面显示单位**（04 §2.3）：同一串 `011560` 配小数位 `3`，
+/// `kg` 是 11.56 kg、`t` 是 11.56 t = 11560 kg，差 1000 倍。选错的后果之所以抓不住，是因为仪表把
+/// 小数位数那一位算进了它自己的异或里，两种解释都自洽、都过校验与判稳——只能靠对表把单位配对。
+///
+/// 认不出的取值回 `None`：[`parse_weight`] 逐帧报中文短句，[`resolve_template`] 在开串口之前就拒掉，
+/// 两处共用这一份合法集合，别各写一份 match（改一边漏一边就是"配置能吃、读数静默错"）。
+fn unit_factor(unit: &str) -> Option<(i64, i64)> {
+    match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "kg" => Some((10, 1)),
+        "0.1kg" | "dag" | "d" => Some((1, 1)),
+        "g" => Some((1, 100)),
+        "t" => Some((10_000, 1)),
+        _ => None,
+    }
+}
+
 /// 位置化取出 `weight_01kg`（0.1 kg 整数；负数=负读数，回皮/空磅负值用）。
 ///
 /// 失败回中文短句，调用方按坏帧计数（§2.4 C1）。
@@ -601,15 +620,9 @@ pub fn parse_weight(frame: &[u8], payload: &Payload) -> Result<i64, String> {
         }
     };
     // 再按单位换算到 0.1 kg（§2.3：无小数点时按 kg 直接换算；有小数点时量级由点定死）
-    let (factor_num, factor_den): (i64, i64) = match payload.unit.trim().to_ascii_lowercase().as_str() {
-        "" | "kg" => (10, 1),
-        "0.1kg" | "dag" | "d" => (1, 1),
-        "g" => (1, 100),
-        "t" => (10_000, 1),
-        other => {
-            return Err(format!("不认识的单位「{other}」，模板 unit 只支持 kg/g/t/0.1kg"));
-        }
-    };
+    let (factor_num, factor_den) = unit_factor(&payload.unit).ok_or_else(|| {
+        format!("不认识的单位「{}」，模板 unit 只支持 kg/g/t/0.1kg", payload.unit.trim())
+    })?;
     let scale = den * factor_den;
     let scaled = num.saturating_mul(factor_num);
     let value_01kg = (scaled + scale / 2) / scale; // 四舍五入到 0.1 kg
@@ -807,6 +820,10 @@ pub struct ScaleEvent {
     pub samples: Vec<i64>,
     pub mean_01kg: i64,
     pub division_01kg: i64,
+    /// 这一帧按什么量纲解析出来的（`payload.unit`，如 `kg` / `t`）。`weight_01kg` 本身永远是 0.1 kg，
+    /// 这个字段只告诉界面"仪表面板上那个数是以什么为单位显示的"，界面据此决定写 kg 还是吨。
+    /// 没单位可说（还没收到过帧）时是空串，界面按 kg 显示。
+    pub unit: String,
     pub frame_count: u64,
     pub err_count: u64,
     // ---- 判稳依据快照：设备中心帧监视器解释"为什么还在波动中"就靠这五项 ----
@@ -844,6 +861,7 @@ impl Default for ScaleEvent {
             samples: Vec::new(),
             mean_01kg: 0,
             division_01kg: 100,
+            unit: String::new(),
             frame_count: 0,
             err_count: 0,
             spread_01kg: 0,
@@ -1143,6 +1161,9 @@ impl StreamCore {
             samples: self.judge.window(),
             mean_01kg: self.last_mean,
             division_01kg: self.tpl.align.division_01kg,
+            // 生效量纲随帧下发：界面不能去看台账的 `config.unit`——那一格可能没填（跟随型号预设），
+            // 而预设的 unit 在 Rust 这张表里，前端抄一份就是第三处真相（同 `division_01kg` 的口径）
+            unit: self.tpl.payload.unit.clone(),
             frame_count: self.frame_count,
             err_count: self.err_count,
             spread_01kg,
@@ -1162,6 +1183,7 @@ impl StreamCore {
 /// 帧尾校验和。
 ///
 /// - `sum8` / `sum8_comp` / `xor8`：`body` = 去掉起始符与终止符后的中段，**最后一字节**为原始校验字节。
+/// - `xor8_incl_start`（顶松 DS822 连续帧）：同 `xor8`，但**起始符本身也计入异或**。
 /// - `xor_ascii_hex`（耀华 XK3190-A9 连续帧）：校验 = 中段各字节异或，输出成**终止符前的两个
 ///   ASCII 十六进制字符**（高字节在前、大小写不敏感），而不是一个原始字节。
 fn verify_checksum(frame: &[u8], framing: &Framing) -> Result<(), String> {
@@ -1193,19 +1215,21 @@ fn verify_checksum(frame: &[u8], framing: &Framing) -> Result<(), String> {
             ))
         }
     } else {
-        if end <= head + 1 {
+        let body_from = if kind == "xor8_incl_start" { 0 } else { head };
+        if end <= body_from + 1 {
             return Err("帧太短，没有校验字节的位置".into());
         }
-        let body = &frame[head..end - 1];
+        let body = &frame[body_from..end - 1];
         let got = frame[end - 1];
         let sum: u8 = body.iter().fold(0u8, |a, b| a.wrapping_add(*b));
         let want = match kind.as_str() {
             "sum8" => sum,
             "sum8_comp" => sum.wrapping_neg(),
-            "xor8" => body.iter().fold(0u8, |a, b| a ^ *b),
+            "xor8" | "xor8_incl_start" => body.iter().fold(0u8, |a, b| a ^ *b),
             other => {
                 return Err(format!(
-                    "不支持的校验方式「{other}」，可选 none/sum8/sum8_comp/xor8/xor_ascii_hex"
+                    "不支持的校验方式「{other}」，\
+                     可选 none/sum8/sum8_comp/xor8/xor8_incl_start/xor_ascii_hex"
                 ));
             }
         };
@@ -1321,6 +1345,14 @@ pub fn capture_align(conn: &Connection) -> Align {
 ///
 /// 这是"通用帧模板 + 型号预设"里的**预设**：现场只填 `port`/`baud` 就能跑；要微调仍可在
 /// `config_json` 写完整的嵌套模板（那时 [`maybe_apply_driver_preset`] 不再套本预设）。
+///
+/// 帧形同样适用于**柯力 D2008 的「连续方式」**：其手册给的帧
+/// `02 2B 30 30 32 30 30 30 32 31 42 03`（发送 +20.00，异或 `0x1B`）与本档逐字节同构，
+/// 手册自己也写明"此协议格式同上海耀华 A2"。2026-11-19 现场又抓到 43 帧
+/// `02 2B 30 31 31 35 36 30 33 31 42 03`（`011560` + 小数位 `3`），异或 43/43 全过：
+/// **小数位数是帧里自带的一位**，现场把仪表 TF 设成几都不用改代码。
+/// 但 `keli_d2008` 走的是 [`keli_d2008_cont`]，不复用本档：本档 `unit="kg"` 有 2026-09-12
+/// 耀华实机 62 kg 顶着，而现场那台 D2008 按吨显示，同一帧必须读成 11.560 t = 11560 kg。
 pub fn yaohua_xk3190_cont() -> FrameTemplate {
     FrameTemplate {
         transport: Transport {
@@ -1362,10 +1394,101 @@ pub fn yaohua_xk3190_cont() -> FrameTemplate {
     }
 }
 
+/// 柯力 D2008 **连续方式**这一档：帧形与 [`yaohua_xk3190_cont`] 逐字节同构（手册自写
+/// "此协议格式同上海耀华 A2"），**只有 `payload.unit` 不同**。
+///
+/// 2026-11-19 现场抓包定死了这一处差别：一帧 `02 2B 30 31 31 35 36 30 33 31 42 03`
+/// = `STX` `+` `011560` `3`(小数位数) `1B`(异或) `ETX`，43 帧帧帧相同、异或 43/43 全过；
+/// 现场对表确认这台实际是 **11.56 吨**，而按 `unit="kg"` 会读成 11.56 kg——差 1000 倍，
+/// 且小数位数那一位被仪表算进它自己的异或里，**校验与判稳都拦不住这种量纲错**，只能这样单独一档。
+///
+/// 小数位数是帧里自带的一位（这里 `3`，手册样例是 `2`），所以仪表面板 TF 设成几都不用改代码、
+/// 也不会报坏帧——模板照那一位定标；`unit` 说的是"帧内数字自身的单位"，必须等于仪表面板显示单位。
+pub fn keli_d2008_cont() -> FrameTemplate {
+    FrameTemplate {
+        payload: Payload { unit: "t".into(), ..yaohua_xk3190_cont().payload },
+        ..yaohua_xk3190_cont()
+    }
+}
+
+/// 顶松 DS822 **连续发送**这一档的帧模板（04 §2.2 A 族）。
+///
+/// 依据是 2026-11-19 现场在 COM6（9600/8/None/1）以十六进制显示抓的 1452 字节：66 帧、
+/// 帧帧相同（空磅），一帧 22 字节
+/// `02 41 61 2B 30 30 30 30 30 30 33 30 30 30 30 30 30 30 62 20 48 03`，
+/// 即 `STX Aa + 000000 3 0000000 b <空格> <校验> ETX`，逐字节：
+///  - 0、21：起始符 STX、结束符 ETX——66 帧无一例外，所以按 STX/ETX 切帧；
+///    `max_len=24` 只留 2 字节余量，粘帧或波特率不对时切出来的超长帧直接判垃圾。
+///  - 1..2：恒定 `Aa`（41 61），仪表地址/命令头，本路不取。
+///  - 3：符号位 `+`/`-`。
+///  - 4..9：6 位重量数字，高位在前。
+///  - 10：**小数位数标志位**，抓到的帧里恒为 `3`，与耀华 A9 同一套口径；
+///    重量 = 4..9 / 10^该位数，数字扫描到此为止，不把这一位吃进重量。
+///  - 11..17：7 个 `0`，形态像皮重/累计字段，本路不取（净重由我们自己按毛-皮算）。
+///  - 18..19：`b` + 0x20 空格，是帧内的固定尾巴，**不是帧间分隔符**。
+///  - 20：**原始异或校验字节**，覆盖范围含起始符、也含 19 那个空格：
+///    `xor(frame[0..20]) = 0x48 = 'H'`，66/66 帧全中；去掉 STX 得 0x4A、去掉空格得 0x6A，
+///    两者都对不上，所以用本轮新加的 `checksum="xor8_incl_start"` 一档。
+///
+/// 上一版是按串口助手的 ASCII 显示（`EAa+00694630000000b`）反推的，那会儿把 19 那个帧内
+/// 空格当成了帧间分隔符，还把行首的 `A`/`E` 当成帧首字段——其实它们是**上一帧的校验字节**：
+/// 按本规则 006942→0x41 `'A'`、006946→0x45 `'E'`，两帧各自命中，才确认校验在帧尾而非帧首。
+///
+/// `unit="t"`：帧内数字配小数位标志得到的是**吨**（`006946` + `3` = 6.946 t = 6946 kg），
+/// 与仪表面板"仪表单位＝吨"一致。这台和柯力 D2008（同族耀华帧，量纲是 kg）正好互为对照：
+/// `unit` 说的是帧内数字自身的单位，不是界面显示单位。
+pub fn dingsong_ds822_cont() -> FrameTemplate {
+    FrameTemplate {
+        transport: Transport {
+            kind: "serial".into(),
+            port: String::new(),
+            baud: 9600,
+            data_bits: 8,
+            parity: "none".into(),
+            stop_bits: 1,
+            host: String::new(),
+            tcp_port: 0,
+        },
+        framing: Framing {
+            mode: "delimited".into(),
+            start: "\u{02}".into(),
+            terminator: "\u{03}".into(),
+            encoding: "ascii".into(),
+            max_len: 24,
+            fixed_len: 0,
+            checksum: "xor8_incl_start".into(),
+        },
+        payload: Payload {
+            sign_index: 3,
+            digits: "0123456".into(),
+            decimal_places: 3,
+            decimal_count_index: Some(10),
+            skip_chars: String::new(),
+            unit: "t".into(),
+            status_bytes: Vec::new(),
+            status_stable_byte: None,
+            status_stable_mask: None,
+        },
+        stability: Stability::default(),
+        align: Align {
+            division_01kg: 100,
+            mode: "nearest_div".into(),
+        },
+        query: Query::default(),
+    }
+}
+
 /// 驱动 → 预设模板。认不出的驱动回 `None`（那就完全按 `config_json` 里的嵌套模板走）。
+///
+/// 一挡驱动可以指向同一份模板：柯力 D2008 的「连续方式 TF=0」帧手册自己写明"协议格式同上海耀华 A2"，
+/// 与 A9 逐字节一致，所以它复用 [`yaohua_xk3190_cont`]。分成两挡不是给它另写解析，
+/// 而是让现场在设备中心按仪表牌子就能选到自己那台——型号选错的人不会去翻文档找"其实选耀华"。
 pub fn driver_preset(driver: &str) -> Option<FrameTemplate> {
     match driver.trim().to_ascii_lowercase().as_str() {
         "yaohua_xk3190" | "yaohua_xk3190_cont" | "xk3190" => Some(yaohua_xk3190_cont()),
+        // 帧形与耀华同构、单独立一档：现场那台 D2008 按吨显示，量纲（payload.unit）与耀华不同
+        "keli_d2008" | "kelid2008_cont" | "d2008" => Some(keli_d2008_cont()),
+        "ds822" | "dingsong_ds822" => Some(dingsong_ds822_cont()),
         _ => None,
     }
 }
@@ -1402,6 +1525,15 @@ fn maybe_apply_driver_preset(
         }
         if let Some(s) = map.get("stop_bits").and_then(json_u8) {
             preset.transport.stop_bits = s;
+        }
+        // 重量单位：设备中心那一栏「跟随型号 / 千克 / 吨」。**空串与缺键都不覆盖**，让型号预设
+        // （耀华 kg、柯力与顶松 t）说了算；现场手选过一次就以手选为准——同一型号换了一块按千克
+        // 显示的面板时，不必回来改代码。非法取值不在这里静默回落，由 [`resolve_template`] 在开串口
+        // 之前拒掉：单位配错是 1000 倍量纲错，校验与判稳都拦不住，只能响。
+        if let Some(u) = map.get("unit").and_then(|v| v.as_str()) {
+            if !u.trim().is_empty() {
+                preset.payload.unit = u.trim().to_string();
+            }
         }
     }
     Ok(preset)
@@ -1470,6 +1602,15 @@ pub fn resolve_template(row: &DeviceRow) -> Result<FrameTemplate, String> {
         return Err(format!(
             "这台磅「{}」的 payload.decimal_places={} 过大（重量小数位最多 6）",
             row.name, tpl.payload.decimal_places
+        ));
+    }
+    // 量纲在开串口之前就验：认不出单位时逐帧报错会被「连续 20 帧解析不出有效重量」那条笼统提示
+    // 盖掉，现场只会以为是帧格式不对，看不出是单位那一栏填了个不是单位的东西。
+    if unit_factor(&tpl.payload.unit).is_none() {
+        return Err(format!(
+            "这台磅「{}」的重量单位「{}」不认识，请在设备中心选「千克 kg」或「吨 t」（帧模板 payload.unit 只支持 kg/g/t/0.1kg）",
+            row.name,
+            tpl.payload.unit.trim()
         ));
     }
     if tpl.framing.max_len > 1024 {

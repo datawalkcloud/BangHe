@@ -35,7 +35,7 @@ import { ESCPOS_DRIVERS, PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type
 import type { DeviceConfig } from "@/mock/types";
 import type { DeviceKind, DeviceStatus, Tone } from "@/lib/constants";
 import { DEVICE_KIND, DEVICE_STATUS, ROLE, TONE_DOT, TONE_TEXT } from "@/lib/constants";
-import { orDash, weight } from "@/lib/format";
+import { orDash, weight, weightUnit, weightUnitLabel } from "@/lib/format";
 import { csvName } from "@/lib/csv";
 import { exportCsvFile } from "@/lib/export-csv";
 import { actorId, useActor, useSession } from "@/store/session";
@@ -80,6 +80,12 @@ interface FieldSpec {
   label: string;
   placeholder?: string;
   options?: string[];
+  /**
+   * 候选项的现场叫法（按 value 查）。缺省用 value 本身当标签。
+   * 落库与后端认的仍是 value（`kg` / `t` 这种英文原名），磅员看到的要是汉字——
+   * 「帧族 A/B」那种本来就看得懂的就不用再登记了。
+   */
+  optionLabels?: Record<string, string>;
   required?: boolean;
   input?: "text" | "password";
 }
@@ -93,10 +99,17 @@ interface FieldSpec {
 const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; fields: FieldSpec[] }> = {
   scale: {
     prefix: "scale",
-    drivers: ["yaohua_xk3190", "toledo", "mock"],
+    drivers: ["yaohua_xk3190", "keli_d2008", "dingsong_ds822", "toledo", "mock"],
     fields: [
       { key: "baud", label: "波特率", options: ["9600", "4800", "2400", "19200", "38400"] },
       { key: "frameFamily", label: "帧族", options: ["A", "B"] },
+      {
+        key: "unit",
+        label: "重量单位",
+        // 第一项是空串＝不写这个键，量纲由型号预设决定（耀华 kg、柯力与顶松 t）
+        options: ["", "kg", "t"],
+        optionLabels: { "": "跟随型号", kg: "千克 kg", t: "吨 t" },
+      },
     ],
   },
   idcard: {
@@ -147,6 +160,26 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
     ],
   },
 };
+
+/**
+ * 驱动的现场叫法（汉字＋型号）。台账 `driver` 列与 Rust 侧 `driver_preset` 认的仍是
+ * `DEVICE_SPEC.scale.drivers` 里那个 id，这里只管显示——磅员看的是仪表上的牌子，不是代码里的蛇形串。
+ * 不在表里的 id 原样显示。
+ */
+const DRIVER_LABEL: Record<string, string> = {
+  yaohua_xk3190: "耀华 XK3190（连续发送）",
+  // 帧与耀华同构（Rust 侧复用同一份预设），但现场认的是仪表上的牌子，所以单独一挡
+  keli_d2008: "柯力 D2008（连续发送）",
+  dingsong_ds822: "顶松 DS822（连续发送）",
+  toledo: "托利多（需手填帧模板）",
+  // 现场到货的是 iDR 系列免驱机型（docs/design/04 §3.2），没有更细的型号编号
+  routon_sdtapi: "精伦 iDR（免驱 USB）",
+  mock: "Mock（演示设备）",
+};
+
+function driverLabel(driver: string): string {
+  return DRIVER_LABEL[driver] ?? driver;
+}
 
 /** ESC/POS 直写 usbprint.sys、靠 VID/PID 寻址的两类驱动（判据收在 print-guard，工作台直打同源） */
 
@@ -388,6 +421,9 @@ export function DevicesPage() {
     setForm((f) => {
       const cfg = { ...f.cfg };
       if (f.kind === "printer" && cfg.paper && !paperOptionsFor(driver).includes(cfg.paper)) delete cfg.paper;
+      // 换仪表牌子就把上一台手选的量纲清掉，回到「跟随型号」：耀华预设是 kg、柯力与顶松是 t，
+      // 手选值跟着人走会把上一台的「吨」带到新换的 kg 仪表上——那是 1000 倍且校验拦不住的错
+      if (f.kind === "scale") delete cfg.unit;
       if (f.kind === "camera") {
         // 本机 ↔ 内网两套寻址互斥：切走就把另一套的键清掉，别让 local 的 deviceId 混进网络机的配置
         if (driver === "local_uvc") {
@@ -1020,7 +1056,7 @@ export function DevicesPage() {
                 aria-label="驱动协议"
                 value={form.driver}
                 onChange={(v) => patchDriver(v)}
-                options={DEVICE_SPEC[form.kind].drivers.map((d) => ({ value: d, label: d }))}
+                options={DEVICE_SPEC[form.kind].drivers.map((d) => ({ value: d, label: driverLabel(d) }))}
               />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -1197,7 +1233,6 @@ export function DevicesPage() {
                 ) : (
                   <p className="text-xs text-muted-foreground">{serialHint ?? "尚未扫描到本机串口，可在下方手动输入。"}</p>
                 )}
-                <p className="text-xs text-muted-foreground">浏览器预览里扫不到串口，只能手动填写。</p>
               </div>
             )}
 
@@ -1225,7 +1260,7 @@ export function DevicesPage() {
                     invalid={!!dynErr.get(f.key)}
                     value={fieldValue(f)}
                     onChange={(v) => patchCfg(f.key, v)}
-                    options={f.options.map((o) => ({ value: o, label: o }))}
+                    options={f.options.map((o) => ({ value: o, label: f.optionLabels?.[o] ?? o }))}
                   />
                 ) : (
                   <Input
@@ -1373,7 +1408,7 @@ function DeviceCard({
           {d.err_count > 0 && <span className="text-destructive">错误 {d.err_count} 次</span>}
         </span>
         <span className="truncate text-xs text-muted-foreground">
-          {orDash(d.last_ok_at) === "—" ? "从未成功" : `最后成功 ${d.last_ok_at}`} · 驱动 {d.driver}
+          {orDash(d.last_ok_at) === "—" ? "从未成功" : `最后成功 ${d.last_ok_at}`} · 驱动 {driverLabel(d.driver)}
         </span>
         {d.last_error && <span className="truncate text-xs text-destructive">{d.last_error}</span>}
         <span className="flex flex-wrap gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
@@ -1584,6 +1619,12 @@ function ScalePanel({ d }: { d: DeviceConfig }) {
    */
   const mine = d.is_mock === 0 && scale.source === "live" && scale.code === d.code;
   const live: DeviceStatus | null = mine ? (scale.connected ? "online" : "offline") : null;
+  /**
+   * 这一格显示成 `11,560.0 kg` 还是 `11.560 t`。正在收这台磅的真帧就用后端随帧带来的量纲
+   * （`payload.unit`，含型号预设那层），否则退回台账里那一栏的手选值——**没帧时它是空的**，
+   * 界面按 kg 显示，绝不自己猜一个吨：量纲猜错是 1000 倍（04 §2.3）。
+   */
+  const unit = weightUnit(mine ? scale.unit : String(d.config.unit ?? ""));
   useEffect(() => {
     if (paused) return;
     setFrames((prev) => {
@@ -1637,8 +1678,8 @@ function ScalePanel({ d }: { d: DeviceConfig }) {
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="flex items-baseline gap-1">
-          <span className="tnum text-2xl font-semibold tabular-nums">{weight(scale.weight01kg, false)}</span>
-          <span className="text-xs text-muted-foreground">kg</span>
+          <span className="tnum text-2xl font-semibold tabular-nums">{weight(scale.weight01kg, false, unit)}</span>
+          <span className="text-xs text-muted-foreground">{weightUnitLabel(unit)}</span>
         </span>
         <ToneBadge tone={scale.stable ? "success" : "warning"}>{scale.stable ? "稳定" : "波动中"}</ToneBadge>
         <span className="text-xs text-muted-foreground">{scale.onScale ? "车在磅上" : "空磅"}</span>

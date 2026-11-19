@@ -29,7 +29,7 @@ import { PencilIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { OUTBOUND_STATUS } from "@/lib/constants";
-import { dateTime, fromKg, toKg, weight } from "@/lib/format";
+import { dateTime, fromKg, toKg, weight, weightUnit } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
 import { WeightDisplay } from "@/components/business/WeightDisplay";
@@ -221,6 +221,7 @@ export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
               stable={scale.stable}
               connected={scale.connected}
               size="lg"
+              unit={weightUnit(scale.unit)}
             />
             <span className="text-[11px] text-muted-foreground">
               {scale.connected

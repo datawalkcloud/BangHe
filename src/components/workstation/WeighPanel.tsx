@@ -42,7 +42,7 @@ import { priceGateOf } from "@/lib/weigh-gate";
 import { tareDev01kg, tareOverTolerance } from "@/lib/tare-ref";
 import type { DeviceConfig, WeighOrder } from "@/mock/types";
 import { grabCaptureFrames } from "@/lib/local-camera";
-import { dateTime, fromKg, nowLocalISO, price as fmtPrice, toKg, weight } from "@/lib/format";
+import { dateTime, fromKg, nowLocalISO, price as fmtPrice, toKg, weight, weightUnit } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
@@ -477,6 +477,7 @@ export function WeighPanel({
               stable={scale.stable}
               connected={scale.connected}
               size="lg"
+              unit={weightUnit(scale.unit)}
             />
           </div>
 
