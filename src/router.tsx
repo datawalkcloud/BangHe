@@ -23,29 +23,96 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/layout/AppShell";
-import { EmptyState } from "@/components/business/layout";
-import { DashboardPage } from "@/pages/DashboardPage";
-import { WorkstationPage } from "@/pages/WorkstationPage";
-import { OrdersPage } from "@/pages/OrdersPage";
-import { OrderDetailPage } from "@/pages/OrderDetailPage";
-import { PartiesPage } from "@/pages/PartiesPage";
-import { PartyDetailPage } from "@/pages/PartyDetailPage";
-import { QcPage } from "@/pages/QcPage";
-import { QcDetailPage } from "@/pages/QcDetailPage";
-import { SettlementsPage } from "@/pages/SettlementsPage";
-import { SettlementDetailPage } from "@/pages/SettlementDetailPage";
-import { PaymentsPage } from "@/pages/PaymentsPage";
-import { LoginPage } from "@/pages/LoginPage";
-import { MastersPage, type MastersSection } from "@/pages/MastersPage";
-import { ReportsPage, type ReportKind } from "@/pages/ReportsPage";
-import { DevicesPage } from "@/pages/DevicesPage";
-import { CardsPage } from "@/pages/CardsPage";
-import { OutboundPage } from "@/pages/OutboundPage";
-import { OutboundDetailPage } from "@/pages/OutboundDetailPage";
-import { StockPage } from "@/pages/StockPage";
-import { SystemPage, type SystemSection } from "@/pages/SystemPage";
-import { SupportPage } from "@/pages/SupportPage";
+import { EmptyState, PagePending } from "@/components/business/layout";
 import { useSession } from "@/store/session";
+import { lazy, Suspense } from "react";
+import type { MastersSection } from "@/pages/MastersPage";
+import type { ReportKind } from "@/pages/ReportsPage";
+import type { SystemSection } from "@/pages/SystemPage";
+
+/**
+ * 21 个页面按导航现取，不进首包。
+ *
+ * 原来这些全是静态 import，主包堆到 2.2MB（连 recharts、react-grid-layout 一起在启动时解析执行），
+ * 磅房那些弱机上光跑这段就要好几秒——那几秒就是"打开程序先白屏一会儿"。
+ *
+ * 页面 chunk 的取法只写在这一份表里：`lazy()` 用它做代码分割，`preloadPages()` 用同一个函数预热。
+ * 两处必须共用同一批闭包——预热走成另一个 `import()` 说明符的话，模块虽然进了缓存，
+ * lazy 那边照样重新取一遍，等于白跑。
+ *
+ * 表的**键序就是预热顺序**，照侧栏排：磅房和磅单中心最先落地，带图表的报表排在后面。
+ *
+ * 三条口径别破：
+ *  1. React.lazy 只认 default 导出，页面清一色具名导出，所以每个都要 .then 转一下。
+ *  2. 类型必须走 `import type`（见上面 MastersSection 那三行）——写成值 import 会把页面又拽回首包。
+ *  3. 每个懒页面都得落在某个 Suspense 边界里头，见 RootComponent 的登录分支与 AppShell 的内容区。
+ */
+const PAGE_LOADERS = {
+  dashboard: () => import("@/pages/DashboardPage").then((m) => ({ default: m.DashboardPage })),
+  workstation: () => import("@/pages/WorkstationPage").then((m) => ({ default: m.WorkstationPage })),
+  orders: () => import("@/pages/OrdersPage").then((m) => ({ default: m.OrdersPage })),
+  orderDetail: () => import("@/pages/OrderDetailPage").then((m) => ({ default: m.OrderDetailPage })),
+  outbound: () => import("@/pages/OutboundPage").then((m) => ({ default: m.OutboundPage })),
+  outboundDetail: () => import("@/pages/OutboundDetailPage").then((m) => ({ default: m.OutboundDetailPage })),
+  devices: () => import("@/pages/DevicesPage").then((m) => ({ default: m.DevicesPage })),
+  stock: () => import("@/pages/StockPage").then((m) => ({ default: m.StockPage })),
+  parties: () => import("@/pages/PartiesPage").then((m) => ({ default: m.PartiesPage })),
+  partyDetail: () => import("@/pages/PartyDetailPage").then((m) => ({ default: m.PartyDetailPage })),
+  qc: () => import("@/pages/QcPage").then((m) => ({ default: m.QcPage })),
+  qcDetail: () => import("@/pages/QcDetailPage").then((m) => ({ default: m.QcDetailPage })),
+  settlements: () => import("@/pages/SettlementsPage").then((m) => ({ default: m.SettlementsPage })),
+  settlementDetail: () => import("@/pages/SettlementDetailPage").then((m) => ({ default: m.SettlementDetailPage })),
+  payments: () => import("@/pages/PaymentsPage").then((m) => ({ default: m.PaymentsPage })),
+  masters: () => import("@/pages/MastersPage").then((m) => ({ default: m.MastersPage })),
+  reports: () => import("@/pages/ReportsPage").then((m) => ({ default: m.ReportsPage })),
+  cards: () => import("@/pages/CardsPage").then((m) => ({ default: m.CardsPage })),
+  system: () => import("@/pages/SystemPage").then((m) => ({ default: m.SystemPage })),
+  support: () => import("@/pages/SupportPage").then((m) => ({ default: m.SupportPage })),
+  login: () => import("@/pages/LoginPage").then((m) => ({ default: m.LoginPage })),
+};
+
+const LoginPage = lazy(PAGE_LOADERS.login);
+const DashboardPage = lazy(PAGE_LOADERS.dashboard);
+const WorkstationPage = lazy(PAGE_LOADERS.workstation);
+const OrdersPage = lazy(PAGE_LOADERS.orders);
+const OrderDetailPage = lazy(PAGE_LOADERS.orderDetail);
+const OutboundPage = lazy(PAGE_LOADERS.outbound);
+const OutboundDetailPage = lazy(PAGE_LOADERS.outboundDetail);
+const StockPage = lazy(PAGE_LOADERS.stock);
+const PartiesPage = lazy(PAGE_LOADERS.parties);
+const PartyDetailPage = lazy(PAGE_LOADERS.partyDetail);
+const QcPage = lazy(PAGE_LOADERS.qc);
+const QcDetailPage = lazy(PAGE_LOADERS.qcDetail);
+const SettlementsPage = lazy(PAGE_LOADERS.settlements);
+const SettlementDetailPage = lazy(PAGE_LOADERS.settlementDetail);
+const PaymentsPage = lazy(PAGE_LOADERS.payments);
+const MastersPage = lazy(PAGE_LOADERS.masters);
+const ReportsPage = lazy(PAGE_LOADERS.reports);
+const DevicesPage = lazy(PAGE_LOADERS.devices);
+const CardsPage = lazy(PAGE_LOADERS.cards);
+const SystemPage = lazy(PAGE_LOADERS.system);
+const SupportPage = lazy(PAGE_LOADERS.support);
+
+/**
+ * 首屏画完之后，把还没取过的页面 chunk 一个个读进来。
+ *
+ * 为什么必须预热而不是等点到再取：侧栏用的是 `navigate()` 不是 `<Link>`，
+ * `defaultPreload: "intent"` 那套悬停预读一次都不会触发，于是每个页面**头一次**打开都要
+ * 现读盘、现解析，Suspense 骨架先顶上去——就是"页面闪一下才出来"。
+ * 本地磁盘上一个 chunk 也就几毫秒，但弱机上解析执行是真耗时，且骨架一定会先画出一帧。
+ *
+ * 串行 await 而不是一次 all：二十来份模块同时执行会在空闲那几秒把 CPU 占满，
+ * 正在看首页的人会觉得卡；一份一份来，浏览器自己会把每份之间让出来。
+ */
+export async function preloadPages(): Promise<void> {
+  for (const load of Object.values(PAGE_LOADERS)) {
+    try {
+      await load();
+    } catch {
+      // 预热失败不当回事：真导航到那一页时 lazy 会自己再取一次，取不到照样有中文空态兜着
+    }
+  }
+}
 
 /** 会话状态 → 能不能进业务页。`mustChangePwd` 视同未登录：进了也只能看，不如先把密码设了 */
 async function guard() {
@@ -68,7 +135,9 @@ async function guard() {
  */
 function RootComponent() {
   const isLogin = useRouterState({ select: (s) => s.location.pathname === "/login" });
-  return isLogin ? <Outlet /> : <AppShell />;
+  // 业务页那一支的 Suspense 在 AppShell 的内容区（壳要保持不动）；登录页不套壳，边界只能挂在这里。
+  if (isLogin) return <Suspense fallback={<PagePending />}><Outlet /></Suspense>;
+  return <AppShell />;
 }
 
 const rootRoute = createRootRoute({

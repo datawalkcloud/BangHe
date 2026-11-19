@@ -9,12 +9,22 @@
  * 96vw（上限 1760 px）下两张卡片并排仍然立得住，再宽就把列表整块盖住了。
  * 这条上限只在这里给：`ui/sheet.tsx` 里不要再放默认 max-w，它会盖掉调用方的宽度。
  */
+import { lazy, Suspense } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useQuickDetail, type QuickDetailType } from "@/components/business/quickDetail";
-import { OrderDetailBody } from "@/pages/OrderDetailPage";
-import { PartyDetailBody } from "@/pages/PartyDetailPage";
-import { QcDetailBody } from "@/pages/QcDetailPage";
-import { SettlementDetailBody } from "@/pages/SettlementDetailPage";
+import { PagePending } from "@/components/business/layout";
+
+/**
+ * 四个正文按抽屉打开时再取。
+ *
+ * 它们与详情整页共用同一份实现，写成静态 import 会把四页的代码连同各自的依赖一起钉进首包——
+ * router.tsx 那份代码分割就白做了（构建期 INEFFECTIVE_DYNAMIC_IMPORT 报的正是这四处）。
+ * 抽屉本来就要人点一下才出，多等一个本地 chunk 读盘看不出来。
+ */
+const OrderDetailBody = lazy(() => import("@/pages/OrderDetailPage").then((m) => ({ default: m.OrderDetailBody })));
+const PartyDetailBody = lazy(() => import("@/pages/PartyDetailPage").then((m) => ({ default: m.PartyDetailBody })));
+const QcDetailBody = lazy(() => import("@/pages/QcDetailPage").then((m) => ({ default: m.QcDetailBody })));
+const SettlementDetailBody = lazy(() => import("@/pages/SettlementDetailPage").then((m) => ({ default: m.SettlementDetailBody })));
 
 const ARIA_LABEL: Record<QuickDetailType, string> = {
   order: "磅单详情",
@@ -29,10 +39,13 @@ export function QuickDetailSheet() {
   return (
     <Sheet open={!!target} onOpenChange={(open) => !open && close()}>
       <SheetContent side="right" className="w-[96vw] sm:max-w-[1760px] gap-0 overflow-hidden p-0" aria-label={target ? ARIA_LABEL[target.type] : undefined}>
-        {target?.type === "order" && <OrderDetailBody orderNo={target.id} embedded />}
-        {target?.type === "party" && <PartyDetailBody partyId={Number(target.id)} embedded />}
-        {target?.type === "qc" && <QcDetailBody reportNo={target.id} embedded />}
-        {target?.type === "settlement" && <SettlementDetailBody settleNo={target.id} embedded />}
+        {/* 四个正文都在同一个边界里：target 为空时一个都不渲染，启动因此不会被这里的 import 触发 */}
+        <Suspense fallback={<PagePending />}>
+          {target?.type === "order" && <OrderDetailBody orderNo={target.id} embedded />}
+          {target?.type === "party" && <PartyDetailBody partyId={Number(target.id)} embedded />}
+          {target?.type === "qc" && <QcDetailBody reportNo={target.id} embedded />}
+          {target?.type === "settlement" && <SettlementDetailBody settleNo={target.id} embedded />}
+        </Suspense>
       </SheetContent>
     </Sheet>
   );

@@ -4,12 +4,128 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- 两种模式都支持了（05 §7.4）：这里只声明"能力"，实际生效值由 bootstrapTheme 写在 <html style=color-scheme> 上 -->
+    <!-- 两种模式都支持了（05 §7.4）。实际生效值下面这段内联脚本先按 bootstrapTheme 的同一套口径打上，
+         等包里的 bootstrapTheme 跑起来再补色板覆盖——两边判定必须一致，否则深色用户会先被闪一屏浅色。 -->
     <meta name="color-scheme" content="light dark" />
     <title>磅禾 · 粮站收粮计量结算系统</title>
+    <style>
+      /*
+       * 启动骨架。写在 index.html 里而不是 React 组件里，是因为它要盖住的正是"包还没跑起来"这段：
+       * 主包解析执行完之前 #root 是空的，弱机上那几秒就是一整屏白。
+       *
+       * 令牌在这里只能按 src/App.css 的出厂值写死（色板覆盖要等 theme.ts 注入）。
+       * 选择器一律带 #boot-splash 前缀：Vite 注入的外链样式表排在本块之后，同权重会被它盖掉。
+       */
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        background: color-mix(in oklab, oklch(1 0 0) 95%, oklch(0.145 0 0));
+        font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        transition: opacity 260ms ease;
+      }
+      html.dark #boot-splash {
+        background: oklch(0.145 0 0);
+      }
+      /* 对外大屏窗（?display=1）不挂路由，没有"首屏渲染出来"这个信号可等，索性不出场 */
+      html.no-boot-splash #boot-splash {
+        display: none;
+      }
+      #boot-splash .boot-logo {
+        width: 60px;
+        height: 60px;
+        object-fit: contain;
+      }
+      #boot-splash .boot-name {
+        font-size: 13px;
+        letter-spacing: 0.22em;
+        color: oklch(0.505 0 0);
+      }
+      html.dark #boot-splash .boot-name {
+        color: oklch(0.65 0 0);
+      }
+      #boot-splash .boot-bar {
+        position: relative;
+        width: 168px;
+        height: 2px;
+        overflow: hidden;
+        background: color-mix(in oklab, oklch(0.145 0 0) 12%, transparent);
+      }
+      html.dark #boot-splash .boot-bar {
+        background: color-mix(in oklab, oklch(0.985 0 0) 16%, transparent);
+      }
+      #boot-splash .boot-bar i {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 40%;
+        background: oklch(0.515 0.105 151);
+        animation: boot-sweep 1.2s ease-in-out infinite;
+      }
+      html.dark #boot-splash .boot-bar i {
+        background: oklch(0.75 0.11 151);
+      }
+      @keyframes boot-sweep {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(350%);
+        }
+      }
+      /* 撤场只改透明，别直接摘节点：淡出这 260ms 里内容已经在底下摆好了 */
+      #boot-splash.boot-splash--gone {
+        opacity: 0;
+        pointer-events: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash,
+        #boot-splash .boot-bar i {
+          animation: none;
+          transition: none;
+        }
+        #boot-splash .boot-bar i {
+          width: 100%;
+        }
+        /* 没有淡出也就没有 transitionend，节点靠 boot-splash.ts 里的定时摘除 */
+        #boot-splash.boot-splash--gone {
+          visibility: hidden;
+        }
+      }
+    </style>
+    <script>
+      // 明暗判定必须早于任何打包产物：App.css 里 .dark 那套令牌要等样式表与 JS 链就位才生效，
+      // 深色用户因此会先被闪一屏白。这里与 src/lib/theme.ts 的 readMode() 逐值一致，
+      // 包括"读不到键就按出厂默认 light"（不是跟随系统）和 THEME_MODE_KEY 这个键名。
+      (function () {
+        var mode = "light";
+        try {
+          var stored = localStorage.getItem("banghe.theme.mode");
+          if (stored === "light" || stored === "dark" || stored === "system") mode = stored;
+        } catch (e) {
+          // 取不到存储就当没设过主题，按出厂浅色走
+        }
+        if (mode === "system") mode = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        var root = document.documentElement;
+        root.classList.add(mode);
+        root.style.colorScheme = mode;
+        if (new URLSearchParams(location.search).get("display") === "1") root.classList.add("no-boot-splash");
+      })();
+    </script>
   </head>
 
   <body>
+    <div id="boot-splash">
+      <img class="boot-logo" src="/logo.png" alt="" />
+      <div class="boot-name">磅禾粮站收粮系统</div>
+      <div class="boot-bar"><i></i></div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

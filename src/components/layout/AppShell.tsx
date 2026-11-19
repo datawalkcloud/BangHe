@@ -12,7 +12,7 @@
  *  3. 对外大屏（F2）：桌面端一律另起独立窗口，多屏整屏贴外屏、单屏开浮动窗，
  *     主窗口始终留给操作员；本文件内的覆盖层只服务浏览器预览，见 `lib/display-window.ts`
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -44,6 +44,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { OperatorFooter } from "@/components/business/OperatorSwitch";
+import { PagePending } from "@/components/business/layout";
 import { DeviceStatusBar } from "@/components/business/DeviceStatusBar";
 import { GlobalSearch } from "@/components/business/GlobalSearch";
 import { QuickDetailSheet } from "@/components/business/QuickDetailSheet";
@@ -381,7 +382,10 @@ function ShellContent({
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <Outlet />
+        {/* 页面是按需取的 chunk（router.tsx 的代码分割）：切页只换这一块，侧栏/顶栏/设备条不动 */}
+        <Suspense fallback={<PagePending />}>
+          <Outlet />
+        </Suspense>
       </div>
       <DeviceStatusBar />
     </>
