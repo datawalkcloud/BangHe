@@ -765,10 +765,21 @@ export const api = {
     }
     const s = settings.find((x) => x.key === key);
     if (s) {
-      const old = s.value;
-      s.value = value;
       const tail = verify === null || verify.mode === "device" ? "" : "（未经真机验证）";
-      auditMaster("setting.update", "app_setting", key, operator_id, `${old} → ${value}${tail}`);
+      const stationField =
+        key === "station_name" ? "name" : key === "station_address" ? "address" : key === "station_phone" ? "phone" : null;
+      if (stationField) {
+        const next = value.trim();
+        if (stationField === "name" && !next) throw new Error("站点名称不能为空：打印抬头与磅单第一行都要用它");
+        const old = station[stationField];
+        station[stationField] = next;
+        s.value = next;
+        if (old !== next) auditMaster("setting.update", "station", key, operator_id, `${old} → ${next}${tail}`);
+      } else {
+        const old = s.value;
+        s.value = value;
+        auditMaster("setting.update", "app_setting", key, operator_id, `${old} → ${value}${tail}`);
+      }
     }
     return settings.slice();
   },

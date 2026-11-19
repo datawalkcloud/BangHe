@@ -2,8 +2,9 @@
 //! §9.8 grain_variety / §9.9 warehouse+storage_slot / §9.10 price_list）
 //!
 //! 参数那一块有个特别处：库里只有「键 / 值 JSON / 值类型 / 说明」，界面上的中文名、
-//! 分组、控件类型一律在前端 `src/lib/settings-catalog.ts`；只有 `station_name` 反过来
-//! 例外——它读自 §9.2 的 `station` 行，不占 `app_setting` 一个键，免得同一个站名存两份。
+//! 分组、控件类型一律在前端 `src/lib/settings-catalog.ts`；只有站点三项（站名 / 地址 /
+//! 电话）反过来例外——它们读自 §9.2 的 `station` 行，不占 `app_setting` 键，免得同一份
+//! 站点信息存两份。
 //!
 //! 这是「从 mock 换成真库」的第一块业务读写，顺手把后面各模块要沿用的规矩立在这里：
 //!  1. **DTO 字段名与 `src/mock/types.ts` 逐字一致（保持 snake_case，不改 camelCase）**。
@@ -1158,7 +1159,10 @@ pub struct Setting {
 
 /// 站点名称不在 `app_setting`，它在 §9.2 的 `station` 表里。参数页照旧列这一项，
 /// 读时合成、写时回 station 行——同一个站名在库里存两份，早晚对不上。
+/// 地址 / 电话同理：票头那两行读的是 station 行，不是参数表。
 const STATION_NAME_KEY: &str = "station_name";
+const STATION_ADDRESS_KEY: &str = "station_address";
+const STATION_PHONE_KEY: &str = "station_phone";
 
 fn flatten_json_value(raw: &str) -> String {
     serde_json::from_str::<serde_json::Value>(raw)
@@ -1209,21 +1213,41 @@ pub fn list_settings(conn: &Connection) -> Result<Vec<Setting>, String> {
         .map_err(|e| format!("读取参数失败：{e}"))?
         .filter_map(|r| r.ok())
         .collect();
-    // 站点档案没建全时参数页仍要能打得开：站名合成空串，让界面自己提示去补
-    let name: Option<String> = conn
+    // 站点档案没建全时参数页仍要能打得开：三项合成空串，让界面自己提示去补
+    let station: Option<(String, String, String)> = conn
         .query_row(
-            "SELECT name FROM station WHERE is_active = 1 ORDER BY id LIMIT 1",
+            "SELECT name, COALESCE(address, ''), COALESCE(phone, '')
+             FROM station WHERE is_active = 1 ORDER BY id LIMIT 1",
             [],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .ok();
+    let (name, address, phone) = station.unwrap_or_default();
     rows.insert(
         0,
         Setting {
             key: STATION_NAME_KEY.into(),
-            value: name.unwrap_or_default(),
+            value: name,
             value_type: "string".into(),
             description: "打印抬头与磅单第一行".into(),
+        },
+    );
+    rows.insert(
+        1,
+        Setting {
+            key: STATION_ADDRESS_KEY.into(),
+            value: address,
+            value_type: "string".into(),
+            description: "票头地址行，留空则不打印".into(),
+        },
+    );
+    rows.insert(
+        2,
+        Setting {
+            key: STATION_PHONE_KEY.into(),
+            value: phone,
+            value_type: "string".into(),
+            description: "票头电话行，留空则不打印".into(),
         },
     );
     Ok(rows)
@@ -1245,28 +1269,38 @@ pub fn save_setting(conn: &Connection, actor: &AuthProfile, input: SettingInput)
         Some(n) if !n.is_empty() => format!("{old} → {new}（{n}）"),
         _ => format!("{old} → {new}"),
     };
-    if input.key == STATION_NAME_KEY {
-        let name = input.value.trim();
-        if name.is_empty() {
-            return Err("站点名称不能为空：打印抬头与磅单第一行都要用它".into());
+    // 站点三项写回 station 行。列名来自这里的固定匹配，不拼界面输入。
+    let station_col = match input.key.as_str() {
+        STATION_NAME_KEY => Some(("name", "站点名称", false)),
+        STATION_ADDRESS_KEY => Some(("address", "站点地址", true)),
+        STATION_PHONE_KEY => Some(("phone", "站点电话", true)),
+        _ => None,
+    };
+    if let Some((col, label, nullable)) = station_col {
+        let next = input.value.trim();
+        if !nullable && next.is_empty() {
+            return Err(format!("{label}不能为空：打印抬头与磅单第一行都要用它"));
         }
         let old: String = conn
             .query_row(
-                "SELECT name FROM station WHERE is_active = 1 ORDER BY id LIMIT 1",
+                &format!("SELECT COALESCE({col}, '') FROM station WHERE is_active = 1 ORDER BY id LIMIT 1"),
                 [],
                 |r| r.get(0),
             )
-            .map_err(|_| "站点档案尚未初始化，改不了站名".to_string())?;
-        if old != name {
-            conn.execute("UPDATE station SET name = ?1 WHERE is_active = 1", params![name])
-                .map_err(|e| format!("站点名称保存失败：{e}"))?;
+            .map_err(|_| format!("站点档案尚未初始化，改不了{label}"))?;
+        if old != next {
+            conn.execute(
+                &format!("UPDATE station SET {col} = NULLIF(?1, '') WHERE is_active = 1"),
+                params![next],
+            )
+            .map_err(|e| format!("{label}保存失败：{e}"))?;
             audit(
                 conn,
                 actor,
                 "setting.update",
                 "station",
-                STATION_NAME_KEY,
-                Some(&reason(&old, name)),
+                &input.key,
+                Some(&reason(&old, next)),
             );
         }
         return list_settings(conn);

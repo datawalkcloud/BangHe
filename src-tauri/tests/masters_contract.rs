@@ -685,9 +685,11 @@ fn settings_read_the_whole_table_with_the_station_name_synthetised_first() {
     let conn = db();
     let rows = list_settings(&conn).unwrap();
     let lib_rows: i64 = conn.query_row("SELECT COUNT(*) FROM app_setting", [], |r| r.get(0)).unwrap();
-    assert_eq!(rows.len() as i64, lib_rows + 1, "整表 + 合成的站名，一条都不该在读取时丢掉");
+    assert_eq!(rows.len() as i64, lib_rows + 3, "整表 + 合成的站点三项，一条都不该在读取时丢掉");
     assert_eq!(rows[0].key, "station_name", "站名固定排第一");
     assert!(!rows[0].value.is_empty(), "站名读成空串，参数页的抬头预览就是空的");
+    assert_eq!(rows[1].key, "station_address");
+    assert_eq!(rows[2].key, "station_phone");
 
     // 界面拿到的必须是解好引号的值：`"A4"` 漏出去就成了下拉框里带引号的一个字
     assert_eq!(raw_json(&conn, "print_paper"), "\"A4\"");
@@ -796,6 +798,34 @@ fn station_name_writes_the_station_row_and_no_audit_when_nothing_changed() {
     let e = err_of(save_setting(&conn, &a, setting_input("station_name", "   ")));
     assert!(e.contains("不能为空"), "{e}");
     assert_eq!(get_station(&conn).unwrap().name, "验收粮油站");
+}
+
+#[test]
+fn station_address_and_phone_write_the_station_row_and_allow_clearing() {
+    let conn = db();
+    let a = actor();
+    let rows = save_setting(&conn, &a, setting_input("station_address", "  向阳路 18 号  ")).unwrap();
+    assert_eq!(only(&rows, "station_address").value, "向阳路 18 号", "首尾空格会跟着进票头");
+    assert_eq!(get_station(&conn).unwrap().address, "向阳路 18 号");
+    save_setting(&conn, &a, setting_input("station_phone", "0571-8800 1234")).unwrap();
+    assert_eq!(get_station(&conn).unwrap().phone, "0571-8800 1234");
+    let as_setting: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM app_setting WHERE key IN ('station_address', 'station_phone')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(as_setting, 0, "站点信息归 §9.2 的 station 表，参数表里再存一份迟早对不上");
+    assert_eq!(audit_count(&conn, "setting.update", "station_address"), 1);
+
+    save_setting(&conn, &a, setting_input("station_address", "向阳路 18 号")).unwrap();
+    assert_eq!(audit_count(&conn, "setting.update", "station_address"), 1, "原样保存不该多记一笔");
+
+    // 留空是合法操作：票头那行整个不打印，而不是打个空标签
+    save_setting(&conn, &a, setting_input("station_phone", "   ")).unwrap();
+    assert_eq!(get_station(&conn).unwrap().phone, "");
+    assert_eq!(only(&list_settings(&conn).unwrap(), "station_phone").value, "");
 }
 
 /// 目录里的键必须在库里真存在，否则设置页渲染出一行"改了也不生效"的死项——
