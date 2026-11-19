@@ -164,7 +164,7 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
 /**
  * 驱动的现场叫法（汉字＋型号）。台账 `driver` 列与 Rust 侧 `driver_preset` 认的仍是
  * `DEVICE_SPEC.scale.drivers` 里那个 id，这里只管显示——磅员看的是仪表上的牌子，不是代码里的蛇形串。
- * 只收地磅这几档；别的 kind 的 id 不在表里，原样显示。
+ * 不在表里的 id 原样显示。
  */
 const DRIVER_LABEL: Record<string, string> = {
   yaohua_xk3190: "耀华 XK3190（连续发送）",
@@ -172,6 +172,9 @@ const DRIVER_LABEL: Record<string, string> = {
   keli_d2008: "柯力 D2008（连续发送）",
   dingsong_ds822: "顶松 DS822（连续发送）",
   toledo: "托利多（需手填帧模板）",
+  // 现场到货的是 iDR 系列免驱机型（docs/design/04 §3.2），没有更细的型号编号
+  routon_sdtapi: "精伦 iDR（免驱 USB）",
+  mock: "Mock（演示设备）",
 };
 
 function driverLabel(driver: string): string {
