@@ -413,12 +413,13 @@ export const PRINT_CHANNEL: Record<PrintChannel, string> = {
 
 export type PaperKind = "A4" | "dot241" | "thermal58" | "thermal80";
 
+// 键序即下拉展开顺序：现场基本都用热敏小票，58 / 80 排前两位
 export const PAPER: Record<PaperKind, string> = {
-  A4: "A4 激光",
-  dot241: "241 针式连续纸",
   thermal58: "58 热敏小票",
   // 现场实机（斯普瑞特 SPRT 80mm）：ESC/POS Font A 实测一行 48 列不折行
   thermal80: "80 热敏小票",
+  A4: "A4 激光",
+  dot241: "241 针式连续纸",
 };
 
 /* -------------------------------------------------------------------- 通用 */

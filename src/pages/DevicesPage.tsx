@@ -33,8 +33,8 @@ import { IpCameraLive, ipCameraSpec } from "@/components/business/IpCameraLive";
 import { MEDIUM, READER_DRIVER_IDS, readerFields, readerSpec } from "@/lib/card-reader";
 import { ESCPOS_DRIVERS, PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import type { DeviceConfig } from "@/mock/types";
-import type { DeviceKind, DeviceStatus, Tone } from "@/lib/constants";
-import { DEVICE_KIND, DEVICE_STATUS, ROLE, TONE_DOT, TONE_TEXT } from "@/lib/constants";
+import type { DeviceKind, DeviceStatus, PaperKind, Tone } from "@/lib/constants";
+import { DEVICE_KIND, DEVICE_STATUS, PAPER, ROLE, TONE_DOT, TONE_TEXT } from "@/lib/constants";
 import { orDash, weight, weightUnit, weightUnitLabel } from "@/lib/format";
 import { csvName } from "@/lib/csv";
 import { exportCsvFile } from "@/lib/export-csv";
@@ -130,7 +130,9 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
   },
   printer: {
     prefix: "prn",
-    drivers: ["preview", "raw_escp", "escpos_usbprint", "raw_escpos"],
+    // raw_escpos 是 1.1.0 的旧标识，与 escpos_usbprint 全程同一条路（ESCPOS_DRIVERS 两个值一起判），
+    // 新登记不再给这档；台账里已有的旧记录编辑时由 printerDriverOptions 补回。
+    drivers: ["preview", "raw_escp", "escpos_usbprint"],
     fields: [{ key: "paper", label: "纸型", options: ["A4", "dot241", "thermal80", "thermal58"], required: true }],
   },
   scanner: {
@@ -162,19 +164,32 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
 };
 
 /**
- * 驱动的现场叫法（汉字＋型号）。台账 `driver` 列与 Rust 侧 `driver_preset` 认的仍是
- * `DEVICE_SPEC.scale.drivers` 里那个 id，这里只管显示——磅员看的是仪表上的牌子，不是代码里的蛇形串。
- * 不在表里的 id 原样显示。
+ * 驱动的现场叫法（汉字＋型号/出纸通道）。台账 `driver` 列与后端认的仍是这些蛇形 id，
+ * 这里只管显示——磅员看的是仪表上的牌子、打印机的出纸方式，不是代码里的标识。
+ * 不在表里的 id 原样显示（摄像头的驱动名本身已可读）。
  */
 const DRIVER_LABEL: Record<string, string> = {
-  yaohua_xk3190: "耀华 XK3190（连续发送）",
+  yaohua_xk3190: "耀华 XK3190",
   // 帧与耀华同构（Rust 侧复用同一份预设），但现场认的是仪表上的牌子，所以单独一挡
-  keli_d2008: "柯力 D2008（连续发送）",
-  dingsong_ds822: "顶松 DS822（连续发送）",
+  keli_d2008: "柯力 D2008",
+  dingsong_ds822: "顶松 DS822",
   toledo: "托利多（需手填帧模板）",
   // 现场到货的是 iDR 系列免驱机型（docs/design/04 §3.2），没有更细的型号编号
   routon_sdtapi: "精伦 iDR（免驱 USB）",
   mock: "Mock（演示设备）",
+  // 打印机：前半句是机器类型，括号里是出纸通道（直连 vs 打印队列）
+  escpos_usbprint: "USB 热敏小票机（ESC/POS 直连）",
+  raw_escpos: "USB 热敏小票机（旧标识，同上）",
+  preview: "A4 激光 / 喷墨（打印队列）",
+  raw_escp: "241 针式（打印队列）",
+};
+
+/** 驱动下拉下的一句人话：四个打印机选项的差别只在出纸通道和机器类型（判据见 print-guard 的 ESCPOS_DRIVERS） */
+const PRINTER_DRIVER_HINT: Record<string, string> = {
+  escpos_usbprint: "字节直写 usbprint.sys、按 VID/PID 寻址，不经打印队列；可做联机 / 缺纸检测。",
+  raw_escpos: "1.1.0 的旧标识，与「USB 热敏小票机（ESC/POS 直连）」完全等价；新登记请选上一项。",
+  preview: "走 Windows 打印队列（GDI）直打，纸型 / 托盘随打印机自身设置，程序不选纸。",
+  raw_escp: "同样走 Windows 打印队列，只是纸型按 241 连续纸登记。",
 };
 
 function driverLabel(driver: string): string {
@@ -191,6 +206,17 @@ function paperOptionsFor(driver: string): string[] {
   if (ESCPOS_DRIVERS.includes(driver)) return ["thermal80", "thermal58"];
   if (driver === "raw_escp") return ["dot241"];
   return ["A4"];
+}
+
+/**
+ * 打印机驱动候选。`raw_escpos` 已从新登记里去掉了：它和 `escpos_usbprint` 在代码里全程同一条路
+ * （ESCPOS_DRIVERS 两个值一起判），并列两档只会让现场以为要按机器选。台账里已有的旧记录
+ * 编辑时补回当前值，否则下拉里找不到当前值会显示空白，看起来像"没选驱动"。
+ */
+function printerDriverOptions(current: string): { value: string; label: string }[] {
+  const drivers = [...DEVICE_SPEC.printer.drivers];
+  if (current === "raw_escpos" && !drivers.includes(current)) drivers.push(current);
+  return drivers.map((d) => ({ value: d, label: driverLabel(d) }));
 }
 
 /**
@@ -253,7 +279,12 @@ function networkCameraFields(driver: string, advanced: boolean): FieldSpec[] {
 
 /** 一栏关键参数随驱动动态化：打印机纸型、本机摄像头靠扫描回填（无需手填 host），其余照 DEVICE_SPEC 原样 */
 function fieldsFor(kind: DeviceKind, driver: string, camAdvanced: boolean): FieldSpec[] {
-  if (kind === "printer") return [{ key: "paper", label: "纸型", options: paperOptionsFor(driver), required: true }];
+  if (kind === "printer") {
+    const options = paperOptionsFor(driver);
+    // 落库仍是 A4/dot241/thermal80/thermal58 这些原值，磅员看到的是纸的现场叫法
+    const optionLabels = Object.fromEntries(options.map((o) => [o, PAPER[o as PaperKind]]));
+    return [{ key: "paper", label: "纸型", options, optionLabels, required: true }];
+  }
   if (kind === "camera") {
     if (driver === "local_uvc") return [];
     if (driver === "mock") return DEVICE_SPEC.camera.fields;
@@ -1056,8 +1087,15 @@ export function DevicesPage() {
                 aria-label="驱动协议"
                 value={form.driver}
                 onChange={(v) => patchDriver(v)}
-                options={DEVICE_SPEC[form.kind].drivers.map((d) => ({ value: d, label: driverLabel(d) }))}
+                options={
+                  form.kind === "printer"
+                    ? printerDriverOptions(form.driver)
+                    : DEVICE_SPEC[form.kind].drivers.map((d) => ({ value: d, label: driverLabel(d) }))
+                }
               />
+              {form.kind === "printer" && !!PRINTER_DRIVER_HINT[form.driver] && (
+                <span className="text-[11px] font-normal leading-snug">{PRINTER_DRIVER_HINT[form.driver]}</span>
+              )}
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               设备名称 *
