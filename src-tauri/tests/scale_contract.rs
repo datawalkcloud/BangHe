@@ -13,9 +13,9 @@ use rusqlite::{params, Connection};
 
 use banghe_lib::db;
 use banghe_lib::scale::{
-    capture_align, driver_preset, frame_display, load_config, load_device, parse_hex, parse_template, parse_weight,
-    resolve_template, split_frames, split_frames_ex, yaohua_xk3190_cont, Align, Framing, Judgement, Payload,
-    ScaleEvent, Stability, StabilityJudge, StreamCore, FrameTemplate, Transport,
+    capture_align, dingsong_ds822_cont, driver_preset, frame_display, load_config, load_device, parse_hex,
+    parse_template, parse_weight, resolve_template, split_frames, split_frames_ex, yaohua_xk3190_cont, Align, Framing,
+    Judgement, Payload, ScaleEvent, Stability, StabilityJudge, StreamCore, FrameTemplate, Transport,
 };
 
 // ------------------------------------------------------------------ 测试用模板
@@ -1081,6 +1081,180 @@ fn full_nested_template_is_never_overwritten_by_the_preset() {
 fn unknown_driver_has_no_preset() {
     assert!(driver_preset("toledo").is_none(), "没预设的驱动完全按 config_json 走");
     assert!(driver_preset("yaohua_xk3190").is_some());
+    assert!(driver_preset("dingsong_ds822").is_some());
+    assert!(driver_preset("ds822").is_some(), "现场抄的是仪表型号，别名也要认");
+}
+
+// =============================================== 顶松 DS822 连续发送（2026-11-19 现场抓包）
+
+/// 现场 COM6（9600/8/None/1）抓到的一帧原始字节，**不含**帧间那个分隔空格：
+/// `E` `A` `a` `+` `006946` `3` `0000000` `b` = 6.946 t。
+fn ds822_captured_frame() -> Vec<u8> {
+    b"EAa+00694630000000b".to_vec()
+}
+
+/// 造一帧进流：6 位重量数字就是 kg（小数位数标志位固定 `3`、单位吨，`006946`/10³ t = 6946 kg），
+/// 尾随空格是流里的真分隔符——模板按它切帧，不给它就一帧都切不出来。
+/// 帧首那个字节按抓包固定写成 `E`：它的规则还没从十六进制抓包里核实，模板 `checksum="none"` 不参与判定。
+fn ds822_frame(kg: i64, sign: char) -> Vec<u8> {
+    let mut f = b"EAa".to_vec();
+    f.push(sign as u8);
+    f.extend(format!("{:06}30000000b", kg.abs()).as_bytes());
+    f.push(b' ');
+    f
+}
+
+fn ds822_core() -> StreamCore {
+    let mut tpl = dingsong_ds822_cont();
+    tpl.transport.port = "COM6".into();
+    StreamCore::new(tpl, "scale2", 2)
+}
+
+#[test]
+fn ds822_captured_frame_reads_6946_kg() {
+    let tpl = dingsong_ds822_cont();
+    // 006946 ÷ 10³ = 6.946 t，unit="t" → 6946 kg = 69460 个 0.1 kg
+    assert_eq!(parse_weight(&ds822_captured_frame(), &tpl.payload).unwrap(), 69_460);
+}
+
+#[test]
+fn ds822_decimal_flag_is_the_byte_right_after_the_six_weight_digits() {
+    let tpl = dingsong_ds822_cont();
+    // 抓包里这一位恒为 '3' 而重量数字在跳 → 它是"小数点从右数几位"，不是重量的第 7 位。
+    // 下标含帧首校验字节：E A a + 0 0 6 9 4 6 [3] → 第 10 字节。
+    assert_eq!(tpl.payload.decimal_count_index, Some(10));
+    assert_eq!(tpl.payload.sign_index, 3, "符号位在第 4 字节（前面是校验 + 地址头 Aa）");
+    assert_eq!(parse_weight(&ds822_frame(1234, '+'), &tpl.payload).unwrap(), 12_340);
+    assert_eq!(parse_weight(&ds822_frame(500, '+'), &tpl.payload).unwrap(), 5_000);
+}
+
+#[test]
+fn ds822_negative_sign_is_kept() {
+    let tpl = dingsong_ds822_cont();
+    assert_eq!(parse_weight(&ds822_frame(6946, '-'), &tpl.payload).unwrap(), -69_460, "回皮的负读数不能当正数");
+}
+
+#[test]
+fn ds822_stream_splits_on_the_space_separator() {
+    let mut core = ds822_core();
+    let mut bytes = ds822_frame(6946, '+');
+    bytes.extend(ds822_frame(6944, '+'));
+    let evs = core.feed(&bytes, 1000);
+    assert_eq!(evs.len(), 1, "两帧同一毫秒，第二帧该被 10 帧/秒节流挡掉：{evs:?}");
+    assert!(evs[0].connected);
+    assert_eq!(evs[0].weight_01kg, 69_460);
+    assert_eq!(evs[0].error_kind, None);
+    assert_eq!(core.buffer_len(), 0, "分隔符切完不该留残字节");
+    let evs = core.feed(&ds822_frame(6944, '+'), 1200);
+    assert_eq!(evs.len(), 1, "到 200 ms 该把第二帧发出去：{evs:?}");
+    assert_eq!(evs[0].weight_01kg, 69_440);
+}
+
+#[test]
+fn ds822_wrong_separator_yields_no_reading_then_offline() {
+    // 万一那台其实用 \r\n 分隔：按空格切一帧都凑不出来，宁可报离线，
+    // 也不要定长切帧把两个重量粘成一帧、照样报个像样的读数。
+    let mut core = ds822_core();
+    let mut bytes = ds822_captured_frame();
+    bytes.extend(b"\r\n");
+    bytes.extend(ds822_captured_frame());
+    bytes.extend(b"\r\n");
+    assert!(core.feed(&bytes, 1000).is_empty(), "分隔符不对时绝不能下发读数");
+    let ev = core.watchdog(6000).expect("一帧都没解析出来，5 秒后该喊离线");
+    assert_eq!(ev.error_kind.as_deref(), Some("Offline"));
+    assert!(!ev.connected);
+}
+
+#[test]
+fn ds822_flat_ledger_form_gets_the_preset() {
+    // 现场在设备中心只填端口/波特率（扁平表单），驱动选 dingsong_ds822 → 自动套上抓包模板
+    let conn = db_conn();
+    insert_device(
+        &conn,
+        "scaleDS822",
+        "2 号地磅",
+        "scale",
+        "dingsong_ds822",
+        r#"{ "port": "COM6", "baud": "9600", "frameFamily": "A" }"#,
+        0,
+        1,
+    );
+    let (_row, tpl) = load_config(&conn, "scaleDS822").unwrap().expect("扁平表单也要跑出 DS822 模板");
+    assert_eq!(tpl.transport.port, "COM6");
+    assert_eq!(tpl.transport.baud, 9600);
+    assert_eq!(tpl.framing.mode, "delimited");
+    assert_eq!(tpl.framing.start, "", "DS822 帧没有起始符");
+    assert_eq!(tpl.framing.terminator, " ");
+    assert_eq!(tpl.framing.checksum, "none", "帧首校验字节的规则未经十六进制抓包核实，先不校验");
+    assert_eq!(tpl.payload.unit, "t", "帧内数字的量纲是吨，不是柯力那种 kg");
+    assert_eq!(parse_weight(&ds822_captured_frame(), &tpl.payload).unwrap(), 69_460);
+}
+
+// ================================ 柯力 D2008「连续方式 TF=0」（复用耀华那一档模板，单独立型号）
+
+/// 柯力 D2008 手册「连续方式(TF=0)」的样例帧：发送 `+20.00` →
+/// `02 2B 30 30 32 30 30 30 32 31 42 03` = `STX` `+` `002000` `2`(小数位数) `1B`(异或) `ETX`。
+/// 异或核对：`+`~小数位这 8 字节（2B 30 30 32 30 30 30 32）异或 = 0x1B → ASCII `"1B"`。
+/// 手册自己写明"此协议格式同上海耀华 A2"，所以这挡驱动不另写解析，只借用耀华模板。
+fn keli_manual_sample_frame() -> Vec<u8> {
+    vec![0x02, b'+', b'0', b'0', b'2', b'0', b'0', b'0', b'2', b'1', b'B', 0x03]
+}
+
+#[test]
+fn keli_d2008_preset_is_the_yaohua_template_verbatim() {
+    // 单独立一档只是为了让现场按仪表牌子选得到，不是给它另一套解析——两处必须逐字段相同，
+    // 否则以后改耀华预设会悄悄漏掉柯力这挡
+    assert_eq!(driver_preset("keli_d2008").unwrap(), yaohua_xk3190_cont());
+    assert_eq!(driver_preset("d2008"), driver_preset("keli_d2008"), "别名也要认");
+}
+
+#[test]
+fn keli_manual_sample_frame_reads_20_kg_through_the_pipeline() {
+    let mut tpl = yaohua_xk3190_cont();
+    tpl.transport.port = "COM5".into();
+    let mut core = StreamCore::new(tpl, "scale1", 1);
+    let evs = core.feed(&keli_manual_sample_frame(), 1000);
+    assert_eq!(evs.len(), 1, "切帧 + 异或校验 + 小数位取数三段一起过：{evs:?}");
+    assert!(evs[0].connected);
+    assert_eq!(evs[0].weight_01kg, 200, "手册样例 +20.00 → 200 个 0.1 kg");
+    assert_eq!(evs[0].error_kind, None, "不该有任何错误：{:?}", evs[0].error);
+}
+
+#[test]
+fn keli_flat_ledger_form_gets_the_shared_preset() {
+    let conn = db_conn();
+    insert_device(
+        &conn,
+        "scaleKeli",
+        "1 号地磅",
+        "scale",
+        "keli_d2008",
+        r#"{ "port": "COM5", "baud": "9600", "frameFamily": "A" }"#,
+        0,
+        1,
+    );
+    let (_row, tpl) = load_config(&conn, "scaleKeli").unwrap().expect("选柯力 D2008 也要跑出模板");
+    assert_eq!(tpl.transport.port, "COM5");
+    assert_eq!(tpl.framing.start, "\u{02}");
+    assert_eq!(tpl.framing.checksum, "xor_ascii_hex");
+    assert_eq!(tpl.payload.decimal_count_index, Some(8));
+    // 帧内那 6 位数字的量纲是 kg（仪表面板显示"吨"只是显示单位）：填成 t 会把读数放大 1000 倍
+    assert_eq!(tpl.payload.unit, "kg");
+    assert_eq!(parse_weight(&keli_manual_sample_frame(), &tpl.payload).unwrap(), 200);
+}
+
+#[test]
+fn keli_frame_with_nonzero_tf_is_a_bad_frame_not_a_plausible_reading() {
+    // 现场那台若没把仪表参数 TF 设成 0，这条模板不会称出个"缩小 1000 倍但看着像数"的读数：
+    // 小数位数那一位一变，手册规定的异或值就跟着变（0x1B → 0x1A），帧尾仍按原样发 → 判坏帧、看得见。
+    let mut tf3 = keli_manual_sample_frame();
+    tf3[8] = b'3';
+    let mut tpl = yaohua_xk3190_cont();
+    tpl.transport.port = "COM5".into();
+    let mut core = StreamCore::new(tpl, "scale1", 1);
+    let evs = core.feed(&tf3, 1000);
+    assert!(evs.iter().any(|e| e.error_kind.as_deref() == Some("BadFrame")), "{evs:?}");
+    assert!(evs.iter().all(|e| e.weight_01kg == 0), "TF 对不上时绝不能当成一次读数下发");
 }
 
 // ============================================================ 判稳依据快照（设备中心取证用）

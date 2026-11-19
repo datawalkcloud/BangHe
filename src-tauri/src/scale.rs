@@ -1321,6 +1321,10 @@ pub fn capture_align(conn: &Connection) -> Align {
 ///
 /// 这是"通用帧模板 + 型号预设"里的**预设**：现场只填 `port`/`baud` 就能跑；要微调仍可在
 /// `config_json` 写完整的嵌套模板（那时 [`maybe_apply_driver_preset`] 不再套本预设）。
+///
+/// 同样适用于**柯力 D2008 的「连续方式 TF=0」**：其手册给的帧
+/// `02 2B 30 30 32 30 30 30 32 31 42 03`（发送 +20.00，异或 `0x1B`）与本档逐字节同构，
+/// 手册自己也写明"此协议格式同上海耀华 A2"——所以 [`driver_preset`] 让 `keli_d2008` 复用本模板。
 pub fn yaohua_xk3190_cont() -> FrameTemplate {
     FrameTemplate {
         transport: Transport {
@@ -1362,10 +1366,84 @@ pub fn yaohua_xk3190_cont() -> FrameTemplate {
     }
 }
 
+/// 顶松 DS822 **连续发送**这一档的帧模板（04 §2.2 A 族）。
+///
+/// 依据是 2026-11-19 现场用串口助手在 COM6（9600/8/None/1）抓到的原始流，一帧 19 字节：
+/// `EAa+00694630000000b`，逐字节：
+///  - 0：随重量数字变化的字节，形态像**帧首异或校验**（重量位变 1，它跟着变 0x04/0x01）；
+///    `verify_checksum` 只认"末字节原始校验"和"终止符前两字符 ASCII 十六进制"两档，
+///    认不了帧首那一位，所以这里 `checksum="none"` 不校验（代价：坏帧只能靠判稳与数字区
+///    宽度守卫挡，等帧监视器复核到真规则再补一档）。
+///  - 1..2：恒定 `Aa`（41 61），仪表地址/命令头，本路不取。
+///  - 3：符号位 `+`/`-`。
+///  - 4..9：6 位重量数字，高位在前。
+///  - 10：**小数位数标志位**——抓到的所有帧里恒为 `3`，而 4..9 在 006942~006954 之间跳，
+///    所以它不是重量的第 7 位，是"小数点从右数几位"，与耀华 A9 同一套口径。
+///  - 11..17：7 个 `0`，形态像皮重字段，本路不取（净重由我们自己按毛-皮算）。
+///  - 18：结尾字符 `b`/`B`。
+///  - 帧间分隔：0x20 空格。截图里"每行正好 3 帧"是 20 字符按显示宽度换行的结果，
+///    说明分隔符是流里的真字节，不是串口助手加的。
+///
+/// 分隔符按空格切而不是按定长切，是**故意的**：万一现场那台其实是 `\r\n` 或没有分隔符，
+/// 定长切帧会永久错位、把两个数字粘成一帧照样算出个像样的读数；按分隔符切则一帧都切不出来，
+/// 5 秒后底栏直接报离线——宁可看得见，也不要静默称错车。
+///
+/// `unit="t"`：帧内数字配小数位标志得到的是**吨**（`006946` + `3` = 6.946 t = 6946 kg），
+/// 与仪表面板"仪表单位＝吨"一致。这台和柯力 D2008（同族耀华帧，量纲是 kg）正好互为对照：
+/// `unit` 说的是帧内数字自身的单位，不是界面显示单位。
+pub fn dingsong_ds822_cont() -> FrameTemplate {
+    FrameTemplate {
+        transport: Transport {
+            kind: "serial".into(),
+            port: String::new(),
+            baud: 9600,
+            data_bits: 8,
+            parity: "none".into(),
+            stop_bits: 1,
+            host: String::new(),
+            tcp_port: 0,
+        },
+        framing: Framing {
+            mode: "delimited".into(),
+            start: String::new(),
+            terminator: " ".into(),
+            encoding: "ascii".into(),
+            max_len: 24,
+            fixed_len: 0,
+            checksum: "none".into(),
+        },
+        payload: Payload {
+            sign_index: 3,
+            digits: "0123456".into(),
+            decimal_places: 3,
+            decimal_count_index: Some(10),
+            skip_chars: String::new(),
+            unit: "t".into(),
+            status_bytes: Vec::new(),
+            status_stable_byte: None,
+            status_stable_mask: None,
+        },
+        stability: Stability::default(),
+        align: Align {
+            division_01kg: 100,
+            mode: "nearest_div".into(),
+        },
+        query: Query::default(),
+    }
+}
+
 /// 驱动 → 预设模板。认不出的驱动回 `None`（那就完全按 `config_json` 里的嵌套模板走）。
+///
+/// 一挡驱动可以指向同一份模板：柯力 D2008 的「连续方式 TF=0」帧手册自己写明"协议格式同上海耀华 A2"，
+/// 与 A9 逐字节一致，所以它复用 [`yaohua_xk3190_cont`]。分成两挡不是给它另写解析，
+/// 而是让现场在设备中心按仪表牌子就能选到自己那台——型号选错的人不会去翻文档找"其实选耀华"。
 pub fn driver_preset(driver: &str) -> Option<FrameTemplate> {
     match driver.trim().to_ascii_lowercase().as_str() {
         "yaohua_xk3190" | "yaohua_xk3190_cont" | "xk3190" => Some(yaohua_xk3190_cont()),
+        // 复用耀华模板，前提是仪表面板参数 TF（小数点位数）设成 0；TF=2/3/4/5/7 是别的帧形，
+        // 套这份模板会校验不过并持续报坏帧（看得见，不会称错车）
+        "keli_d2008" | "kelid2008_cont" | "d2008" => Some(yaohua_xk3190_cont()),
+        "ds822" | "dingsong_ds822" => Some(dingsong_ds822_cont()),
         _ => None,
     }
 }

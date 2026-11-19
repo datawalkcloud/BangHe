@@ -93,7 +93,7 @@ interface FieldSpec {
 const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; fields: FieldSpec[] }> = {
   scale: {
     prefix: "scale",
-    drivers: ["yaohua_xk3190", "toledo", "mock"],
+    drivers: ["yaohua_xk3190", "keli_d2008", "dingsong_ds822", "toledo", "mock"],
     fields: [
       { key: "baud", label: "波特率", options: ["9600", "4800", "2400", "19200", "38400"] },
       { key: "frameFamily", label: "帧族", options: ["A", "B"] },
@@ -147,6 +147,23 @@ const DEVICE_SPEC: Record<DeviceKind, { prefix: string; drivers: string[]; field
     ],
   },
 };
+
+/**
+ * 驱动的现场叫法（汉字＋型号）。台账 `driver` 列与 Rust 侧 `driver_preset` 认的仍是
+ * `DEVICE_SPEC.scale.drivers` 里那个 id，这里只管显示——磅员看的是仪表上的牌子，不是代码里的蛇形串。
+ * 只收地磅这几档；别的 kind 的 id 不在表里，原样显示。
+ */
+const DRIVER_LABEL: Record<string, string> = {
+  yaohua_xk3190: "耀华 XK3190（连续发送）",
+  // 帧与耀华同构（Rust 侧复用同一份预设），但现场认的是仪表上的牌子，所以单独一挡
+  keli_d2008: "柯力 D2008（连续发送）",
+  dingsong_ds822: "顶松 DS822（连续发送）",
+  toledo: "托利多（需手填帧模板）",
+};
+
+function driverLabel(driver: string): string {
+  return DRIVER_LABEL[driver] ?? driver;
+}
 
 /** ESC/POS 直写 usbprint.sys、靠 VID/PID 寻址的两类驱动（判据收在 print-guard，工作台直打同源） */
 
@@ -1020,7 +1037,7 @@ export function DevicesPage() {
                 aria-label="驱动协议"
                 value={form.driver}
                 onChange={(v) => patchDriver(v)}
-                options={DEVICE_SPEC[form.kind].drivers.map((d) => ({ value: d, label: d }))}
+                options={DEVICE_SPEC[form.kind].drivers.map((d) => ({ value: d, label: driverLabel(d) }))}
               />
             </Label>
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -1373,7 +1390,7 @@ function DeviceCard({
           {d.err_count > 0 && <span className="text-destructive">错误 {d.err_count} 次</span>}
         </span>
         <span className="truncate text-xs text-muted-foreground">
-          {orDash(d.last_ok_at) === "—" ? "从未成功" : `最后成功 ${d.last_ok_at}`} · 驱动 {d.driver}
+          {orDash(d.last_ok_at) === "—" ? "从未成功" : `最后成功 ${d.last_ok_at}`} · 驱动 {driverLabel(d.driver)}
         </span>
         {d.last_error && <span className="truncate text-xs text-destructive">{d.last_error}</span>}
         <span className="flex flex-wrap gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
