@@ -201,7 +201,7 @@ export function SplitBar({
   const config: ChartConfig = Object.fromEntries(segments.map((s) => [s.label, { label: s.label, color: fillOf(s.colorClass) }]));
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <ChartContainer config={config} className="aspect-auto h-5 w-full border border-border">
+      <ChartContainer config={config} className="aspect-auto h-5 w-full border">
         <BarChart layout="vertical" data={data} margin={{ top: 0, right: 0, bottom: 0, left: 0 }} barCategoryGap={0}>
           <YAxis type="category" dataKey="name" hide />
           <XAxis type="number" domain={[0, total]} hide />

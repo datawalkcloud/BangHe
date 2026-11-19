@@ -39,7 +39,7 @@ import { ALL, Choose } from "@/components/business/Choose";
 import { IdCardText } from "@/components/business/IdCardText";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
-import { CallOut, EmptyState, InfoGrid, PageHeader, SectionBar, SectionTitle } from "@/components/business/layout";
+import { PAGE_CARD, CallOut, EmptyState, InfoGrid, PageHeader, SectionBar, SectionTitle } from "@/components/business/layout";
 import { ThemeSettingsPanel } from "@/components/business/ThemeSettingsPanel";
 import { WindowBehaviorPanel } from "@/components/business/WindowBehaviorPanel";
 import { SoftKeyboardPanel } from "@/components/business/SoftKeyboardPanel";
@@ -100,7 +100,7 @@ export function SystemPage({ section }: { section: SystemSection }) {
           </Tabs>
         }
       />
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-4">
+      <div className={cn(PAGE_CARD, "flex flex-col")}>
         {section === "users" && <UsersSection />}
         {section === "staff" && <StaffSection />}
         {section === "audit" && <AuditSection />}

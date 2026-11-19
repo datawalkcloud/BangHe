@@ -22,7 +22,7 @@ import { useSetting, useStaffNames } from "@/hooks/useLookups";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { PaymentStatusBadge, ToneBadge } from "@/components/business/badges";
-import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
+import { PAGE_CARD, CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { detailColumn } from "@/components/business/quickDetail";
 import { StatCard, StatCardGrid } from "@/components/business/StatCard";
 import { Button } from "@/components/ui/button";
@@ -185,7 +185,7 @@ export function SettlementsPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         <div className="flex flex-col gap-4">
           <StatCardGrid>
             <StatCard label="筛选后应付合计" value={money(totals.payable, false)} unit="元" hint={rmbUpper(totals.payable)} />

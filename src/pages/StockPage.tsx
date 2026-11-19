@@ -25,7 +25,8 @@ import { dateTime, money, orDash, ton, todayISO } from "@/lib/format";
 import { useVarieties, useWarehouses } from "@/hooks/useLookups";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { EmptyState, PageHeader } from "@/components/business/layout";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PAGE_CARD, EmptyState, PageHeader } from "@/components/business/layout";
 import { ToneBadge } from "@/components/business/badges";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -178,7 +179,9 @@ export function StockPage() {
         title="库存账"
         description={
           tab === "balance"
-            ? `全站在库 ${ton(totalBalance)}${negative.length ? ` · ${negative.length} 格为负（超库存出库未拦）` : ""}`
+            ? balanceQ.isPending
+              ? "正在读结存…"
+              : `全站在库 ${ton(totalBalance)}${negative.length ? ` · ${negative.length} 格为负（超库存出库未拦）` : ""}`
             : `共 ${movementsQ.data?.total ?? 0} 条流水 · 当前筛选净变动 ${ton(moves.reduce((s, r) => s + r.signed_01kg, 0))}`
         }
         tabs={
@@ -202,7 +205,7 @@ export function StockPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         {/* 两个视图共用这一排筛选：从结存某一格下钻到流水，靠的就是同一组 仓房 + 品种 */}
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -265,7 +268,11 @@ export function StockPage() {
 
         {tab === "balance" ? (
           <div className="flex flex-col gap-4">
-            {grouped.length === 0 ? (
+            {/* 结存没回来之前 grouped 必然是空数组，直接进空态等于对着 15 吨的库说"还没有任何库存"；
+                查询出错时（retry: 0）更是会一直停在这句话上。空态只在结果真的到手之后才有资格说话。 */}
+            {balanceQ.isPending ? (
+              <Skeleton className="h-32 w-full" />
+            ) : grouped.length === 0 ? (
               <EmptyState
                 title="还没有任何库存流水"
                 description="过磅结算并登记入仓去向、或完成出库单后，这里会自动出现流水。"

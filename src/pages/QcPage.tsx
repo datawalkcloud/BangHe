@@ -22,7 +22,7 @@ import { useStaffNames, useVarieties } from "@/hooks/useLookups";
 import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { QcDecisionBadge, ToneBadge } from "@/components/business/badges";
-import { EmptyState, Kbd, PageHeader } from "@/components/business/layout";
+import { PAGE_CARD, EmptyState, Kbd, PageHeader } from "@/components/business/layout";
 import { detailColumn, QuickDetailLink } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -223,7 +223,7 @@ export function QcPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         {tab === "reports" ? (
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-end gap-2">

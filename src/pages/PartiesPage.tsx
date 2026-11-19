@@ -34,7 +34,7 @@ import { ToneBadge } from "@/components/business/badges";
 import { WeightField } from "@/components/business/NumField";
 import { PlateField } from "@/components/business/PlateField";
 import { alnumKeys, digitKeys, KeypadInput } from "@/components/ui/keypad";
-import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
+import { PAGE_CARD, CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { detailColumn } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import {
@@ -493,7 +493,7 @@ export function PartiesPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         <div className="flex flex-col gap-3">
           {cardError && (
             <CallOut tone="warning" title="身份证阅读器不可用">

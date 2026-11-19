@@ -42,7 +42,7 @@ import { actorId, useActor, useSession } from "@/store/session";
 import { useDeviceStore, useScaleTick, type ReaderProbe } from "@/store/device";
 import { DeviceStatusLight, ToneBadge } from "@/components/business/badges";
 import { Choose } from "@/components/business/Choose";
-import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
+import { PAGE_CARD, CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -954,7 +954,7 @@ export function DevicesPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         {/* 灰按钮必须自己解释原因，否则现场只会得出"软件坏了"的结论（05 §6.5） */}
         {!can("device.manage") && (
           <CallOut

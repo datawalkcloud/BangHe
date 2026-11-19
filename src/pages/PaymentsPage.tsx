@@ -24,7 +24,7 @@ import { useSession } from "@/store/session";
 import { BarList, StatCard, StatCardGrid } from "@/components/business/StatCard";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge } from "@/components/business/badges";
-import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
+import { PAGE_CARD, CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { QuickDetailLink } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -166,7 +166,7 @@ export function PaymentsPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         <div className="flex flex-col gap-4">
           <StatCardGrid>
             <StatCard label="期间付款额" value={money(totalFen, false)} unit="元" hint={`${payments.length} 笔`} />

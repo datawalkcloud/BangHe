@@ -20,7 +20,7 @@ import { AlertTriangleIcon, CircleDollarSignIcon, CopyIcon } from "lucide-react"
 import { toast } from "sonner";
 import { SUPPORT_QQ, SUPPORT_WECHAT } from "@/lib/support";
 import { runningInTauri, updateChannel, type UpdateChannel } from "@/lib/native";
-import { CallOut, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
+import { CallOut, InfoGrid, PAGE_CARD, PageHeader, SectionTitle } from "@/components/business/layout";
 import { UpdatePanel } from "@/components/business/UpdatePanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -144,10 +144,10 @@ async function copyRecommendation() {
   }
 }
 
-/** 「支持这个项目」的一格：一句标题 + 动作钮 + 一句说明 */
+/** 「支持这个项目」的一格：一句标题 + 动作钮 + 一句说明。白卡里靠 --card-hairline 淡边分格 */
 function SupportTile({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-2 rounded-xl border p-3">
+    <div className="flex flex-col gap-2 rounded-xl border border-(--card-hairline) p-3">
       <span className="text-sm font-medium">{title}</span>
       {children}
     </div>
@@ -172,8 +172,8 @@ export function SupportPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader title="技术支持" description="安装部署、外设对接、定制开发与日常使用中的需求，可通过以下方式联系服务人员。" />
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
-        <Card size="sm" className="gap-3 px-5">
+      <div className={cn(PAGE_CARD, "space-y-5")}>
+        <section className="flex flex-col gap-3">
           <SectionTitle>产品与更新</SectionTitle>
           <div className="flex items-start gap-3">
             <img src="/logo.png" alt={conf.productName} className="size-12 shrink-0 object-contain" />
@@ -207,7 +207,7 @@ export function SupportPage() {
             ]}
           />
           <UpdatePanel version={pkg.version} channel={channel} />
-        </Card>
+        </section>
 
         <div className="grid gap-4 md:grid-cols-2">
           <ChannelCard
@@ -227,7 +227,7 @@ export function SupportPage() {
           />
         </div>
 
-        <Card size="sm" className="gap-3 px-5">
+        <section className="flex flex-col gap-3">
           <SectionTitle>服务与合作范围</SectionTitle>
           <CallOut
             tone="warning"
@@ -252,9 +252,9 @@ export function SupportPage() {
             ]}
           />
           <p className="text-xs text-muted-foreground">具体内容、周期与费用按项目单独商定。</p>
-        </Card>
+        </section>
 
-        <Card size="sm" className="gap-3 px-5">
+        <section className="flex flex-col gap-3">
           <SectionTitle>支持这个项目</SectionTitle>
           <p className="text-xs text-muted-foreground">软件开源免费，下面几件事不花钱，但能让更多粮站用上、也帮我们把产品做得更稳。</p>
           <div className="grid gap-3 md:grid-cols-3">
@@ -304,7 +304,7 @@ export function SupportPage() {
           <p className="text-xs leading-relaxed text-muted-foreground">
             还有两件小事同样有用：把现场的仪表、打印机型号告诉我们，帮助补齐适配清单；新版本愿意先试用并反馈问题。
           </p>
-        </Card>
+        </section>
 
         <CallOut
           tone="warning"

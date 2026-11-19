@@ -31,7 +31,7 @@ import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge } from "@/components/business/badges";
 import { WeightField } from "@/components/business/NumField";
-import { CallOut, EmptyState, InfoGrid, PageHeader, SectionBar } from "@/components/business/layout";
+import { PAGE_CARD, CallOut, EmptyState, InfoGrid, PageHeader, SectionBar } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -83,7 +83,7 @@ export function MastersPage({ section }: { section: MastersSection }) {
           </Tabs>
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         {section === "varieties" && <VarietiesSection />}
         {section === "warehouses" && <WarehousesSection />}
         {section === "prices" && <PricesSection />}

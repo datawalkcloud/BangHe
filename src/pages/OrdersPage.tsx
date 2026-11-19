@@ -41,7 +41,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Label } from "@/components/ui/label";
-import { EmptyState, PageHeader } from "@/components/business/layout";
+import { EmptyState, PAGE_CARD, PageHeader } from "@/components/business/layout";
 import { useQuickDetail } from "@/components/business/quickDetail";
 import { cn } from "cn";
 
@@ -336,8 +336,8 @@ export function OrdersPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <div className="flex flex-col gap-3">
+      {/* 页面主体就是一张大白卡（PAGE_CARD，与 PageBody 同一常量），卡内不再分块包卡 */}
+      <div className={cn(PAGE_CARD, "flex flex-col gap-3")}>
           <div className="flex flex-wrap items-end gap-2">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
               业务日期
@@ -469,7 +469,6 @@ export function OrdersPage() {
               </span>
             }
           />
-        </div>
       </div>
 
       <Dialog open={batchOpen} onOpenChange={setBatchOpen}>

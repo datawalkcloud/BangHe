@@ -29,7 +29,7 @@ import { ReceiptPrintPreview } from "@/components/print/receipt/ReceiptPrintPrev
 import { BarList, MiniBars, RatioBar, SplitBar, StatCard, StatCardGrid } from "@/components/business/StatCard";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge, WeightSourceBadge } from "@/components/business/badges";
-import { CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
+import { PAGE_CARD, CallOut, EmptyState, InfoGrid, PageHeader, SectionTitle } from "@/components/business/layout";
 import { IdCardText } from "@/components/business/IdCardText";
 import { detailColumn } from "@/components/business/quickDetail";
 import { Button } from "@/components/ui/button";
@@ -78,7 +78,7 @@ export function ReportsPage({ kind }: { kind: ReportKind }) {
           </Tabs>
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         {kind === "ledger" && <LedgerReport />}
         {kind === "daily" && <DailyReportView />}
         {kind === "quality" && <QualityReportView />}

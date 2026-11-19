@@ -17,7 +17,7 @@ import { GridLayout, verticalCompactor } from "react-grid-layout";
 import type { Layout } from "react-grid-layout";
 import { MoveHorizontalIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { GRID_COLS, GRID_MARGIN, GRID_MIN_WIDTH, GRID_ROWS, type PanelSpec } from "./layout";
+import { GRID_COLS, GRID_MARGIN, GRID_MIN_WIDTH, GRID_PADDING, GRID_ROWS, type PanelSpec } from "./layout";
 
 const MARGIN_Y = GRID_MARGIN[1];
 const MIN_ROW_HEIGHT = 16;
@@ -78,10 +78,19 @@ export function WorkstationGrid({
   const stacked = box.width < GRID_MIN_WIDTH || rowHeight === 0;
 
   return (
-    // 内边距比格缝小一点但容得下手柄外扩的那 6 px：最右列、最后一行的抓取条伸进边距里，
-    // 不至于被这个 overflow 容器剪掉半截。去线之后它同时是"面板离窗口边缘"的那圈留白，
-    // 所以比格缝松一档（14/12 对 18）。
-    <div ref={ref} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-3.5 py-3">
+    // 左右 0、上下 4（GRID_PADDING）：面板顶到侧栏和窗口边，两侧不留竖缝，宽度全还给内容。
+    // 上下那 4 px 是给编辑态下缘手柄外扩留的落点，压成 0 会把滚动条勾出来（见 layout.ts 那条注释）。
+    //
+    // 这里刻意**不**留 scrollbar-gutter：常驻预留的 12 px 等于在最右边又画了一条谁都不需要的竖缝，
+    // "顶到头"就白做了。会不会因此来回抖不会——竖向滚动条只在行高退到 MIN_ROW_HEIGHT 那档才出现，
+    // 而那一档由高度单独决定、宽度少 12 px 不会把它推回去，量出来的 clientWidth 直接喂给网格即可。
+    // 横向用 hidden 兜住：编辑态右缘手柄往外伸的那 4 px 是绝对定位的溢出内容，不裁会勾出横向滚动条；
+    // 网格宽度本来就按内容盒算出来的，横向永远不需要滚。
+    <div
+      ref={ref}
+      className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+      style={{ paddingTop: GRID_PADDING[1], paddingBottom: GRID_PADDING[1], paddingLeft: GRID_PADDING[0], paddingRight: GRID_PADDING[0] }}
+    >
       {editing && (
         <p className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
           <MoveHorizontalIcon className="size-3.5 shrink-0" />
@@ -91,10 +100,11 @@ export function WorkstationGrid({
         </p>
       )}
       {stacked ? (
-        // 窄屏 / 尚未测量：单列堆叠，按默认格子的阅读顺序排，不采信拖出来的几何
-        <div className="ws-stacked flex flex-col gap-4">{children}</div>
+        // 窄屏 / 尚未测量：单列堆叠，按默认格子的阅读顺序排，不采信拖出来的几何。
+        // 间距跟格缝同一个数，收紧/放松只改 layout.ts 一处。
+        <div className="ws-stacked flex flex-col" style={{ gap: GRID_MARGIN[1] }}>{children}</div>
       ) : (
-        // 只给 se 一个角标时，12 px 的格缝里根本容不下"看准了再拽"这个动作：磅员要的是拽哪都行。
+        // 只给 se 一个角标时，4 px 的格缝里根本容不下"看准了再拽"这个动作：磅员要的是拽哪都行。
         // 所以右缘、下缘、右下角三向都给（三条都只在编辑态出现，见 App.css 的 .ws-grid-edit 节）。
         // handles 的顺序即手柄 DOM 的顺序，角上那几像素由排最后的 se 压住右缘/下缘。
         <GridLayout

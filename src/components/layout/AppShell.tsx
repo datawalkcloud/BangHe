@@ -316,10 +316,12 @@ export function AppShell() {
               <OperatorFooter />
             </Sidebar>
           </ResizablePanel>
-          {/* 只保留侧栏自身的 1px 边框作分隔；把手保留 4px 拖拽热区但平时透明，不再是一条色带 */}
+          {/* 只保留侧栏自身的 1px 边框作分隔：把手本体压成 0 宽，不再占一条竖缝。
+              拖拽热区由它自带的 after 伪元素提供（4px，骑在边框线上、左右各伸 2px），
+              平时不画底色，hover/拖动才亮握把色 */}
           <ResizableHandle
             title="拖动调整宽度 · 单击折叠/展开 (Ctrl+B)"
-            className="w-1 shrink-0 bg-transparent hover:bg-sidebar-border active:bg-sidebar-accent"
+            className="w-0 shrink-0 bg-transparent hover:after:bg-sidebar-border active:after:bg-sidebar-accent"
             onPointerDown={(e) => {
               pressX.current = e.clientX;
             }}

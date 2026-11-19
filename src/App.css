@@ -222,6 +222,17 @@ body,
   border-color: var(--hairline-row);
 }
 
+/* 页内卡的淡边：页面主体大白卡（PAGE_CARD）里的统计卡/面板卡是白压白，
+   需要一条 --hairline-row 的细线才分得开。开关挂在容器上而不是卡上——
+   PAGE_CARD 用 [--card-hairline:var(--hairline-row)] 把变量带进整棵子树，
+   工作台、登录页这类直接浮在灰画布上的卡拿不到这个变量，仍走 --hairline（无线）。
+   写在 base 层里：语义色顶边（如登录卡的 border-t-warning）是 utility，照常压得过它。 */
+@layer base {
+  [data-slot="card"] {
+    border-color: var(--card-hairline, var(--hairline));
+  }
+}
+
 /* ============================================================ 全局滚动条：默认不显示，滚了才浮现 */
 
 /* 系统里所有滚动区都是原生 overflow 滚动（页面主体、工作台卡片、下拉与弹层一律 overflow-y-auto），
@@ -409,11 +420,11 @@ textarea::placeholder {
   background-color: var(--color-border);
 }
 
-/* 基色 = 这张表实际压在哪个面上。台账直接铺在页面上，所以是 --color-background；
-   哪天把 DataTable 挪进 Card，在容器上覆盖这个变量即可，
-   否则深色主题下冻结列会比整行亮一档（--card 0.205 vs --background 0.145）。 */
+/* 基色 = 这张表实际压在哪个面上。台账外框自己就是那张白卡（data-table.tsx 的 bg-card），
+   所以钉住格的基色跟 --card 走；哪天把表挪出这个壳，在容器上覆盖这个变量即可，
+   否则深色主题下冻结列会比整行暗一档（--card 0.205 vs --background 0.145）。 */
 [data-slot="table-container"] {
-  --dt-pin-base: var(--color-background);
+  --dt-pin-base: var(--color-card);
 }
 /* 表头整行本来就是实色 muted（它自己也要 sticky 顶格），冻结格跟着同一个色、不再叠淡色；
    合计行的实底是压在 tfoot 上的 muted/50，这里用同一档淡色层把它复刻出来。 */
@@ -623,8 +634,8 @@ textarea::placeholder {
 
 /* 缩放手柄。库自带的是"悬停才显形"的 20 px 角标，而且只在 se 一个轴上给了可视标记：
    一个角标压在卡片角上、离邻居只剩格缝那点距离，看不准是拽哪一块，磅房里戴手套更够不着。
-   编辑态改成右缘 / 下缘 / 右下角三条常驻抓取条，各自外扩 6 px 伸进 12 px 的格缝（GRID_MARGIN），
-   于是"往哪儿拽"不要求指针先落准。z-index 抬到卡片之上：手柄压在邻居的那几像素，
+   编辑态改成右缘 / 下缘 / 右下角三条常驻抓取条，各自外扩 4 px，正好铺满 4 px 的格缝（GRID_MARGIN），
+   于是"往哪儿拽"不要求指针先落准，相邻两卡的手柄也不互相重叠。z-index 抬到卡片之上：手柄压在邻居的那几像素，
    不该反过来被邻居的卡盖住。非编辑态库会挂 react-resizable-hide，三条整块 display:none，不留点击死角。 */
 .ws-grid-edit .react-grid-item > .react-resizable-handle {
   z-index: 6;
@@ -633,8 +644,8 @@ textarea::placeholder {
 
 /* 右下角：唯一带库那种 L 形标记的轴，放大到 28 px 并把标记推到外沿，指向"往这个方向拽" */
 .ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se {
-  right: -6px;
-  bottom: -6px;
+  right: -4px;
+  bottom: -4px;
   width: 28px;
   height: 28px;
 }
@@ -656,7 +667,7 @@ textarea::placeholder {
    铺在长条上会歪到卡外去，所以这里既撤掉它的 rotate，也改用一条居中的小杠当提示。 */
 .ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e {
   top: 0;
-  right: -6px;
+  right: -4px;
   margin-top: 0;
   width: 18px;
   height: 100%;
@@ -665,7 +676,7 @@ textarea::placeholder {
 }
 .ws-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s {
   left: 0;
-  bottom: -6px;
+  bottom: -4px;
   margin-left: 0;
   width: 100%;
   height: 18px;

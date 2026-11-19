@@ -28,7 +28,7 @@ import { actorId, useSession } from "@/store/session";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { PaymentStatusBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
-import { EmptyState, PageHeader } from "@/components/business/layout";
+import { PAGE_CARD, EmptyState, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -159,7 +159,7 @@ export function OutboundPage() {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className={PAGE_CARD}>
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-end gap-2">
             <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
