@@ -39,7 +39,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, PanelTopIcon, PlusIcon, RotateCcwIcon, UserRoundPlusIcon } from "lucide-react";
+import { ExternalLinkIcon, PrinterIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, CheckIcon, PlusIcon, RotateCcwIcon, UserRoundPlusIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSetting, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
@@ -73,7 +73,6 @@ import { useIcWorkflow } from "@/components/workstation/useIcWorkflow";
 import { SettleForm } from "@/components/settlement/SettleForm";
 import { PayDialog } from "@/components/settlement/PayDialog";
 import { TicketPrintSection } from "@/components/settlement/TicketPrintSection";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useSilentReceiptPrint } from "@/components/print/receipt/useSilentPrint";
 import { useQuickDetail } from "@/components/business/quickDetail";
@@ -218,7 +217,6 @@ export function WorkstationPage() {
   const [focusMode, setFocusMode] = useState(false);
   const [editing, setEditing] = useState(false);
   const board = useWorkstationLayout();
-  const showCam = !board.hidden.includes("camera");
 
   const goOrder = useCallback(
     (no: string | null) => void navigate({ to: "/workstation", search: { orderNo: no ?? undefined } }),
@@ -940,6 +938,7 @@ export function WorkstationPage() {
       {!focusMode && (
         <PageHeader
           title="磅房工作台"
+          actionsBelow
           description={
             outboundMode ? (
               <>
@@ -1011,51 +1010,17 @@ export function WorkstationPage() {
                   制单（F7）
                 </Button>
               )}
-              {!outboundMode && (
-                <Button size="sm" variant="outline" onClick={() => board.togglePanel("camera", showCam)}>
-                  <CctvIcon />
-                  {showCam ? "隐藏画面" : "过磅画面"}
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  if (outboundMode) void printOutbound();
-                  else triggerPrint();
-                }}
-                disabled={outboundMode ? printBlockedReason != null : !order}
-                title={outboundMode ? (printBlockedReason ?? undefined) : undefined}
-              >
-                <PrinterIcon />
-                {outboundMode && outboundPrinted > 0 ? `补打（已打 ${outboundPrinted} 张）` : "打印（F9）"}
-              </Button>
-              {/* 面板与布局是入库那张网格的排布，出库板面没有格子可排，整组不渲染 */}
-              {!outboundMode && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger render={<Button size="sm" variant="outline" />}>
-                    <PanelTopIcon />
-                    面板
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuLabel>显示哪些区块</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {board.specs.map((s) => (
-                      <DropdownMenuCheckboxItem
-                        key={s.id}
-                        checked={s.shown}
-                        onCheckedChange={(v) => board.togglePanel(s.id, v !== true)}
-                        disabled={s.shown && board.specs.filter((x) => x.shown).length === 1}
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm">{s.title}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{s.hint}</span>
-                        </span>
-                      </DropdownMenuCheckboxItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
+            </>
+          }
+          actionsRight={
+            <>
+              {/* 抬头只留日常要按的三颗：打印、自定义布局、全屏专注。
+                  「过磅画面/隐藏画面」与「面板」都收掉了——同一个显隐动作原先摆在三处
+                  （画面开关、面板清单、各区块页脚的收起），挤得按钮换行。区块显隐现在只在
+                  「自定义布局」编辑态里做，见下面 editing 那条提示行。
+                  **顺序按"会不会随模式/状态消失"排**：这一群整体贴右，只有最右那颗的位置
+                  与它左边的成员无关，所以只在入库（或编辑态）出现的「自定义布局 / 恢复默认」
+                  必须排在最左，切到出库时它们凭空少一颗，也不会把「打印」「全屏专注」推位。 */}
               {!outboundMode && editing && (
                 <Button size="sm" variant="outline" onClick={board.reset}>
                   <RotateCcwIcon />
@@ -1075,6 +1040,19 @@ export function WorkstationPage() {
                   {editing ? "完成" : "自定义布局"}
                 </Button>
               )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (outboundMode) void printOutbound();
+                  else triggerPrint();
+                }}
+                disabled={outboundMode ? printBlockedReason != null : !order}
+                title={outboundMode ? (printBlockedReason ?? undefined) : undefined}
+              >
+                <PrinterIcon />
+                {outboundMode && outboundPrinted > 0 ? `补打（已打 ${outboundPrinted} 张）` : "打印（F9）"}
+              </Button>
               <Button size="sm" variant="outline" onClick={toggleFocusMode}>
                 <Maximize2Icon />
                 全屏专注（F11）
@@ -1091,16 +1069,36 @@ export function WorkstationPage() {
           </p>
         )}
         {!outboundMode && editing && (
-          <p className="mx-2 mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-            排布存在你本人账号上，换台磅房机登录也是这一套。
-            {board.saving && <span className="shrink-0 text-primary">保存中…</span>}
-          </p>
+          <div className="mx-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span className="shrink-0">显示区块</span>
+            {/* 原「面板」下拉里的勾选项搬进编辑态：点「自定义布局」进来就能收放，
+                不必再在抬头常驻一颗按钮。最后一直留着的这颗不许再收（沿用原下拉的闸门），
+                否则整张桌子会被自己收空。 */}
+            {board.specs.map((s) => (
+              <Button
+                key={s.id}
+                size="xs"
+                variant={s.shown ? "secondary" : "ghost"}
+                aria-pressed={s.shown}
+                title={s.hint}
+                disabled={s.shown && board.specs.filter((x) => x.shown).length === 1}
+                onClick={() => board.togglePanel(s.id, s.shown)}
+              >
+                {s.shown && <CheckIcon />}
+                {s.title}
+              </Button>
+            ))}
+            <span className="ml-auto shrink-0">
+              排布存在你本人账号上，换台磅房机登录也是这一套。
+              {board.saving && <span className="ml-1 text-primary">保存中…</span>}
+            </span>
+          </div>
         )}
         {modeLoading ? (
           // 本人那份模式偏好还没读回来：先铺骨架，别让人看一眼入库桌子又跳成出库板面
-          <div className="grid flex-1 grid-cols-1 gap-4 px-3.5 py-3 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
+          <div className="grid flex-1 grid-cols-1 gap-1 py-1 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
             {Array.from({ length: 3 }, (_, i) => (
-              <div key={i} className="flex flex-col gap-4">
+              <div key={i} className="flex flex-col gap-1">
                 <Skeleton className="h-72" />
                 <Skeleton className="h-48" />
               </div>
@@ -1132,9 +1130,9 @@ export function WorkstationPage() {
             }}
           />
         ) : !board.ready || isLoading ? (
-          <div className="grid flex-1 grid-cols-1 gap-4 px-3.5 py-3 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
+          <div className="grid flex-1 grid-cols-1 gap-1 py-1 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
             {Array.from({ length: 3 }, (_, i) => (
-              <div key={i} className="flex flex-col gap-4">
+              <div key={i} className="flex flex-col gap-1">
                 <Skeleton className="h-72" />
                 <Skeleton className="h-48" />
               </div>
