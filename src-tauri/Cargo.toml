@@ -44,7 +44,8 @@ tauri-plugin-opener = "2"
 # 插件只提供选路，路径清洗与落盘全在 system.rs::import_backup（只认绝对路径）。
 tauri-plugin-dialog = "2"
 # 「关于 → 检查更新」：拉 tauri.conf.json plugins.updater.endpoints 里的 latest.json
-# （GitHub Releases，gh-proxy 镜像优先），minisign 验签（公钥即 plugins.updater.pubkey，
+# （首位为国内 Gitee 镜像仓 banghe-release 的 raw 直链，GitHub Release 及其 gh-proxy
+# 镜像作兜底），minisign 验签（公钥即 plugins.updater.pubkey，
 # 私钥只放 GitHub Secrets 的 TAURI_SIGNING_PRIVATE_KEY，本机不落盘）后静默安装 NSIS。
 # 签名产物由发版工作流以 --config 注入 createUpdaterArtifacts 开启，本地 tauri build 无感。
 tauri-plugin-updater = "2"
