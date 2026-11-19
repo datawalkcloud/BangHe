@@ -9,36 +9,27 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
+import { NAV_FLAT } from "@/components/layout/app-nav";
 
 export interface BreadcrumbItemDef {
   label: string;
   href?: string;
 }
 
-const MASTERS_SECTIONS: Record<string, string> = {
-  varieties: "品种与指标",
-  warehouses: "仓房与货位",
-  prices: "收购价目表",
-  settings: "站点参数",
-};
+/**
+ * 中文一律取自侧栏配置，本文件不再维护第二套名字。
+ * 自己抄一份的代价已经踩过两次：这里写"系统与审计"而侧栏是"系统设置"；
+ * /cards、/stock、/outbound 三条压根没登记，落到兜底分支上把英文路由段直接印进顶栏。
+ * 侧栏高亮按路径首段归属模块（isNavActive 同一口径），面包屑也照这个口径取条目。
+ */
 
-const REPORTS_KINDS: Record<string, string> = {
-  ledger: "收购明细台账",
-  daily: "日报",
-  quality: "质量分析",
-  parties: "农户排行",
-  staff: "作业量与异常",
-};
-
-const SYSTEM_SECTIONS: Record<string, string> = {
-  users: "登录与权限",
-  staff: "员工与岗位",
-  audit: "操作审计",
-  backup: "备份与恢复",
-  shift: "日结交班",
-  window: "窗口",
-  appearance: "外观与主题",
-  templates: "小票模板",
+/** 详情页在模块之后追加单据号；键是路径首段，值是与页面标题一致的单据名 */
+const DOC_CRUMB: Record<string, string> = {
+  "/orders": "磅单",
+  "/outbound": "出库单",
+  "/parties": "档案",
+  "/qc": "质检单",
+  "/settlements": "结算单",
 };
 
 export function getBreadcrumbItems(pathname: string, search?: Record<string, unknown>): BreadcrumbItemDef[] {
@@ -47,65 +38,23 @@ export function getBreadcrumbItems(pathname: string, search?: Record<string, unk
   }
 
   const items: BreadcrumbItemDef[] = [{ label: "首页看板", href: "/" }];
+  const segs = pathname.split("/").filter(Boolean);
+  const nav = NAV_FLAT.find((entry) => entry.match === `/${segs[0]}`);
+  if (!nav) {
+    items.push({ label: decodeURIComponent(segs[segs.length - 1] ?? pathname) });
+    return items;
+  }
 
-  if (pathname === "/workstation") {
-    const orderNo = typeof search?.orderNo === "string" && search.orderNo ? search.orderNo : undefined;
-    if (orderNo) {
-      items.push({ label: "磅房作业", href: "/workstation" });
-      items.push({ label: `过磅单 ${orderNo}` });
-    } else {
-      items.push({ label: "磅房作业" });
-    }
-  } else if (pathname === "/orders") {
-    items.push({ label: "磅单中心" });
-  } else if (pathname.startsWith("/orders/")) {
-    const orderNo = decodeURIComponent(pathname.slice("/orders/".length));
-    items.push({ label: "磅单中心", href: "/orders" });
-    items.push({ label: `磅单 ${orderNo}` });
-  } else if (pathname === "/parties") {
-    items.push({ label: "农户单位" });
-  } else if (pathname.startsWith("/parties/")) {
-    const id = decodeURIComponent(pathname.slice("/parties/".length));
-    items.push({ label: "农户单位", href: "/parties" });
-    items.push({ label: `档案 ${id}` });
-  } else if (pathname === "/qc") {
-    items.push({ label: "化验作业" });
-  } else if (pathname.startsWith("/qc/")) {
-    const reportNo = decodeURIComponent(pathname.slice("/qc/".length));
-    items.push({ label: "化验作业", href: "/qc" });
-    items.push({ label: `质检单 ${reportNo}` });
-  } else if (pathname === "/settlements") {
-    items.push({ label: "结算中心" });
-  } else if (pathname.startsWith("/settlements/")) {
-    const settleNo = decodeURIComponent(pathname.slice("/settlements/".length));
-    items.push({ label: "结算中心", href: "/settlements" });
-    items.push({ label: `结算单 ${settleNo}` });
-  } else if (pathname === "/payments") {
-    items.push({ label: "付款挂账" });
-  } else if (pathname.startsWith("/masters/")) {
-    const section = pathname.slice("/masters/".length);
-    const label = MASTERS_SECTIONS[section] || section;
-    items.push({ label: "基础档案", href: "/masters/varieties" });
-    items.push({ label });
-  } else if (pathname.startsWith("/reports/")) {
-    const kind = pathname.slice("/reports/".length);
-    const label = REPORTS_KINDS[kind] || kind;
-    items.push({ label: "台账报表", href: "/reports/ledger" });
-    items.push({ label });
-  } else if (pathname === "/support") {
-    items.push({ label: "技术支持" });
-  } else if (pathname === "/devices") {
-    items.push({ label: "设备中心" });
-  } else if (pathname.startsWith("/system/")) {
-    const section = pathname.slice("/system/".length);
-    const label = SYSTEM_SECTIONS[section] || section;
-    items.push({ label: "系统与审计", href: "/system/audit" });
-    items.push({ label });
+  // 二层只在"真的下到了某一张单"时出现。分区/报表/设置类页面的第三段是页内标签页，
+  // 抬头下方的标签条已经写着同一个词，再进面包屑只是把当前页名字换成侧栏里没有的那个。
+  const doc = segs.length > 1 ? DOC_CRUMB[nav.match] : undefined;
+  const orderNo = typeof search?.orderNo === "string" && search.orderNo ? search.orderNo : undefined;
+
+  if (doc || orderNo) {
+    items.push({ label: nav.label, href: nav.href });
+    items.push({ label: doc ? `${doc} ${decodeURIComponent(segs[1])}` : `过磅单 ${orderNo}` });
   } else {
-    const segs = pathname.split("/").filter(Boolean);
-    if (segs.length > 0) {
-      items.push({ label: segs[segs.length - 1] });
-    }
+    items.push({ label: nav.label });
   }
 
   return items;
