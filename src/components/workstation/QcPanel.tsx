@@ -545,7 +545,7 @@ export function QcPanel({ order, variety }: { order: WeighOrder | null; variety:
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-1.5 border-t pt-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 pt-2.5">
           <span className={cn("text-xs", status.tone)}>{status.text}</span>
           {existing && (
             <span className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">

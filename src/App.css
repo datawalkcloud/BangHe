@@ -44,6 +44,8 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    /* 画布色：见文件下方「去线留白」一节，卡片就浮在它上面 */
+    --color-canvas: var(--canvas);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -160,7 +162,12 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    /* 描边的默认色不再直接取 --border：整站的"结构线"由 --hairline 这一个开关说了算
+       （见下方「去线留白」）。写死了颜色的那些描边——输入框的 border-input、
+       状态条的 border-warning / destructive、按钮的 border-border——都是功能线与语义线，
+       走的是工具类，本来就压在这一层之上，不受影响。 */
+    @apply outline-ring/50;
+    border-color: var(--hairline);
     }
   body {
     @apply bg-background text-foreground;
@@ -168,6 +175,51 @@
   html {
     @apply font-sans;
     }
+}
+
+/* ============================================================ 去线留白（05 §7.5）
+
+   块与块之间不再用 1px 描边分界，改由「底色分层 + 留白」来分：
+     · --canvas   画布比卡片低一档 → 白卡片浮在浅灰画布上，边界由色差读出来；
+     · --hairline 结构线取 transparent → 卡片外框、分区横线、抬头底边一起消失；
+     · 表头 / 合计行那种横跨上千像素的一整行留一道 7% 的 --hairline-row：
+       它不是框，是防止眼睛串行的行标尺（台账十几列，全靠白底会看串行）。
+   三个开关都在这里。**要改"有没有线"只改这里，不要再去各组件里删 border 类名**——
+   那些类名有一半是 vendored shadcn 写死的，下次 `npx shadcn add` 会连本带利长回来。 */
+:root {
+    /* 画布从 --background 派生，不写死一个灰：换基础色板（theme.ts 注入 --background）时它跟着走。
+       浅色下 = 白里掺 5% 前景色；深色下 --background 本来就比 --card 深，直接用即可。 */
+    --canvas: color-mix(in oklab, var(--background) 95%, var(--foreground));
+    /* 结构线开关：transparent = 全站无线。想回到原来的描边体系，改回 var(--border) 即可。 */
+    --hairline: transparent;
+    /* 表格行线：比原来的描边再淡一档，只在"一行很长、中间没有参照物"的地方用 */
+    --hairline-row: color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+.dark {
+    --canvas: var(--background);
+}
+
+/* 画布落三处，都是"页面级"的底：body（登录页这类没有外壳的页面）、外壳内容区、
+   以及详情抽屉（`QuickDetailSheet` 是 96vw 的整页抽屉，里面直接渲染详情页正文，
+   若仍是白底，卡片去掉描边后就与抽屉糊成一片）。弹层里的**对话框**不算：它本身就是一张卡片。 */
+body,
+[data-slot="sidebar-inset"],
+[data-slot="sheet-content"] {
+  background-color: var(--canvas);
+}
+
+/* 为什么不用一条 `[data-slot="card"] { border-color: … }` 直接把卡片框盖掉：
+   Card 上还挂着语义色顶边（登录页那枚 `border-t-2 border-t-warning` 的告警条），
+   而 border-color 是四边通吃，一盖连语义条一起没了。所以卡片与数据表外框的
+   `border-border` 是在源头（components/ui/card.tsx、data-table.tsx）去掉的，
+   留下的 `border` 只管宽度，颜色交给上面的 --hairline。 */
+
+/* 台账行线：th / td 的 border-b 来自 table.tsx 的 [&_tr]:border-b，默认色已被 --hairline 抹平，
+   这里按行单独给回来（表头、合计行属于"行"，一并算上）。 */
+[data-slot="table"] tr,
+[data-slot="table-header"],
+[data-slot="table-footer"] {
+  border-color: var(--hairline-row);
 }
 
 /* ============================================================ 全局滚动条：默认不显示，滚了才浮现 */

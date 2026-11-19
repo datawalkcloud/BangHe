@@ -350,7 +350,7 @@ export function DataTable<T extends RowData>({
       {/* 滚动口必须是 Table 自带的那一层 container（见 ui/table.tsx 的 containerClassName）：
           在它外层限高会让表头跟着整块滚走，几十列的台账滚下去就找不到列名了 */}
       {/* overflow-hidden 不能省：表头/合计行的不透明底色会涂到方角外面，靠外层裁切才贴住圆角 */}
-      <div className="min-w-0 overflow-hidden rounded-2xl border border-border">
+      <div className="min-w-0 overflow-hidden rounded-2xl border">
         <Table
           containerClassName="max-h-[70vh] overflow-auto"
           className={cn(dense && "text-[13px]")}

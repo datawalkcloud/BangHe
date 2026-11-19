@@ -78,9 +78,10 @@ export function WorkstationGrid({
   const stacked = box.width < GRID_MIN_WIDTH || rowHeight === 0;
 
   return (
-    // 内边距比格缝（GRID_MARGIN 12）小一点但容得下手柄外扩的那 6 px：
-    // 最右列、最后一行的抓取条伸进边距里，不至于被这个 overflow 容器剪掉半截。
-    <div ref={ref} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2.5 py-2">
+    // 内边距比格缝小一点但容得下手柄外扩的那 6 px：最右列、最后一行的抓取条伸进边距里，
+    // 不至于被这个 overflow 容器剪掉半截。去线之后它同时是"面板离窗口边缘"的那圈留白，
+    // 所以比格缝松一档（14/12 对 18）。
+    <div ref={ref} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-3.5 py-3">
       {editing && (
         <p className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
           <MoveHorizontalIcon className="size-3.5 shrink-0" />
@@ -91,7 +92,7 @@ export function WorkstationGrid({
       )}
       {stacked ? (
         // 窄屏 / 尚未测量：单列堆叠，按默认格子的阅读顺序排，不采信拖出来的几何
-        <div className="ws-stacked flex flex-col gap-3">{children}</div>
+        <div className="ws-stacked flex flex-col gap-4">{children}</div>
       ) : (
         // 只给 se 一个角标时，12 px 的格缝里根本容不下"看准了再拽"这个动作：磅员要的是拽哪都行。
         // 所以右缘、下缘、右下角三向都给（三条都只在编辑态出现，见 App.css 的 .ws-grid-edit 节）。
