@@ -731,3 +731,37 @@ async function openRealScale(): Promise<void> {
   if (failure) scaleOpening = false;
   set({ error: failure });
 }
+
+/**
+ * 工作台切换当前磅（`code` = 台账里那台磅的编码）。
+ *
+ * 两件事，顺序不能反：先把台账里 `scale` 类的「当前磅」改到这台（`orders::default_scale_id`
+ * 与 `scale::capture_align` 都按同一列认磅，`weigh_record.device_id` 与整量化跟着走），
+ * 再把读数流挪过去（`scale_start` 停旧线程、开新端口）。台账那一步失败就整个不做——
+ * 只挪流不改台账会出现"屏幕上 2 号磅的数、库里记 1 号磅"的分叉，比切不过去更糟。
+ *
+ * 返回失败原因（中文短句），成功回 `null`；调用方负责 toast 与失效 `["devices"]`。
+ */
+export async function selectScale(code: string): Promise<string | null> {
+  const set = (patch: Partial<ScaleState>) => useDeviceStore.getState().setScale(patch);
+  try {
+    await api.selectScale(code);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    set({ error: msg });
+    return msg;
+  }
+  // 浏览器预览没有串口可挪：台账已在 mock 里切好，预览的读数本来就是一条演示替身
+  if (!runningInTauri()) return null;
+  // 新帧到位前先压回未连接：这一瞬的读数还属于上一台秤，不能让捕获按钮把它当新读数
+  set({ source: "live", connected: false, stable: false, error: "正在切换到新的地磅…" });
+  let failure: string | null = null;
+  try {
+    const res = await nativeScale.start(code);
+    failure = res.error ?? null;
+  } catch (e) {
+    failure = e instanceof Error ? e.message : String(e);
+  }
+  set({ error: failure });
+  return failure;
+}

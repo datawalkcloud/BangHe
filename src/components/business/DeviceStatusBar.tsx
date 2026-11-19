@@ -161,7 +161,17 @@ export function DeviceStatusStrip() {
   const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices() });
   const cfg = (code: string) => devices.find((d) => d.code === code);
 
-  const scaleCfg = cfg("scale1");
+  /**
+   * 底栏那台磅必须跟工作台切到的「当前磅」一致：读数帧里的 code 是最近事实；还没收到真帧时
+   * 按台账「启用 + 默认优先」（`scale::default_scale_id` 同一口径），切换器改的就是这一列。
+   * 钉死 scale1 会在切到 2 号磅后仍报 COM3 离线，把操作员指回另一台秤。
+   */
+  const scaleCfg =
+    cfg(scale.code ?? "") ??
+    devices
+      .filter((d) => d.kind === "scale" && d.is_enabled === 1)
+      .sort((a, b) => b.is_default - a.is_default || a.id - b.id)[0] ??
+    cfg("scale1");
   const camCfg = cfg("cam1");
   const prtCfg = devices.find((d) => d.kind === "printer" && d.is_default === 1) ?? cfg("prt1");
   const { readerDev } = readerGateOf(devices);
@@ -201,7 +211,7 @@ export function DeviceStatusStrip() {
           title="磅"
           status={scale.connected ? "online" : "offline"}
           detail={scaleDetail}
-          deviceCode="scale1"
+          deviceCode={scaleCfg?.code ?? "scale1"}
         />
         <Separator orientation="vertical" className="my-auto h-4 shrink-0" />
         {/* 底栏给磅房操作员看，不摆驱动代码（routon_sdtapi 这类），只说能不能读卡、刚读了谁 */}

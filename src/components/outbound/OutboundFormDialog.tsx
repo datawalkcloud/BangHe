@@ -85,11 +85,17 @@ export function OutboundFormDialog({
   open,
   onOpenChange,
   editing,
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   /** null＝新建 */
   editing: OutboundOrder | null;
+  /**
+   * 保存成功、库已回读之后把那一行交出去（新建时工作台用它自动选中刚开的单）。
+   * 关框照旧由这里做，调用方只在拿到的行上做「顺手指过去」那一下。
+   */
+  onSaved?: (row: OutboundOrder) => void;
 }) {
   const qc = useQueryClient();
   const { data: varieties = [] } = useVarieties();
@@ -161,14 +167,24 @@ export function OutboundFormDialog({
     onSuccess: (row) => {
       toast.success(`${editing ? "已修改" : "已制单"} ${row.order_no}`);
       qc.invalidateQueries({ queryKey: ["outbound"] });
+      onSaved?.(row);
       onOpenChange(false);
     },
     // 服务端原因原样透传：Rust 回的都是"登记出库不计价，单价请留空"这种人话
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const canSubmit =
-    d.warehouse_id !== "" && d.variety_id !== "" && (isSale ? d.party_id !== "" : true) && !save.isPending;
+  /**
+   * 还差哪几项 = 后端 `validate_save` 的必填集（仓房、品种，销售出库再加领出方档案）。
+   * 制单那颗按钮从前只是灰着不说明原因，现场只能一颗颗格子点过去试——把缺的项念出来，
+   * 顺带在标签上标「必填」，与「货位（选填）」那两格同一套写法。
+   */
+  const missing = [
+    d.warehouse_id === "" && "出仓仓房",
+    d.variety_id === "" && "品种",
+    isSale && d.party_id === "" && "领出方档案",
+  ].filter(Boolean) as string[];
+  const canSubmit = missing.length === 0 && !save.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -205,7 +221,7 @@ export function OutboundFormDialog({
           </Label>
 
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {isSale ? "领出方（售粮人档案）" : "领出方（可只填下方文字）"}
+            {isSale ? "领出方（售粮人档案，必填）" : "领出方（可只填下方文字）"}
             <Choose
               aria-label="领出方"
               value={d.party_id}
@@ -236,7 +252,7 @@ export function OutboundFormDialog({
           </Label>
 
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            品种
+            品种（必填）
             <Choose
               aria-label="品种"
               value={d.variety_id}
@@ -258,7 +274,7 @@ export function OutboundFormDialog({
           </Label>
 
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            出仓仓房
+            出仓仓房（必填）
             <Choose
               aria-label="出仓仓房"
               value={d.warehouse_id}
@@ -352,6 +368,10 @@ export function OutboundFormDialog({
         </div>
 
         <DialogFooter>
+          {/* 灰按钮不解释自己，现场就只会反复点它：把还差哪几项直接写在按钮旁边 */}
+          {missing.length > 0 && (
+            <span className="mr-auto text-xs text-muted-foreground">还差：{missing.join("、")}</span>
+          )}
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={save.isPending}>
             取消
           </Button>

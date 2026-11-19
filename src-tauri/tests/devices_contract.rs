@@ -25,7 +25,7 @@ use banghe_lib::auth::AuthProfile;
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::devices::{
     create_device, list_devices, probe_plan, report_device_probe, scale_verdict_from_probe, scale_verdict_from_stream,
-    set_device_enabled, set_device_mock, update_device, update_device_config,
+    set_current_scale, set_device_enabled, set_device_mock, update_device, update_device_config,
     CreateDeviceInput, DeviceConfig, ProbePlan, ProbeResult, PrintVerify, UpdateDeviceConfigInput, UpdateDeviceInput,
 };
 
@@ -541,4 +541,74 @@ fn camera_password_stays_real_in_config_and_masked_in_audit() {
     let reason = audit_reason(&conn, "device.update", "cam1");
     assert!(!reason.contains("new-pass") && !reason.contains("third-pass"), "改配置的留痕同样不许带口令：{reason}");
     assert_eq!(device(&conn, "cam1").config.get("password").unwrap().as_str().unwrap(), "third-pass");
+}
+
+// ------------------------------------------------- 工作台切换当前磅（多磅现场）
+
+/// 现场两台地磅：车开上哪台就在哪台称。工作台那个切换改的是 `device_config.is_default`
+/// （`kind='scale'` 内唯一），它同时是 `orders::default_scale_id` 与 `scale::capture_align`
+/// 认磅的那一列——所以这里守的就是"屏幕上换成哪台，落库归属与整量化就跟着换哪台"的前半截。
+#[test]
+fn scale_select_moves_the_current_scale_and_only_touches_scales() {
+    let conn = db();
+    let a = master(&conn);
+    let s1 = insert_device(&conn, "scale1", "scale", "keli_d2008", r#"{"port":"COM5","baud":9600}"#);
+    insert_device(&conn, "scale2", "scale", "dingsong_ds822", r#"{"port":"COM6","baud":9600}"#);
+    let prn = insert_device(&conn, "prn1", "printer", "escpos_usbprint", r#"{"vid":"0x0483","pid":"0x5720"}"#);
+    conn.execute("UPDATE device_config SET is_default = 1 WHERE id IN (?1, ?2)", params![s1, prn]).unwrap();
+
+    let list = set_current_scale(&conn, &a, "scale2").expect("切到 2 号磅应成功");
+    let by_code = |code: &str| list.iter().find(|d| d.code == code).cloned().expect("台账里应有这台");
+    assert_eq!(by_code("scale2").is_default, 1, "切过去的那台要是当前磅");
+    assert_eq!(by_code("scale1").is_default, 0, "旧当前磅必须让位（uk_dev_default 每类只容一台）");
+    assert_eq!(by_code("prn1").is_default, 1, "别的类别的默认设备不许跟着被降级");
+    assert_eq!(device(&conn, "scale2").is_default, 1, "落库那一行要真的是它");
+
+    // 迎检要能对回"这车为什么记在 2 号磅"：审计写清从哪台切到哪台、端口是哪条
+    let reason = audit_reason(&conn, "device.update", "scale2");
+    assert!(reason.contains("当前磅") && reason.contains("COM6"), "审计要说清切去了哪台、哪条串口：{reason}");
+
+    // 幂等：已经指向它就不再写第二条审计（磅员连点两下不该刷出两条动作）
+    let before = audit_count(&conn, "device.update", "scale2");
+    set_current_scale(&conn, &a, "scale2").expect("重复切同一台应成功");
+    assert_eq!(audit_count(&conn, "device.update", "scale2"), before, "重复切换不留空转审计");
+
+    // 切回去：1 号重新成为当前磅，2 号让位（来回切是现场常态）
+    set_current_scale(&conn, &a, "scale1").expect("切回 1 号磅应成功");
+    assert_eq!(device(&conn, "scale1").is_default, 1);
+    assert_eq!(device(&conn, "scale2").is_default, 0);
+    let dup: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM (SELECT kind FROM device_config WHERE is_default = 1 GROUP BY kind HAVING COUNT(*) > 1)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dup, 0, "任何一类都不许出现两台默认");
+}
+
+#[test]
+fn scale_select_rejects_non_scale_disabled_and_mock_without_touching_the_ledger() {
+    let conn = db();
+    let a = master(&conn);
+    let s1 = insert_device(&conn, "scale1", "scale", "keli_d2008", r#"{"port":"COM5","baud":9600}"#);
+    let s2 = insert_device(&conn, "scale2", "scale", "dingsong_ds822", r#"{"port":"COM6","baud":9600}"#);
+    conn.execute("UPDATE device_config SET is_default = 1 WHERE id = ?1", params![s1]).unwrap();
+    conn.execute("UPDATE device_config SET is_enabled = 0 WHERE id = ?1", params![s2]).unwrap();
+    insert_device(&conn, "prn1", "printer", "escpos_usbprint", r#"{"vid":"0x0483","pid":"0x5720"}"#);
+    let mock_scale = insert_device(&conn, "scale_mock", "scale", "mock", r#"{"port":"COM9"}"#);
+    conn.execute("UPDATE device_config SET is_mock = 1 WHERE id = ?1", params![mock_scale]).unwrap();
+
+    let e = set_current_scale(&conn, &a, "prn1").expect_err("打印机不是地磅");
+    assert!(e.contains("不是地磅"), "{e}");
+    let e = set_current_scale(&conn, &a, "scale2").expect_err("停用的磅不能当当前磅");
+    assert!(e.contains("已停用"), "{e}");
+    let e = set_current_scale(&conn, &a, "scale_mock").expect_err("Mock 磅不能当当前磅");
+    assert!(e.contains("Mock"), "{e}");
+    let e = set_current_scale(&conn, &a, "scale_missing").expect_err("不存在的编码");
+    assert!(e.contains("设备不存在"), "{e}");
+
+    assert_eq!(device(&conn, "scale1").is_default, 1, "被拒之后当前磅不许动");
+    assert_eq!(device(&conn, "scale2").is_default, 0);
+    assert_eq!(device(&conn, "prn1").is_default, 0, "被拒的跨类切换不许留下任何改动");
 }

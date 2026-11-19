@@ -231,6 +231,70 @@ pub fn set_device_mock(conn: &Connection, actor: &AuthProfile, code: &str, mock:
     list_devices(conn)
 }
 
+// -------------------------------------------------------------------- 当前磅
+
+/// 把这台地磅设为**工作台当前磅**（台账 `is_default`，`kind='scale'` 内唯一）。
+///
+/// 现场配了两台秤时，车开上哪台就得在哪儿读、就记哪台的读数——工作台那个切换下拉改的
+/// 就是这一列。**整条链路只有这一个真相**：`orders::default_scale_id` 与
+/// `scale::capture_align` 都按「启用 + 默认优先」认磅，所以这一列指到哪儿，
+/// `weigh_record.device_id` 与整量化就跟着到哪儿；前端不需要、也不允许把"我在读哪台"
+/// 传上来。读数流由前端接着调 `scale_start` 挪过去，端口本身不在这一层碰。
+///
+/// 三条拒绝都发生在改库之前：非地磅（打印机/相机的默认还有别的用途，不给磅房岗动）、
+/// 已停用、Mock。已经是当前磅时原样返回台账，不写一条空转的审计。
+pub fn set_current_scale(conn: &Connection, actor: &AuthProfile, code: &str) -> Result<Vec<DeviceConfig>, String> {
+    let d = device_by_code(conn, code)?;
+    if d.kind != "scale" {
+        return Err(format!("「{}」不是地磅（台账 kind={}）：切换当前磅只对地磅开放", d.name, d.kind));
+    }
+    if d.is_enabled != 1 {
+        return Err(format!("这台磅「{}」已停用，先在设备中心把它启用", d.name));
+    }
+    if d.is_mock == 1 {
+        return Err(format!("这台磅「{}」在台账里是 Mock，不能当当前磅用（Mock 不开串口）", d.name));
+    }
+    if d.is_default == 1 {
+        return list_devices(conn);
+    }
+    // 降级旧默认再置新：`uk_dev_default(kind) WHERE is_default = 1` 是部分唯一索引，
+    // 两步顺序反了就撞 UNIQUE（与 create_device / update_device 同一条 SQL 口径）。
+    let prev: Option<String> = conn
+        .query_row(
+            "SELECT name FROM device_config WHERE kind = 'scale' AND is_default = 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取当前磅失败：{e}"))?;
+    let now = now_iso();
+    conn.execute(
+        "UPDATE device_config SET is_default = 0, updated_at = ?1 WHERE kind = 'scale' AND is_default = 1",
+        params![now],
+    )
+    .map_err(|e| format!("旧当前磅降级失败：{e}"))?;
+    conn.execute(
+        "UPDATE device_config SET is_default = 1, updated_at = ?2 WHERE id = ?1",
+        params![d.id, now],
+    )
+    .map_err(|e| format!("当前磅保存失败：{e}"))?;
+    audit(
+        conn,
+        actor,
+        "device.update",
+        "device_config",
+        &d.code,
+        Some(&format!(
+            "工作台切换当前磅：{} → {}（{}）",
+            prev.as_deref().unwrap_or("原先没有当前磅"),
+            d.name,
+            d.config.get("port").and_then(|v| v.as_str()).unwrap_or("未配串口"),
+        )),
+        None,
+    );
+    list_devices(conn)
+}
+
 // -------------------------------------------------------------------- 配置写入
 
 /// 一次联机验证的结果。前端 `src/lib/print-guard.ts` 的 `PrintVerify` 只有
@@ -894,6 +958,20 @@ pub async fn device_enabled(app: AppHandle, code: String, enabled: bool) -> Resu
 #[tauri::command]
 pub async fn device_mock(app: AppHandle, code: String, mock: bool) -> Result<Vec<DeviceConfig>, String> {
     write_tx(&app, move |conn, actor| set_device_mock(conn, actor, &code, mock), DEVICE_ROLES, "切换设备数据来源").await
+}
+
+/// 工作台切换当前磅（改的是台账 `is_default`，见 [`set_current_scale`]）。
+/// 闸门用磅房现场岗（[`crate::orders::FLOOR_ROLES`]），不是站长专属的 [`DEVICE_ROLES`]：
+/// 一辆车开上哪台秤是磅员当场做的决定，不是台账配置。
+#[tauri::command]
+pub async fn scale_select(app: AppHandle, code: String) -> Result<Vec<DeviceConfig>, String> {
+    write_tx(
+        &app,
+        move |conn, actor| set_current_scale(conn, actor, &code),
+        crate::orders::FLOOR_ROLES,
+        "切换当前地磅",
+    )
+    .await
 }
 
 #[tauri::command]

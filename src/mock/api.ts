@@ -840,6 +840,22 @@ export const api = {
   },
 
   /**
+   * 工作台切换当前磅（真实实现即改 `device_config.is_default`，见 `devices.rs::set_current_scale`）。
+   * 演示台账里两台磅的默认标记互相让位，工作台读到哪台就显示哪台；三条拒绝与真库同一句话。
+   */
+  async selectScale(code: string): Promise<DeviceConfig[]> {
+    await sleep(60);
+    const d = devices.find((x) => x.code === code);
+    if (!d) throw new Error("设备不存在");
+    if (d.kind !== "scale") throw new Error(`「${d.name}」不是地磅（台账 kind=${d.kind}）：切换当前磅只对地磅开放`);
+    if (d.is_enabled !== 1) throw new Error(`这台磅「${d.name}」已停用，先在设备中心把它启用`);
+    if (d.is_mock === 1) throw new Error(`这台磅「${d.name}」在台账里是 Mock，不能当当前磅用（Mock 不开串口）`);
+    devices.filter((x) => x.kind === "scale").forEach((x) => (x.is_default = 0));
+    d.is_default = 1;
+    return devices.map((x) => ({ ...x }));
+  },
+
+  /**
    * 写设备配置（真实实现即 `device_config.config_json`）。
    *
    * 门禁（02 §M9）：改完必须能打通才算配好。桌面端有原生通道时，调用方必须先做一次

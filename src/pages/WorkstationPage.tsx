@@ -12,9 +12,16 @@
  * 工作台后台常听 IC（`useIcWorkflow` 唯一收口），弹窗读身份证时让出设备锁。
  * 读卡器故障 / 关掉流转卡时，称重/结算面板仍可应急手点（05 §10-1 无外设闭环）。
  *
+ * **页头可切「出库」模式**（偏好键 `workstation.mode`，默认入库）：出库那张桌子不摆身份、
+ * 化验、抓拍与在途条，左边是草稿出库队列、右边是选中单的摘要与 `OutboundWeighPanel`；
+ * 扫出库码单只定位那一张，称毛重 → 皮重 → 「完成出库」扣库存并算货款（02 §M11 F11.6/F11.7）。
+ * 出库不过结算窗口、不推流转卡，也不听 IC（`useIcWorkflow` 在出库模式整条让位）——
+ * 出库单不绑流转卡，让后台继续听卡只会在出库板面上把某张在途磅单悄悄定位出来。
+ * 两条模式各认各的纸：入库只认磅单码，出库只认出库码，撞号时当场说破。
+ *
  * 客户拿着打过码单的票回来，就在工作台用扫码枪扫票面码（02 §F1.4）就地走到钱那一步
  * （`useScannerCapture` 常驻捕获，判定与话术收在 `settle-gate.ts`，与第三刷、称重区
- * 「去结算」共用一份）。**磅房作业只认磅单码**：本版的码里装的就是票面那行单号，扫进来
+ * 「去结算」共用一份）。**入库模式下磅房作业只认磅单码**：本版的码里装的就是票面那行单号，扫进来
  * 按磅单查库——查到就分给两个框之一（还没算钱 → `SettleForm` 当场算清；算过钱、钱没付完 →
  * 补付框 `PayDialog`，里面就是那份 `PayForm`）。分派收在 `requestSettle` 这一条上，
  * 框体本身也与「磅单详情」卡片底部那枚「付款」共用（`components/settlement/PayDialog.tsx`）。
@@ -32,20 +39,21 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, PanelTopIcon, RotateCcwIcon, UserRoundPlusIcon } from "lucide-react";
+import { ExternalLinkIcon, PrinterIcon, CctvIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, PanelTopIcon, PlusIcon, RotateCcwIcon, UserRoundPlusIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSetting, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useScannerCapture } from "@/hooks/useScannerCapture";
-import { parseScannedCode, settleable } from "@/lib/ticket-code";
+import { parseScannedCode, settleable, type ScannedCode } from "@/lib/ticket-code";
 import { tareMean01kg as tareMeanOf, tareOverTolerance, tareRefRows } from "@/lib/tare-ref";
 import { awaitingPayment, creditPayGate, scanRejectNote, settleGateOf, unpaidFen, type GateTone, type SettleGate } from "@/lib/settle-gate";
 import { announce } from "@/lib/voice-prompt";
 import { postWeighAction, settleDefaults } from "@/lib/settle-defaults";
-import type { QcReport, WeighOrder } from "@/mock/types";
-import { useDeviceStore } from "@/store/device";
+import type { OutboundDetail, QcReport, WeighOrder } from "@/mock/types";
+import { OUTBOUND_STATUS } from "@/lib/constants";
+import { useDeviceStore, selectScale } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
-import { date, money, weight, varietyLabel } from "@/lib/format";
+import { date, money, ton, weight, varietyLabel } from "@/lib/format";
 import { IdentityPanel, TarePanel, draftFromOrder, emptyDraft, type OrderDraft } from "@/components/workstation/IdentityPanel";
 import { WeighPanel } from "@/components/workstation/WeighPanel";
 import { QcPanel } from "@/components/workstation/QcPanel";
@@ -58,6 +66,9 @@ import { useWorkstationLayout } from "@/components/workstation/layout";
 import type { PanelId } from "@/components/workstation/layout";
 import { RegistrationDialog } from "@/components/workstation/RegistrationDialog";
 import { ScanTestBar } from "@/components/workstation/ScanTestBar";
+import { OutboundBoard } from "@/components/workstation/OutboundBoard";
+import { OutboundFormDialog } from "@/components/outbound/OutboundFormDialog";
+import { useWorkstationMode } from "@/hooks/useWorkstationMode";
 import { useIcWorkflow } from "@/components/workstation/useIcWorkflow";
 import { SettleForm } from "@/components/settlement/SettleForm";
 import { PayDialog } from "@/components/settlement/PayDialog";
@@ -93,6 +104,8 @@ export function WorkstationPage() {
    * 另一把钥匙——补付不需要结算权，红冲后重结那类场合两者也不是一回事）。
    */
   const mayPay = useSession((s) => s.can("pay.record"));
+  /** 出库侧那几枚按钮与出库详情页同一把钥匙（`outbound.create` / `print`），不另立新权 */
+  const can = useSession((s) => s.can);
   const names = useStaffNames();
   const { data: varieties = [] } = useVarieties();
   const { data: warehouses = [] } = useWarehouses();
@@ -102,11 +115,43 @@ export function WorkstationPage() {
   const { data: parties = [] } = useQuery({ queryKey: ["parties", ""], queryFn: () => api.listParties("") });
   const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices(), staleTime: 60_000 });
 
+  /**
+   * 工作模式（入库 / 出库），按账号存 §9.25 `workstation.mode`。默认入库：升级后第一眼
+   * 还是原来那张桌子；模式开关在页头，切过去只换板面，不切库、不切会话。
+   */
+  const { mode, loading: modeLoading, set: setModePref } = useWorkstationMode();
+  const outboundMode = mode === "out";
+  /**
+   * 出库模式的当前单据与表单。单号存页面本地：出库没有"在途条点卡片接着干"那样的外链入口，
+   * 不需要占 URL；离开这一页再回来即从草稿队列重新选。
+   */
+  const [outboundNo, setOutboundNo] = useState<string | null>(null);
+  const [outboundForm, setOutboundForm] = useState<{ open: boolean; editing: OutboundDetail | null }>({ open: false, editing: null });
+
   const { data: order, isLoading } = useQuery({
     queryKey: ["order", orderNo],
     queryFn: () => (orderNo ? api.getOrder(orderNo) : Promise.resolve(null)),
     enabled: !!orderNo,
   });
+
+  /**
+   * 出库模式的当前单与草稿队列。两条查询都只在出库模式下才发——入库那一侧一条不多拉。
+   * 队列只取 `status='draft'`：已过账的单不能再称重，留在队列里只会让人点了才发现。
+   */
+  const outboundQuery = useQuery({
+    queryKey: ["outbound", outboundNo],
+    queryFn: () => (outboundNo ? api.getOutbound(outboundNo) : Promise.resolve(null)),
+    enabled: outboundMode && outboundNo != null,
+  });
+  const outboundDoc = outboundQuery.data ?? null;
+  const draftsQuery = useQuery({
+    queryKey: ["outbound", "workbench-drafts"],
+    queryFn: () => api.listOutbound({ status: "draft", page_size: 200 }),
+    enabled: outboundMode,
+  });
+  const outboundDrafts = draftsQuery.data?.rows ?? [];
+  /** 已打几张只看 `print_log` 里真出过纸的那几条，与详情页同一口径 */
+  const outboundPrinted = (outboundDoc?.prints ?? []).filter((p) => p.result === "success").length;
 
   const tolerancePct = useSetting("tare_tolerance_pct").num / 100;
   // 分度值不走站点参数（`scale_division_01kg` 已由 0032 退役）：它是设备属性，
@@ -197,6 +242,35 @@ export function WorkstationPage() {
   // 参与过磅抓拍的是台账里勾了 `config.captureOnWeigh` 的相机，最多 3 台（默认优先、按 id 序，
   // 与真库 `camera::list_capture_cameras` 同口径）；CameraPanel 的画面墙仍按全部启用相机显示。
   const cameras = useMemo(() => devices.filter((d) => d.kind === "camera" && d.is_enabled === 1), [devices]);
+  /**
+   * 台账里可用的真磅（启用 + 非 Mock）。两台以上时称重区头部给「切换当前磅」下拉——
+   * 现场配了两台秤、车开上哪台就称哪台的站点靠它切（`store/device.ts::selectScale`）。
+   * 只有一台时那一格不渲染，界面与从前逐字一致。
+   */
+  const scales = useMemo(
+    () => devices.filter((d) => d.kind === "scale" && d.is_enabled === 1 && d.is_mock === 0),
+    [devices],
+  );
+  /** 帧里的 code：读数此刻真正属于哪台磅（比台账的 default 更近事实） */
+  const liveScaleCode = useDeviceStore((s) => s.scale.code);
+  /**
+   * 切换当前磅：台账与读数流一起挪（判定与顺序收在 `selectScale` 里）。
+   * 失败也要刷新台账——台账那一步可能已经切过去了，只有串口没打开；
+   * 不刷新会让"该开哪台"和界面上的候选各说各话。
+   */
+  const switchScale = useMutation({
+    mutationFn: async (code: string) => {
+      const err = await selectScale(code);
+      if (err) throw new Error(err);
+    },
+    onSuccess: (_r, code) => {
+      const name = scales.find((d) => d.code === code)?.name ?? code;
+      toast.success(`已切换到「${name}」：读数、落库归属与整量化都跟着这台磅`);
+      announce(`已切换到${name}`, `ws-scale:${code}`);
+    },
+    onError: (e: Error) => toast.error(`切换地磅失败：${e.message}`),
+    onSettled: () => void qcClient.invalidateQueries({ queryKey: ["devices"] }),
+  });
   const captureCams = useMemo(
     () =>
       cameras
@@ -250,6 +324,92 @@ export function WorkstationPage() {
       setPrintSeq((n) => n + 1);
     },
     [order, qcClient],
+  );
+
+  /**
+   * 出库模式打当前那张出库码单。走的是与磅单、与出库详情页同一条 `useSilentReceiptPrint`
+   * （无预览直打 → 失败才回退预览框），刷新键传 `["outbound"]`——`prints` 挂在这张单的
+   * 详情查询上，用缺省值（磅单那条）打完「已打 N 张」不会动。
+   *
+   * 出票前先把这一单重取一遍：刚捕完毛/皮就按 F9 的场合，缓存里还是写之前那份，
+   * 票面会把刚称到的那一栏印成空的。取不到就照缓存印，宁可旧一点也不能不出票。
+   */
+  const printOutbound = useCallback(async () => {
+    const target = outboundDoc?.order_no;
+    if (!target || !station) return;
+    try {
+      await qcClient.refetchQueries({ queryKey: ["outbound", target], type: "all" });
+    } catch {
+      /* 取不到新值就照缓存那一份印 */
+    }
+    const fresh = qcClient.getQueryData<OutboundDetail | null>(["outbound", target]);
+    if (!fresh) {
+      toast.error(`读不到出库单 ${target}，请到「库存与出库」核对单号`);
+      return;
+    }
+    if (fresh.net_weight_01kg == null) {
+      toast.warning(`${target} 还没有出库净重，先不出票`);
+      announce("这一单还没有出库净重，先不出票", `ws-ob-print-nonet:${target}`);
+      return;
+    }
+    const printed = (fresh.prints ?? []).filter((p) => p.result === "success").length;
+    void printReceipt({
+      scenario: "outbound_order",
+      docNo: target,
+      isReprint: printed > 0,
+      context: { station, names, outbound: fresh },
+      invalidate: ["outbound"],
+    });
+  }, [outboundDoc?.order_no, station, names, qcClient, printReceipt]);
+
+  /** 打印按钮灰掉的原因（05 §5：禁用必须带文字）。null＝可以打 */
+  const printBlockedReason = !can("print")
+    ? "当前岗位无打印权限"
+    : !station
+      ? "站点信息还没加载"
+      : !outboundDoc
+        ? "先在左边队列选一张出库单，或扫出库码单"
+        : outboundDoc.net_weight_01kg == null
+          ? "本单还没有出库净重，打不出有效票据；请先称重或改单填净重"
+          : null;
+
+  /**
+   * 完成出库：算货款、判超库存（只警示不拦）、同事务写库存流水。判据全在
+   * `outbound::complete`，这里只负责把服务端那句中文原因原样透传。
+   */
+  const completeOutbound = useMutation({
+    mutationFn: (no: string) => api.completeOutbound({ order_no: no, operator_id: actorId() }),
+    onSuccess: (row) => {
+      if (row.stock_warning) toast.warning(row.stock_warning, { duration: 9000 });
+      else toast.success(`${row.order_no} 已出库，库存扣减 ${ton(row.net_weight_01kg)}`);
+      qcClient.invalidateQueries({ queryKey: ["outbound"] });
+      qcClient.invalidateQueries({ queryKey: ["stock-balance"] });
+      qcClient.invalidateQueries({ queryKey: ["stock-movements"] });
+      qcClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  /**
+   * 切换工作模式。切到出库时把入库那几层弹框收掉：结算框 / 补付框 / 制单框都是入库流程的，
+   * 留在出库板面上既挡视线，也容易让人对着一张纸填到另一张单上。切回来不恢复它们——
+   * 那几张框的由头（第三刷、扫票、净重刚定）都过去了，硬弹回来只会是错的一单。
+   */
+  const switchMode = useCallback(
+    (next: "in" | "out") => {
+      if (next === mode) return;
+      if (next === "out") {
+        setRegOpen(false);
+        setRegCard(null);
+        setSettleNo(null);
+        setPayNo(null);
+        setSettleUnpaid(false);
+      }
+      // 布局编辑态只属于入库那张网格，切走就退出，免得切回来时还挂着一套把手
+      setEditing(false);
+      setModePref(next);
+    },
+    [mode, setModePref],
   );
 
   /**
@@ -422,7 +582,9 @@ export function WorkstationPage() {
     [goOrder, order, mayPay, showGate],
   );
   useIcWorkflow({
-    paused: regOpen || settleNo != null || payNo != null || regHolding || panelHolding,
+    // 出库模式让 IC 整条让位：出库单不绑流转卡，也没有"刷卡推进一步"这条路；
+    // 不听卡才不会在出库板面上把某张在途磅单悄悄定位出来、甚至替它捕一捕重量。
+    paused: regOpen || settleNo != null || payNo != null || regHolding || panelHolding || outboundMode,
     captureCams,
     anyCamOnline,
     onRequestSettle: requestSettle,
@@ -453,7 +615,74 @@ export function WorkstationPage() {
   }, []);
 
   /**
-   * 扫票面码（02 §F1.4 的兑付那一步）：**磅房作业只认磅单码**。
+   * 出库模式扫进来的那一串：**只认本版出库单**（02 §M11 F11.7）。
+   *
+   * 与入库侧同一条纪律，方向相反：一串号先按出库单查库，查到就选中这张草稿；
+   * 查不到再按磅单查一次，是为了把"拿错纸"当场说清——同站同月里 CK#5 与 BD#5 是同一串
+   * 数字，这个路口恰恰是两张纸最容易混的地方。老纸上带票种位的载荷（`15…` / `CK…`）
+   * 能自己报出种类，报出来不是出库单的一律在本模式拒收，指回入库窗口。
+   *
+   * 出库模式**不推进状态、不出票、不算钱**：这里只做"定位 + 称重 + 完成出库"，
+   * 收款核销仍在「付款与挂账」。所以这条路上没有结算框，也不可能把出库单结掉。
+   */
+  const handleOutboundScan = useCallback(
+    async (code: ScannedCode | null, raw: string) => {
+      const known = code && code.kind !== "unknown" ? code : null;
+      if (known && known.kind !== "outbound") {
+        toast.info(
+          `递过来的是${known.label}（${known.docNo}）：出库模式只处理出库码单。要过磅 / 结算请先把工作台切回「入库」模式。`,
+          { id: "ws-scan-reject" },
+        );
+        announce("这不是出库码单，请切回入库模式", "ws-scan-reject");
+        return;
+      }
+      const no = code?.docNo;
+      if (!no) {
+        const note = scanRejectNote(null, raw);
+        if (note) showScanReject(note, "这个码没认出来，请再扫一次");
+        return;
+      }
+      let scanned: OutboundDetail | null;
+      try {
+        scanned = await api.getOutbound(no);
+      } catch {
+        toast.error(`读不到出库单 ${no}，请到「库存与出库」核对单号`, { id: `ws-ob-read:${no}` });
+        return;
+      }
+      if (!scanned) {
+        // 同号也是常见情形：客户手里那张可能是收购码单，只是号形与出库单一样
+        const weigh = await api.getOrder(no).catch(() => null);
+        if (weigh) {
+          toast.info(`这串号 ${no} 是一张收购磅单：要过磅 / 结算请把工作台切回「入库」模式再扫。`, { id: `ws-ob-weigh:${no}` });
+          announce("这是一张收购磅单，请切回入库模式", `ws-ob-weigh:${no}`);
+          return;
+        }
+        toast.error(`查不到出库单 ${no}：可能不是本站的单，或码被压坏读错了单号。请到「库存与出库」核对。`, { id: `ws-ob-gone:${no}` });
+        announce("查不到这张出库单，请核对票面单号", `ws-ob-gone:${no}`);
+        return;
+      }
+      setOutboundNo(no);
+      if (scanned.status !== "draft") {
+        toast.info(`${no} 已是「${OUTBOUND_STATUS[scanned.status].label}」：这里只能查看和补打，称重与过账都不开放。`, {
+          id: `ws-ob-status:${no}`,
+        });
+        return;
+      }
+      // 同号闸门的出库侧镜像：这串号也有一张磅单时，先说破再让人核对拿的哪张纸
+      const twin = await api.getOrder(no).catch(() => null);
+      if (twin) {
+        toast.warning(
+          `这串号 ${no} 同时也是一张收购磅单：这里打开的是出库单（${scanned.warehouse_name} · ${scanned.variety_name ?? "—"}）。拿的是收购码单请切回「入库」模式。`,
+          { id: `ws-ob-twin:${no}` },
+        );
+        announce("这串号也有磅单，请核对拿的哪张纸", `ws-ob-twin:${no}`);
+      }
+    },
+    [showScanReject],
+  );
+
+  /**
+   * 扫票面码（02 §F1.4 的兑付那一步）：**入库模式下磅房只认磅单码**。
    *
    * 本版的码里装的就是票面那行单号，所以一串数字进来只做一件事——按磅单去查库：查到就交给
    * `requestSettle`（与第③刷、称重区那个「去结算」同一个分派：没算过钱的进结算框，算过钱、
@@ -464,10 +693,19 @@ export function WorkstationPage() {
    * （`ticket-code.ts` 的 ②③ 两条读轨）。认出来不是磅单的一律拒收并说清该上哪儿去：
    * 结算凭证那枚凭单码本版已经不打，可客户手里那张老纸还在流通，扫到这儿绝不能顺手去开一张
    * 同号磅单的结算框——那是钱，不是提示一下就能了事的事。
+   *
+   * 出库单那张纸的消费口是页头的**「出库」模式**（`handleOutboundScan`）：那条路只定位与称重，
+   * 永远不开结算框。两条口按当前模式分流，谁也不替对方接纸——在一张出库单上开结算框，
+   * 或者把一张收购码单当成出库单过账，都是账面立刻错位的事。
    */
   const handleScan = useCallback(
     async (raw: string) => {
       const code = parseScannedCode(raw);
+      // 出库模式走另一条出口：那里只按出库单查库，与下面的结算分派完全隔开
+      if (outboundMode) {
+        await handleOutboundScan(code, raw);
+        return;
+      }
       // 只有老纸上的载荷会报得出种类（本版的码＝单号本体，种类留给查库判）
       const known = code && code.kind !== "unknown" ? code : null;
       // ── 认得出种类、且认出来的不是磅单（质检单 / 付款凭证 / 出库单 / 老结算凭证）：打发走 ──
@@ -495,7 +733,9 @@ export function WorkstationPage() {
       // 称重区那一路靠它），拿它当"查无此单"的闸门等于没有闸门——窗口会弹出一个空结算框
       // 转圈，人在里面填好单价点提交，才发现单子根本不存在。
       if (!scanned) {
-        toast.error(`查不到磅单 ${no}：可能不是本站的单，或码被压坏读错了单号。请到「磅单中心」核对。`, { id: `ws-scan-gone:${no}` });
+        toast.error(`查不到磅单 ${no}：可能不是本站的单，或码被压坏读错了单号。如果手里是出库码单，请把工作台切到「出库」模式再扫。`, {
+          id: `ws-scan-gone:${no}`,
+        });
         announce("查不到这张单，请核对票面单号", `ws-scan-gone:${no}`);
         return;
       }
@@ -506,7 +746,7 @@ export function WorkstationPage() {
       // "客户递来的就是那张磅单"。撞号时当场说破、不开框：窗口里结错一张单是真金白银，
       // 而两可这件事只有库能回答，答完就得如实报出来。
       if (await api.getOutbound(no).catch(() => null)) {
-        toast.error(`这串号 ${no} 既是一张磅单、也是一张出库单：要结算请到「磅单中心」点开那张磅单再「带到工作台」；出库那张请到「库存与出库」处理。`, { id: `ws-scan-twin:${no}` });
+        toast.error(`这串号 ${no} 既是一张磅单、也是一张出库单：要结算请到「磅单中心」点开那张磅单再「带到工作台」；出库那张请把工作台切到「出库」模式再扫，或到「库存与出库」处理。`, { id: `ws-scan-twin:${no}` });
         announce("这串号既是磅单也是出库单，请到界面里点开", `ws-scan-twin:${no}`);
         return;
       }
@@ -521,16 +761,22 @@ export function WorkstationPage() {
       void requestSettle(no, scanned ?? null);
       // 成功进结算框刻意不插话：接下来由结算框（SettleForm）自己念它的话术，与第三刷同一处理
     },
-    [maySettle, requestSettle, showGate, showScanReject],
+    [maySettle, requestSettle, showGate, showScanReject, outboundMode, handleOutboundScan],
   );
 
   // 弹窗/结算框/补付框开着时不捕获扫码：那会儿焦点在弹层里，扫进来的码不该把底下的单换掉。
   // 后台常驻捕获（键盘枪免聚焦，`useScannerCapture` 已反向让位在输入框里打字的人）。
-  useScannerCapture((raw) => void handleScan(raw), { enabled: !regOpen && settleNo == null && payNo == null });
+  useScannerCapture((raw) => void handleScan(raw), {
+    enabled: !regOpen && settleNo == null && payNo == null && !outboundForm.open,
+  });
 
   // F7（制单）已收进顶部工具条作全局键：任何页面都弹同一张 RegistrationDialog，
   // 这里不再重复绑定，避免一次按键叠出两层弹窗
-  useHotkey("f9", () => triggerPrint());
+  // F9 跟着当前模式走：入库打磅单码单，出库打当前那张出库码单——同一枚键，两个纸种各打各的
+  useHotkey("f9", () => {
+    if (outboundMode) void printOutbound();
+    else triggerPrint();
+  });
   /**
    * 专注态以「是不是真的全屏」为准回写。全屏里 ESC 被 WebView 自己拿去退出全屏，
    * 键盘事件根本到不了页面，不回写就会出现「全屏已退、界面还钉在 fixed inset-0」，
@@ -578,7 +824,16 @@ export function WorkstationPage() {
     () => varieties.find((v) => v.id === (order?.variety_id ?? draft.varietyId)) ?? null,
     [varieties, order?.variety_id, draft.varietyId],
   );
-  const scaleDevice = devices.find((d) => d.kind === "scale");
+  /**
+   * 称重区标题栏显示哪台磅的串口：以帧里的 code 为准（读数真正来自哪条串口），
+   * 还没收到帧时退回台账当前磅，最后才退回台账里第一台磅。
+   * 从前这里直接 `devices.find(kind==='scale')` 取第一台，两台秤时会把 2 号磅的读数
+   * 挂在 1 号磅的 COM 口上。
+   */
+  const scaleDevice =
+    devices.find((d) => d.code === liveScaleCode) ??
+    scales.find((d) => d.is_default === 1) ??
+    devices.find((d) => d.kind === "scale");
   const photos = order?.photos ?? [];
 
   // ── 第三刷结算框：拿 settleNo 对应单的 order / variety / qc ──
@@ -657,6 +912,9 @@ export function WorkstationPage() {
         mean01kg={tareMean01kg}
         tolerancePct={tolerancePct}
         scalePort={String(scaleDevice?.config?.port ?? "COM1")}
+        scales={scales}
+        onSelectScale={(code) => switchScale.mutate(code)}
+        switchingScale={switchScale.isPending}
         anyCamOnline={anyCamOnline}
         captureCams={captureCams}
         onNetDetermined={handleNetDetermined}
@@ -678,75 +936,140 @@ export function WorkstationPage() {
         <PageHeader
           title="磅房工作台"
           description={
-            <>
-              制单后一张流转卡<b className="font-semibold">刷一次推进一步</b>：毛重 → 皮重 → 要收钱再刷一次当场结清。
-              客户拿码单回来<b className="font-semibold">直接扫票面码</b>就地结算；挂账的回头收尾款，
-              在「结算台账」点开那张结算单登记付款。票没带或丢了，在上方在途条点中那张单再按「去结算」。
-              <Kbd>F7</Kbd> 制单 <Kbd>空格</Kbd>/<Kbd>P</Kbd> 捕获 <Kbd>F5</Kbd> 化验 <Kbd>F9</Kbd> 打印
-            </>
+            outboundMode ? (
+              <>
+                出库模式：左边点一张草稿出库单（或<b className="font-semibold">扫出库码单</b>），称毛重 → 皮重，
+                核对净重后<b className="font-semibold">「完成出库」</b>扣库存、算货款。出库不过结算窗口、不推流转卡；
+                销售货款与收款核销在「付款与挂账」。<Kbd>F9</Kbd> 打印当前出库码单
+              </>
+            ) : (
+              <>
+                制单后一张流转卡<b className="font-semibold">刷一次推进一步</b>：毛重 → 皮重 → 要收钱再刷一次当场结清。
+                客户拿码单回来<b className="font-semibold">直接扫票面码</b>就地结算；挂账的回头收尾款，
+                在「结算台账」点开那张结算单登记付款。票没带或丢了，在上方在途条点中那张单再按「去结算」。
+                <Kbd>F7</Kbd> 制单 <Kbd>空格</Kbd>/<Kbd>P</Kbd> 捕获 <Kbd>F5</Kbd> 化验 <Kbd>F9</Kbd> 打印
+              </>
+            )
           }
           actions={
             <>
+              {/* 模式开关排在最前：先选这一台机现在是干什么的，后面的按钮与快捷键都跟着它变 */}
+              <div className="flex overflow-hidden rounded-md border" role="group" aria-label="工作台模式">
+                <Button
+                  size="xs"
+                  variant={outboundMode ? "ghost" : "default"}
+                  className="rounded-none"
+                  aria-pressed={!outboundMode}
+                  onClick={() => switchMode("in")}
+                >
+                  入库
+                </Button>
+                <Button
+                  size="xs"
+                  variant={outboundMode ? "default" : "ghost"}
+                  className="rounded-none"
+                  aria-pressed={outboundMode}
+                  onClick={() => switchMode("out")}
+                >
+                  出库
+                </Button>
+              </div>
               <span className="text-xs text-muted-foreground">当前</span>
-              <span className="tnum text-sm font-semibold">{order?.order_no ?? "（无）"}</span>
-              {order && (
-                <Button size="xs" variant="ghost" onClick={() => openQuickDetail("order", order.order_no)}>
-                  <ExternalLinkIcon />
-                  单证详情
+              <span className="tnum text-sm font-semibold">
+                {outboundMode ? (outboundNo ?? "（无）") : (order?.order_no ?? "（无）")}
+              </span>
+              {outboundMode
+                ? outboundDoc && (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => void navigate({ to: "/outbound/$no", params: { no: outboundDoc.order_no } })}
+                    >
+                      <ExternalLinkIcon />
+                      单证详情
+                    </Button>
+                  )
+                : order && (
+                    <Button size="xs" variant="ghost" onClick={() => openQuickDetail("order", order.order_no)}>
+                      <ExternalLinkIcon />
+                      单证详情
+                    </Button>
+                  )}
+              {outboundMode ? (
+                <Button size="sm" disabled={!can("outbound.create")} onClick={() => setOutboundForm({ open: true, editing: null })}>
+                  <PlusIcon />
+                  新建出库单
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => setRegOpen(true)}>
+                  <UserRoundPlusIcon />
+                  制单（F7）
                 </Button>
               )}
-              <Button size="sm" onClick={() => setRegOpen(true)}>
-                <UserRoundPlusIcon />
-                制单（F7）
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => board.togglePanel("camera", showCam)}>
-                <CctvIcon />
-                {showCam ? "隐藏画面" : "过磅画面"}
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => triggerPrint()} disabled={!order}>
+              {!outboundMode && (
+                <Button size="sm" variant="outline" onClick={() => board.togglePanel("camera", showCam)}>
+                  <CctvIcon />
+                  {showCam ? "隐藏画面" : "过磅画面"}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (outboundMode) void printOutbound();
+                  else triggerPrint();
+                }}
+                disabled={outboundMode ? printBlockedReason != null : !order}
+                title={outboundMode ? (printBlockedReason ?? undefined) : undefined}
+              >
                 <PrinterIcon />
-                打印（F9）
+                {outboundMode && outboundPrinted > 0 ? `补打（已打 ${outboundPrinted} 张）` : "打印（F9）"}
               </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<Button size="sm" variant="outline" />}>
-                  <PanelTopIcon />
-                  面板
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>显示哪些区块</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {board.specs.map((s) => (
-                    <DropdownMenuCheckboxItem
-                      key={s.id}
-                      checked={s.shown}
-                      onCheckedChange={(v) => board.togglePanel(s.id, v !== true)}
-                      disabled={s.shown && board.specs.filter((x) => x.shown).length === 1}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm">{s.title}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{s.hint}</span>
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              {editing && (
+              {/* 面板与布局是入库那张网格的排布，出库板面没有格子可排，整组不渲染 */}
+              {!outboundMode && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<Button size="sm" variant="outline" />}>
+                    <PanelTopIcon />
+                    面板
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>显示哪些区块</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {board.specs.map((s) => (
+                      <DropdownMenuCheckboxItem
+                        key={s.id}
+                        checked={s.shown}
+                        onCheckedChange={(v) => board.togglePanel(s.id, v !== true)}
+                        disabled={s.shown && board.specs.filter((x) => x.shown).length === 1}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm">{s.title}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{s.hint}</span>
+                        </span>
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+              {!outboundMode && editing && (
                 <Button size="sm" variant="outline" onClick={board.reset}>
                   <RotateCcwIcon />
                   恢复默认
                 </Button>
               )}
-              <Button
-                size="sm"
-                variant={editing ? "default" : "outline"}
-                onClick={() => {
-                  board.flush();
-                  setEditing((v) => !v);
-                }}
-              >
-                <LayoutGridIcon />
-                {editing ? "完成" : "自定义布局"}
-              </Button>
+              {!outboundMode && (
+                <Button
+                  size="sm"
+                  variant={editing ? "default" : "outline"}
+                  onClick={() => {
+                    board.flush();
+                    setEditing((v) => !v);
+                  }}
+                >
+                  <LayoutGridIcon />
+                  {editing ? "完成" : "自定义布局"}
+                </Button>
+              )}
               <Button size="sm" variant="outline" onClick={toggleFocusMode}>
                 <Maximize2Icon />
                 全屏专注（F11）
@@ -757,18 +1080,53 @@ export function WorkstationPage() {
       )}
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {order?.void_reason && (
+        {!outboundMode && order?.void_reason && (
           <p className="mx-2 mt-1.5 border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
             本单已作废：{order.void_reason}（仅作留痕，要继续作业请新建下一单）
           </p>
         )}
-        {editing && (
+        {!outboundMode && editing && (
           <p className="mx-2 mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
             排布存在你本人账号上，换台磅房机登录也是这一套。
             {board.saving && <span className="shrink-0 text-primary">保存中…</span>}
           </p>
         )}
-        {!board.ready || isLoading ? (
+        {modeLoading ? (
+          // 本人那份模式偏好还没读回来：先铺骨架，别让人看一眼入库桌子又跳成出库板面
+          <div className="grid flex-1 grid-cols-1 gap-3 px-2.5 py-2 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="flex flex-col gap-3">
+                <Skeleton className="h-72" />
+                <Skeleton className="h-48" />
+              </div>
+            ))}
+          </div>
+        ) : outboundMode ? (
+          <OutboundBoard
+            drafts={outboundDrafts}
+            draftsLoading={draftsQuery.isPending}
+            selectedNo={outboundNo}
+            doc={outboundDoc}
+            docLoading={outboundNo != null && outboundQuery.isPending}
+            canCreate={can("outbound.create")}
+            completing={completeOutbound.isPending}
+            printBlockedReason={printBlockedReason}
+            printedCount={outboundPrinted}
+            scales={scales}
+            switchingScale={switchScale.isPending}
+            onSelectScale={(code) => switchScale.mutate(code)}
+            onPick={setOutboundNo}
+            onNew={() => setOutboundForm({ open: true, editing: null })}
+            onEdit={() => setOutboundForm({ open: true, editing: outboundDoc })}
+            onComplete={() => {
+              if (outboundDoc) completeOutbound.mutate(outboundDoc.order_no);
+            }}
+            onPrint={() => void printOutbound()}
+            onDetail={() => {
+              if (outboundDoc) void navigate({ to: "/outbound/$no", params: { no: outboundDoc.order_no } });
+            }}
+          />
+        ) : !board.ready || isLoading ? (
           <div className="grid flex-1 grid-cols-1 gap-3 px-2.5 py-2 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
             {Array.from({ length: 3 }, (_, i) => (
               <div key={i} className="flex flex-col gap-3">
@@ -788,11 +1146,12 @@ export function WorkstationPage() {
         )}
       </div>
 
-      {!focusMode && <OpenOrdersBar activeNo={orderNo} onPick={(no) => goOrder(no)} />}
+      {/* 在途条是入库流程的"点卡片接着干"，出库模式不摆在眼前；测试扫码框两边都留着 */}
+      {!focusMode && !outboundMode && <OpenOrdersBar activeNo={orderNo} onPick={(no) => goOrder(no)} />}
       {/* 测试扫码框（站点参数 `scan_test_input`，默认关）：没有扫码枪的机器上贴一串票面码
           按回车，走的正是扫码枪那条同一个 `handleScan`；专注态里也留着，演示常在全屏档下讲流程 */}
       {scanTestInput && (
-        <ScanTestBar onScan={(raw) => void handleScan(raw)} disabled={regOpen || settleNo != null || payNo != null} />
+        <ScanTestBar onScan={(raw) => void handleScan(raw)} disabled={regOpen || settleNo != null || payNo != null || outboundForm.open} />
       )}
       {/* 专注层是 fixed inset-0，会把 AppShell 那条常驻设备状态条整个盖住；设备故障是现场最高频问题，
           抬头就得看见，所以覆盖层底部补挂一份纯展示的（闸门与读卡探测仍只有被盖住的那份在跑） */}
@@ -812,6 +1171,15 @@ export function WorkstationPage() {
         slots={slots}
         lastVarietyId={variety?.id ?? null}
         onCreated={(no) => goOrder(no)}
+      />
+
+      {/* 出库制单 / 改草稿：与「库存与出库」那张表单同一份。新建成功就顺手选中，
+          下一步直接是称重，不必再回队列里找一遍刚开的号 */}
+      <OutboundFormDialog
+        open={outboundForm.open}
+        onOpenChange={(v) => setOutboundForm((s) => ({ ...s, open: v }))}
+        editing={outboundForm.editing}
+        onSaved={(row) => setOutboundNo(row.order_no)}
       />
 
       {/* 结算框：复用 SettleForm（第③刷 / 扫票 / 称重区「去结算」同一条算钱口径，06 §6.3）。
@@ -903,7 +1271,11 @@ export function WorkstationPage() {
         </div>
       )}
 
-      <span className="sr-only">{`${openOrdersHint} ${date(order?.registered_at)} ${weight(order?.net_weight_01kg)}`}</span>
+      <span className="sr-only">
+        {outboundMode
+          ? `出库 ${outboundDoc?.order_no ?? "未选"} ${outboundDoc?.variety_name ?? ""} ${weight(outboundDoc?.net_weight_01kg ?? null)}`
+          : `${openOrdersHint} ${date(order?.registered_at)} ${weight(order?.net_weight_01kg)}`}
+      </span>
     </div>
   );
 }

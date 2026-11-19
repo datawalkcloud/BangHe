@@ -268,6 +268,7 @@ pub fn run() {
             devices::device_test,
             devices::device_enabled,
             devices::device_mock,
+            devices::scale_select,
             devices::device_config_update,
             devices::device_probe_report,
             devices::device_create,

@@ -37,15 +37,37 @@ import { InlineNumField } from "@/components/business/NumField";
 import { ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "cn";
-import type { OutboundDetail } from "@/mock/types";
+import type { DeviceConfig, OutboundDetail } from "@/mock/types";
 
 type WeighType = "gross" | "tare";
 
 const LABEL: Record<WeighType, string> = { gross: "毛重", tare: "皮重" };
 
-export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
+export function OutboundWeighPanel({
+  order,
+  scales = [],
+  onSelectScale,
+  switchingScale = false,
+}: {
+  order: OutboundDetail;
+  /**
+   * 台账里启用的真磅（`kind='scale' && is_enabled=1 && is_mock=0`）。
+   * 两台以上时头部给「切换当前磅」下拉，与工作台③称重区同一套：切的是台账里的当前磅，
+   * `weigh_record.device_id` 与整量化跟着走。不传时这一格不渲染——详情页保持原样。
+   */
+  scales?: DeviceConfig[];
+  onSelectScale?: (code: string) => void;
+  switchingScale?: boolean;
+}) {
   const scale = useDeviceStore((s) => s.scale);
+  /**
+   * 读数归属以帧里的 code 为准，还没收到帧时退回台账当前磅——与③称重区逐字同口径
+   * （见 `workstation/WeighPanel` 同名变量）。下拉显示的是真正的读数来源，不是刚点过的那项。
+   */
+  const currentScale = scales.find((d) => d.code === scale.code) ?? scales.find((d) => d.is_default === 1) ?? null;
+  const scaleItems = scales.map((d) => ({ value: d.code, label: d.name }));
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
 
@@ -202,6 +224,32 @@ export function OutboundWeighPanel({ order }: { order: OutboundDetail }) {
       <CardHeader>
         <CardTitle className="text-sm">地磅称重</CardTitle>
         <CardAction className="flex items-center gap-2 text-xs text-muted-foreground">
+          {/* 一站两磅：与③称重区同一处切，切的是台账"当前磅"，落库归属跟着一起挪 */}
+          {scales.length > 1 && (
+            <Select
+              value={currentScale?.code}
+              items={scaleItems}
+              onValueChange={(v) => {
+                if (v && v !== currentScale?.code) onSelectScale?.(v);
+              }}
+              disabled={switchingScale}
+            >
+              <SelectTrigger
+                size="sm"
+                className="h-6 w-auto gap-1 rounded-md border-dashed px-1.5 py-0 text-xs font-medium text-foreground"
+                aria-label="切换当前地磅"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {scales.map((d) => (
+                  <SelectItem key={d.code} value={d.code}>
+                    {d.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {/* 读数归属说清是哪台磅：一站两磅时"这条读数是哪个坑称的"是要问得出来的 */}
           {scale.code ? `${scale.code}${scale.port ? ` · ${scale.port}` : ""}` : "未取到设备读数"}
         </CardAction>

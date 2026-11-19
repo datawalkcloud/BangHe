@@ -78,7 +78,10 @@ fn actor_with_roles(app: &AppHandle, roles: &[&str], what: &str) -> Result<AuthP
 }
 
 /// 制单 / 称重 / 建档：磅房现场岗三件套（05 §6.1 order.create、party.manage）
-const FLOOR_ROLES: &[&str] = &["station_master", "registrar", "weigher"];
+///
+/// `devices::scale_select`（工作台切换当前磅）也挂在这一档：切换是**这一车要上哪台秤**的
+/// 现场动作，不是站长的台账配置，所以不走 `devices.rs` 里站长专属的那档岗位。
+pub(crate) const FLOOR_ROLES: &[&str] = &["station_master", "registrar", "weigher"];
 /// 化验录入（05 §6.1 qc.save）
 const QC_ROLES: &[&str] = &["station_master", "inspector"];
 /// 结算与当场付款（05 §6.1 settle.create）：能生成结算单，也能当场收钱

@@ -56,6 +56,14 @@ export const devicesApi = {
   setDeviceEnabled: (code: string, enabled: boolean): Promise<DeviceList> =>
     runningInTauri() ? call("device_enabled", { code, enabled }) : mock.setDeviceEnabled(code, enabled),
 
+  /**
+   * 工作台切换当前磅：把这台磅设为台账里 `scale` 类的默认（同一条 SQL 口径驱动
+   * `weigh_record.device_id` 与整量化），读数流由调用方接着 `nativeScale.start(code)` 挪过去。
+   * 非地磅 / 停用 / Mock 三档由服务端拒并回中文短句，这里原样抛成 Error 给页面 toast。
+   */
+  selectScale: (code: string): Promise<DeviceList> =>
+    runningInTauri() ? call("scale_select", { code }) : mock.selectScale(code),
+
   /** 02 §M9 的门禁在服务端也判一次：`verify.mode === "device"` 而没通过就拒绝保存 */
   updateDeviceConfig: (input: UpdateDeviceConfigInput): Promise<DeviceRow> =>
     runningInTauri() ? call("device_config_update", { input }) : mock.updateDeviceConfig(input),
