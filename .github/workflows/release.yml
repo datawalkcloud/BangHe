@@ -41,6 +41,12 @@ name: Release
 #     job 末尾「同步安装包到国内 Gitee 镜像」步骤的注释）。人工下载与内置更新 endpoints
 #     均优先指这里（2026-11-19 落地：tauri.conf.json endpoints 首位改为本镜像的
 #     raw latest.json，此前只有注释声称优先、配置里仍是 gh-proxy 打头）。
+#   - Gitee 发行版页面（2026-11-19 加入，见 release job 末尾「在 Gitee 建发行版并挂安装包」）：
+#     同一个 banghe-release 仓再用 v5 API 打 tag + 建发行版 + 传安装包附件，给客户一个按版本
+#     翻的人类下载页。附件直链形态与 GitHub 一致（.../releases/download/{tag}/{文件名}，
+#     {tag} 位置写 latest 也认，实测匿名 200 能落地）。构建仍只在 GitHub：Gitee Go 公共
+#     runner 没有 Windows，跑不了 Tauri + NSIS。应用内更新链路的 endpoints 首位仍是 raw
+#     latest.json，没换成附件直链——已装出去的老客户端不该跟着这次的链路改动冒险。
 #
 # Microsoft Store 变体（2026-10-17 加入，build-msix-store job）：
 #   - 商店要求应用更新走商店通道，商店版用 cargo feature `store-build` 掐掉装内
@@ -334,10 +340,12 @@ jobs:
 
       # 国内高速镜像：把安装包与一份「安装包地址指向 Gitee raw」的 latest.json 推到一个
       # 公开 Gitee 仓，客户用 raw 直链匿名下载。
-      # 为什么不走 Gitee「发行版附件」：Gitee 个人仓的 Release 二进制附件用 v5 API 上传
-      # 极不稳定（撞风控、要登录态/验证码），故改走 git——主包仅 MB 量级、远低于 Gitee
-      # 单文件 50MB 限制，用「orphan 工作树 + 强推」只留最新版（不累积历史、仓体积恒定）。
-      # 代价：Gitee 那份只保留最新版，下老版本仍回 GitHub。
+      # 应用内更新链路为什么走 git raw、不走「发行版附件」：早先试 v5 API 传附件撞过风控
+      # （不稳定、疑似要登录态），所以客户端 endpoints 首位这条链路改成 git 推——主包仅 MB
+      # 量级，远低于 Gitee git 单文件 50MB 限制（附件侧上限另算，100MB），用「orphan 工作树
+      # + 强推」只留最新版（不累积历史、仓体积恒定）。
+      # 代价：raw 那份只保留最新版，按版本翻的老包仍回 GitHub——人类入口由下一步的
+      # Gitee 发行版补上（那一步挂了只红那一步，更新链路这步已经回读确认过）。
       # 同时额外推一个固定文件名 banghe-latest-windows-x64-setup.exe，官网/README 的下载
       # 直链只认它——改版号不用动网页（带版本号的 banghe-<ver>-*.exe 仍一并保留，供追溯）。
       # 前置（一次性）：
@@ -398,3 +406,36 @@ jobs:
           done
           [ "$ok" = 1 ] || { echo "::error::Gitee raw latest.json 回读不到版本 ${ver}，客户端会停在旧版"; exit 1; }
           echo "Gitee 更新清单已生效：${rawbase}/latest.json（版本 ${ver}）"
+
+      # 人类入口：在同一个镜像仓建 Gitee 发行版并把本次安装包挂成附件，
+      # 页面 https://gitee.com/<owner>/banghe-release/releases 按版本列，附件直链形态
+      # 和 GitHub 一样（.../releases/download/{tag}/{文件名}，{tag} 写 latest 也认）。
+      # 两步拆开做的原因：
+      #   1) tag 先走 git 推——Gitee 发行版绑 git tag，tag 不在创建接口直接失败，而
+      #      /tags 接口对 ref_name 的口径没有实测依据；这里直接给上一步强推上去的那个
+      #      orphan 提交（含安装包与 latest.json）打 tag。
+      #   2) 发行版本体与附件走 v5 API（scripts/release-notes/gitee_release.py，请求体
+      #      固定表单编码：官方 swagger 写的 JSON 通道会丢字段、中文名乱码）。
+      # 幂等：同 tag 的发行版复用 id、同名附件跳过，重跑 release job 不会堆重复发行版。
+      # 失败会红，但上一步的更新链路已经回读确认过，红只表示发行版页面没建成。
+      # 配额红线：单附件 ≤100MB、每仓附件总量 ≤1GB（Gitee 个人仓）——主包 ~7MB 一次一份，
+      # 攒到上限要清老附件（脚本只传不删，删除接口见脚本头注）。
+      - name: 在 Gitee 建发行版并挂安装包
+        env:
+          GITEE_USER: ${{ secrets.GITEE_USER }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+          GITEE_REPO: banghe-release
+          GITEE_BRANCH: master
+        run: |
+          set -euo pipefail
+          ver="${{ needs.meta.outputs.version }}"
+          tag="${{ github.ref_name }}"
+          dl="https://${GITEE_USER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+          git -C gitee-dl tag -f "$tag"
+          git -C gitee-dl push -f "$dl" "refs/tags/${tag}"
+          python3 scripts/release-notes/gitee_release.py \
+            --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --tag "$tag" --version "$ver" \
+            --title "磅禾粮站收粮系统 ${ver}" --body-file release_body.md \
+            --ref "$GITEE_BRANCH" \
+            --assets "artifacts/banghe-${ver}-windows-x64-setup.exe"
