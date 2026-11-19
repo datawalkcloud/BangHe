@@ -646,7 +646,7 @@ export function IdentityPanel({
           </div>
           {/* 去向是可选登记项：默认折成一行，不跟品种/车牌抢主视线；填了就把值亮在行上，
               免得磅员不知道这单到底带没带去向 */}
-          <div className="border-t pt-1">
+          <div className="pt-2">
             <button
               type="button"
               aria-expanded={destOpen}
@@ -714,7 +714,7 @@ export function IdentityPanel({
           </div>
         </div>
 
-        <div className="flex flex-col gap-1 border-t pt-1">
+        <div className="flex flex-col gap-1 pt-2">
           {cardNo ? (
             <p className="flex items-center justify-between gap-1.5 text-xs">
               <span className="min-w-0 truncate text-muted-foreground">
@@ -923,7 +923,7 @@ function OrderMetaEditor({ order, editable }: { order: WeighOrder; editable: boo
 
   if (!editable) {
     return (
-      <div className="flex flex-col gap-0.5 border-t pt-1 text-xs text-muted-foreground">
+      <div className="flex flex-col gap-0.5 pt-2 text-xs text-muted-foreground">
         <p>
           车牌 <span className="tnum text-foreground">{order.vehicle_no ?? "—"}</span>
         </p>
@@ -933,7 +933,7 @@ function OrderMetaEditor({ order, editable }: { order: WeighOrder; editable: boo
   }
 
   return (
-    <div className="flex flex-col gap-1 border-t pt-1">
+    <div className="flex flex-col gap-1 pt-2">
       <div className="grid grid-cols-2 items-end gap-1.5">
         <div className="flex min-w-0 flex-col gap-0.5 text-xs text-muted-foreground">
           <span>车牌号</span>
@@ -1035,7 +1035,7 @@ function PartyPhoneField({
   }
 
   return (
-    <div className="border-t pt-1">
+    <div className="pt-2">
       <div className="flex items-center gap-1.5">
         <span className="shrink-0 text-xs text-muted-foreground">联系电话</span>
         <KeypadInput
@@ -1151,7 +1151,7 @@ export function TarePanel({
         {rows.length === 0 ? (
           <p className="text-xs text-muted-foreground">暂无历史，首次过磅后自动累积。</p>
         ) : (
-          <div className="flex flex-col gap-0.5 border-t border-border/60 pt-1">
+          <div className="flex flex-col gap-0.5 pt-2">
             <p className="text-[10px] text-muted-foreground">近 {rows.length} 次明细 · 皮重 kg · 与均值偏差</p>
             <ul className="flex flex-col gap-0.5">
               {rows.map((r, i) => {

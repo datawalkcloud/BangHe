@@ -384,7 +384,10 @@ export const DEMO_ALIGN = captureAlign(devices);
  * 桌面端读库、浏览器读目录，两边共用的只能是这一份。
  */
 export const settings: AppSetting[] = demoSettings().map((s) =>
-  s.key === "station_name" ? { ...s, value: station.name } : s,
+  s.key === "station_name" ? { ...s, value: station.name }
+  : s.key === "station_address" ? { ...s, value: station.address }
+  : s.key === "station_phone" ? { ...s, value: station.phone }
+  : s,
 );
 
 export function settingValue(key: string, fallback = ""): string {

@@ -51,6 +51,14 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
     hint: "打印抬头与磅单第一行",
   },
   {
+    key: "station_address", demo: "", label: "站点地址", group: "doc", kind: "text",
+    hint: "票头地址行，留空则不打印",
+  },
+  {
+    key: "station_phone", demo: "", label: "站点电话", group: "doc", kind: "text",
+    hint: "票头电话行，留空则不打印",
+  },
+  {
     key: "doc_no_seq_len", demo: "6", label: "流水号位数", group: "doc", kind: "number",
     hint: "每个站点、每种票、每个月各自从零起号",
   },

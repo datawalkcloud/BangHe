@@ -56,8 +56,8 @@ function Sheet({
         <p className="mt-1 flex items-center justify-center gap-6 text-[11px]">
           <span>单据号：{docNo}</span>
           <span>业务日期：{dateText}</span>
-          <span>地址：{station.address}</span>
-          <span>电话：{station.phone}</span>
+          {station.address && <span>地址：{station.address}</span>}
+          {station.phone && <span>电话：{station.phone}</span>}
         </p>
       </header>
 

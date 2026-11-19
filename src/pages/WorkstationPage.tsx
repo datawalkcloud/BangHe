@@ -1093,9 +1093,9 @@ export function WorkstationPage() {
         )}
         {modeLoading ? (
           // 本人那份模式偏好还没读回来：先铺骨架，别让人看一眼入库桌子又跳成出库板面
-          <div className="grid flex-1 grid-cols-1 gap-3 px-2.5 py-2 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
+          <div className="grid flex-1 grid-cols-1 gap-4 px-3.5 py-3 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
             {Array.from({ length: 3 }, (_, i) => (
-              <div key={i} className="flex flex-col gap-3">
+              <div key={i} className="flex flex-col gap-4">
                 <Skeleton className="h-72" />
                 <Skeleton className="h-48" />
               </div>
@@ -1127,9 +1127,9 @@ export function WorkstationPage() {
             }}
           />
         ) : !board.ready || isLoading ? (
-          <div className="grid flex-1 grid-cols-1 gap-3 px-2.5 py-2 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
+          <div className="grid flex-1 grid-cols-1 gap-4 px-3.5 py-3 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
             {Array.from({ length: 3 }, (_, i) => (
-              <div key={i} className="flex flex-col gap-3">
+              <div key={i} className="flex flex-col gap-4">
                 <Skeleton className="h-72" />
                 <Skeleton className="h-48" />
               </div>

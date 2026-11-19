@@ -523,8 +523,8 @@ export function ReceiptDocument({
             <p className="mt-1 flex flex-wrap items-center justify-center gap-x-4 gap-y-0.5 text-[11px]">
               <span>单据号：{docNo}</span>
               <span>业务日期：{dateText}</span>
-              <span>地址：{station.address}</span>
-              <span>电话：{station.phone}</span>
+              {station.address && <span>地址：{station.address}</span>}
+              {station.phone && <span>电话：{station.phone}</span>}
             </p>
           </header>
           <div className="mt-3 border-t-2 border-black" />

@@ -535,7 +535,7 @@ export function WeighPanel({
           </div>
 
           {/* 右侧：本单已取重量明细 + 捕获操作（填掉读数右边的空白） */}
-          <div className="flex shrink-0 min-w-[220px] flex-col justify-center gap-1.5 border-t sm:border-l sm:border-t-0 pt-1.5 sm:pt-0 sm:pl-2.5">
+          <div className="flex shrink-0 min-w-[220px] flex-col justify-center gap-1.5 pt-1.5 sm:pt-0 sm:pl-4">
             <div className="flex flex-col gap-1">
               {/*
                 毛重 / 皮重这两行**本身就是手录的入口**（2026-10-09 改版，原来那块「手工录入读数」
@@ -604,7 +604,7 @@ export function WeighPanel({
                   </div>
                 );
               })}
-              <div className="flex items-center justify-between gap-2 text-sm border-t pt-0.5">
+              <div className="flex items-center justify-between gap-2 text-sm pt-1.5">
                 <span className="font-semibold text-foreground">净重</span>
                 <span className="tnum font-bold text-primary text-base">
                   {order?.net_weight_01kg != null ? weight(order.net_weight_01kg) : "—"}
@@ -615,7 +615,7 @@ export function WeighPanel({
                 缺价标红——只有制单时该品种没有现行价目才会走到这一步（有现行价目的单制单就带上了），
                 而**捕毛重之前这一格必须有价**（`lib/weigh-gate.ts` 那道闸），所以它不是提醒，是前置条件。
               */}
-              <div className="flex items-center justify-between gap-2 text-sm border-t pt-0.5">
+              <div className="flex items-center justify-between gap-2 text-sm pt-1.5">
                 <span className="text-muted-foreground">单价</span>
                 {order?.price_fen_per_ton != null ? (
                   <span className="tnum font-semibold text-foreground">{fmtPrice(order.price_fen_per_ton)}</span>
