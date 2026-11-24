@@ -12,10 +12,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, Ref } from "react";
-import { KeyboardIcon } from "lucide-react";
 import { fromKg, fromPercent, fromYuanPerKg, money, priceNumber, toKg, weight } from "@/lib/format";
 import { useSoftKeyboardVisible } from "@/hooks/useSoftKeyboard";
-import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Keypad, KeypadFloat, digitKeys } from "@/components/ui/keypad";
 import { cn } from "cn";
@@ -172,7 +170,6 @@ export function NumField({
   onKeyDown,
   keypad,
 }: NumFieldProps) {
-  const [padOpen, setPadOpen] = useState(false);
   /** 全局「屏幕软键盘」偏好：关了就不摆展开按钮，输入框本身照旧可逐字键入 */
   const showPad = useSoftKeyboardVisible();
   const padKeys = useMemo(
@@ -196,22 +193,27 @@ export function NumField({
           {label}
         </label>
         {keypad && showPad && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-pressed={padOpen}
+          <KeypadFloat
+            anchor={host}
+            minWidth={200}
+            triggerLabel="键盘"
             disabled={disabled}
-            title={padOpen ? "收起数字键盘" : "展开数字键盘，点一下出一个数字"}
-            onClick={() => setPadOpen((v) => !v)}
-            className={cn(
+            title="展开数字键盘：点一下出一个数字，也可用真键盘输入"
+            triggerClassName={cn(
               "h-5 shrink-0 gap-0.5 px-1 text-[11px]",
-              padOpen ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
-            <KeyboardIcon className="size-3.5" />
-            键盘
-          </Button>
+            <Keypad
+              aria-label={`${label}数字键盘`}
+              keys={padKeys}
+              onInsert={(c) => apply(live.current + c)}
+              onAction={(a) => {
+                if (a === "backspace") apply(live.current.slice(0, -1));
+                else if (a === "clear") apply("");
+              }}
+            />
+          </KeypadFloat>
         )}
       </div>
       <NumInput
@@ -228,20 +230,6 @@ export function NumField({
         size={size}
         onKeyDown={onKeyDown}
       />
-      {keypad && showPad && padOpen && (
-        <KeypadFloat anchor={host} minWidth={200} onClose={() => setPadOpen(false)}>
-          <Keypad
-            aria-label={`${label}数字键盘`}
-            keys={padKeys}
-            onInsert={(c) => apply(live.current + c)}
-            onAction={(a) => {
-              if (a === "backspace") apply(live.current.slice(0, -1));
-              else if (a === "clear") apply("");
-              else setPadOpen(false);
-            }}
-          />
-        </KeypadFloat>
-      )}
       {hint && (
         <p className={cn("text-xs", invalid ? "text-destructive" : "text-muted-foreground")}>{hint}</p>
       )}

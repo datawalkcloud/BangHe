@@ -4,20 +4,25 @@
  * 业务页只需关心「打哪张单、数据是什么」，模板长什么样由用户在编辑器里决定。
  * 纸型默认取模板设置，但允许在打印弹窗里临时改——改完预览和出纸尺寸同步变（所见即所得）。
  *
- * 出纸去向按通道分流，两条路物理上不是一台机器：
- *  - `raw`：ESC/POS 直连**小票机**。票面按当前模板现排（`escpos.ts`），只能吃热敏纸；
- *  - 其余（窗口预览 / PDF 静默）：走 `printPage.ts` 的离屏 iframe 通道，把预览里那张纸
- *    原样送进打印文档——改纸型 / 改版式后预览怎么变，纸上就怎么变。
+ * 这个框现在是非小票机（A4 激光 / 241 针式）**打票的常规去处**：`silent.ts` 只让热敏直连机
+ * 当场出纸，其余一律回到这里（issue #4）。三条通道各走各的：
+ *  - `preview`（窗口预览）：走 `printPage.ts` 的离屏 iframe 通道，把预览里那张纸原样送进
+ *    打印文档——改纸型 / 改版式后预览怎么变，纸上就怎么变；
+ *  - `pdf_silent`（静默直打）：Rust 用 GDI 把同一份行序列画到打印机 DC 提交假脱机，
+ *    纸型、托盘、方向一概不传，以打印机自身配置为准（连续纸、预印纸要的是这一条）；
+ *  - `raw`：ESC/POS 直连**小票机**，票面按当前模板现排（`escpos.ts`），只能吃热敏纸。
  */
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PAPER } from "@/lib/constants";
 import type { PaperKind, PrintChannel } from "@/lib/constants";
+import type { DeviceConfig } from "@/mock/types";
 import { nativePrinter, toNativePaper } from "@/lib/native";
 import { PrintPreview } from "../PrintPreview";
 import { printJob } from "../printPage";
 import { receiptLines } from "./escpos";
 import { PaperFrame, ReceiptDocument, docMeta } from "./render";
+import { resolveDirectTarget } from "./silent";
 import { PAPER_SPEC } from "./paper";
 import { useReceiptStore, useReceiptTemplate } from "./store";
 import type { ReceiptContext, ReceiptScenario } from "./types";
@@ -29,6 +34,7 @@ export function ReceiptPrintPreview({
   context,
   isReprint = false,
   docNo,
+  devices = [],
   onPrinted,
 }: {
   open: boolean;
@@ -38,6 +44,8 @@ export function ReceiptPrintPreview({
   isReprint?: boolean;
   /** 不传则按上下文自动推导（order_no / report_no / settle_no / pay_no / 日期） */
   docNo?: string;
+  /** 设备台账：「静默直打」那条通道要从这里认那台队列机的真实队列名 */
+  devices?: DeviceConfig[];
   /** 出纸并留痕成功后回调，调用方用它刷新"这张票打过几次" */
   onPrinted?: () => void;
 }) {
@@ -50,13 +58,32 @@ export function ReceiptPrintPreview({
   const no = docNo ?? docMeta(context).docNo;
 
   /**
-   * 「RAW 直连」把小票机接进来；其余通道仍走浏览器打印。
-   * 返回 false = 没出纸，PrintPreview 据此跳过留痕（不留"已打印但纸上空白"的假账）。
+   * 三条通道各自落地；返回 false = 没出纸，PrintPreview 据此跳过留痕（不留"已打印但纸上空白"的假账）。
    * 失败提示在这里给全，所以 PrintPreview 侧不再叠一层。
    */
   async function handlePrint(channel: PrintChannel, p: PaperKind): Promise<boolean> {
+    if (channel === "pdf_silent") {
+      // 队列机的 GDI 直打：纸面交给驱动，程序不选纸。要的就是"连续纸不弹框、按打印机配置走"
+      const target = resolveDirectTarget(devices, p);
+      if (target.kind !== "queue") {
+        toast.error("静默直打只吃打印队列机（A4 激光 / 241 针式）", {
+          description: target.deviceName ? `台账里默认那台「${target.deviceName}」是热敏直连机，请改用「RAW 直连」。` : "设备中心里没有登记可用的队列机，请改用「窗口预览」。",
+        });
+        return false;
+      }
+      // 队列机不传 machinePaper——可打区是驱动给的，落点不归我们算（与 silent.ts 同一口径）
+      const res = await nativePrinter.receiptToQueue(receiptLines(tpl, { ...context, reprint: isReprint }), {
+        printer: target.printer ?? null,
+      });
+      const out = res.available ? res.data : undefined;
+      if (!res.available || !out?.ok) {
+        toast.error(`没能提交打印队列：${out?.error ?? res.error ?? "本机没有原生打印通道"}`);
+        return false;
+      }
+      return true;
+    }
     if (channel !== "raw") {
-      // 走的不是小票机：把预览里那块纸原样送进打印文档，纸上就是眼前这一版
+      // 窗口预览：把预览里那块纸原样送进打印文档，纸上就是眼前这一版
       const node = document.getElementById("print-root");
       if (!node) return false;
       const spec = PAPER_SPEC[p];

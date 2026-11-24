@@ -77,9 +77,9 @@ def file_cells(path: str | None) -> tuple[str, str]:
     return human, f"`{h.hexdigest()[:16]}…`"
 
 
-def collect_commits(rev_range: str) -> list[tuple[str, str, str]]:
-    """rev_range 内的提交，返回 (短hash, 标题, 作者)，按时间正序。"""
-    fmt = FIELD.join(["%h", "%s", "%an"]) + RECORD
+def collect_commits(rev_range: str) -> list[tuple[str, str]]:
+    """rev_range 内的提交，返回 (短hash, 标题)，按时间正序。"""
+    fmt = FIELD.join(["%h", "%s"]) + RECORD
     raw = git("log", "--no-merges", "--reverse", f"--format={fmt}", rev_range)
     commits = []
     for record in raw.split(RECORD):
@@ -87,7 +87,7 @@ def collect_commits(rev_range: str) -> list[tuple[str, str, str]]:
         if not record:
             continue
         parts = record.split(FIELD)
-        if len(parts) == 3:
+        if len(parts) == 2:
             commits.append(tuple(parts))
     return commits
 
@@ -164,8 +164,8 @@ def main() -> None:
     lines.append(f"## 更新内容（{prev + ' 以来' if prev else '全部历史'}，共 {len(commits)} 次提交）")
     lines.append("")
     if commits:
-        for h, subject, author in commits:
-            lines.append(f"- `{h}` {subject}（{author}）")
+        for h, subject in commits:
+            lines.append(f"- `{h}` {subject}")
     else:
         lines.append("- 本次没有新提交。")
     lines.append("")

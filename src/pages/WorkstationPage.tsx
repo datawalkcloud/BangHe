@@ -39,11 +39,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLinkIcon, PrinterIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, CheckIcon, PlusIcon, RotateCcwIcon, UserRoundPlusIcon } from "lucide-react";
+import { ExternalLinkIcon, PrinterIcon, Maximize2Icon, Minimize2Icon, LayoutGridIcon, CheckIcon, PlusIcon, RotateCcwIcon, UserRoundPlusIcon, Volume2Icon, VolumeXIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSetting, useStaffNames, useStation, useVarieties, useWarehouses, useSlots, usePrices } from "@/hooks/useLookups";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useScannerCapture } from "@/hooks/useScannerCapture";
+import { useVoiceMasterSwitch } from "@/hooks/useVoicePrompt";
 import { parseScannedCode, settleable, type ScannedCode } from "@/lib/ticket-code";
 import { tareMean01kg as tareMeanOf, tareOverTolerance, tareRefRows } from "@/lib/tare-ref";
 import { awaitingPayment, creditPayGate, scanRejectNote, settleGateOf, unpaidFen, type GateTone, type SettleGate } from "@/lib/settle-gate";
@@ -57,7 +58,7 @@ import { date, money, ton, weight, varietyLabel } from "@/lib/format";
 import { IdentityPanel, TarePanel, draftFromOrder, emptyDraft, type OrderDraft } from "@/components/workstation/IdentityPanel";
 import { WeighPanel } from "@/components/workstation/WeighPanel";
 import { QcPanel } from "@/components/workstation/QcPanel";
-import { OpenOrdersBar } from "@/components/workstation/OpenOrdersBar";
+import { OpenOrdersPanel } from "@/components/workstation/OpenOrdersPanel";
 import { CameraPanel } from "@/components/workstation/CameraPanel";
 import { localCameraSpec } from "@/lib/local-camera";
 import { ipCameraSpec } from "@/components/business/IpCameraLive";
@@ -65,7 +66,8 @@ import { PanelTile, WorkstationGrid } from "@/components/workstation/Workstation
 import { useWorkstationLayout } from "@/components/workstation/layout";
 import type { PanelId } from "@/components/workstation/layout";
 import { RegistrationDialog } from "@/components/workstation/RegistrationDialog";
-import { ScanTestBar } from "@/components/workstation/ScanTestBar";
+// 测试扫码框暂时不对外展示，渲染与站点参数一起注释着，这一行 import 先停掉
+// import { ScanTestBar } from "@/components/workstation/ScanTestBar";
 import { OutboundBoard } from "@/components/workstation/OutboundBoard";
 import { OutboundFormDialog } from "@/components/outbound/OutboundFormDialog";
 import { useWorkstationMode } from "@/hooks/useWorkstationMode";
@@ -105,6 +107,8 @@ export function WorkstationPage() {
   const mayPay = useSession((s) => s.can("pay.record"));
   /** 出库侧那几枚按钮与出库详情页同一把钥匙（`outbound.create` / `print`），不另立新权 */
   const can = useSession((s) => s.can);
+  /** 页头语音总闸：写本机 localStorage，每台机器各自静音、互不影响（见 hooks/useVoicePrompt） */
+  const voice = useVoiceMasterSwitch();
   const names = useStaffNames();
   const { data: varieties = [] } = useVarieties();
   const { data: warehouses = [] } = useWarehouses();
@@ -156,11 +160,9 @@ export function WorkstationPage() {
   // 分度值不走站点参数（`scale_division_01kg` 已由 0032 退役）：它是设备属性，
   // 称重区那一格直接读后端随帧下发的 `scale.division01kg`，与落库取整同源。
   const allowCredit = useSetting("settlement_allow_part_pay").bool;
-  /**
-   * 站点参数 `scan_test_input`（**默认关**）：没有扫码枪的机器（还没接枪、枪坏了、
-   * 浏览器演示）在工作台底部挂一个测试扫码框。关掉时那一整条不渲染，界面与从前逐字一致。
-   */
-  const scanTestInput = useSetting("scan_test_input").bool;
+  // 站点参数 `scan_test_input`（出厂 false）：没有扫码枪的机器（还没接枪、枪坏了、浏览器演示）
+  // 在工作台底部挂一个测试扫码框。这一功能暂时不对外展示，参数与下面那条渲染一起注释掉。
+  // const scanTestInput = useSetting("scan_test_input").bool;
   // 自动出码单默认开：参数还没读回来时 raw 是 undefined，不能按"缺省关"把升级后的
   // 第一趟过磅静默吞掉（与 useVoicePrompt 同一条道理），只认显式的 "false"
   const autoPrintWeigh = useSetting("auto_print_weigh_order").raw !== "false";
@@ -201,9 +203,10 @@ export function WorkstationPage() {
   /** 打印目标：自动出码单时是被称的那张单，手动打印时是当前单；null 回落到当前 order */
   const [printTarget, setPrintTarget] = useState<string | null>(null);
   /**
-   * 「直打」触发器：第二刷皮重后自动出码单、F9、结算弹窗的「凭票打印」与顶部按钮共用这一条路——
-   * 无预览直接打（silent.ts 按模板纸型分流热敏直连 / 打印队列直打，纸张随打印机配置），
-   * 只有真打不出去（浏览器演示、设备离线、队列报错）才回退弹预览框。
+   * 「出票」触发器：第二刷皮重后自动出码单、F9、结算弹窗的「凭票打印」与顶部按钮共用这一条路——
+   * `silent.ts` 判这台机器能不能不经人手直接出纸：热敏直连机当场出纸，A4 / 241 这类走打印队列的
+   * 机器一律先开预览框（issue #4），看过版面再走浏览器打印；真打不出去（浏览器演示、设备离线）
+   * 同样落到那个框里。
    * 这条路与磅单详情的补打共用 `useSilentReceiptPrint`，出纸口解析只有一份实现。
    *
    * 记的是**自增序号**而不是 `boolean`：`setState(同值)` 不引发重渲染，而"目标单号没变、
@@ -925,6 +928,7 @@ export function WorkstationPage() {
       />
     ),
     qc: <QcPanel order={order ?? null} variety={variety} />,
+    open: <OpenOrdersPanel activeNo={orderNo} onPick={(no) => goOrder(no)} />,
   };
 
   const openOrdersHint = order
@@ -1014,15 +1018,47 @@ export function WorkstationPage() {
           }
           actionsRight={
             <>
-              {/* 抬头只留日常要按的三颗：打印、自定义布局、全屏专注。
+              {/* 抬头只留四颗：语音、自定义布局、打印、全屏专注。
                   「过磅画面/隐藏画面」与「面板」都收掉了——同一个显隐动作原先摆在三处
                   （画面开关、面板清单、各区块页脚的收起），挤得按钮换行。区块显隐现在只在
                   「自定义布局」编辑态里做，见下面 editing 那条提示行。
-                  **顺序按"会不会随模式/状态消失"排**：这一群整体贴右，只有最右那颗的位置
-                  与它左边的成员无关，所以只在入库（或编辑态）出现的「自定义布局 / 恢复默认」
-                  必须排在最左，切到出库时它们凭空少一颗，也不会把「打印」「全屏专注」推位。 */}
+                  **顺序按"会不会随模式/状态消失"排**：这一群整体贴右，常驻的语音放最左，
+                  只在入库（或编辑态）出现的「自定义布局 / 恢复默认」紧随其后；切到出库时它们
+                  凭空少一颗，也不会把「打印」「全屏专注」推位。 */}
+              {/* 语音是本机的：点喇叭图标切换开/关（喇叭＝出声，带斜杠喇叭＝这台机已静音），
+                  ghost 样式（喇叭 + 「语音」文字）与旁边几颗同一套视觉，不做成普通按钮的样子；
+                  这台机静音不影响别的机器，也不需要站长权限。
+                  本机没显式设过时按全站参数 reader_prompt_voice 走。 */}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className={voice.on ? "text-foreground" : "text-muted-foreground"}
+                      aria-label={voice.on ? "本机语音已开，点一下静音" : "本机已静音，点一下恢复语音"}
+                      aria-pressed={voice.on}
+                      onClick={() => voice.set(!voice.on)}
+                    />
+                  }
+                >
+                  {voice.on ? <Volume2Icon /> : <VolumeXIcon />}
+                  语音
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="end">
+                  {voice.overridden
+                    ? voice.on
+                      ? "这台机语音已开（本机设定，不随全站变）：点一下只静音这台机"
+                      : "这台机已静音（本机设定，不随全站变）：点一下恢复这台机的人声播报"
+                    : voice.on
+                      ? "语音跟随全站、当前为开：点一下只静音这台机，其他机器不受影响"
+                      : "语音跟随全站、当前为关：点一下只让这台机出声"}
+                </TooltipContent>
+              </Tooltip>
+              {/* 除语音外的页头操作一律 ghost：无边框无底色，只留 hover 反馈，跟那颗喇叭图标同一套视觉。
+                  编辑态的「完成」靠 aria-expanded 给一点底色表示"正在编辑"，仍是幽灵不是实心按钮。 */}
               {!outboundMode && editing && (
-                <Button size="sm" variant="outline" onClick={board.reset}>
+                <Button size="sm" variant="ghost" onClick={board.reset}>
                   <RotateCcwIcon />
                   恢复默认
                 </Button>
@@ -1030,7 +1066,8 @@ export function WorkstationPage() {
               {!outboundMode && (
                 <Button
                   size="sm"
-                  variant={editing ? "default" : "outline"}
+                  variant="ghost"
+                  aria-expanded={editing}
                   onClick={() => {
                     board.flush();
                     setEditing((v) => !v);
@@ -1042,7 +1079,7 @@ export function WorkstationPage() {
               )}
               <Button
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 onClick={() => {
                   if (outboundMode) void printOutbound();
                   else triggerPrint();
@@ -1053,7 +1090,7 @@ export function WorkstationPage() {
                 <PrinterIcon />
                 {outboundMode && outboundPrinted > 0 ? `补打（已打 ${outboundPrinted} 张）` : "打印（F9）"}
               </Button>
-              <Button size="sm" variant="outline" onClick={toggleFocusMode}>
+              <Button size="sm" variant="ghost" onClick={toggleFocusMode}>
                 <Maximize2Icon />
                 全屏专注（F11）
               </Button>
@@ -1062,14 +1099,16 @@ export function WorkstationPage() {
         />
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      {/* pl-1：面板别顶在侧栏边框上，留 4px 画布灰当间隙（抬头与在途条是通栏的条，仍贴边）。
+          下面两行原本自带 mx-2，左边那截交给这条留白，免得叠宽 */}
+      <div className="flex min-h-0 flex-1 flex-col pl-1">
         {!outboundMode && order?.void_reason && (
-          <p className="mx-2 mt-1.5 border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+          <p className="mr-2 mt-1.5 border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
             本单已作废：{order.void_reason}（仅作留痕，要继续作业请新建下一单）
           </p>
         )}
         {!outboundMode && editing && (
-          <div className="mx-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <div className="mr-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <span className="shrink-0">显示区块</span>
             {/* 原「面板」下拉里的勾选项搬进编辑态：点「自定义布局」进来就能收放，
                 不必再在抬头常驻一颗按钮。最后一直留着的这颗不许再收（沿用原下拉的闸门），
@@ -1149,13 +1188,13 @@ export function WorkstationPage() {
         )}
       </div>
 
-      {/* 在途条是入库流程的"点卡片接着干"，出库模式不摆在眼前；测试扫码框两边都留着 */}
-      {!focusMode && !outboundMode && <OpenOrdersBar activeNo={orderNo} onPick={(no) => goOrder(no)} />}
-      {/* 测试扫码框（站点参数 `scan_test_input`，默认关）：没有扫码枪的机器上贴一串票面码
-          按回车，走的正是扫码枪那条同一个 `handleScan`；专注态里也留着，演示常在全屏档下讲流程 */}
+      {/* 在途作业已进网格成为一块面板（bodies.open），底部不再挂横条 */}
+      {/* 测试扫码框暂时不对外展示，整段注释（组件、站点参数、handleScan 那条通路都原样留着，
+          放开这段 + settings-catalog 里那行参数就回来了）：
       {scanTestInput && (
         <ScanTestBar onScan={(raw) => void handleScan(raw)} disabled={regOpen || settleNo != null || payNo != null || outboundForm.open} />
       )}
+      */}
       {/* 专注层是 fixed inset-0，会把 AppShell 那条常驻设备状态条整个盖住；设备故障是现场最高频问题，
           抬头就得看见，所以覆盖层底部补挂一份纯展示的（闸门与读卡探测仍只有被盖住的那份在跑） */}
       {focusMode && <DeviceStatusStrip />}
@@ -1258,7 +1297,7 @@ export function WorkstationPage() {
               render={
                 <Button
                   size="icon-sm"
-                  variant="outline"
+                  variant="ghost"
                   className="bg-background/80 shadow-xs backdrop-blur-xs hover:bg-background"
                   onClick={toggleFocusMode}
                   aria-label="退出专注（Esc / F11）"

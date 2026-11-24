@@ -150,7 +150,7 @@ export function WeighOrderSheet({
         <Line label="皮重" v={weight(order.tare_weight_01kg)} />
         <Line label="净重" v={weight(order.net_weight_01kg)} />
         <div className="grid grid-cols-4 border-t border-black/60">
-          <Line label="袋重" v={weight(order.package_deduct_01kg)} />
+          <Line label="默认扣包" v={weight(order.package_deduct_01kg)} />
           <Line label="扣水" v={weight(order.moisture_deduct_01kg)} />
           <Line label="扣杂" v={weight(order.impurity_deduct_01kg)} />
           <Line label="其他扣" v={weight(order.other_deduct_01kg)} />

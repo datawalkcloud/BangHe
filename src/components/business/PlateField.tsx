@@ -9,11 +9,9 @@
  * 点选只是新增通路，原来怎么敲还怎么敲；落库口径不变：仍是 `vehicle.vehicle_no`
  * 那串文本，字母自动转大写。
  */
-import { useRef, useState } from "react";
-import { KeyboardIcon } from "lucide-react";
+import { useRef } from "react";
 import { PLATE_ALNUM, PLATE_PROVINCES } from "@/lib/constants";
 import { useSoftKeyboardVisible } from "@/hooks/useSoftKeyboard";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Keypad, KeypadFloat, type KeypadKey } from "@/components/ui/keypad";
 import { cn } from "cn";
@@ -55,12 +53,10 @@ export function PlateField({
   invalid?: boolean;
   "aria-label"?: string;
 }) {
-  const [open, setOpen] = useState(false);
   /** 键阵浮层的锚点：车牌这一格 */
   const host = useRef<HTMLDivElement>(null);
   /** 全局「屏幕软键盘」偏好：关了连展开按钮都不摆，手输照旧 */
   const showPad = useSoftKeyboardVisible();
-  const padOpen = open && showPad;
   /** 连点落在同一次渲染之前：只认闭包里的 `value` 会被后一下覆盖，本地再记一份 */
   const live = useRef(value);
   if (live.current !== value) live.current = value;
@@ -84,7 +80,6 @@ export function PlateField({
   function onAction(a: "backspace" | "clear" | "close") {
     if (a === "backspace") commit(live.current.slice(0, -1));
     else if (a === "clear") commit("");
-    else setOpen(false);
   }
 
   return (
@@ -104,41 +99,33 @@ export function PlateField({
           className={cn(showPad && "pr-14", inputClassName)}
         />
         {showPad && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-pressed={open}
-            title={open ? "收起车牌键盘" : "展开车牌键盘：点省份字定开头，再点字母数字"}
-            onClick={() => setOpen((v) => !v)}
-            className={cn(
+          <KeypadFloat
+            anchor={host}
+            minWidth={380}
+            triggerLabel="车牌"
+            title="展开车牌键盘：点省份字定开头，再点字母数字；也可用真键盘输入"
+            triggerClassName={cn(
               "absolute top-1/2 right-1 -translate-y-1/2 h-6 gap-0.5 px-1.5 text-[11px]",
-              open ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
-            <KeyboardIcon className="size-3.5" />
-            车牌
-          </Button>
+            <Keypad
+              aria-label="车牌省份简称"
+              keys={PROVINCE_KEYS}
+              columns={10}
+              onInsert={(c) => insert(c)}
+              onAction={onAction}
+            />
+            <Keypad
+              aria-label="车牌字母与数字"
+              keys={ALNUM_KEYS}
+              columns={9}
+              onInsert={(c) => insert(c)}
+              onAction={onAction}
+            />
+          </KeypadFloat>
         )}
       </div>
-      {padOpen && (
-        <KeypadFloat anchor={host} minWidth={380} onClose={() => setOpen(false)}>
-          <Keypad
-            aria-label="车牌省份简称"
-            keys={PROVINCE_KEYS}
-            columns={10}
-            onInsert={(c) => insert(c)}
-            onAction={onAction}
-          />
-          <Keypad
-            aria-label="车牌字母与数字"
-            keys={ALNUM_KEYS}
-            columns={9}
-            onInsert={(c) => insert(c)}
-            onAction={onAction}
-          />
-        </KeypadFloat>
-      )}
     </div>
   );
 }

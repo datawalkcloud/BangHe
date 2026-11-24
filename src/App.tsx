@@ -34,7 +34,7 @@ export default function App() {
       >
         <TooltipProvider delay={400}>
           <RouterProvider router={router} />
-          {/* 语音总闸：挂在根上、全应用一份，参数读回来之前本机一律不出声（见 lib/voice-prompt 规矩④） */}
+          {/* 语音总闸：挂在根上、全应用一份。本机偏好或全站默认定下来之前不出声（见 lib/voice-prompt 规矩④） */}
           <VoicePromptSwitch />
           <Toaster position="bottom-right" richColors closeButton />
         </TooltipProvider>
@@ -43,7 +43,7 @@ export default function App() {
   );
 }
 
-/** 把站点参数 `reader_prompt_voice` 同步进语音模块；本身不渲染任何东西 */
+/** 把最终语音开关（本机偏好优先，回落站点参数）同步进语音模块；本身不渲染任何东西 */
 function VoicePromptSwitch() {
   useVoicePromptSwitch();
   return null;

@@ -1159,7 +1159,7 @@ export function DevicesPage() {
                 </div>
                 {readerScanState === "running" ? (
                   <p className="text-xs text-muted-foreground">正在探测本机读卡器…</p>
-                ) : readerProbe?.connected ? (
+                ) : readerProbe?.connected && readerProbe.samId ? (
                   <CallOut tone="success" title="已探测到读卡器，登记后即可联机读卡">
                     <span className="tnum">
                       读卡器编号 {readerProbe.samId ?? "未读到"} · 指纹 {readerProbe.fingerprint ? "支持" : "不支持"}
@@ -1825,7 +1825,9 @@ function CardReaderPanel({ d }: { d: DeviceConfig }) {
       : d.is_mock === 1
         ? "台账里这台机是 Mock：身份证通道回演示卡，IC 通道不造假"
         : lastProbe?.connected
-          ? "设备已打开，SAM 应答正常"
+          ? lastProbe.samId
+            ? "设备已打开，SAM 应答正常"
+            : "设备已打开，但未读到 SAM"
           : "设备未连通";
 
   return (

@@ -406,7 +406,9 @@ export type PrintChannel = "preview" | "pdf_silent" | "raw";
 export const PRINT_CHANNEL: Record<PrintChannel, string> = {
   preview: "窗口预览",
   // 值键沿用 pdf_silent（print_log 的 CHECK 锁死了三个值）；实现已从"导出 PDF"改为
-  // GDI 直打 Windows 打印队列——通道选择器上说的是行为（无预览直打），不是实现细节
+  // GDI 直打 Windows 打印队列——通道选择器上说的是行为（无预览直打），不是实现细节。
+  // 自 issue #4 起它不再是默认路径：队列机（A4 / 241）点打印先开预览框，
+  // 只有磅员在框里亲手选中这一条才跳过浏览器对话框直接进队列。
   pdf_silent: "静默直打",
   raw: "RAW 直连",
 };

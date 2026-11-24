@@ -26,6 +26,13 @@ npx tsc --noEmit --incremental false -p tsconfig.json        # 必须 --incremen
 npx vite build --outDir .scratch/dist-verify --emptyOutDir   # 别清 dist/，会撞沙箱批量删除护栏
 npx esbuild scripts/receipt-code/check.ts --bundle --platform=node --format=cjs \
     --outfile=.scratch/receipt-code.cjs && node .scratch/receipt-code.cjs
+npx esbuild scripts/workstation-layout/check.ts --bundle --platform=node --format=esm \
+    --alias:@/lib/api=./scripts/workstation-layout/stub.js \
+    --alias:@/store/session=./scripts/workstation-layout/stub.js \
+    --alias:react-grid-layout=./scripts/workstation-layout/stub.js \
+    --alias:@tanstack/react-query=./scripts/workstation-layout/stub.js \
+    --alias:sonner=./scripts/workstation-layout/stub.js \
+    --outfile=.scratch/workstation-layout-check.mjs && node .scratch/workstation-layout-check.mjs
 ```
 
 `cargo` 没有工作区根（仓库根没有 `Cargo.toml`），三个 crate 各自独立：

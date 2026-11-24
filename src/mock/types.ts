@@ -85,6 +85,8 @@ export interface GrainVariety {
   reject_moisture_001pct: number | null;
   enabled_indicators: string[];
   default_package_deduct_01kg: number;
+  /** 按比例扣包（0.01%）。非空且 >0 时赢过上一列，见 settle-defaults 的 varietyPackageDeduct01kg */
+  default_package_deduct_001pct: number | null;
   sort_order: number;
   is_active: 0 | 1;
 }

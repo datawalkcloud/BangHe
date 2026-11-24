@@ -345,7 +345,7 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("gross_weight", "毛重", "重量明细", "weight"),
   mk("tare_weight", "皮重", "重量明细", "weight"),
   mk("net_weight", "净重", "重量明细", "weight"),
-  mk("package_deduct", "袋重扣量", "重量明细", "weight"),
+  mk("package_deduct", "默认扣包", "重量明细", "weight"),
   mk("moisture_deduct", "扣水", "重量明细", "weight"),
   mk("impurity_deduct", "扣杂", "重量明细", "weight"),
   mk("other_deduct", "其他扣", "重量明细", "weight"),

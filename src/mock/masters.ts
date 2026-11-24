@@ -142,6 +142,7 @@ export const varieties: GrainVariety[] = VARIETY_SPECS.map((v, i) => ({
   reject_moisture_001pct: v.rejectMoisture,
   enabled_indicators: v.indicators,
   default_package_deduct_01kg: v.pkgDeduct,
+  default_package_deduct_001pct: null,
   sort_order: (i + 1) * 10,
   is_active: 1,
 }));

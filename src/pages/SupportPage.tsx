@@ -9,14 +9,14 @@
  * 这一项原先直接打开「关于」弹窗，两条联系方式缩在信息格子的最后一行——装机现场真要
  * 找人的时候，恰恰是最难扫到的一条。现在独立成页，自上而下：产品与更新（logo / 版本 /
  * 版权 / 官网 / 检查更新，与「关于」同源）→ 微信 / QQ 各占一张大卡片、号码旁就是复制钮
- * → 服务与合作范围 → 支持这个项目（Star、推荐给朋友、反馈与共建）→ 二次开发授权声明。
- * 支持类都是不花钱的方式，也避免把开源免费的产品做成只收钱的单向通道。
+ * → 服务与合作 → 支持这个项目（Star、推荐给朋友、反馈与共建）→ 二次开发授权声明。
+ * 支持类都是推广与共建类的动作，也避免把服务页做成只有收费项目的单向通道。
  *
  * 号码单源在 lib/support.ts；静态站读不到应用常量，site/index.html 的「技术支持」
  * 弹窗里还有一份副本，换号码时两处一起改。
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { AlertTriangleIcon, CircleDollarSignIcon, CopyIcon } from "lucide-react";
+import { AlertTriangleIcon, CopyIcon } from "lucide-react";
 import { toast } from "sonner";
 import { SUPPORT_QQ, SUPPORT_WECHAT } from "@/lib/support";
 import { runningInTauri, updateChannel, type UpdateChannel } from "@/lib/native";
@@ -102,7 +102,7 @@ const GITHUB_ISSUES_URL = `${GITHUB_REPO_URL}/issues`;
 const BROCHURE_URL = `${SITE_URL}/brochure/`;
 
 /** 推荐给朋友的一段话：官网、产品定位与断网可用的特点，复制出去就能直接发 */
-const RECOMMEND_TEXT = `磅禾 · 粮站收粮计量结算系统：开源免费的粮站收粮管理系统，地磅、证卡、化验、结算、票据一台电脑全接，断网可用，数据由企业自己掌握。下载与介绍：${SITE_URL}/#download`;
+const RECOMMEND_TEXT = `磅禾 · 粮站收粮计量结算系统：开源的粮站收粮管理系统，地磅、证卡、化验、结算、票据一台电脑全接，断网可用，数据由企业自己掌握。下载与介绍：${SITE_URL}/#download`;
 
 /**
  * 标准支持之外能承接的合作面。按"服务人员常被问到什么"分组，
@@ -188,9 +188,10 @@ export function SupportPage() {
             </div>
           </div>
           <InfoGrid
-            cols={2}
+            cols={3}
             items={[
               { label: "出品 / 版权", value: conf.bundle.copyright },
+              { label: "软件授权", value: "AGPL-3.0" },
               {
                 label: "官网",
                 value: (
@@ -228,14 +229,7 @@ export function SupportPage() {
         </div>
 
         <section className="flex flex-col gap-3">
-          <SectionTitle>服务与合作范围</SectionTitle>
-          <CallOut
-            tone="warning"
-            icon={<CircleDollarSignIcon className="size-4" />}
-            title="以下均为收费服务项目"
-          >
-            软件本体开源免费（AGPL-3.0），上门安装、定制开发、系统对接、数据迁移、培训运维与硬件配套按项目单独报价。
-          </CallOut>
+          <SectionTitle>服务与合作</SectionTitle>
           <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
             {SCOPE_ITEMS.map((s) => (
               <div key={s.title} className="min-w-0">
@@ -246,17 +240,14 @@ export function SupportPage() {
           </div>
           <InfoGrid
             cols={2}
-            items={[
-              { label: "服务时间", value: "随装机约定" },
-              { label: "软件授权", value: "AGPL-3.0 开源免费，商用可用" },
-            ]}
+            items={[{ label: "服务时间", value: "随装机约定" }]}
           />
           <p className="text-xs text-muted-foreground">具体内容、周期与费用按项目单独商定。</p>
         </section>
 
         <section className="flex flex-col gap-3">
           <SectionTitle>支持这个项目</SectionTitle>
-          <p className="text-xs text-muted-foreground">软件开源免费，下面几件事不花钱，但能让更多粮站用上、也帮我们把产品做得更稳。</p>
+          <p className="text-xs text-muted-foreground">下面这几件事能让更多粮站用上磅禾，也帮我们把产品做得更稳。</p>
           <div className="grid gap-3 md:grid-cols-3">
             <SupportTile title="给项目点个 Star">
               <div className="flex flex-wrap gap-2">
@@ -301,9 +292,6 @@ export function SupportPage() {
               </p>
             </SupportTile>
           </div>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            还有两件小事同样有用：把现场的仪表、打印机型号告诉我们，帮助补齐适配清单；新版本愿意先试用并反馈问题。
-          </p>
         </section>
 
         <CallOut

@@ -15,7 +15,8 @@
  * 留存与留样用自然日、判稳窗口用毫秒。
  */
 import type { AppSetting } from "@/mock/types";
-import { CODE_EXAMPLES } from "@/lib/ticket-code";
+// 只有下面注释掉的测试扫码框那行参数用到，功能放回来时一起放开
+// import { CODE_EXAMPLES } from "@/lib/ticket-code";
 
 /** 目录里的一项 = `AppSetting` 去掉值，再加一份演示值 */
 type CatalogEntry = Omit<AppSetting, "value"> & {
@@ -115,14 +116,16 @@ export const SETTINGS_CATALOG: CatalogEntry[] = [
   },
   {
     key: "reader_prompt_voice", demo: "true", label: "磅房语音提示", group: "weigh", kind: "bool",
-    hint: "放卡提示与工作台的每步结果都念出来；关掉只是这台机不出声，操作不受影响",
+    hint: "全站默认值：放卡提示与工作台每步结果都念出来。各台磅房机页头的「语音开/关」设过之后就以本机为准、互不影响；没设过的机器才按这里走。关掉只是静音，读卡、称重、结算一律不受影响",
   },
-  {
-    // 演示值取 true 是刻意的（库里默认 false）：浏览器里没有扫码枪，这一框是那里唯一的
-    // 扫码入口；桌面装机按库里的真值走，交出去的生产机默认干干净净不出现这一框。
-    key: "scan_test_input", demo: "true", label: "工作台测试扫码框", group: "weigh", kind: "bool",
-    hint: `工作台底部多一个输入框，把票上那行单号（例 ${CODE_EXAMPLES.order}）贴进去按回车，等同扫一下枪；没有扫码枪的机器用这个`,
-  },
+  // 工作台测试扫码框暂时不对外展示：这一行连同 WorkstationPage 里那条渲染一起注释，
+  // 「基础档案 → 参数」里不再出现这颗开关（库里的 scan_test_input 那行留着，改回只需放开本行）。
+  // {
+  //   // 演示值取 true 是刻意的（库里默认 false）：浏览器里没有扫码枪，这一框是那里唯一的
+  //   // 扫码入口；桌面装机按库里的真值走，交出去的生产机默认干干净净不出现这一框。
+  //   key: "scan_test_input", demo: "true", label: "工作台测试扫码框", group: "weigh", kind: "bool",
+  //   hint: `工作台底部多一个输入框，把票上那行单号（例 ${CODE_EXAMPLES.order}）贴进去按回车，等同扫一下枪；没有扫码枪的机器用这个`,
+  // },
 
   { key: "settlement_allow_part_pay", demo: "true", label: "允许挂账（部分付款）", group: "settle", kind: "bool" },
   {

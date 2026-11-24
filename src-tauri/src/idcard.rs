@@ -47,14 +47,61 @@ fn locate_dll(app: &AppHandle) -> Option<PathBuf> {
     cands.into_iter().find(|p| p.exists())
 }
 
-/// 打开设备会话：优先免驱 USB-HID 时序，失败退回常规端口。
-/// 调用方需已持有 `DEV_LOCK`；返回的 `Session` 借用 `sdt`，二者须在同一作用域内
-/// 按“先 sdt 后 session”的顺序声明（session 先于 sdt 析构）。
-fn open_session<'a>(sdt: &'a Sdt) -> Result<Session<'a>, String> {
-    sdt.open_driverfree(port::DRIVER_FREE_HID, false)
-        .or_else(|_| sdt.open_any(&[port::USB_HID, port::AUTO, 1, 2]))
-        .map_err(|e| format!("打开读卡器失败: {e}"))
+/// 现场可能遇到的打开通道，按“免驱优先、老机型兜底”排列。
+///
+/// **不能只看 `InitComm` 的返回值**：客户新采购的 iDR210 上 `InitComm(1001)` 会返回 1，
+/// 但随后 SAM 与读卡全无应答——端口打开了，设备却没真在说话。按这个顺序逐条试：
+/// 问到 SAM 才算真正联机（status），读卡则试到读出为止（read）。
+#[derive(Clone, Copy, Debug)]
+enum OpenChannel {
+    /// 免驱 USB-HID：`setTransWay(2)` + `InitComm(1001)`
+    DriverFree,
+    /// 同上但开双通道（HIDAB / iDR223 一类）
+    DriverFreeDual,
+    /// `SelectUSB(0)` + `InitSDTandHIDComm(0)`
+    SdtHid,
+    /// `HIDSelect(0)`：只选中、不开 `InitComm`
+    HidSelect,
+    /// 常规端口：USB-HID(20) / AUTO / COM1 / COM2
+    LegacyPorts,
 }
+
+impl OpenChannel {
+    const ALL: [Self; 5] = [
+        Self::DriverFree,
+        Self::DriverFreeDual,
+        Self::SdtHid,
+        Self::HidSelect,
+        Self::LegacyPorts,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::DriverFree => "免驱HID(1001)",
+            Self::DriverFreeDual => "免驱HID双通道(1001)",
+            Self::SdtHid => "SDT+HID组合",
+            Self::HidSelect => "HIDSelect(0)",
+            Self::LegacyPorts => "常规端口(20/AUTO/COM)",
+        }
+    }
+
+    /// 调用方需已持有 `DEV_LOCK`；返回的 `Session` 借用 `sdt`，二者须在同一作用域内
+    /// 按“先 sdt 后 session”的顺序声明（session 先于 sdt 析构）。
+    fn open<'a>(self, sdt: &'a Sdt) -> Result<Session<'a>, String> {
+        let res = match self {
+            Self::DriverFree => sdt.open_driverfree(port::DRIVER_FREE_HID, false),
+            Self::DriverFreeDual => sdt.open_driverfree(port::DRIVER_FREE_HID, true),
+            Self::SdtHid => sdt.open_sdt_hid(0),
+            Self::HidSelect => sdt.open_hid_select(0),
+            Self::LegacyPorts => sdt.open_any(&[port::USB_HID, port::AUTO, 1, 2]),
+        };
+        res.map_err(|e| format!("{}: 打开失败（{e}）", self.label()))
+    }
+}
+
+/// 一个会话内最多试几轮触发；轮间短歇即可，外层还有 5 条通道，总时长必须可控
+/// （建档弹窗是 350 ms 一轮的常听循环，单次失败不能把窗口卡住几秒）。
+const READ_ROUNDS: usize = 3;
 
 /// 旧照片的存活时间。建档路径是"刷一张卡 → 保存这张档案"，几分钟内走完；
 /// 留到 24 小时是给"读卡后先去补别的字段、晚点再保存"这类现场节奏留余量。
@@ -190,27 +237,58 @@ pub async fn idcard_status(app: AppHandle) -> Result<ReaderStatus, String> {
                 })
             }
         };
-        match Sdt::load(&dll).map_err(|e| e.to_string()).and_then(|sdt| {
-            open_session(&sdt).map(|session| {
-                (
-                    session.sam_id().ok(),
-                    session.is_fingerprint_device(),
-                )
-            })
-        }) {
-            Ok((sam_id, fingerprint)) => Ok(ReaderStatus {
-                connected: true,
-                sam_id,
-                fingerprint,
-                error: None,
-            }),
-            Err(e) => Ok(ReaderStatus {
-                connected: false,
-                sam_id: None,
-                fingerprint: false,
-                error: Some(e),
-            }),
+        let sdt = match Sdt::load(&dll) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(ReaderStatus {
+                    connected: false,
+                    sam_id: None,
+                    fingerprint: false,
+                    error: Some(format!("加载 Sdtapi.dll 失败: {e}")),
+                })
+            }
+        };
+        let mut tried: Vec<String> = Vec::new();
+        let mut opened = false;
+        for ch in OpenChannel::ALL {
+            let session = match ch.open(&sdt) {
+                Ok(s) => s,
+                Err(e) => {
+                    tried.push(e);
+                    continue;
+                }
+            };
+            opened = true;
+            // 有些机型 InitComm 刚返回时 SAM 还没就绪，别一次失败就判死。
+            let mut sam_err = String::new();
+            for _ in 0..3 {
+                match session.sam_id() {
+                    Ok(sam) if !sam.trim().is_empty() => {
+                        return Ok(ReaderStatus {
+                            connected: true,
+                            sam_id: Some(sam),
+                            fingerprint: session.is_fingerprint_device(),
+                            error: None,
+                        })
+                    }
+                    Ok(_) => sam_err = "返回空序列号".into(),
+                    Err(e) => sam_err = e.to_string(),
+                }
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            tried.push(format!("{}: SAM {}", ch.label(), sam_err));
         }
+        let detail = tried.join("；");
+        Ok(ReaderStatus {
+            connected: false,
+            sam_id: None,
+            fingerprint: false,
+            error: Some(if opened {
+                format!("端口已打开但 SAM 序列号无应答（{detail}）。可能是 SDK 与机型不匹配，请先用厂商工具复核，或在设备配置里换用配套 Sdtapi.dll。")
+            } else {
+                format!("打开读卡器失败（{detail}）")
+            }),
+        })
     })
     .await
     .map_err(|e| format!("状态查询任务失败: {e}"))?
@@ -255,9 +333,97 @@ impl IdCardInfo {
     }
 }
 
-/// 读身份证。`with_photo=true` 时让 DLL 把照片落进复用的工作目录，读到卡后由 [`archive_photo`]
-/// **搬**进本次读卡专属的目录再回传路径（24 小时后被清理）；取照失败一律降级成"这张卡没照片"，
-/// 读卡本身照常成功。免驱版需先 `authenticate()` 触发射频再读，这里重试若干次。
+/// 在当前会话上读一张卡。带照与不带照是**同一次读卡的两种取法**，不是两种结果：
+/// `ReadBaseInfosPhoto` 走照片解码 DLL（04 §3.5-3 版本不配套就失败），一旦出错就退回
+/// `ReadBaseInfos` 把文字信息读全；取不到照片只是少一张档案人像，读卡本身照常成功。
+fn read_card_once(
+    session: &Session<'_>,
+    photo_dirs: Option<(&Path, &Path)>,
+) -> Result<IdCardInfo, String> {
+    let mut photo_degraded: Option<String> = None;
+    let res = match photo_dirs {
+        Some((_, work)) => session
+            .read_id_card_with_photo(&work.display().to_string())
+            .or_else(|e| {
+                photo_degraded = Some(e.to_string());
+                session.read_id_card().map_err(|e2| e2.to_string())
+            }),
+        None => session.read_id_card().map_err(|e| e.to_string()),
+    };
+    if let Some(e) = photo_degraded {
+        eprintln!("[身份证] 本轮未取到卡面照片（读卡照常）: {e}");
+    }
+    let id = res?;
+    // 照片必须先离开复用目录：留在原地就会被下一个人的证件照覆盖掉
+    let archived = match photo_dirs {
+        Some((root, work)) => archive_photo(root, work),
+        None => None,
+    };
+    Ok(IdCardInfo {
+        ok: true,
+        name: id.name,
+        gender: id.gender,
+        nation: id.nation,
+        birth: id.birth,
+        id_number: id.id_number,
+        address: id.address,
+        agency: id.agency,
+        valid_from: id.valid_from,
+        valid_to: id.valid_to,
+        photo_path: archived.or_else(|| photo_file_ok(id.photo_path.as_deref())),
+        error: None,
+    })
+}
+
+/// 一次会话内的触发顺序：**免驱原厂寻卡优先**，退回原来跑通链路上的 `Authenticate`。
+///
+/// 原链路是 `open_driverfree(1001)` → `Authenticate()` → `ReadBaseInfos()`，本来就是免驱；
+/// `Authenticate` 只是 SDK 的通用便捷卡认证口，不是"有驱动/部标版专属"。这里把免驱
+/// 专用的 `Routon_StartFindIDCard` 提到第一位：客户新买的 iDR210 上前者恒返回 0，
+/// 只靠它会把一台好机器误判成没放卡。两种都试，任何一条读出即收工。
+fn read_with_session(
+    session: &Session<'_>,
+    photo_dirs: Option<(&Path, &Path)>,
+) -> Result<IdCardInfo, String> {
+    let mut last = String::new();
+    for round in 0..READ_ROUNDS {
+        let triggered = if round % 2 == 0 {
+            let code = session.find_id_card();
+            if code == 1 {
+                true
+            } else {
+                last = format!("Routon_StartFindIDCard 返回 {code}");
+                false
+            }
+        } else {
+            match session.authenticate() {
+                Ok(true) => true,
+                Ok(false) => {
+                    last = "Authenticate 返回 0（未检测到卡）".into();
+                    false
+                }
+                Err(e) => {
+                    last = format!("Authenticate: {e}");
+                    false
+                }
+            }
+        };
+        if triggered {
+            match read_card_once(session, photo_dirs) {
+                Ok(info) => return Ok(info),
+                Err(e) => last = e,
+            }
+        }
+        if round + 1 < READ_ROUNDS {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    Err(last)
+}
+
+/// 读身份证。`with_photo=true` 时让 DLL 把照片落进复用的工作目录，读到后由 [`archive_photo`]
+/// **搬**进本次读卡专属的目录再回传路径（24 小时后被清理）。
+/// 逐条尝试所有打开通道与两种寻卡触发，失败时把每步的返回码带回来供现场排障。
 #[command]
 pub async fn idcard_read(app: AppHandle, with_photo: Option<bool>) -> Result<IdCardInfo, String> {
     let want_photo = with_photo.unwrap_or(false);
@@ -271,10 +437,6 @@ pub async fn idcard_read(app: AppHandle, with_photo: Option<bool>) -> Result<IdC
             Ok(s) => s,
             Err(e) => return Ok(IdCardInfo::failed(format!("加载 Sdtapi.dll 失败: {e}"))),
         };
-        let session = match open_session(&sdt) {
-            Ok(s) => s,
-            Err(e) => return Ok(IdCardInfo::failed(e)),
-        };
 
         let photo_dirs = if want_photo {
             match staging_root(&app).and_then(|root| work_photo_dir(&root).map(|w| (root, w))) {
@@ -287,53 +449,26 @@ pub async fn idcard_read(app: AppHandle, with_photo: Option<bool>) -> Result<IdC
         } else {
             None
         };
+        let photo_ref = photo_dirs.as_ref().map(|(r, w)| (r.as_path(), w.as_path()));
 
-        for _ in 0..5 {
-            if session.authenticate().unwrap_or(false) {
-                // 带照与不带照是**同一次读卡的两种取法**，不是两种结果：`ReadBaseInfosPhoto`
-                // 走的是照片解码 DLL（04 §3.5-3 版本不配套就失败），一旦它出错就退回
-                // `ReadBaseInfos` 把文字信息读全。取不到照片只是少一张档案人像，
-                // 读卡本身该成的绝不能被它带崩。
-                let mut photo_degraded: Option<String> = None;
-                let res = match &photo_dirs {
-                    Some((_, work)) => session
-                        .read_id_card_with_photo(&work.display().to_string())
-                        .or_else(|e| {
-                            photo_degraded = Some(e.to_string());
-                            session.read_id_card().map_err(|e2| e2.to_string())
-                        }),
-                    None => session.read_id_card().map_err(|e| e.to_string()),
-                };
-                if let Some(e) = photo_degraded {
-                    eprintln!("[身份证] 本轮未取到卡面照片（读卡照常）: {e}");
+        let mut failures: Vec<String> = Vec::new();
+        for ch in OpenChannel::ALL {
+            let session = match ch.open(&sdt) {
+                Ok(s) => s,
+                Err(e) => {
+                    failures.push(e);
+                    continue;
                 }
-                if let Ok(id) = res {
-                    // 照片必须先离开复用目录：留在原地就会被下一个人的证件照覆盖掉
-                    let archived = match &photo_dirs {
-                        Some((root, work)) => archive_photo(root, work),
-                        None => None,
-                    };
-                    return Ok(IdCardInfo {
-                        ok: true,
-                        name: id.name,
-                        gender: id.gender,
-                        nation: id.nation,
-                        birth: id.birth,
-                        id_number: id.id_number,
-                        address: id.address,
-                        agency: id.agency,
-                        valid_from: id.valid_from,
-                        valid_to: id.valid_to,
-                        photo_path: archived.or_else(|| photo_file_ok(id.photo_path.as_deref())),
-                        error: None,
-                    });
-                }
+            };
+            match read_with_session(&session, photo_ref) {
+                Ok(info) => return Ok(info),
+                Err(e) => failures.push(format!("{}: {e}", ch.label())),
             }
-            std::thread::sleep(std::time::Duration::from_millis(300));
         }
-        Ok(IdCardInfo::failed(
-            "未检测到身份证，请把卡贴紧感应区后重试".into(),
-        ))
+        Ok(IdCardInfo::failed(format!(
+            "未检测到身份证，请把卡贴紧感应区后重试（已试：{}）",
+            failures.join("；")
+        )))
     })
     .await
     .map_err(|e| format!("读卡任务失败: {e}"))?
@@ -360,6 +495,52 @@ pub struct IcCardInfo {
     pub sn: String,
     pub blocks: Vec<IcBlock>,
     pub error: Option<String>,
+}
+
+/// 在当前会话上读一次 Mifare：寻卡 + 卡号 + 按给定密钥读若干块。
+fn read_ic_once(session: &Session<'_>, key: &[u8; 6], blocks: &[[i32; 2]]) -> IcCardInfo {
+    let fail = |e: String| IcCardInfo {
+        ok: false,
+        kind_code: 0,
+        kind_label: String::new(),
+        sn: String::new(),
+        blocks: vec![],
+        error: Some(e),
+    };
+    match session.ic_find() {
+        Ok(Some(card)) => {
+            let mut out = Vec::new();
+            for [sec, blk] in blocks {
+                let _ = session.ic_request(); // 读块前只寻卡激活，避免 halt
+                match session.ic_read_block(*sec, *blk, KeyType::KeyA, key) {
+                    Ok(data) => out.push(IcBlock {
+                        sector: *sec,
+                        block: *blk,
+                        ok: true,
+                        hex: hex_str(&data),
+                        error: None,
+                    }),
+                    Err(e) => out.push(IcBlock {
+                        sector: *sec,
+                        block: *blk,
+                        ok: false,
+                        hex: String::new(),
+                        error: Some(e.to_string()),
+                    }),
+                }
+            }
+            IcCardInfo {
+                ok: true,
+                kind_code: card.kind_code,
+                kind_label: card.kind_label().to_string(),
+                sn: card.sn,
+                blocks: out,
+                error: None,
+            }
+        }
+        Ok(None) => fail("未找到 IC 卡（放一张 13.56MHz Mifare 卡贴紧）".into()),
+        Err(e) => fail(format!("寻卡失败: {e}")),
+    }
 }
 
 /// 读 Mifare IC 卡：寻卡 + 卡号 + 用给定密钥读若干块。
@@ -397,45 +578,22 @@ pub async fn ic_read(
             Ok(s) => s,
             Err(e) => return Ok(fail(format!("加载 Sdtapi.dll 失败: {e}"))),
         };
-        let session = match open_session(&sdt) {
-            Ok(s) => s,
-            Err(e) => return Ok(fail(e)),
-        };
-
-        match session.ic_find() {
-            Ok(Some(card)) => {
-                let mut out = Vec::new();
-                for [sec, blk] in blocks {
-                    let _ = session.ic_request(); // 读块前只寻卡激活，避免 halt
-                    match session.ic_read_block(sec, blk, KeyType::KeyA, &key) {
-                        Ok(data) => out.push(IcBlock {
-                            sector: sec,
-                            block: blk,
-                            ok: true,
-                            hex: hex_str(&data),
-                            error: None,
-                        }),
-                        Err(e) => out.push(IcBlock {
-                            sector: sec,
-                            block: blk,
-                            ok: false,
-                            hex: String::new(),
-                            error: Some(e.to_string()),
-                        }),
-                    }
+        let mut failures: Vec<String> = Vec::new();
+        for ch in OpenChannel::ALL {
+            let session = match ch.open(&sdt) {
+                Ok(s) => s,
+                Err(e) => {
+                    failures.push(e);
+                    continue;
                 }
-                Ok(IcCardInfo {
-                    ok: true,
-                    kind_code: card.kind_code,
-                    kind_label: card.kind_label().to_string(),
-                    sn: card.sn,
-                    blocks: out,
-                    error: None,
-                })
+            };
+            let info = read_ic_once(&session, &key, &blocks);
+            if info.ok {
+                return Ok(info);
             }
-            Ok(None) => Ok(fail("未找到 IC 卡（放一张 13.56MHz Mifare 卡贴紧）".into())),
-            Err(e) => Ok(fail(format!("寻卡失败: {e}"))),
+            failures.push(format!("{}: {}", ch.label(), info.error.unwrap_or_default()));
         }
+        Ok(fail(format!("未读到 IC 卡（{}）", failures.join("；"))))
     })
     .await
     .map_err(|e| format!("IC 卡任务失败: {e}"))?

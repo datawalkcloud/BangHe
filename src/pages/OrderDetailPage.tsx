@@ -3,8 +3,9 @@
  *
  * 这张页面的存在理由只有一个：迎检与纠纷。所以它不做任何"美化"，
  * 而是把 谁在什么时间以什么来源留下了什么数字 完整摊开：
- *   基本信息 → 重量轨迹（含被弃用的读数）→ 化验指标 → 结算明细
- *   → 附件墙 → 打印记录 → 全链路时间轴
+ *   概览（基本信息 / 重量与扣重 / 化验结果）/ 结算 / 称重轨迹（含被弃用的读数）/ 现场附件 /
+ *   打印记录 / 全链路时间轴，全部按标签页收纳；迎检时按主题一点就到，数据一样不删，
+ *   异常与人工干预提示仍在页顶常驻，不随标签页切走。
  *
  * 页面上只有四处写操作：「作废」**任何状态都能点**、不需要授权、只需填明事由留痕
  *  （已结算的单作废时会连带撤销它那张结算单，弹窗里提前说破，见 02 §F2.3）；「定价 / 改价」
@@ -32,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -530,6 +532,18 @@ export function OrderDetailBody({
             </CallOut>
           )}
 
+          {/* 整页信息按主题分标签页：概览（基本/重量/化验）/ 结算 / 称重轨迹 / 附件 / 打印 / 时间轴。
+              迎检时一点就到，不再一屏铺七张卡；异常提示仍留在页顶，不随标签页切走。 */}
+          <Tabs defaultValue="overview" className="gap-2">
+            <TabsList variant="line" className="h-auto max-w-full flex-wrap justify-start">
+              <TabsTrigger value="overview" className="flex-none text-xs">概览</TabsTrigger>
+              <TabsTrigger value="settle" className="flex-none text-xs">结算</TabsTrigger>
+              <TabsTrigger value="records" className="flex-none text-xs">称重轨迹</TabsTrigger>
+              <TabsTrigger value="photos" className="flex-none text-xs">现场附件</TabsTrigger>
+              <TabsTrigger value="prints" className="flex-none text-xs">打印记录</TabsTrigger>
+              <TabsTrigger value="timeline" className="flex-none text-xs">全链路时间轴</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="flex flex-col gap-4">
           <div className="grid items-start gap-4 xl:grid-cols-2">
             <Card size="sm">
               <CardHeader>
@@ -649,7 +663,7 @@ export function OrderDetailBody({
                     { label: "毛重", value: <span className="tnum">{weight(order.gross_weight_01kg)}</span> },
                     { label: "皮重", value: <span className="tnum">{weight(order.tare_weight_01kg)}</span> },
                     { label: "净重", value: <span className="tnum font-semibold">{weight(order.net_weight_01kg)}</span> },
-                    { label: "包装物", value: <span className="tnum">{weight(order.package_deduct_01kg)} × {order.package_count} 件</span> },
+                    { label: "默认扣包", value: <span className="tnum">{weight(order.package_deduct_01kg)}{order.package_count > 0 ? ` × ${order.package_count} 件` : ""}</span> },
                     { label: "扣水（磅单值）", value: <span className="tnum">{weight(order.moisture_deduct_01kg)}</span> },
                     { label: "扣杂（磅单值）", value: <span className="tnum">{weight(order.impurity_deduct_01kg)}</span> },
                     { label: "其他扣重", value: <span className="tnum">{weight(order.other_deduct_01kg)}</span> },
@@ -679,27 +693,6 @@ export function OrderDetailBody({
               </CardContent>
             </Card>
           </div>
-
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm">
-                称重轨迹
-                <span className="font-normal text-xs text-muted-foreground">
-                  共 {records.length} 次读数，含被弃用记录
-                </span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <DataTable
-                columns={recordCols}
-                rows={records}
-                rowKey={(r) => r.id}
-                dense
-                defaultPageSize={50}
-                empty={<EmptyState title="本单尚无称重读数" description="若车辆已上过磅，说明读数未捕获成功，需在工作台重新捕获。" />}
-              />
-            </CardContent>
-          </Card>
 
           <div className="grid items-start gap-4 xl:grid-cols-2">
             <Card size="sm">
@@ -789,7 +782,10 @@ export function OrderDetailBody({
                 )}
               </CardContent>
             </Card>
+          </div>
+            </TabsContent>
 
+            <TabsContent value="settle" className="flex flex-col gap-4">
             <Card size="sm" className="relative">
               <CardHeader>
                 <CardTitle className="text-sm">结算与付款</CardTitle>
@@ -887,9 +883,32 @@ export function OrderDetailBody({
                 <PaidStamp label={PAYMENT_STATUS.paid.label} paidFen={order.paid_amount_fen} paidAt={order.paid_at} />
               )}
             </Card>
-          </div>
+            </TabsContent>
 
-          <div className="grid items-start gap-4 xl:grid-cols-2">
+            <TabsContent value="records" className="flex flex-col gap-4">
+              <Card size="sm">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    称重轨迹
+                    <span className="font-normal text-xs text-muted-foreground">
+                      共 {records.length} 次读数，含被弃用记录
+                    </span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <DataTable
+                    columns={recordCols}
+                    rows={records}
+                    rowKey={(r) => r.id}
+                    dense
+                    defaultPageSize={50}
+                    empty={<EmptyState title="本单尚无称重读数" description="若车辆已上过磅，说明读数未捕获成功，需在工作台重新捕获。" />}
+                  />
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+          <TabsContent value="photos" className="flex flex-col gap-4">
             <Card size="sm">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm">
@@ -913,7 +932,9 @@ export function OrderDetailBody({
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
 
+          <TabsContent value="prints" className="flex flex-col gap-4">
             <Card size="sm">
               <CardHeader>
                 <CardTitle className="text-sm">打印记录</CardTitle>
@@ -956,19 +977,22 @@ export function OrderDetailBody({
                 </p>
               </CardContent>
             </Card>
-          </div>
+          </TabsContent>
 
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle className="text-sm">
-                全链路时间轴
-                <span className="ml-2 font-normal text-xs text-muted-foreground">每一步都带署名与时刻</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <DocTimeline events={timeline} />
-            </CardContent>
-          </Card>
+          <TabsContent value="timeline" className="flex flex-col gap-4">
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle className="text-sm">
+                  全链路时间轴
+                  <span className="ml-2 font-normal text-xs text-muted-foreground">每一步都带署名与时刻</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <DocTimeline events={timeline} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+          </Tabs>
         </div>
       </div>
 

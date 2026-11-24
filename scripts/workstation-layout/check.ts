@@ -2,7 +2,7 @@
  * 磅房工作台布局的无头自检（05 §4.1「脏值」「后加面板」两行）。
  *
  * 为什么单独留这一份：`parseDoc` / `stringifyDoc` 是纯函数，但它管的是"别人排好的界面会不会被
- * 我们悄悄重排"。这类回归在界面上当场看不出来，只在下一次开机时爆——用户拖了半天的布局被打回三栏。
+ * 我们悄悄重排"。这类回归在界面上当场看不出来，只在下一次开机时爆——用户拖了半天的布局被打回默认。
  * 前端没有测试运行器，也不必为此装一套：用 vite 自带的 esbuild 打成 node 能跑的脚本即可。
  *
  *   npx esbuild scripts/workstation-layout/check.ts --bundle --platform=node --format=esm ^
@@ -11,7 +11,7 @@
  *     --alias:react-grid-layout=./scripts/workstation-layout/stub.js ^
  *     --alias:@tanstack/react-query=./scripts/workstation-layout/stub.js ^
  *     --alias:sonner=./scripts/workstation-layout/stub.js ^
- *     --outfile=.tmp-check.mjs && node .tmp-check.mjs
+ *     --outfile=.scratch/workstation-layout-check.mjs && node .scratch/workstation-layout-check.mjs
  *
  * `stub.js` 只顶掉那几个"一 import 就要碰 Tauri / DOM"的模块，被检的函数本身不依赖它们。
  * 唯一被简化的是 react-grid-layout 的 `verticalCompactor`（落库前那道挤开逻辑）：真实网格在屏幕上跑，
@@ -47,7 +47,7 @@ const oldFull = JSON.stringify({
 const a = parseDoc(oldFull);
 ok(
   "A 老排布四格几何原样（一格都没动）",
-  geom(a, "tare") === "0,0,3,24" && geom(a, "camera") === "3,0,6,7" && geom(a, "weigh") === "3,7,6,11" && geom(a, "qc") === "3,18,6,6" && a.items.length === 5,
+  geom(a, "tare") === "0,0,3,24" && geom(a, "camera") === "3,0,6,7" && geom(a, "weigh") === "3,7,6,11" && geom(a, "qc") === "3,18,6,6" && a.items.length === 6,
   a.items,
 );
 ok("A 新面板对老用户默认收起", a.hidden.includes("identity") && visible(a).join() === "camera,qc,tare,weigh", a.hidden);
@@ -72,10 +72,25 @@ const c1 = parseDoc(stringifyDoc(b));
 const c2 = parseDoc(stringifyDoc(c1));
 ok("C 二次往返逐字稳定", JSON.stringify(c1) === JSON.stringify(c2) && c1.hidden.includes("identity"), { c1, c2 });
 
-/* D. 新账号（库里没值）走默认排布，新面板一进来就在位 */
+/* D. 新账号（库里没值）走默认排布，六个面板一进来都在位 */
 const d = parseDoc(null);
-ok("D 默认排布含五格且身份与制单可见", d.items.length === 5 && !d.hidden.includes("identity") && geom(d, "identity") === "0,0,3,14", d);
-ok("D 默认排布五块互不压字（面板注册表与默认格位自洽）", PANELS.length === 5 && JSON.stringify(defaultDoc().hidden) === "[]");
+ok("D 默认排布含六格且身份与制单可见", d.items.length === 6 && d.hidden.length === 0 && geom(d, "identity") === "2,0,3,16", d);
+ok("D 默认排布六块互不压字（面板注册表与默认格位自洽）", PANELS.length === 6 && JSON.stringify(defaultDoc().hidden) === "[]");
+
+/* D2. 默认几何是 2026-11-24 从开发环境站长账号存下的布局固化的，别被顺手改回去 */
+const expectedDefault = {
+  version: 1,
+  items: [
+    { i: "open", x: 0, y: 0, w: 2, h: 24 },
+    { i: "identity", x: 2, y: 0, w: 3, h: 16 },
+    { i: "tare", x: 2, y: 16, w: 3, h: 8 },
+    { i: "weigh", x: 5, y: 0, w: 4, h: 13 },
+    { i: "qc", x: 5, y: 13, w: 4, h: 11 },
+    { i: "camera", x: 9, y: 0, w: 3, h: 10 },
+  ],
+  hidden: [],
+};
+ok("D2 默认几何与开发环境固化的六格逐字一致", JSON.stringify(JSON.parse(stringifyDoc(defaultDoc()))) === JSON.stringify(expectedDefault), stringifyDoc(defaultDoc()));
 
 /* E. 脏值（互相压字）仍整份退回默认——旧闸门不该被新逻辑绕过 */
 const dirty = JSON.stringify({

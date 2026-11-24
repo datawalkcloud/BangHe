@@ -36,7 +36,7 @@ import type { PaymentMethod } from "@/lib/constants";
 import { GRADES, PAYMENT_METHOD } from "@/lib/constants";
 import { money, price as fmtPrice, rmbUpper, ton, weight } from "@/lib/format";
 import { previewSettlement } from "@/lib/calc";
-import { lookupPrice, settleDefaults } from "@/lib/settle-defaults";
+import { lookupPrice, packageDeduct01kg, settleDefaults } from "@/lib/settle-defaults";
 import { actorId, useSession } from "@/store/session";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useQuickOptions, useVarieties } from "@/hooks/useLookups";
@@ -260,7 +260,7 @@ export function SettleForm({
       const next = allVarieties.find((v) => v.id === o.variety_id) ?? null;
       const l = lookupPrice(prices, o.variety_id, grade || null, o.business_date);
       setPrice(l?.price_fen_per_ton ?? null);
-      setPkg(o.package_deduct_01kg ?? next?.default_package_deduct_01kg ?? 0);
+      setPkg(packageDeduct01kg(o, next));
       toast.success(
         `品种已改为「${o.variety_name ?? "未定品种"}」，${
           l ? `单价按价目表重带为 ${fmtPrice(l.price_fen_per_ton)}` : "该品种没有生效价，单价已清空，请手工填价"
@@ -450,7 +450,7 @@ export function SettleForm({
       </div>
 
       <div className="grid grid-cols-2 gap-1 border-y py-1">
-        <WeightField label="袋重（含绳网）" keypad value01kg={pkg || null} onChange={(v) => setPkg(v ?? 0)} />
+        <WeightField label="默认扣包（含绳网）" keypad value01kg={pkg || null} onChange={(v) => setPkg(v ?? 0)} />
         <WeightField
           label={withQcSource("扣水", qcMoisture)}
           keypad

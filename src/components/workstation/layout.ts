@@ -2,7 +2,7 @@
  * 磅房工作台的自定义布局（05 §4.1）。
  *
  * 一句话口径：**排布跟人走，不跟机器走**。磅员把称重区拉成半屏、化验员把化验区挪到
- * 首屏左上、站长保留默认三栏，三个人同一台磅房机互不影响；换个账号登录仍是各自那一套。
+ * 首屏左上、站长保留默认排布，三个人同一台磅房机互不影响；换个账号登录仍是各自那一套。
  * 所以值存 §9.25 `user_preference`（按 user_id + key 一行），而不是 localStorage——
  * 磅房机是轮班共用的，存在本机等于第二天就换个人把他排好的界面覆盖了。
  *
@@ -10,8 +10,8 @@
  *  - **12 列 × 24 行是固定预算**。行高由容器实际高度换算（见 WorkstationGrid），
  *    所以同一份布局在 1080p 和 2K 屏上是同一张脸，只是每块各自长高一点，
  *    不需要"每套分辨率存一份"那类额外状态。
- *  - **存的是 x/y/w/h，单位是格**。默认排布就是原来写死的三栏（3 / 6 / 3 列），
- *    老用户升级后看到的还是熟悉的界面，只是这次能动。
+ *  - **存的是 x/y/w/h，单位是格**。默认排布见 `PANELS` 的 `box`，是 2026-11-24 从开发
+ *    环境里站长账号实际存下的那份布局固化下来的；老用户升级后仍读自己库里那份。
  *
  * 读回来的值一律过 `parseDoc`：键不认识就丢、数字越界就夹、互相压字（手工改脏的 JSON）
  * 整份退回默认。库里的文本可能被旧版本或人写过，宁可退回默认也不能让工作台开不起来——
@@ -54,7 +54,7 @@ export const GRID_MIN_WIDTH = 1280;
 /** 停手多久后落库。太短等于每帧一写，太长会让"拖完马上关窗口"丢掉布局 */
 const SAVE_DEBOUNCE_MS = 400;
 
-export type PanelId = "identity" | "tare" | "camera" | "weigh" | "qc";
+export type PanelId = "identity" | "tare" | "camera" | "weigh" | "qc" | "open";
 
 export interface PanelSpec {
   id: PanelId;
@@ -62,7 +62,7 @@ export interface PanelSpec {
   title: string;
   /** 面板选择菜单里的副文案：这块是干什么的 */
   hint: string;
-  /** 默认格位，就是接真库以前那三栏的样子 */
+  /** 默认格位：没存过偏好的人开箱即用的几何，见 `PANELS` 下的说明 */
   box: { x: number; y: number; w: number; h: number };
   /** 再小就没法用了：称重区要容得下读数，化验区要容得下指标行 */
   min: { w: number; h: number };
@@ -79,15 +79,20 @@ export interface PanelSpec {
 // 「身份与制单」回归常驻格子（原 05 §4 左栏第一格，git f9d407b 之前那张）。
 // 「制单」弹窗（F7 / 刷卡带卡）没有撤：两条入口共用同一个 `IdentityPanel`，
 // 弹窗开着时这一格让位不挂载（同一张读卡器的回读只能被一个实例认领，见 WorkstationPage）。
-// 默认三栏并排（12 列 = 左 4 / 中 5 / 右 3，约 35% / 40% / 25%）：
-// 左列 身份与制单 + 皮重参考 竖排；中列 称重区 + 化验区 竖排；右列 车上磅画面 通高。
+//
+// 默认几何（12 列 × 24 行）于 2026-11-24 从开发环境里站长账号实际保存的
+// `user_preference.workstation.layout` 原样固化：
+//   左 在途作业 x0 w2 通高 24；身份与制单 x2 w3 h16、皮重参考 x2 w3 h16~24；
+//   中 称重区 x5 w4 h13、化验区 x5 w4 h13~24；右 车上磅画面 x9 w3 h10。
+// 改这里的 box 就是改「恢复默认」与未存过偏好账号的开箱布局；已经存过排布的人不受影响。
 export const PANELS: readonly PanelSpec[] = [
   // 后加/回归面板一律带 defaultHidden：老用户库里那份排布按「收起」补进来，不挤动他排好的格子。
-  { id: "identity", title: "身份与制单", hint: "读卡、选农户、取号制单", box: { x: 0, y: 0, w: 4, h: 16 }, min: { w: 2, h: 8 }, defaultHidden: true },
-  { id: "tare", title: "皮重参考", hint: "历史皮重与容差告警", box: { x: 0, y: 16, w: 4, h: 8 }, min: { w: 2, h: 4 } },
-  { id: "weigh", title: "称重区", hint: "读数与捕获", box: { x: 4, y: 0, w: 5, h: 14 }, min: { w: 3, h: 8 } },
-  { id: "qc", title: "化验区", hint: "指标录入与等级判定", box: { x: 4, y: 14, w: 5, h: 10 }, min: { w: 3, h: 5 } },
-  { id: "camera", title: "车上磅画面", hint: "实时预览与上磅抓拍", box: { x: 9, y: 0, w: 3, h: 24 }, min: { w: 3, h: 4 } },
+  { id: "open", title: "在途作业", hint: "手上压着的单，点一张接着干", box: { x: 0, y: 0, w: 2, h: 24 }, min: { w: 2, h: 4 }, defaultHidden: true },
+  { id: "identity", title: "身份与制单", hint: "读卡、选农户、取号制单", box: { x: 2, y: 0, w: 3, h: 16 }, min: { w: 2, h: 8 }, defaultHidden: true },
+  { id: "tare", title: "皮重参考", hint: "历史皮重与容差告警", box: { x: 2, y: 16, w: 3, h: 8 }, min: { w: 2, h: 4 } },
+  { id: "weigh", title: "称重区", hint: "读数与捕获", box: { x: 5, y: 0, w: 4, h: 13 }, min: { w: 3, h: 8 } },
+  { id: "qc", title: "化验区", hint: "指标录入与等级判定", box: { x: 5, y: 13, w: 4, h: 11 }, min: { w: 3, h: 5 } },
+  { id: "camera", title: "车上磅画面", hint: "实时预览与上磅抓拍", box: { x: 9, y: 0, w: 3, h: 10 }, min: { w: 3, h: 4 } },
   // 「凭票与打印」不再是格子面板：出票/补打入口收进第三刷结算弹窗（TicketPrintSection）。
   // 老用户存好的排布里若还留着 "settle" 那一格，sanitize 认不出就静默丢弃，不报错也不重排其余面板。
 ];
@@ -189,7 +194,7 @@ function settle(doc: LayoutDoc): LayoutDoc {
 }
 
 /**
- * 默认排布：老三栏 + 本次版本的所有面板都在位。这里**不**读 `defaultHidden`——
+ * 默认排布：`PANELS` 的 box + 本次版本的所有面板都在位。这里**不**读 `defaultHidden`——
  * 那个标记只管"库里那份老排布别被新面板挤动"（走 `normalize`），
  * 而压根没存过排布的账号第一眼就该看见新面板，不该还要自己去菜单里勾一下。
  */
@@ -333,7 +338,7 @@ export function useWorkstationLayout() {
    * 不然拖一次就把它们悄悄打回默认位。
    * 这里用 `sanitize` 而不是 `normalize`：缩放中间帧压字是常态，把别人挤开是网格
    * 在手势结束时自己做的事，拿读库那道"压字就退回默认"的闸门去卡它，
-   * 等于用户每把一块拖大一点就被打回默认三栏（实测就是这样，看起来像"缩放根本不生效"）。
+   * 等于用户每把一块拖大一点就被打回默认排布（实测就是这样，看起来像"缩放根本不生效"）。
    */
   const applyLayout = useCallback(
     (visible: Layout) => {
@@ -348,7 +353,7 @@ export function useWorkstationLayout() {
   );
   const reset = useCallback(() => {
     commit(defaultDoc());
-    toast.success("已恢复默认三栏");
+    toast.success("已恢复默认布局");
   }, [commit]);
 
   const hidden = doc.hidden;

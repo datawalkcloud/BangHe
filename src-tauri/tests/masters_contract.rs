@@ -53,6 +53,7 @@ fn variety_input(code: &str) -> VarietyInput {
         reject_moisture_001pct: None,
         enabled_indicators: vec!["moisture".into()],
         default_package_deduct_01kg: 0,
+        default_package_deduct_001pct: None,
         sort_order: 90,
         is_active: 1,
     }
@@ -181,6 +182,27 @@ fn a_blank_standard_stays_null_instead_of_becoming_zero() {
     assert_eq!(read.std_moisture_001pct, None, "0 会被读成「国标规定水分 0.00%」");
     assert_eq!(read.std_bulk_density, None);
     assert_eq!(read.category, "主粮", "空类别按未填处理，不能出现一串空白");
+}
+
+#[test]
+fn the_package_deduct_ratio_survives_a_save_and_a_clear() {
+    let conn = db();
+    let mut input = variety_input("PKG1");
+    input.default_package_deduct_01kg = 5;
+    input.default_package_deduct_001pct = Some(250);
+    let saved = save_variety(&conn, &actor(), input).unwrap();
+    assert_eq!(saved.default_package_deduct_001pct, Some(250), "比例读不回来，折算就永远走固定公斤那一支");
+    assert_eq!(saved.default_package_deduct_01kg, 5, "两列并存，谁赢由 `varietyPackageDeduct01kg` 一处判");
+
+    // 界面切回"按公斤"那一档时传的是 null，库里得真的空回来：
+    // 残留的比例会继续赢过公斤数，而档案列表显示的是公斤，两边各说各话
+    let mut back = variety_input("PKG1");
+    back.id = Some(saved.id);
+    back.default_package_deduct_01kg = 5;
+    back.default_package_deduct_001pct = None;
+    let cleared = save_variety(&conn, &actor(), back).unwrap();
+    assert_eq!(cleared.default_package_deduct_001pct, None, "切档必须清掉比例，不能留暗账");
+    assert_eq!(list_varieties(&conn).unwrap().iter().find(|v| v.code == "PKG1").unwrap().default_package_deduct_001pct, None, "列表读路径与保存回执要一致");
 }
 
 #[test]

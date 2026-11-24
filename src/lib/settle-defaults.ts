@@ -15,7 +15,7 @@
  * 注意 `settleDefaults` 里的**默认值一律不是判定**：自动结算照它落库、人工结算框照它铺屏，
  * 人在框里改过的值以人为准（自动那一支没有"人改过"这回事）。
  */
-import { previewSettlement } from "@/lib/calc";
+import { previewSettlement, roundHalfUp } from "@/lib/calc";
 import type { GrainVariety, PriceList, QcReport, WeighOrder } from "@/mock/types";
 
 /**
@@ -53,15 +53,48 @@ export interface SettleDefaults {
 }
 
 /**
+ * 品种默认扣包折算成 0.1kg。**比例与固定公斤的取舍只判这一处**：档案里
+ * `default_package_deduct_001pct` 非空且 > 0 就按比例扣净重，否则用固定公斤数。
+ * 两列谁赢不设开关列——"模式是比例、比例却是空"这种自相矛盾的行判不出来，
+ * 也不该由磅房猜。
+ *
+ * 净重还没定（`null`）时比例算不出数，退回固定公斤：铺进结算框的必须是一个能用的公斤数，
+ * 而不是"等有了净重再算"的第二种状态。
+ *
+ * 折算只发生在**铺默认值**这一刻。磅单上落的、`orders.rs::settle` 校验的、票面印的
+ * 仍是 `package_deduct_01kg` 那个公斤数：比例不进结算公式，也不进票面。
+ */
+export function varietyPackageDeduct01kg(v: GrainVariety | null | undefined, netWeight01kg: number | null): number {
+  if (!v) return 0;
+  const pct = v.default_package_deduct_001pct ?? 0;
+  if (pct > 0 && netWeight01kg != null) return roundHalfUp((netWeight01kg * pct) / 10000);
+  return v.default_package_deduct_01kg ?? 0;
+}
+
+/**
+ * 结算那一格袋重该铺什么。**这里不能照抄上面的 `??` 范式**，它是本文件最容易踩空的一处：
+ * `weigh_order.package_deduct_01kg` 是非空列（0001 建表 `NOT NULL DEFAULT 0`），而全库只有
+ * `orders.rs::settle` 会写它——未结算单上那个 0 是建表默认，不是"磅员说了不扣"。
+ * 从前写的正是 `order.package_deduct_01kg ?? 品种默认`，左边永不为 null，
+ * 于是档案里的「默认扣包」在桌面端一次都没生效过；issue #3 要加的比例档会被同一句话挡住。
+ *
+ * 所以按"结没结算过"分两支：
+ *  - 没结算过：0 就是还没人填，铺品种默认（比例优先，见 `varietyPackageDeduct01kg`）；
+ *  - 已结算：那一格是当场填进账的数，填 0＝不用袋子也照原样读回来，品种插不上手。
+ */
+export function packageDeduct01kg(order: WeighOrder, variety: GrainVariety | null): number {
+  if (order.settled_at != null || order.package_deduct_01kg !== 0) return order.package_deduct_01kg;
+  return varietyPackageDeduct01kg(variety, order.net_weight_01kg);
+}
+
+/**
  * 铺一格结算要用的默认值。**两个调用方共用这一份**（见文件头）。
  *
  * 每一条的兜底顺序都是照现场来的：
  *  - 等级：磅单上改判过的（`order.grade`）覆盖化验判定（化验单本身永不改写）；
  *  - 单价：磅单上已落库的价优先——它可能是磅房提前定的，比"此刻的价目表"更权威；
  *  - 扣水/扣杂：磅单上有就用磅单的，没有才拿化验单的（`||` 而不是 `??`：0 在这里就是"没扣"）；
- *  - 袋重：以磅单上记着的为准（哪怕记的是 0＝不用袋子）；`??` 后面那两级是给老数据缺列的
- *    兜底，真库那一列非空，正常取不到——**不要**为了"让它生效"改成 `||`：0 在这里是有效值，
- *    改成 `||` 会让"不用袋子"的单被硬扣一笔品种默认扣量；
+ *  - 袋重：见 `packageDeduct01kg` 那一段，判据与上面几条不同；
  *  - 费用扣款（卸车费、袋钱）没有来源，一律从 0 起。
  */
 export function settleDefaults(
@@ -75,7 +108,7 @@ export function settleDefaults(
   return {
     grade,
     price_fen_per_ton: order.price_fen_per_ton ?? listed?.price_fen_per_ton ?? null,
-    package_deduct_01kg: order.package_deduct_01kg ?? variety?.default_package_deduct_01kg ?? 0,
+    package_deduct_01kg: packageDeduct01kg(order, variety),
     moisture_deduct_01kg: order.moisture_deduct_01kg || qc?.moisture_deduct_01kg || 0,
     impurity_deduct_01kg: order.impurity_deduct_01kg || qc?.impurity_deduct_01kg || 0,
     other_deduct_01kg: order.other_deduct_01kg ?? 0,
@@ -95,8 +128,9 @@ export function settleDefaults(
  * 预估值只用"此刻已经知道的东西"，每一条都对着 `settleDefaults` 的兜底顺序：
  *  - 单价：磅单上已定的价（制单带的挂牌价、或磅房事后改的价）。没有价就没有预估可言，回 null；
  *  - 扣水 / 扣杂：磅单还没记（未结算就是没记）→ 拿**化验建议**；
- *  - 袋重 / 其他扣 / 扣款：磅单现值（未填＝0）。这三项没有别的来源，是结算那一刻人当场填的，
- *    所以预估里也按现值算，票面不把它们标成预估。
+ *  - 袋重 / 其他扣 / 扣款：磅单现值（未结算时那一列还是建表默认的那个 0）。**品种默认扣包
+ *    不在这一支里**：它由 `settleDefaults` 在结算那一刻才铺进框，而票面渲染拿不到品种档案。
+ *    所以配了默认扣包的站点，票面预估会比结算框少扣那一笔——既有口径，不是本次改动带来的。
  *
  * 公式走 `previewSettlement`——与结算框的即时试算**同一份**，绝不另写一套：票面那个预估值与
  * 结算框铺出来的数必须是同一个，否则客户拿着两张纸对不上，比不印更糟。

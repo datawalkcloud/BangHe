@@ -145,7 +145,7 @@ export function AboutDialog({
 
         <UpdatePanel version={version} channel={channel} active={open} />
 
-        <p className="text-xs text-muted-foreground">本项目以 AGPL-3.0 协议开源，免费使用与商用；再分发须以同协议开源。</p>
+        <p className="text-xs text-muted-foreground">本项目以 AGPL-3.0 协议开源，可商用；再分发须以同协议开源。</p>
       </DialogContent>
     </Dialog>
   );

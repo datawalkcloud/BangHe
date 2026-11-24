@@ -13,14 +13,14 @@
  *  - 键阵一律浮在字段旁边（[`KeypadFloat`]），不占版面：工作台一屏挤着称重、化验、
  *    身份三块，内联展开会把下面的字段整个顶走。
  */
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import type * as React from "react";
 import type { ReactNode, RefObject } from "react";
 import { DeleteIcon, KeyboardIcon, XIcon } from "lucide-react";
 import { useSoftKeyboardVisible } from "@/hooks/useSoftKeyboard";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "cn";
 
 export type KeypadAction = "backspace" | "clear" | "close";
@@ -82,30 +82,84 @@ export function Keypad({ keys, onInsert, onAction, columns = 5, className, "aria
 }
 
 /**
- * 键阵悬浮层：官方 Popover 挂在 body 上，贴着输入框摆，不占字段下方的版面。
+ * 键阵浮层 + 它的展开按钮，必须成对挂在同一棵 Popover 下。
  *
  * 用 Popover 是因为工作台与结算页那些区块套着 `overflow-y-auto`，就地渲染会被裁掉半截；
- * 锚点就是输入框容器（点击它不算"点外面"，展开按钮才能自己收尾），
- * `initialFocus={false}` 保证焦点留在输入框里——键阵点了要能接着逐字改。
+ * 锚点就是输入框容器，浮层贴着它摆，不占字段下方的版面。
+ *
+ * **open 交给 base-ui 自己管（非受控）**。早先做过两份受控版本：一是按钮留在 Popover
+ * 外、只挂 `<Popover open>`，base-ui 把展开按钮判成 outside press；二是补上
+ * `PopoverTrigger` + `triggerId`、再用 `requestAnimationFrame` 把焦点抢回输入框。
+ * 两份都在工作台的高频重渲染下出过事（「有时点不出来」/「现在完全不出来」）。
+ * 非受控是 base-ui 的常规用法，trigger 点击与 outside press 全由它自己收口，
+ * 字段不再持 open 状态，也就不存在我们这边 state 与它内部时序打架的余地。
+ *
+ * 焦点：展开按钮是 `tabIndex={-1}` 的 span，点它不抢焦点、不进 Tab 序——
+ * 输入框在点按钮前有焦点的话，物理键盘的数字/字母直接继续落进去；再在
+ * `onOpenChange(true)` 里补一次聚焦，兜住「焦点本在页面别处」的情况。
+ * 键阵按键 `pointerdown` 上 `preventDefault`，同样是同一条不抢焦点的规矩。
  */
 export function KeypadFloat({
   anchor,
   minWidth = 240,
-  onClose,
+  triggerLabel,
+  title,
+  disabled,
+  triggerClassName,
   children,
 }: {
   /** 输入框所在的容器：浮层以它的位置为准 */
   anchor: RefObject<HTMLElement | null>;
   /** 至少多宽。列数多的键阵（车牌 10 列）挤在窄框下面一行放不下 */
   minWidth?: number;
-  onClose: () => void;
+  /** 展开按钮上的文字：车牌 / 键盘 */
+  triggerLabel: string;
+  title?: string;
+  disabled?: boolean;
+  /** 按钮在字段里的定位（车牌框内右侧、数字字段标题行等） */
+  triggerClassName?: string;
   children: ReactNode;
 }) {
+  /**
+   * 展开时把焦点交还给锚点里的输入框。
+   *
+   * 展开按钮是 `tabIndex={-1}` 的 span，点它不抢焦点——所以如果点按钮前输入框
+   * 本来就有焦点，物理键盘自然继续落进去；但如果焦点在页面别处（比如刚切过来
+   * 直接点「车牌」），span 同样不会把焦点带进来，物理键盘就没有落点。所以在
+   * `onOpenChange(true)` 里主动聚焦一次。`initialFocus={false}` 下 base-ui 打开时
+   * 不会自己聚焦任何东西，这里不会跟它抢；`finalFocus={false}` 保证关闭时焦点
+   * 不会被拽回触发元素。
+   */
   return (
-    <Popover modal={false} open onOpenChange={(o) => !o && onClose()}>
+    <Popover modal={false} onOpenChange={(open) => {
+      if (open) {
+        anchor.current?.querySelector("input")?.focus();
+      }
+    }}>
+      <PopoverTrigger
+        nativeButton={false}
+        disabled={disabled}
+        title={title}
+        render={
+          <span
+            tabIndex={-1}
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "xs" }),
+              "cursor-pointer select-none",
+              // PopoverTrigger 自带 aria-expanded，展开态的高亮走它，字段不必再持 open
+              "aria-expanded:bg-secondary aria-expanded:text-foreground",
+              triggerClassName,
+            )}
+          />
+        }
+      >
+        <KeyboardIcon className="size-3.5" />
+        {triggerLabel}
+      </PopoverTrigger>
       <PopoverContent
         anchor={anchor}
         initialFocus={false}
+        finalFocus={false}
         align="start"
         sideOffset={4}
         style={{ minWidth }}
@@ -174,12 +228,10 @@ export function KeypadInput({
   className?: string;
   inputClassName?: string;
 } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange" | "className">) {
-  const [open, setOpen] = useState(false);
   /** 键阵浮层的锚点：输入框这一格 */
   const host = useRef<HTMLDivElement>(null);
   /** 全局「屏幕软键盘」关掉时，这里连展开按钮都不摆——输入框与逐字键入不受影响 */
   const showPad = useSoftKeyboardVisible();
-  const padOpen = open && showPad;
   /**
    * 连点会落在同一次渲染之前：只认闭包里的 `value` 的话，后一下会把前一下覆盖掉，
    * 操作员看到的就是"我明明点了三个数字，怎么只剩一个"。所以自己追一份最新值。
@@ -203,38 +255,29 @@ export function KeypadInput({
           className={cn(inputClassName, showPad && toggleLabel && "pr-16")}
         />
         {showPad && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-pressed={open}
-            onClick={() => setOpen((v) => !v)}
-            title={open ? `收起${toggleLabel}` : `展开${toggleLabel}，点一下出一个字符`}
-            className={cn(
+          <KeypadFloat
+            anchor={host}
+            minWidth={columns * 38}
+            triggerLabel={toggleLabel}
+            title={`展开${toggleLabel}：点一下出一个字符，也可用真键盘输入`}
+            triggerClassName={cn(
               "absolute top-1/2 right-1 -translate-y-1/2 h-6 gap-0.5 rounded px-1.5 text-[11px]",
-              open ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
-            <KeyboardIcon className="size-3.5" />
-            {toggleLabel}
-          </Button>
+            <Keypad
+              aria-label={toggleLabel}
+              keys={keyList}
+              columns={columns}
+              onInsert={(c) => set(appendChar(live.current, c, maxLength))}
+              onAction={(a) => {
+                if (a === "backspace") set(live.current.slice(0, -1));
+                else if (a === "clear") set("");
+              }}
+            />
+          </KeypadFloat>
         )}
       </div>
-      {padOpen && (
-        <KeypadFloat anchor={host} minWidth={columns * 38} onClose={() => setOpen(false)}>
-          <Keypad
-            aria-label={toggleLabel}
-            keys={keyList}
-            columns={columns}
-            onInsert={(c) => set(appendChar(live.current, c, maxLength))}
-            onAction={(a) => {
-              if (a === "backspace") set(live.current.slice(0, -1));
-              else if (a === "clear") set("");
-              else setOpen(false);
-            }}
-          />
-        </KeypadFloat>
-      )}
     </div>
   );
 }

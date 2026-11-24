@@ -38,9 +38,9 @@ const ZH_LANG = /^zh([-_]|$)/i;
 const ANNOUNCE_GAP_MS = 3_000;
 
 /**
- * 站点参数 `reader_prompt_voice` 同步进来的总闸。**未同步前按关处理**：参数还没读回来时不出声，
- * 免得站长明明关掉了开关、弹窗仍抢在参数落地前念一句。写入方只有 `useVoicePromptVoice`
- * （挂在应用根上，一次），别处不许直接改。
+ * 最终出声总闸，由应用根上的 `useVoicePromptSwitch` 唯一一处写入。判据在 `useVoicePrompt.ts`：
+ * 本机偏好显式设过就认本机（每台机器自己静音、互不影响），没设过才回落站点参数
+ * `reader_prompt_voice` 作为全站默认；两者都没就绪前按关处理，免得弹窗抢在真值落地前念一句。
  */
 let enabled = false;
 const lastSpoken = new Map<string, number>();
@@ -63,9 +63,33 @@ if (typeof window !== "undefined" && "speechSynthesis" in window) {
   window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
 }
 
-/** 由 `useVoicePromptVoice` 在站点参数读回来后写入；关掉即这台机彻底不出声 */
+/** 由 `useVoicePromptSwitch` 在真值（本机偏好或站点默认）定下来后写入；关掉即这台机彻底不出声 */
 export function setPromptVoiceEnabled(v: boolean) {
   enabled = v;
+}
+
+/**
+ * 语音开关的本机偏好键。落 `localStorage` 而不是 `user_preference`：Webview2 的用户数据目录按机器/
+ * 按 Windows 用户隔离，同一账号在两台磅房机上有各自的开关，换账号登录也不会把这台机的选择带走。
+ * 与 `banghe.theme.*` 同一类"只作用这台机"的偏好，不进审计、不需要 `setting.write`。
+ *
+ * 三态：`"true"` / `"false"` 是这台机显式选过，null（没存过、或存了脏值）表示"跟随全站默认"。
+ */
+export const VOICE_LOCAL_KEY = "banghe.voice.enabled";
+
+/** 读本机开关；localStorage 被禁/数据损坏时回 null（跟随全站默认），不把界面带崩 */
+export function readVoiceLocal(): boolean | null {
+  try {
+    const raw = window.localStorage.getItem(VOICE_LOCAL_KEY);
+    return raw === "true" ? true : raw === "false" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 写本机开关：只落这台机，成功返回；失败让调用方把错误亮出来，别假装"已经静音了" */
+export function writeVoiceLocal(on: boolean): void {
+  window.localStorage.setItem(VOICE_LOCAL_KEY, on ? "true" : "false");
 }
 
 /** 提示音：两声上行"叮咚"。单声太像系统通知，磅房里容易被直接忽略 */

@@ -30,7 +30,7 @@ import { actorId, useActor, useSession } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { ToneBadge } from "@/components/business/badges";
-import { WeightField } from "@/components/business/NumField";
+import { WeightField, PercentField } from "@/components/business/NumField";
 import { PAGE_CARD, CallOut, EmptyState, InfoGrid, PageHeader, SectionBar } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -107,7 +107,10 @@ interface VarietyForm {
   unsound: string;
   bulkDensity: string;
   rejectMoisture: string;
+  /** 默认扣包按哪种记法（issue #3）：固定公斤 or 净重比例。两列互斥，切档即清另一档 */
+  packageMode: "kg" | "pct";
   package01kg: number | null;
+  packagePct001: number | null;
   indicators: string[];
   sortOrder: string;
   active: boolean;
@@ -127,7 +130,9 @@ function varietyForm(v?: GrainVariety): VarietyForm {
       unsound: "",
       bulkDensity: "",
       rejectMoisture: "",
+      packageMode: "kg",
       package01kg: 0,
+      packagePct001: null,
       indicators: ["moisture", "impurity"],
       sortOrder: "",
       active: true,
@@ -143,7 +148,10 @@ function varietyForm(v?: GrainVariety): VarietyForm {
     unsound: pctText(v.std_unsound_001pct),
     bulkDensity: v.std_bulk_density == null ? "" : String(v.std_bulk_density),
     rejectMoisture: pctText(v.reject_moisture_001pct),
+    // 比例非空且 >0 就按比例档回填，判据与 `varietyPackageDeduct01kg` 折算时那一条同一句
+    packageMode: (v.default_package_deduct_001pct ?? 0) > 0 ? "pct" : "kg",
     package01kg: v.default_package_deduct_01kg,
+    packagePct001: v.default_package_deduct_001pct,
     indicators: v.enabled_indicators.slice(),
     sortOrder: String(v.sort_order),
     active: v.is_active === 1,
@@ -184,7 +192,10 @@ function VarietiesSection() {
         std_unsound_001pct: pctOrNull(form.unsound),
         std_bulk_density: Number(form.bulkDensity) || null,
         reject_moisture_001pct: pctOrNull(form.rejectMoisture),
-        default_package_deduct_01kg: form.package01kg ?? 0,
+        // 两档互斥：切到哪一档，另一档就落回"没用"（0 / NULL）。留着旧值等于在库里埋一笔暗账——
+        // 界面按公斤那一档显示，折算却按还非空的比例那一档走（`varietyPackageDeduct01kg` 比例优先）。
+        default_package_deduct_01kg: form.packageMode === "kg" ? (form.package01kg ?? 0) : 0,
+        default_package_deduct_001pct: form.packageMode === "pct" ? (form.packagePct001 ?? null) : null,
         enabled_indicators: form.indicators,
         sort_order: Number(form.sortOrder) || rows.length + 1,
         is_active: form.active ? 1 : 0,
@@ -228,7 +239,17 @@ function VarietiesSection() {
     { key: "u", header: "不完善粒", align: "right", cell: (v) => <span className="tnum">{percent(v.std_unsound_001pct)}</span> },
     { key: "d", header: "容重基准", align: "right", cell: (v) => <span className="tnum">{density(v.std_bulk_density)}</span> },
     { key: "r", header: "拒收水分", align: "right", cell: (v) => <span className="tnum text-destructive">{percent(v.reject_moisture_001pct)}</span> },
-    { key: "pk", header: "默认扣包", align: "right", cell: (v) => <span className="tnum">{weight(v.default_package_deduct_01kg)}</span> },
+    {
+      key: "pk",
+      header: "默认扣包",
+      align: "right",
+      // 档案里配的是哪一档就显示哪一档：显示成折算前的公斤数会让人以为这车只扣这么多
+      cell: (v) => (
+        <span className="tnum">
+          {(v.default_package_deduct_001pct ?? 0) > 0 ? percent(v.default_package_deduct_001pct) : weight(v.default_package_deduct_01kg)}
+        </span>
+      ),
+    },
     {
       key: "ind",
       header: "检测项目",
@@ -319,8 +340,25 @@ function VarietiesSection() {
             <DecimalField label="不完善粒（%）" decimal value={form.unsound} onChange={(v) => patch({ unsound: v })} />
             <DecimalField label="容重基准（g/L）" value={form.bulkDensity} onChange={(v) => patch({ bulkDensity: v })} />
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">默认扣包</span>
-              <WeightField label="" value01kg={form.package01kg} onChange={(v) => patch({ package01kg: v })} hint="每车固定皮扣" />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">默认扣包</span>
+                <Choose
+                  size="sm"
+                  aria-label="默认扣包记法"
+                  className="w-24"
+                  value={form.packageMode}
+                  onChange={(m) => patch({ packageMode: m })}
+                  options={[
+                    { value: "kg", label: "按公斤" },
+                    { value: "pct", label: "按比例" },
+                  ]}
+                />
+              </div>
+              {form.packageMode === "kg" ? (
+                <WeightField label="" value01kg={form.package01kg} onChange={(v) => patch({ package01kg: v })} hint="每车固定皮扣" />
+              ) : (
+                <PercentField label="" value001pct={form.packagePct001} onChange={(v) => patch({ packagePct001: v })} hint="净重 × 比例" />
+              )}
             </div>
             <div className="flex flex-col gap-1.5 sm:col-span-2">
               <span className="text-xs text-muted-foreground">检测项目（决定化验面板显示哪些指标）</span>

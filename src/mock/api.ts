@@ -686,6 +686,7 @@ export const api = {
       reject_moisture_001pct: input.reject_moisture_001pct ?? null,
       enabled_indicators: input.enabled_indicators ?? ["moisture", "impurity"],
       default_package_deduct_01kg: input.default_package_deduct_01kg ?? 0,
+      default_package_deduct_001pct: input.default_package_deduct_001pct ?? null,
       sort_order: input.sort_order ?? varieties.length + 1,
       is_active: input.is_active ?? 1,
     };

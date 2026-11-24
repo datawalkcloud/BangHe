@@ -118,6 +118,8 @@ pub struct Variety {
     pub reject_moisture_001pct: Option<i64>,
     pub enabled_indicators: Vec<String>,
     pub default_package_deduct_01kg: i64,
+    /// 按比例扣包（0.01% 定点）。非空且 > 0 时它赢过上面那个固定公斤数
+    pub default_package_deduct_001pct: Option<i64>,
     pub sort_order: i64,
     pub is_active: i64,
 }
@@ -221,6 +223,8 @@ pub struct VarietyInput {
     pub enabled_indicators: Vec<String>,
     #[serde(default)]
     pub default_package_deduct_01kg: i64,
+    /// 按比例扣包（0.01% 定点）；留空＝这档不用比例，按上面那个固定公斤数
+    pub default_package_deduct_001pct: Option<i64>,
     #[serde(default)]
     pub sort_order: i64,
     #[serde(default = "enabled")]
@@ -314,7 +318,7 @@ pub struct StaffInput {
 const VARIETY_COLS: &str = "id, code, name, COALESCE(category, ''),
         std_moisture_001pct, std_impurity_001pct, std_unsound_001pct,
         std_bulk_density, reject_moisture_001pct, enabled_indicators_json,
-        default_package_deduct_01kg, sort_order, is_active";
+        default_package_deduct_01kg, default_package_deduct_001pct, sort_order, is_active";
 
 fn map_variety(r: &rusqlite::Row<'_>) -> rusqlite::Result<Variety> {
     let indicators: String = r.get(9)?;
@@ -331,8 +335,9 @@ fn map_variety(r: &rusqlite::Row<'_>) -> rusqlite::Result<Variety> {
         // 脏 JSON 只丢掉指标勾选，不让整个档案页白屏
         enabled_indicators: serde_json::from_str(&indicators).unwrap_or_default(),
         default_package_deduct_01kg: r.get(10)?,
-        sort_order: r.get(11)?,
-        is_active: r.get(12)?,
+        default_package_deduct_001pct: r.get(11)?,
+        sort_order: r.get(12)?,
+        is_active: r.get(13)?,
     })
 }
 
@@ -404,13 +409,15 @@ pub fn save_variety(conn: &Connection, actor: &AuthProfile, input: VarietyInput)
                     std_moisture_001pct = ?4, std_impurity_001pct = ?5, std_unsound_001pct = ?6,
                     std_bulk_density = ?7, reject_moisture_001pct = ?8,
                     enabled_indicators_json = ?9, default_package_deduct_01kg = ?10,
-                    sort_order = ?11, is_active = ?12, updated_at = ?13
-                 WHERE id = ?14 AND deleted_at IS NULL",
+                    default_package_deduct_001pct = ?11,
+                    sort_order = ?12, is_active = ?13, updated_at = ?14
+                 WHERE id = ?15 AND deleted_at IS NULL",
                 params![
                     code, name, input.category,
                     input.std_moisture_001pct, input.std_impurity_001pct, input.std_unsound_001pct,
                     input.std_bulk_density, input.reject_moisture_001pct,
                     indicators, input.default_package_deduct_01kg,
+                    input.default_package_deduct_001pct,
                     input.sort_order, input.is_active, now_iso(), id,
                 ],
             )
@@ -431,14 +438,16 @@ pub fn save_variety(conn: &Connection, actor: &AuthProfile, input: VarietyInput)
                 "INSERT INTO grain_variety (
                     code, name, category, std_moisture_001pct, std_impurity_001pct,
                     std_unsound_001pct, std_bulk_density, reject_moisture_001pct,
-                    enabled_indicators_json, default_package_deduct_01kg, sort_order,
+                    enabled_indicators_json, default_package_deduct_01kg,
+                    default_package_deduct_001pct, sort_order,
                     is_active, created_at)
-                 VALUES (?1, ?2, NULLIF(?3, ''), ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                 VALUES (?1, ?2, NULLIF(?3, ''), ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     code, name, input.category,
                     input.std_moisture_001pct, input.std_impurity_001pct, input.std_unsound_001pct,
                     input.std_bulk_density, input.reject_moisture_001pct,
-                    indicators, input.default_package_deduct_01kg, input.sort_order,
+                    indicators, input.default_package_deduct_01kg,
+                    input.default_package_deduct_001pct, input.sort_order,
                     input.is_active, now_iso(),
                 ],
             )

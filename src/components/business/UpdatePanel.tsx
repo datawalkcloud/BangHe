@@ -6,7 +6,7 @@
  * 这里只负责按通道渲染：商店版说明 / GitHub 版检查-下载-安装 / 浏览器预览说明。
  *
  * 「检查更新」走 tauri-plugin-updater，更新源与验签公钥在 tauri.conf.json 的 plugins.updater。
- * 只做手动检查：磅房机大多不联网，开局自动检查只会先撞一次超时招人烦。
+ * 默认只做手动检查：磅房机大多不联网，开局自动检查只会先撞一次超时招人烦。
  * Windows 下安装器拉起后本程序即退出并自动重启（InstallOptions.restartAfterInstall 默认 true），
  * 所以「安装中」之后前端不用再调重启。
  *
@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { fileSize } from "@/lib/format";
 import { runningInTauri, type UpdateChannel } from "@/lib/native";
 
-type Phase = "idle" | "checking" | "available" | "downloading" | "installing";
+type Phase = "idle" | "checking" | "latest" | "available" | "downloading" | "installing";
 
 /** 命令层回的错误可能是裸字符串（Rust 侧约定），别把 `[object Object]` 弹给人 */
 function errText(e: unknown): string {
