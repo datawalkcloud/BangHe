@@ -43,6 +43,9 @@ name: Release
 #     release job 发完 GitHub Release（含 latest.json 与 release_body.md 两份附件）后，
 #     publish-gitee job 经 go-api 触发 Gitee Go 流水线，由它下载成品、更新 raw 清单、
 #     打 tag 建发行版；失败会让本工作流变红，不靠人肉对账。
+#     发行版两个仓各建一份：banghe-release（按版本翻的下载页）与源码镜像 BangHe
+#     （项目首页「发行版」区直接可见）。BangHe 侧镜像同步滞后、还没有该 tag 时，
+#     流水线会把 tag 从 GitHub 原样取过来推过去。
 #     应用内更新 endpoints 首位仍是 banghe-release 的 raw latest.json（2026-11-19 落地），
 #     已装出去的老客户端不受这次链路调整影响。
 #     一次性配置（Gitee 侧，不在本仓库）：

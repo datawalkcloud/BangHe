@@ -12,17 +12,23 @@ Windows runner，所以 Tauri + NSIS 的构建仍留在 GitHub。
 
 流程（幂等，可重跑）：
   1. 定位目标 tag：TARGET_TAG 环境变量优先，否则取 GitHub「latest release」重定向；
-  2. 从该 GitHub Release 下载 安装包 / latest.json / release_body.md；
+  2. 从该 GitHub Release 下载 安装包 / latest.json / release_body.md（正文缺失时
+     用最小正文兜底——补发 2026-11-25 之前打过 tag 的旧版本会碰到）；
   3. 造 orphan 工作树：版本号包 + 固定名包 + 改写安装包地址的 latest.json + README，
      强推到 datawalkcloud/banghe-release（raw 直链，客户端 endpoints 首位拉的就是它）；
      同一提交上打 tag 并推过去——Gitee 发行版绑 git tag，tag 不在创建接口直接失败；
-  4. 调 scripts/release-notes/gitee_release.py 建/复用发行版并挂附件（含回读校验）；
+  4. 建/复用发行版并挂附件（含回读校验），两个仓各建一次：
+     - datawalkcloud/banghe-release：下载镜像仓，人类按版本翻的入口；
+     - datawalkcloud/BangHe：源码镜像仓，项目首页「发行版」区要能直接看到最新版。
+       镜像同步是手动/滞后的，tag 还没同步过去时从 GitHub 原样取过来推过去
+       （提交与 GitHub 一致，之后的镜像同步不会打架）；
   5. 回读 raw latest.json，确认客户端实际拉的地址已是本次版本。
 
 凭据（Gitee Go 项目级「全局参数」，界面配置，不进仓库）：
   GITEE_TOKEN  必填，私人令牌（projects 权限）
   GITEE_USER   可选，令牌所属账号登录名；缺省用令牌调 /api/v5/user 反查
-其余可用环境变量覆盖：GITEE_OWNER / GITEE_REPO / GITEE_BRANCH / GH_REPO / TARGET_TAG。
+其余可用环境变量覆盖：GITEE_OWNER / GITEE_REPO / GITEE_SRC_REPO / GITEE_BRANCH /
+GH_REPO / TARGET_TAG。
 
 退出码：0 成功或已是对应版本；2 参数/凭据/下载/接口/回读任一环节不对。
 """
@@ -46,6 +52,8 @@ GITEE_HOST = "https://gitee.com"
 
 OWNER = os.environ.get("GITEE_OWNER", "datawalkcloud").strip()
 REPO = os.environ.get("GITEE_REPO", "banghe-release").strip()
+# 源码镜像仓（Gitee Go 流水线所在的仓），发行版在那边也建一份
+SRC_REPO = os.environ.get("GITEE_SRC_REPO", "BangHe").strip()
 BRANCH = os.environ.get("GITEE_BRANCH", "master").strip()
 GH_REPO = os.environ.get("GH_REPO", "datawalkcloud/BangHe").strip()
 TOKEN = os.environ.get("GITEE_TOKEN", "").strip()
@@ -124,7 +132,7 @@ def resolve_tag() -> str:
          "可在 Gitee Go 给这次构建设环境变量 TARGET_TAG=vX.Y.Z 后重跑。")
 
 
-def download(tag: str, name: str, dest: str) -> None:
+def download(tag: str, name: str, dest: str, *, optional: bool = False) -> bool:
     bases = [
         f"https://gh-proxy.com/https://github.com/{GH_REPO}/releases/download/{tag}",
         f"https://github.com/{GH_REPO}/releases/download/{tag}",
@@ -137,8 +145,10 @@ def download(tag: str, name: str, dest: str) -> None:
         if status == 200 and os.path.isfile(dest) and os.path.getsize(dest) > 0:
             size = os.path.getsize(dest)
             log(f"  下载 {name}（{size / 1048576:.1f} MB）← {url}")
-            return
+            return True
         log(f"  下载失败（HTTP {status}）：{url}")
+    if optional:
+        return False
     fail(f"从 GitHub Release {tag} 下载不到 {name}（直连与 gh-proxy 都失败）")
 
 
@@ -170,12 +180,44 @@ def push_user() -> str:
     return "oauth2"
 
 
-def git(*args: str, cwd: str, env: dict | None = None) -> str:
+def git(*args: str, cwd: str, env: dict | None = None, hint: str = "") -> str:
     proc = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True,
                           text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
-        fail(f"git {' '.join(args)} 失败：\n{proc.stderr.strip() or proc.stdout.strip()}")
+        fail(f"git {' '.join(args)} 失败：\n{proc.stderr.strip() or proc.stdout.strip()}{hint}")
     return proc.stdout
+
+
+def ensure_src_tag(repo: str, tag: str, auth: list[str], env: dict) -> None:
+    """源码镜像仓里也得有同一个 tag，发行版才建得起来。
+
+    镜像同步是手动/滞后的，刚发的 tag 多半还没过去。从 GitHub 原样取这个 tag 再推，
+    指向的提交与 GitHub 一致；别推 orphan 里的同名 tag——那会让之后的镜像同步对不上。
+    """
+    src_url = f"{GITEE_HOST}/{OWNER}/{SRC_REPO}.git"
+    if git("ls-remote", src_url, f"refs/tags/{tag}", cwd=repo, env=env).strip():
+        return
+    log(f"{SRC_REPO} 还没有 tag {tag}（镜像未同步），从 GitHub 取过来再推")
+    git("fetch", "-q", "--no-tags", f"https://github.com/{GH_REPO}.git",
+        f"+refs/tags/{tag}:refs/banghe-src/{tag}", cwd=repo, env=env,
+        hint=(f"\n（Gitee 构建机连不上 GitHub：到 Gitee 的 {SRC_REPO} 仓库页点「同步」把 tag"
+              f"带过来，再重跑这条流水线；或给构建配 TARGET_TAG 后重跑）"))
+    git(*auth, "push", "-q", src_url, f"refs/banghe-src/{tag}:refs/tags/{tag}",
+        cwd=repo, env=env)
+    log(f"已把 tag {tag} 推到 {SRC_REPO}")
+
+
+def make_release(repo_name: str, tag: str, version: str, body_path: str, ref: str,
+                 asset: str) -> None:
+    log(f"建/复用 Gitee 发行版 {repo_name} 并挂附件（含回读校验）")
+    proc = subprocess.run(
+        [sys.executable, RELEASE_SCRIPT,
+         "--owner", OWNER, "--repo", repo_name, "--tag", tag, "--version", version,
+         "--title", f"磅禾粮站收粮系统 {version}", "--body-file", body_path,
+         "--ref", ref, "--assets", asset],
+        env={**os.environ, "GITEE_TOKEN": TOKEN})
+    if proc.returncode != 0:
+        fail(f"{repo_name} 的发行版步骤失败（退出码 {proc.returncode}），见上方输出")
 
 
 def build_tree(work: str, exe: str, manifest: dict) -> tuple[str, str]:
@@ -212,7 +254,8 @@ def main() -> None:
     if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         fail(f"tag「{tag}」不是 vX.Y.Z 形态，安装包名与发行版标题会对不齐")
     version = tag[1:]
-    log(f"目标：GitHub {GH_REPO} Release {tag} → Gitee {OWNER}/{REPO}")
+    log(f"目标：GitHub {GH_REPO} Release {tag} → Gitee {OWNER}/{REPO}"
+        + (f" + {OWNER}/{SRC_REPO}" if SRC_REPO and SRC_REPO != REPO else ""))
 
     work = tempfile.mkdtemp(prefix="gitee-publish-")
     try:
@@ -224,7 +267,13 @@ def main() -> None:
         if os.path.getsize(exe) < 1024 * 1024:
             fail(f"下载到的安装包只有 {os.path.getsize(exe)} B，不像安装包本体")
         download(tag, "latest.json", manifest_path)
-        download(tag, "release_body.md", body_path)
+        # 正文缺失只发生在补发旧版本时（release_body.md 是 2026-11-25 才作为附件上传的）
+        if not download(tag, "release_body.md", body_path, optional=True):
+            log("  这次 Release 没有 release_body.md，用最小正文兜底（补发旧版本的情况）")
+            with open(body_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(f"磅禾粮站收粮系统 {version}\n\n"
+                        f"安装包见本页附件；完整更新说明见 GitHub Release：\n"
+                        f"https://github.com/{GH_REPO}/releases/tag/{tag}\n")
 
         try:
             with open(manifest_path, encoding="utf-8") as f:
@@ -270,15 +319,11 @@ def main() -> None:
         git(*auth, "push", "-f", "-q", url, f"refs/tags/{tag}", cwd=repo, env=env)
         log(f"已推 tag {tag}")
 
-        log("建/复用 Gitee 发行版并挂附件（含回读校验）")
-        proc = subprocess.run(
-            [sys.executable, RELEASE_SCRIPT,
-             "--owner", OWNER, "--repo", REPO, "--tag", tag, "--version", version,
-             "--title", f"磅禾粮站收粮系统 {version}", "--body-file", body_path,
-             "--ref", BRANCH, "--assets", asset_path],
-            env={**os.environ, "GITEE_TOKEN": TOKEN})
-        if proc.returncode != 0:
-            fail(f"Gitee 发行版步骤失败（退出码 {proc.returncode}），见上方输出")
+        make_release(REPO, tag, version, body_path, BRANCH, asset_path)
+
+        if SRC_REPO and SRC_REPO != REPO:
+            ensure_src_tag(repo, tag, auth, env)
+            make_release(SRC_REPO, tag, version, body_path, "master", asset_path)
 
         # 客户端 endpoints 首位就是这份 raw latest.json：回读不到版本 = 新版被藏起来
         for _ in range(5):
@@ -286,6 +331,8 @@ def main() -> None:
                 log(f"raw 更新清单已生效：{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}/latest.json"
                     f"（版本 {version}）")
                 log(f"发行版页面：{GITEE_HOST}/{OWNER}/{REPO}/releases/tag/{tag}")
+                if SRC_REPO and SRC_REPO != REPO:
+                    log(f"           {GITEE_HOST}/{OWNER}/{SRC_REPO}/releases/tag/{tag}")
                 return
             time.sleep(3)
         fail(f"raw latest.json 回读不到版本 {version}，客户端会停在旧版")

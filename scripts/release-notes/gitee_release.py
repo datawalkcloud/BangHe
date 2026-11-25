@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""在 Gitee 镜像仓自动创建发行版（Release）并把本次安装包挂成附件。
+"""在 Gitee 仓自动创建发行版（Release）并把本次安装包挂成附件。
 
-前置：调用方（scripts/release-notes/gitee_publish.py，跑在 Gitee Go 流水线里）已经把
-含安装包的 orphan 工作树强推到 Gitee 镜像仓，并给它打上本次 tag 推上去。Gitee 的发行版
+调用方是 scripts/release-notes/gitee_publish.py（跑在 Gitee Go 流水线里），它会先后
+对下载镜像仓 banghe-release 与源码镜像仓 BangHe 各调一次本脚本，两个仓各有一份同
+tag 的发行版。
+
+前置：调用方已经把含安装包的 orphan 工作树强推到 Gitee 下载镜像仓并推上 tag；源码
+镜像仓的 tag 也已确认存在（镜像同步滞后时由调用方从 GitHub 取过来推）。Gitee 的发行版
 绑死 git tag，tag 不在创建接口就直接失败，而 tag 走 git 推比调 /tags 接口稳（那接口对
 ref_name 的口径没有实测依据）。
 
