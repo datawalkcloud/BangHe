@@ -30,8 +30,9 @@ Windows runner，所以 Tauri + NSIS 的构建仍留在 GitHub。
 建完变量还要在流水线里引用才会进构建（.workflow/gitee-publish.yml 的
 variables.global 列表；可视化界面是「编辑流水线 → 变量设置 → 引用变量」）。
 本地手工跑时用 GITEE_TOKEN / GITEE_USER 也行（同名变量优先取 BH_ 前缀的）。
-其余可用环境变量覆盖：GITEE_OWNER / GITEE_REPO / GITEE_SRC_REPO / GITEE_BRANCH /
-GH_REPO / TARGET_TAG。
+其余可用环境变量覆盖：GITEE_OWNER / BH_RELEASE_REPO（发布仓名）/ BH_RELEASE_BRANCH /
+GITEE_SRC_REPO / GH_REPO / TARGET_TAG。注意 Gitee Go 的系统参数 GITEE_REPO（当前仓库
+path，带 /）和 GITEE_BRANCH（本次构建的分支）不能当发布仓名/镜像分支用，脚本不读它们。
 
 退出码：0 成功或已是对应版本；2 参数/凭据/下载/接口/回读任一环节不对。
 """
@@ -54,10 +55,23 @@ UA = "banghe-gitee-publish"
 GITEE_HOST = "https://gitee.com"
 
 OWNER = os.environ.get("GITEE_OWNER", "datawalkcloud").strip()
-REPO = os.environ.get("GITEE_REPO", "banghe-release").strip()
+
+
+def _repo_name() -> str:
+    # Gitee Go 有系统参数 GITEE_REPO（当前仓库 path，形如 owner/name），不能当发布仓名；
+    # 只接受不含 / 的值，否则回落到缺省的 banghe-release。
+    for name in ("BH_RELEASE_REPO", "GITEE_REPO"):
+        val = os.environ.get(name, "").strip()
+        if val and "/" not in val:
+            return val
+    return "banghe-release"
+
+
+REPO = _repo_name()
 # 源码镜像仓（Gitee Go 流水线所在的仓），发行版在那边也建一份
 SRC_REPO = os.environ.get("GITEE_SRC_REPO", "BangHe").strip()
-BRANCH = os.environ.get("GITEE_BRANCH", "master").strip()
+# Gitee Go 的系统参数 GITEE_BRANCH 是本次构建的分支，别拿它当下载镜像仓的分支。
+BRANCH = os.environ.get("BH_RELEASE_BRANCH", "").strip() or "master"
 GH_REPO = os.environ.get("GH_REPO", "datawalkcloud/BangHe").strip()
 
 
