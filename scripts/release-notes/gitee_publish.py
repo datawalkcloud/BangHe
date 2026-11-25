@@ -27,8 +27,8 @@ Windows runner，所以 Tauri + NSIS 的构建仍留在 GitHub。
 凭据（Gitee Go 仓库级「通用变量」，界面配置，不进仓库；名字不能以 GITEE_ 开头）：
   BH_GITEE_TOKEN  必填，私人令牌（projects 权限）
   BH_GITEE_USER   可选，令牌所属账号登录名；缺省用令牌调 /api/v5/user 反查
-建完变量还要在 **编辑流水线 → 变量设置 → 引用变量** 里勾选并保存，引用过的变量
-才会进构建环境；只建变量不引用，环境里什么都不会有。
+建完变量还要在流水线里引用才会进构建（.workflow/gitee-publish.yml 的
+variables.global 列表；可视化界面是「编辑流水线 → 变量设置 → 引用变量」）。
 本地手工跑时用 GITEE_TOKEN / GITEE_USER 也行（同名变量优先取 BH_ 前缀的）。
 其余可用环境变量覆盖：GITEE_OWNER / GITEE_REPO / GITEE_SRC_REPO / GITEE_BRANCH /
 GH_REPO / TARGET_TAG。
@@ -274,10 +274,10 @@ def build_tree(work: str, exe: str, manifest: dict) -> tuple[str, str]:
 
 def main() -> None:
     if not TOKEN:
-        fail("没有 GITEE_TOKEN：通用变量建了不等于生效，还得在「编辑流水线 → 变量设置 → "
-             "引用变量」里勾选 BH_GITEE_TOKEN 并保存，没被引用的变量不会进构建环境。"
-             "路径：Gitee Go → 通用变量 新建（名字不能用 GITEE_ 开头，那是系统保留前缀；值填"
-             "私人令牌，勾 projects 权限）→ 编辑流水线 → 变量设置 → 引用变量 → 保存")
+        fail("没有 GITEE_TOKEN：通用变量建了不等于生效，流水线必须在 variables.global "
+             "列表里引用它（可视化界面里是「编辑流水线 → 变量设置 → 引用变量」，"
+             "保存后写进 YAML 的就是这个列表）——没被引用的变量不会进构建环境。"
+             "见 .workflow/gitee-publish.yml 的 variables.global")
 
     if "${" in TOKEN:
         fail("BH_GITEE_TOKEN 拿到的还是 ${...} 字面量：变量被引用了但值没替换进构建。"
