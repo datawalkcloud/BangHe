@@ -1,0 +1,37 @@
+version: '1.0'
+name: gitee-publish
+displayName: Gitee 发布（下载镜像 + 发行版）
+
+# 这条流水线只负责「把最新一次 GitHub Release 搬到 Gitee」，构建仍在 GitHub
+# （Gitee Go 云端没有 Windows runner，跑不了 Tauri + NSIS）。
+#
+# 触发方式只有两种，故意不配 triggers：
+#   1) GitHub 发完 Release 后经 go-api 触发
+#      （scripts/release-notes/trigger_gitee_pipeline.py）；
+#   2) 在 Gitee Go 页面手动执行（补发/重跑）。
+# 千万别加 push 触发：Gitee 镜像仓每次从 GitHub 同步源码都会推 master，
+# 加了就是每同步一次跑一遍发布。
+#
+# 一次性配置（都在 Gitee 侧，不进仓库）：
+#   Gitee Go → 本项目 → 全局参数：GITEE_TOKEN（私人令牌，勾 projects 权限，
+#   要能推 datawalkcloud/banghe-release 与调 v5 发行版接口）。可选 GITEE_USER
+#   （私人令牌所属账号的登录名；不配则用令牌调 /api/v5/user 反查）。
+#   其余缺省值写死在 scripts/release-notes/gitee_publish.py 里。
+stages:
+  - stage:
+    name: publish
+    displayName: 同步最新 Release 到 Gitee
+    strategy: naturally
+    trigger: auto
+    steps:
+      - step: build@python
+        name: publish_gitee
+        displayName: 推下载镜像 + 建发行版
+        # CentOS 8.3 基础镜像，自带 git；脚本只用标准库，不需要 pip
+        pythonVersion: 3.9
+        commands:
+          - python3 -V
+          - python3 scripts/release-notes/gitee_publish.py
+        notify: []
+        strategy:
+          retry: '0'

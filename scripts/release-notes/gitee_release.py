@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """在 Gitee 镜像仓自动创建发行版（Release）并把本次安装包挂成附件。
 
-前置：release.yml 上一步已经把含安装包的 orphan 工作树强推到 Gitee 镜像仓，并给它
-打上本次 tag 推上去。Gitee 的发行版绑死 git tag，tag 不在创建接口就直接失败，
-而 tag 走 git 推比调 /tags 接口稳（那接口对 ref_name 的口径没有实测依据）。
+前置：调用方（scripts/release-notes/gitee_publish.py，跑在 Gitee Go 流水线里）已经把
+含安装包的 orphan 工作树强推到 Gitee 镜像仓，并给它打上本次 tag 推上去。Gitee 的发行版
+绑死 git tag，tag 不在创建接口就直接失败，而 tag 走 git 推比调 /tags 接口稳（那接口对
+ref_name 的口径没有实测依据）。
 
 接口口径（v5，2026-11-19 实测）：
   - 请求体一律 application/x-www-form-urlencoded; charset=utf-8。官方 swagger 写的是
@@ -28,7 +29,7 @@ GVP 20 GB）。主包 ~7 MB，一次发版一份附件，攒到上限要清老�
 
 退出码：0 成功；2 参数/凭据缺失、接口报错或附件回读对不上（红得明确，不静默跳过）。
 
-用法（CI 里凭据来自 Secret GITEE_TOKEN）：
+用法（跑在 Gitee Go 流水线里，凭据来自项目级全局参数 GITEE_TOKEN；本地可传 --dry-run 核对）：
     GITEE_TOKEN=... python3 scripts/release-notes/gitee_release.py \
         --owner datawalkcloud --repo banghe-release --tag v26.11.19 --version 26.11.19 \
         --title "磅禾粮站收粮系统 26.11.19" --body-file release_body.md \
