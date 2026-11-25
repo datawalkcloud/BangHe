@@ -27,6 +27,8 @@ Windows runner，所以 Tauri + NSIS 的构建仍留在 GitHub。
 凭据（Gitee Go 仓库级「通用变量」，界面配置，不进仓库；名字不能以 GITEE_ 开头）：
   BH_GITEE_TOKEN  必填，私人令牌（projects 权限）
   BH_GITEE_USER   可选，令牌所属账号登录名；缺省用令牌调 /api/v5/user 反查
+建完变量还要在 **编辑流水线 → 变量设置 → 引用变量** 里勾选并保存，引用过的变量
+才会进构建环境；只建变量不引用，环境里什么都不会有。
 本地手工跑时用 GITEE_TOKEN / GITEE_USER 也行（同名变量优先取 BH_ 前缀的）。
 其余可用环境变量覆盖：GITEE_OWNER / GITEE_REPO / GITEE_SRC_REPO / GITEE_BRANCH /
 GH_REPO / TARGET_TAG。
@@ -272,15 +274,15 @@ def build_tree(work: str, exe: str, manifest: dict) -> tuple[str, str]:
 
 def main() -> None:
     if not TOKEN:
-        fail("没有 GITEE_TOKEN：Gitee Go 自带的仓库凭据只用于检出当前仓库（以 git extraheader 注入，"
-             "不是环境变量、也不是可调 OpenAPI 的令牌；这次连 extraheader 里也没解析出凭据），而本"
-             "流水线要推 banghe-release 并调 v5 发行版接口，必须用你自己的私人令牌。到 Gitee Go → "
-             "通用变量 新建 BH_GITEE_TOKEN（名字不能用 GITEE_ 开头，那是系统保留前缀；值填私人令牌，"
-             "勾 projects）并在流水线里绑定，或看 gitee_probe.py 的诊断输出排查")
+        fail("没有 GITEE_TOKEN：通用变量建了不等于生效，还得在「编辑流水线 → 变量设置 → "
+             "引用变量」里勾选 BH_GITEE_TOKEN 并保存，没被引用的变量不会进构建环境。"
+             "路径：Gitee Go → 通用变量 新建（名字不能用 GITEE_ 开头，那是系统保留前缀；值填"
+             "私人令牌，勾 projects 权限）→ 编辑流水线 → 变量设置 → 引用变量 → 保存")
 
     if "${" in TOKEN:
-        fail("BH_GITEE_TOKEN 拿到的还是 ${...} 字面量：Gitee Go 没有把通用变量替换进命令。"
-             "到流水线编辑（图形/代码视图）里确认 BH_GITEE_TOKEN 已建、且已关联/引用到这条流水线")
+        fail("BH_GITEE_TOKEN 拿到的还是 ${...} 字面量：变量被引用了但值没替换进构建。"
+             "到「编辑流水线 → 变量设置 → 引用变量」确认 BH_GITEE_TOKEN 已勾选并保存，"
+             "再在「通用变量」里确认值不是占位符")
 
     tag = resolve_tag()
     if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):

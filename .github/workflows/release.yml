@@ -50,8 +50,9 @@ name: Release
 #     已装出去的老客户端不受这次链路调整影响。
 #     一次性配置（Gitee 侧，不在本仓库）：
 #       1) datawalkcloud/BangHe 已开通 Gitee Go（服务状态 active）；
-#       2) Gitee Go → 本项目 → 全局参数：GITEE_TOKEN（私人令牌，projects 权限；
-#          可选 GITEE_USER 填令牌账号登录名，不配则用令牌反查）；
+#       2) Gitee Go → 通用变量：BH_GITEE_TOKEN（私人令牌，projects 权限；GITEE_ 前缀被
+#          系统保留所以加 BH_；可选 BH_GITEE_USER 填令牌账号登录名，不配则用令牌反查）。
+#          建完还要「编辑流水线 → 变量设置 → 引用变量」勾选并保存，未引用的变量不会进构建；
 #       3) Gitee 镜像仓 master 要同步到含 .workflow/gitee-publish.yml 的提交，
 #          否则触发会报「流水线文件不存在」。
 #

@@ -18,8 +18,10 @@ displayName: Gitee 发布（下载镜像 + 发行版）
 #   Gitee Go → 通用变量：BH_GITEE_TOKEN（私人令牌，勾 projects 权限，要能推
 #   datawalkcloud/banghe-release 与调 v5 发行版接口）。名字不能用 GITEE_ 开头——
 #   那是系统级参数保留前缀。可选 BH_GITEE_USER（私人令牌所属账号的登录名；
-#   不配则用令牌调 /api/v5/user 反查）。其余缺省值写死在
-#   scripts/release-notes/gitee_publish.py 里。
+#   不配则用令牌调 /api/v5/user 反查）。
+#   建完变量必须在「编辑流水线 → 变量设置 → 引用变量」里勾选它们并保存，
+#   没被引用的通用变量不会进构建环境（实测：env 里没有、${} 也不替换）。
+#   其余缺省值写死在 scripts/release-notes/gitee_publish.py 里。
 variables:
   BH_PROBE: probe-value
 stages:
