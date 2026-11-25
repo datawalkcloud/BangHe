@@ -1156,6 +1156,8 @@ export function WorkstationPage() {
             printedCount={outboundPrinted}
             scales={scales}
             switchingScale={switchScale.isPending}
+            captureCams={captureCams}
+            anyCamOnline={anyCamOnline}
             onSelectScale={(code) => switchScale.mutate(code)}
             onPick={setOutboundNo}
             onNew={() => setOutboundForm({ open: true, editing: null })}

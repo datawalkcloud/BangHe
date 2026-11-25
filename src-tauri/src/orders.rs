@@ -1105,7 +1105,9 @@ pub fn load_order_full(conn: &Connection, by_no: &str) -> Result<Option<WeighOrd
 /// 判据是 `attachment`（`biz_type='scale_capture'`、`biz_id=称重记录 id`）——一条记录挂了几张
 /// 就出几格；一条被采纳的记录一张都没有，才补一格「无抓拍」占位（`missing`）。已被复称替换的
 /// 轨迹（`is_adopted=0`）不进墙。
-fn build_capture_wall(conn: &Connection, records: &[WeighRecord]) -> Result<Vec<CapturePhoto>, String> {
+///
+/// 出库侧复用（`outbound::detail`）：出库轨迹与磅单同表（0029），墙的判据一字不差。
+pub(crate) fn build_capture_wall(conn: &Connection, records: &[WeighRecord]) -> Result<Vec<CapturePhoto>, String> {
     let adopted: Vec<&WeighRecord> = records.iter().filter(|r| r.is_adopted == 1).collect();
     if adopted.is_empty() {
         return Ok(Vec::new());
@@ -3236,13 +3238,16 @@ pub async fn order_capture(app: AppHandle, mut input: CaptureInput) -> Result<Op
     let order = write_tx(&app, move |conn, actor| capture(conn, actor, input), FLOOR_ROLES, "称重").await?;
     if want_photo || !frames.is_empty() {
         if let Some(weighed) = order.as_ref() {
-            attach_weigh_photos(&app, weighed, frames).await;
+            // capture() 成功即新增一条轨迹，`records` 按 seq 升序，最后一条就是刚称的那个头
+            if let Some(record) = weighed.records.as_ref().and_then(|rs| rs.last()) {
+                attach_capture_photos(&app, weighed.id, record.id, record.operator_id, &record.weigh_type, frames).await;
+            }
         }
     }
     Ok(order)
 }
 
-/// 过磅抓拍（04 §2.4）：磅单已经提交，这里只往那条称重轨迹上挂图。
+/// 过磅抓拍（04 §2.4）：单据已经提交，这里只往那条称重轨迹上挂图。
 ///
 /// **一次最多 3 台相机各拍一张**（04 §4）：遍历 [`camera::list_capture_cameras`] 拿到勾了
 /// 「过磅抓拍」的相机，逐台分叉取图——本机 USB 摄像头用前端回传的那帧
@@ -3255,14 +3260,19 @@ pub async fn order_capture(app: AppHandle, mut input: CaptureInput) -> Result<Op
 /// 把已经成立的过磅拖回滚、或者把单连接的写事务开足三秒，都是把主次颠倒了（04 §4）。
 /// 于是这里的所有失败都就地降级成"无抓拍"，含"配置非法"那类：原因由 `camera` 写进
 /// `device_config.last_error`，站长在设备中心看得到，不该由一次称重去替它报警。
-async fn attach_weigh_photos(app: &AppHandle, weighed: &WeighOrder, frames: Vec<CaptureFrame>) {
-    // capture() 成功即新增一条轨迹，`records` 按 seq 升序，最后一条就是刚称的那个头
-    let Some(record) = weighed.records.as_ref().and_then(|rs| rs.last()) else {
-        return;
-    };
+///
+/// 磅单与出库单共用：两边轨迹都在 `weigh_record`（0029），挂图只看记录不看链，
+/// 出库侧（`outbound::outbound_capture`）直接带着刚落的那条记录的头调进来。
+pub(crate) async fn attach_capture_photos(
+    app: &AppHandle,
+    order_id: i64,
+    record_id: i64,
+    operator_id: i64,
+    weigh_type: &str,
+    frames: Vec<CaptureFrame>,
+) {
     let (Ok(app_dir), Ok(pool)) = (app.path().app_data_dir(), pool_of(app)) else { return };
-    let (order_id, record_id, operator_id) = (weighed.id, record.id, record.operator_id);
-    let weigh_type = record.weigh_type.clone();
+    let weigh_type = weigh_type.to_string();
     let attached = tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
         let conn = pool.lock().unwrap_or_else(|p| p.into_inner());
         let key = if weigh_type == "tare" { "capture_on_tare" } else { "capture_on_gross" };

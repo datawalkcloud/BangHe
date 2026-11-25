@@ -27,12 +27,14 @@ import type {
   StockBalanceRow,
   StockMovementRow,
   WeighRecord,
+  CapturePhoto,
 } from "./types";
 import { amountFen } from "@/lib/calc";
 import { GRADES } from "@/lib/constants";
+import type { Tone } from "@/lib/constants";
 import { parties, users, varieties, warehouses, TODAY, int, pick, DEMO_ALIGN } from "./masters";
 import { applyAlign } from "@/lib/scale-align";
-import { orders, printLogs } from "./orders";
+import { orders, printLogs, captureCameras } from "./orders";
 import { dateKey, isoOf, pad } from "./rng";
 
 /** 站内经办人里能开出库单的那几位（值仓/站长/磅员/登记员）。 */
@@ -423,6 +425,7 @@ export function saveOutbound(i: OutboundSaveInput): OutboundOrder {
       slot_id,
       slot_label: null,
       vehicle_no: i.vehicle_no?.trim() || null,
+      driver_name: i.driver_name?.trim() || null,
       net_weight_01kg: i.net_weight_01kg ?? null,
       weight_source: "manual",
       // 新建一律没上过磅：这两个字段只有称重捕获那条路会写（见 `captureOutbound`）
@@ -465,6 +468,7 @@ export function saveOutbound(i: OutboundSaveInput): OutboundOrder {
     warehouse_id: i.warehouse_id,
     slot_id,
     vehicle_no: i.vehicle_no?.trim() || null,
+    driver_name: i.driver_name?.trim() || null,
     net_weight_01kg: i.net_weight_01kg ?? null,
     price_fen_per_ton: i.price_fen_per_ton ?? null,
     goods_amount_fen: goods,
@@ -608,7 +612,7 @@ export function listOutbound(f: OutboundFilters = {}): OutboundPage {
     .filter((d) => (f.variety_id ? d.variety_id === f.variety_id : true))
     .filter((d) =>
       kw
-        ? [d.order_no, d.party_name, d.counterparty_label, d.vehicle_no].some((s) =>
+        ? [d.order_no, d.party_name, d.counterparty_label, d.vehicle_no, d.driver_name].some((s) =>
             (s ?? "").toLowerCase().includes(kw),
           )
         : true,
@@ -685,7 +689,8 @@ export function captureOutbound(i: OutboundCaptureInput): OutboundOrder {
       stable: 1,
       captured_at: at,
       operator_id: keeper.id,
-      has_photo: false,
+      // 与磅单侧同口径：has_photo（IP 摄像机在线声明）或带了本机帧，都算这一捕挂了图
+      has_photo: !!(i.has_photo || (i.frames?.length ?? 0) > 0),
     },
   });
 
@@ -707,13 +712,52 @@ export function captureOutbound(i: OutboundCaptureInput): OutboundOrder {
   return snapshot(docs[docs.indexOf(cur)]);
 }
 
+/**
+ * 出库侧的抓拍墙：与 `mock/orders.ts::photosOf` 同判据（adopted 轨迹 × 参与抓拍的相机），
+ * 只把入口从磅单换成出库轨迹。一条被采纳的轨迹一张都没有才补「无抓拍」占位。
+ */
+export function photosOfOutbound(trailRows: WeighRecord[]): CapturePhoto[] {
+  const cams = captureCameras();
+  const out: CapturePhoto[] = [];
+  for (const r of trailRows) {
+    if (r.is_adopted !== 1) continue;
+    const label = r.weigh_type === "gross" ? "毛重抓拍" : "皮重抓拍";
+    if (r.has_photo && cams.length > 0) {
+      cams.forEach((c, i) =>
+        out.push({
+          id: r.id * 100 + (i + 1),
+          biz_type: "scale_capture" as const,
+          label,
+          device_label: c.name,
+          tone: "info" as Tone,
+          captured_at: r.captured_at,
+          missing: false,
+        }),
+      );
+    } else {
+      out.push({
+        id: -r.id,
+        biz_type: "scale_capture" as const,
+        label,
+        device_label: null,
+        tone: "danger" as Tone,
+        captured_at: r.captured_at,
+        missing: true,
+      });
+    }
+  }
+  return out;
+}
+
 export function getOutbound(no: string): OutboundDetail | null {
   const d = docs.find((x) => x.order_no === no);
   if (!d) return null;
+  const records = trail.filter((t) => t.outbound_id === d.id).map((t) => ({ ...t.rec }));
   return {
     ...d,
     movements: outLegRows().filter((m) => m.outbound_id === d.id).sort((a, b) => (a.operated_at < b.operated_at ? -1 : 1)),
-    records: trail.filter((t) => t.outbound_id === d.id).map((t) => ({ ...t.rec })),
+    records,
+    photos: photosOfOutbound(records),
     // 与真库 `orders::load_prints_of` 同一条判据：**号 + 票种两个条件**一起查。
     // 只按号查会把同站同月那张同号磅单的打印算到这张出库单头上（0026 之后号面上没有票种字母）。
     prints: printLogs.filter((p) => p.doc_type === "outbound_order" && p.doc_no === d.order_no).map((p) => ({ ...p })),
@@ -771,6 +815,7 @@ function seedDocs() {
       slot_id: wh.slots.length ? pick(wh.slots).id : null,
       slot_label: null,
       vehicle_no: null,
+      driver_name: null,
       net_weight_01kg: weight,
       weight_source: p.weighed ? "scale" : "manual",
       gross_weight_01kg: gross,
@@ -816,7 +861,9 @@ function seedDocs() {
         stable: 1,
         captured_at: isoOf(new Date(created.getTime() + minuteOffset * 60000)),
         operator_id: keeper.id,
-        has_photo: false,
+        // 被采用的那一捕挂图（勾了抓拍的相机各一张），被复称摘掉的那条按无抓拍——
+        // 与真库同判据：墙只认 adopted 轨迹
+        has_photo: adopted === 1,
       });
       const t = tare ?? 0;
       const g = gross ?? 0;

@@ -43,6 +43,7 @@ type Draft = {
   warehouse_id: string;
   slot_id: string;
   vehicle_no: string;
+  driver_name: string;
   net_kg: string;
   price_yuan_kg: string;
   remark: string;
@@ -58,6 +59,7 @@ const EMPTY: Draft = {
   warehouse_id: "",
   slot_id: "",
   vehicle_no: "",
+  driver_name: "",
   net_kg: "",
   price_yuan_kg: "",
   remark: "",
@@ -75,6 +77,7 @@ function draftOf(o: OutboundOrder | null): Draft {
     warehouse_id: String(o.warehouse_id),
     slot_id: o.slot_id == null ? "" : String(o.slot_id),
     vehicle_no: o.vehicle_no ?? "",
+    driver_name: o.driver_name ?? "",
     net_kg: o.net_weight_01kg == null ? "" : String(o.net_weight_01kg / 10),
     price_yuan_kg: o.price_fen_per_ton == null ? "" : String(toYuanPerKg(o.price_fen_per_ton)),
     remark: o.remark ?? "",
@@ -159,6 +162,7 @@ export function OutboundFormDialog({
         warehouse_id: Number(d.warehouse_id),
         slot_id: d.slot_id ? Number(d.slot_id) : null,
         vehicle_no: d.vehicle_no.trim() || null,
+        driver_name: d.driver_name.trim() || null,
         net_weight_01kg: net01,
         price_fen_per_ton: isSale ? priceFen : null,
         remark: d.remark.trim() || null,
@@ -345,6 +349,10 @@ export function OutboundFormDialog({
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
             车牌（选填）
             <Input value={d.vehicle_no} onChange={(e) => patch({ vehicle_no: e.target.value })} className="tnum" placeholder="如 豫PA1234" />
+          </Label>
+          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            司机名（选填）
+            <Input value={d.driver_name} onChange={(e) => patch({ driver_name: e.target.value })} placeholder="如 张师傅" />
           </Label>
           <div className="flex flex-col justify-end gap-1 text-xs">
             <span className="text-muted-foreground">货款试算</span>

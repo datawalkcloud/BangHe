@@ -47,6 +47,8 @@ export function OutboundBoard({
   printedCount,
   scales,
   switchingScale,
+  captureCams,
+  anyCamOnline,
   onSelectScale,
   onPick,
   onNew,
@@ -67,6 +69,9 @@ export function OutboundBoard({
   printedCount: number;
   scales: DeviceConfig[];
   switchingScale: boolean;
+  /** 勾了「过磅抓拍」的相机（与磅单侧同源）；过磅时前端为它们就地取帧 */
+  captureCams: DeviceConfig[];
+  anyCamOnline: boolean;
   onSelectScale: (code: string) => void;
   onPick: (no: string) => void;
   onNew: () => void;
@@ -180,6 +185,7 @@ export function OutboundBoard({
                     { label: "品种 / 等级", value: `${orDash(doc.variety_name)}${doc.grade ? ` · ${doc.grade}` : ""}` },
                     { label: "出仓仓房", value: orDash(doc.slot_label ? `${doc.warehouse_name} / ${doc.slot_label}` : doc.warehouse_name) },
                     { label: "车牌", value: <span className="tnum">{orDash(doc.vehicle_no)}</span> },
+                    { label: "司机", value: orDash(doc.driver_name) },
                     { label: "单价", value: <span className="tnum">{price(doc.price_fen_per_ton)}</span> },
                     { label: "出库净重", value: <span className="tnum font-medium">{doc.net_weight_01kg == null ? "—" : weight(doc.net_weight_01kg)}</span> },
                     { label: "货款", value: <span className="tnum font-medium">{doc.goods_amount_fen == null ? "—" : money(doc.goods_amount_fen)}</span> },
@@ -253,6 +259,8 @@ export function OutboundBoard({
               scales={scales}
               onSelectScale={onSelectScale}
               switchingScale={switchingScale}
+              captureCams={captureCams}
+              anyCamOnline={anyCamOnline}
             />
           </>
         )}

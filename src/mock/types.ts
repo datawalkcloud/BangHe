@@ -702,6 +702,8 @@ export interface OutboundOrder {
    */
   gross_weight_01kg: number | null;
   tare_weight_01kg: number | null;
+  /** 司机名（0035，选填）：出库现场车来车走，没有司机信息留空照常出库。与 Rust 一样追加在尾 */
+  driver_name: string | null;
 }
 
 /** 一条库存流水。字段与 `src-tauri/src/stock.rs::MovementRow` 逐字一致。 */
@@ -744,6 +746,11 @@ export interface OutboundDetail extends OutboundOrder {
    */
   records: WeighRecord[];
   /**
+   * 过磅抓拍墙（与磅单侧同判据：attachment 按 `biz_type='scale_capture'` 挂在 adopted 轨迹上）。
+   * 空数组＝没有已被采纳的轨迹挂图。
+   */
+  photos: CapturePhoto[];
+  /**
    * 这张出库单打过的票（0030 / F11.7 出库码单）。详情页据此显示「已打 N 张」并决定下一次算不算补打。
    * 后端按 `doc_type='outbound_order'` + 单号查，不是只按号——同站同月的磅单与出库单会撞成同一串数字。
    */
@@ -779,6 +786,8 @@ export interface OutboundSaveInput {
   warehouse_id: number;
   slot_id?: number | null;
   vehicle_no?: string | null;
+  /** 司机名（0035，选填）：不填留空，照常保存出库 */
+  driver_name?: string | null;
   net_weight_01kg?: number | null;
   price_fen_per_ton?: number | null;
   remark?: string | null;
@@ -799,8 +808,10 @@ export interface OutboundCloseInput {
 }
 
 /**
- * 出库单称重入参（0029）。与磅单侧 `CaptureInput` 同形但更窄：出库没有过磅抓拍、
- * 没有皮重容差、也没有历史授权放行，那三道闸门一条都不该管出库（理由见 `outbound.rs` 模块头）。
+ * 出库单称重入参（0029）。与磅单侧 `CaptureInput` 同形但窄两处：没有皮重容差、
+ * 也没有历史授权放行（理由见 `outbound.rs` 模块头）。抓拍这一段与磅单侧同构：
+ * 本机 USB 摄像头帧由前端就地取（`frames`），IP 摄像机靠 `has_photo` 声明在线后
+ * 由服务端自行 HTTP 抓图。
  */
 export interface OutboundCaptureInput {
   order_no: string;
@@ -812,6 +823,10 @@ export interface OutboundCaptureInput {
   /** 仪表原始帧，迎检时对回仪表报文；手录不传 */
   raw_frame?: string | null;
   operator_id: number;
+  /** 抓拍开关的自我声明（当时摄像头在线），离线时不堵那几秒网络 */
+  has_photo?: boolean;
+  /** 本机 USB 摄像头的帧（空串由后端逐条丢弃）；IP 摄像机不在此列 */
+  frames?: { device_id: number; b64: string }[];
 }
 
 export interface OutboundFilters {

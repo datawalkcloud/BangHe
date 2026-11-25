@@ -244,6 +244,7 @@ const SAMPLE_OUTBOUND: OutboundDetail = {
   updated_at: "2026-09-12T10:41:00+08:00",
   movements: [],
   records: [],
+  photos: [],
   prints: [],
 };
 
@@ -543,6 +544,7 @@ const OUTBOUND_FIELDS: FieldDef[] = [
   mk("grade", "等级", "基本信息", "text"),
   mk("warehouse", "出仓仓房 / 货位", "基本信息", "text"),
   mk("vehicle_no", "车牌", "基本信息", "text"),
+  mk("driver_name", "司机名", "基本信息", "text"),
   mk("stock_warning", "超库存警示", "基本信息", "text"),
   mk("gross_weight", "毛重", "重量", "weight"),
   mk("tare_weight", "皮重", "重量", "weight"),
@@ -772,6 +774,7 @@ const OUTBOUND_SPEC: ScenarioSpec = {
       case "grade": return o.grade ?? "未定级";
       case "warehouse": return `${o.warehouse_name}${o.slot_label ? ` / ${o.slot_label}` : ""}`;
       case "vehicle_no": return o.vehicle_no ?? "—";
+      case "driver_name": return o.driver_name ?? "—";
       // 超库存不拦车（03 §9.28），但这句话必须跟着粮出门：账面不够这一格是服务端复算写进去的，
       // 票上印出来，事后对账的人才知道这一车出的是"未结算入仓量不算数"的那部分
       case "stock_warning": return o.stock_warning ?? "—";

@@ -164,7 +164,7 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
             // 它们各自取到一句实话（"未过磅，净重为人工填写" / "—"），不会出现空半行。
             fields: [
               "order_no", "business_date", "kind_label", "status_label",
-              "party_name", "counterparty_label", "variety_name", "grade", "warehouse", "vehicle_no", "stock_warning",
+              "party_name", "counterparty_label", "variety_name", "grade", "warehouse", "vehicle_no", "driver_name", "stock_warning",
               "gross_weight", "tare_weight", "net_weight", "net_weight_ton", "weight_source_label", "weigh_note",
               "price_per_kg", "goods_amount", "goods_amount_upper", "payment_status_label",
             ],

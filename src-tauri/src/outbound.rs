@@ -131,6 +131,9 @@ pub struct OutboundOrder {
     /// 追加在尾，已有下标一个不动。
     pub gross_weight_01kg: Option<i64>,
     pub tare_weight_01kg: Option<i64>,
+    /// 司机名（0035，选填）：出库现场车来车走，管"车是谁开的"，与 vehicle_no 一起选填。
+    /// 与毛/皮两列同一条纪律：追加在尾，[`OUT_SELECT`] 已有下标一个不动。
+    pub driver_name: Option<String>,
 }
 
 /// 详情页带的东西：这张单在库存账上留下的流水（出库那条 + 红冲补的对称入库那条），
@@ -142,6 +145,9 @@ pub struct OutboundDetail {
     pub movements: Vec<stock::MovementRow>,
     /// 空数组＝这一单没上过磅（纯手填净重），不是"读不到"。界面对这两种要分开说。
     pub records: Vec<crate::orders::WeighRecord>,
+    /// 过磅抓拍墙（与磅单侧 `orders::build_capture_wall` 同一判据：`attachment` 按
+    /// `biz_type='scale_capture'` 挂在各条称重轨迹上）。空数组＝没有已被采纳的轨迹挂图。
+    pub photos: Vec<crate::orders::CapturePhoto>,
     /// 这张出库单打过的票（F11.7 出库码单）。详情页据此显示「已打 N 张」并决定下一次算不算补打。
     ///
     /// 按 `doc_type='outbound_order'` 查而不是只按号：号面上没有票种字母（0026），
@@ -158,7 +164,7 @@ const OUT_SELECT: &str = "SELECT o.id, o.order_no, o.business_date, o.kind, o.st
        o.stock_warning, o.void_reason, o.remark,
        o.created_at, o.created_by, COALESCE(cu.display_name, '—'),
        o.completed_at, o.completed_by, COALESCE(bu.display_name, '—'), o.updated_at,
-       o.gross_weight_01kg, o.tare_weight_01kg
+       o.gross_weight_01kg, o.tare_weight_01kg, o.driver_name
   FROM outbound_order o
   LEFT JOIN party p ON p.id = o.party_id
   LEFT JOIN grain_variety v ON v.id = o.variety_id
@@ -202,6 +208,7 @@ fn map_row(r: &rusqlite::Row) -> rusqlite::Result<OutboundOrder> {
         updated_at: r.get(30)?,
         gross_weight_01kg: r.get(31)?,
         tare_weight_01kg: r.get(32)?,
+        driver_name: r.get(33)?,
     })
 }
 
@@ -235,6 +242,9 @@ pub struct OutboundSaveInput {
     pub slot_id: Option<i64>,
     #[serde(default)]
     pub vehicle_no: Option<String>,
+    /// 司机名（0035，选填）：现场没有司机信息时留空照常出库
+    #[serde(default)]
+    pub driver_name: Option<String>,
     #[serde(default)]
     pub net_weight_01kg: Option<i64>,
     #[serde(default)]
@@ -389,15 +399,16 @@ pub fn save(conn: &Connection, actor: &AuthProfile, input: OutboundSaveInput) ->
             conn.execute(
                 "INSERT INTO outbound_order (order_no, station_id, business_date, kind, status,
                         party_id, counterparty_label, variety_id, grade, warehouse_id, slot_id,
-                        vehicle_no, net_weight_01kg, weight_source, price_fen_per_ton, goods_amount_fen,
+                        vehicle_no, driver_name, net_weight_01kg, weight_source, price_fen_per_ton, goods_amount_fen,
                         payment_status, remark, created_at, created_by)
                  VALUES (?1, (SELECT id FROM station WHERE is_active = 1 ORDER BY id LIMIT 1),
-                        ?2, ?3, 'draft', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'manual', ?12, ?13,
-                        ?14, ?15, ?16, ?17)",
+                        ?2, ?3, 'draft', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'manual', ?13, ?14,
+                        ?15, ?16, ?17, ?18)",
                 params![
                     order_no, business_date, input.kind,
                     input.party_id, clean(&input.counterparty_label), input.variety_id, grade,
-                    warehouse_id, slot_id, clean(&input.vehicle_no), input.net_weight_01kg,
+                    warehouse_id, slot_id, clean(&input.vehicle_no), clean(&input.driver_name),
+                    input.net_weight_01kg,
                     input.price_fen_per_ton, goods,
                     // 草稿期一律 not_required：销售出库「成为一笔应收」这个动作发生在
                     // 完成出库那一刻（见 [`complete`]）。提前落 unpaid，会让一张还没出仓的
@@ -435,14 +446,14 @@ pub fn save(conn: &Connection, actor: &AuthProfile, input: OutboundSaveInput) ->
             conn.execute(
                 "UPDATE outbound_order SET business_date = ?2, kind = ?3, party_id = ?4,
                         counterparty_label = ?5, variety_id = ?6, grade = ?7, warehouse_id = ?8,
-                        slot_id = ?9, vehicle_no = ?10, net_weight_01kg = ?11,
-                        price_fen_per_ton = ?12, goods_amount_fen = ?13, remark = ?14,
-                        updated_at = ?15, updated_by = ?16
+                        slot_id = ?9, vehicle_no = ?10, driver_name = ?11, net_weight_01kg = ?12,
+                        price_fen_per_ton = ?13, goods_amount_fen = ?14, remark = ?15,
+                        updated_at = ?16, updated_by = ?17
                   WHERE order_no = ?1",
                 params![
                     order_no, business_date, input.kind, input.party_id,
                     clean(&input.counterparty_label), input.variety_id, grade, warehouse_id, slot_id,
-                    clean(&input.vehicle_no), input.net_weight_01kg,
+                    clean(&input.vehicle_no), clean(&input.driver_name), input.net_weight_01kg,
                     input.price_fen_per_ton, goods, clean(&input.remark), now, actor.id,
                 ],
             )
@@ -666,10 +677,11 @@ pub fn reverse(conn: &Connection, actor: &AuthProfile, input: OutboundCloseInput
 
 // ----------------------------------------------------------------- 写：过地磅（0029）
 
-/// 出库侧的称重入参。与磅单侧 `orders::CaptureInput` 同形，但**刻意更窄**：
-/// 出库没有过磅抓拍（`frames`）、没有皮重容差（`tare_warning`）、也没有历史授权放行
-/// （`tare_override`）。把那几个字段一并收下，只会让人以为出库也走那三道闸门——
-/// 而它们一条都不该管出库（判据的来理由见模块头「与磅单侧刻意不同的三处」）。
+/// 出库侧的称重入参。与磅单侧 `orders::CaptureInput` 同形但**窄两处**：
+/// 没有皮重容差（`tare_warning`）、也没有历史授权放行（`tare_override`）——那两个闸门
+/// 一条都不该管出库（判据的来理由见模块头「与磅单侧刻意不同的三处」）。抓拍这一段
+/// （`frames`/`has_photo`，本机摄像头帧 + IP 摄像机的在线声明）与磅单侧同构：用户点名的
+/// 「过磅时摄像头抓拍」，两条链共用 `weigh_record` 与 `attachment`，挂图走同一条路。
 #[derive(Debug, Deserialize)]
 pub struct OutboundCaptureInput {
     pub order_no: String,
@@ -685,6 +697,12 @@ pub struct OutboundCaptureInput {
     #[serde(default)]
     #[allow(dead_code)]
     pub operator_id: Option<i64>,
+    /// 抓拍开关的自我声明（当时摄像头在线），离线时不堵那几秒网络
+    #[serde(default)]
+    pub has_photo: Option<bool>,
+    /// 本机 USB 摄像头的帧（前端就地取，空串逐条丢弃）；IP 摄像机由服务端自行 HTTP 抓图
+    #[serde(default)]
+    pub frames: Vec<crate::orders::CaptureFrame>,
 }
 
 /// 这一单当前**采用的**读数里有没有手录那一条 —— [`capture`] 判 `weight_source` 的唯一依据。
@@ -915,7 +933,8 @@ pub fn list(conn: &Connection, f: &OutboundFilters) -> Result<OutboundPage, Stri
         let p = format!("%{kw}%");
         where_sql.push_str(&format!(
             " AND (lower(o.order_no) LIKE ?{n} OR lower(COALESCE(p.name, '')) LIKE ?{n} \
-               OR lower(COALESCE(o.counterparty_label, '')) LIKE ?{n} OR lower(COALESCE(o.vehicle_no, '')) LIKE ?{n})"
+               OR lower(COALESCE(o.counterparty_label, '')) LIKE ?{n} OR lower(COALESCE(o.vehicle_no, '')) LIKE ?{n} \
+               OR lower(COALESCE(o.driver_name, '')) LIKE ?{n})"
         ));
         args.push(Box::new(p));
     }
@@ -972,10 +991,12 @@ pub fn detail(conn: &Connection, order_no: &str) -> Result<Option<OutboundDetail
     // 称重轨迹借磅单侧那一只取轨迹的函数（0029 起两条单据链共用 `weigh_record`）：
     // `doc_kind` 的判据写在 `orders::load_records` 一处，两侧都不许自己再拼一遍 SQL。
     let records = crate::orders::load_records(conn, "outbound_order", order.id)?;
+    // 抓拍墙同借磅单侧那一只（判据同源：attachment 挂在 adopted 轨迹上）。
+    let photos = crate::orders::build_capture_wall(conn, &records)?;
     // 打印留痕同理走 `orders::load_prints_of` 那一只口（0030）：按号 + 票种两个条件查，
     // 判据写一处，出库侧不再拼第二遍。
     let prints = crate::orders::load_prints_of(conn, "outbound_order", &order.order_no)?;
-    Ok(Some(OutboundDetail { order, movements, records, prints }))
+    Ok(Some(OutboundDetail { order, movements, records, photos, prints }))
 }
 
 // ==================================================================== Tauri 命令
@@ -1019,6 +1040,35 @@ pub async fn outbound_reverse(app: AppHandle, input: OutboundCloseInput) -> Resu
 /// 上一磅是**做这张单**的一部分动作，不是更正别人的账——磅员本来就是 0020 就写进
 /// `OUTBOUND_ROLES` 的现场代做岗，接秤这件事正是给他留的（02 §M11 F11.1）。
 #[tauri::command]
-pub async fn outbound_capture(app: AppHandle, input: OutboundCaptureInput) -> Result<OutboundOrder, String> {
-    write_tx(&app, move |conn, actor| capture(conn, actor, input), OUTBOUND_ROLES, "出库称重").await
+pub async fn outbound_capture(app: AppHandle, mut input: OutboundCaptureInput) -> Result<OutboundOrder, String> {
+    // 与磅单侧 order_capture 同一套口径：has_photo 是"摄像头在线"的自我声明，本机帧前端就地取。
+    let want_photo = input.has_photo.unwrap_or(false);
+    let frames: Vec<crate::orders::CaptureFrame> = std::mem::take(&mut input.frames)
+        .into_iter()
+        .filter(|f| !f.b64.trim().is_empty())
+        .collect();
+    let order = write_tx(&app, move |conn, actor| capture(conn, actor, input), OUTBOUND_ROLES, "出库称重").await?;
+    if want_photo || !frames.is_empty() {
+        // capture() 已成功插入一条 adopted 轨迹（seq 最大），把它找出来挂图。
+        let head = read_only(
+            &app,
+            move |conn| {
+                conn.query_row(
+                    "SELECT id, operator_id, weigh_type FROM weigh_record
+                      WHERE doc_kind = 'outbound_order' AND order_id = ?1 AND is_adopted = 1
+                      ORDER BY seq DESC, id DESC LIMIT 1",
+                    params![order.id],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)),
+                )
+                .optional()
+                .map_err(|e| format!("读取出库称重轨迹失败：{e}"))
+            },
+            "出库抓拍挂图",
+        )
+        .await?;
+        if let Some((record_id, operator_id, weigh_type)) = head {
+            crate::orders::attach_capture_photos(&app, order.id, record_id, operator_id, &weigh_type, frames).await;
+        }
+    }
+    Ok(order)
 }

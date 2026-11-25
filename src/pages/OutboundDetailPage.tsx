@@ -293,6 +293,7 @@ export function OutboundDetailPage() {
                   { label: "业务日期", value: <span className="tnum">{doc.business_date}</span> },
                   { label: "领出方", value: orDash(doc.party_name ?? doc.counterparty_label) },
                   { label: "车牌", value: <span className="tnum">{orDash(doc.vehicle_no)}</span> },
+                  { label: "司机名", value: orDash(doc.driver_name) },
                   { label: "品种", value: orDash(doc.variety_name) },
                   { label: "等级", value: orDash(doc.grade) },
                   { label: "出仓仓房 / 货位", value: orDash(doc.slot_label ? `${doc.warehouse_name} / ${doc.slot_label}` : doc.warehouse_name) },

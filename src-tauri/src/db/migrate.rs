@@ -206,6 +206,10 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0034_package_deduct_ratio.sql",
         sql: include_str!("migrations/0034_package_deduct_ratio.sql"),
     },
+    Migration {
+        name: "0035_outbound_driver_name.sql",
+        sql: include_str!("migrations/0035_outbound_driver_name.sql"),
+    },
 ];
 
 /// 需要在**事务外关掉外键**才能跑的脚本，按文件名点名。

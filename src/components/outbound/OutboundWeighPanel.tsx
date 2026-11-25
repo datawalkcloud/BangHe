@@ -29,11 +29,13 @@ import { PencilIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { OUTBOUND_STATUS } from "@/lib/constants";
+import { grabCaptureFrames } from "@/lib/local-camera";
 import { dateTime, fromKg, toKg, weight, weightUnit } from "@/lib/format";
 import { useDeviceStore } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
 import { WeightDisplay } from "@/components/business/WeightDisplay";
 import { InlineNumField } from "@/components/business/NumField";
+import { CapturePhotoThumb } from "@/components/business/CapturePhotoThumb";
 import { ToneBadge, WeightSourceBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +52,8 @@ export function OutboundWeighPanel({
   scales = [],
   onSelectScale,
   switchingScale = false,
+  captureCams = [],
+  anyCamOnline = false,
 }: {
   order: OutboundDetail;
   /**
@@ -60,6 +64,13 @@ export function OutboundWeighPanel({
   scales?: DeviceConfig[];
   onSelectScale?: (code: string) => void;
   switchingScale?: boolean;
+  /**
+   * 勾了「过磅抓拍」的相机（与磅单侧同源）。过磅时前端为它们就地取帧
+   * （`grabCaptureFrames` 只处理本机 USB 相机，IP 机由服务端抓图）。详情页不传＝不抓拍。
+   */
+  captureCams?: DeviceConfig[];
+  /** 台账在线的 IP 相机声明：服务端值得去抓；本机取到帧也照样想落 */
+  anyCamOnline?: boolean;
 }) {
   const scale = useDeviceStore((s) => s.scale);
   /**
@@ -117,8 +128,11 @@ export function OutboundWeighPanel({
     order.gross_weight_01kg == null ? "gross" : order.tare_weight_01kg == null ? "tare" : null;
 
   const capture = useMutation({
-    mutationFn: (a: { weigh_type: WeighType; weight_01kg: number; source: "scale" | "manual" }) =>
-      api.captureOutbound({
+    mutationFn: async (a: { weigh_type: WeighType; weight_01kg: number; source: "scale" | "manual" }) => {
+      // 本机摄像头：先就地取帧再提交（与③称重区同一条 `grabCaptureFrames`）；
+      // 取不到就按无抓拍提交，抓拍失败不该拖住这次称重。
+      const frames = await grabCaptureFrames(captureCams);
+      return api.captureOutbound({
         order_no: order.order_no,
         weigh_type: a.weigh_type,
         weight_01kg: a.weight_01kg,
@@ -126,7 +140,11 @@ export function OutboundWeighPanel({
         // 真机流的原帧是迎检时唯一能对回仪表报文的证据；只有演示流才合成个样子
         raw_frame: a.source === "scale" ? (scale.rawFrame ?? `=W${(a.weight_01kg / 10).toFixed(1)}kg ST`) : null,
         operator_id: actorId(),
-      }),
+        // 台账在线的 IP 机值得服务端去抓（即便本机一台没取到帧）；本机取到帧也照样想落
+        has_photo: anyCamOnline,
+        frames,
+      });
+    },
     onSuccess: (o, a) => {
       setFlash(a.weigh_type);
       window.setTimeout(() => setFlash(null), 700);
@@ -426,6 +444,26 @@ export function OutboundWeighPanel({
               : "还没上过磅，当前净重是手填的。上过磅后改重量只走这一块，表单里的净重格会锁定。"}
           </p>
         )}
+
+        {(() => {
+          const photos = order.photos ?? [];
+          if (photos.length === 0) return null;
+          return (
+            <div className="flex flex-col gap-1.5 border-t pt-2">
+              <p className="text-[11px] font-medium text-muted-foreground">
+                过磅抓拍 {photos.length} 张
+                <span className="ml-1 font-normal">一次称重最多 3 台相机各一张；离线的那台按「无抓拍」留痕</span>
+              </p>
+              <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {photos.map((p) => (
+                  <li key={p.id} className="min-w-0">
+                    <CapturePhotoThumb photo={p} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })()}
       </CardContent>
     </Card>
   );

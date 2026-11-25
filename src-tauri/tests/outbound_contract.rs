@@ -148,6 +148,7 @@ fn sale_input(warehouse: i64, variety: i64, party: i64, weight: i64, price: i64)
         warehouse_id: warehouse,
         slot_id: None,
         vehicle_no: None,
+        driver_name: None,
         net_weight_01kg: Some(weight),
         price_fen_per_ton: Some(price),
         remark: None,
@@ -167,6 +168,7 @@ fn record_input(warehouse: i64, variety: i64) -> OutboundSaveInput {
         warehouse_id: warehouse,
         slot_id: None,
         vehicle_no: None,
+        driver_name: None,
         net_weight_01kg: Some(1000),
         price_fen_per_ton: None,
         remark: None,
@@ -571,6 +573,8 @@ fn cap_input(order_no: &str, weigh_type: &str, weight_01kg: i64, source: &str) -
         source: source.into(),
         raw_frame: (source == "scale").then(|| format!("=W{:.1}kg ST", weight_01kg as f64 / 10.0)),
         operator_id: None,
+        has_photo: None,
+        frames: vec![],
     }
 }
 
