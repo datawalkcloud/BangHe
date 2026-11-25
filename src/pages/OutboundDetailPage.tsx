@@ -101,15 +101,29 @@ export function OutboundDetailPage() {
   /**
    * 已打几张只看 `print_log` 里真出过纸的那几条（`result === 'success'`），与磅单同一口径：
    * 「框开合过」不等于「纸上印过」，靠前者判断会让取消预览的那次也算成一张。
+   * 码单与发货凭证是两种票、各数各的：补打角标只该由同一种票的历史决定。
    */
-  const printed = (doc?.prints ?? []).filter((p) => p.result === "success").length;
+  const printedCode = (doc?.prints ?? []).filter((p) => p.doc_type === "outbound_order" && p.result === "success").length;
+  const printedVoucher = (doc?.prints ?? []).filter((p) => p.doc_type === "outbound_voucher" && p.result === "success").length;
 
   const printTicket = () => {
     if (!doc || !station) return;
     void printReceipt({
       scenario: "outbound_order",
       docNo: doc.order_no,
-      isReprint: printed > 0,
+      isReprint: printedCode > 0,
+      context: { station, names, outbound: doc },
+      invalidate: ["outbound"],
+    });
+  };
+
+  /** 发货凭证：随车交接的表单，与码单同一套打印通道（A4 / 241 针式走预览框，纸型在框里切） */
+  const printVoucher = () => {
+    if (!doc || !station) return;
+    void printReceipt({
+      scenario: "outbound_voucher",
+      docNo: doc.order_no,
+      isReprint: printedVoucher > 0,
       context: { station, names, outbound: doc },
       invalidate: ["outbound"],
     });
@@ -168,10 +182,11 @@ export function OutboundDetailPage() {
     // 每一次出纸都上时间轴（0030）：纸上有没有「补打」角标、谁在什么时候又打了一张，
     // 是纠纷与迎检要回答的两件事，只藏在按钮那句「已打 N 张」里等于看得见数、看不见来路。
     for (const p of doc.prints) {
+      const isVoucher = p.doc_type === "outbound_voucher";
       out.push({
         at: p.printed_at,
         action: p.is_reprint ? "reprint" : "print",
-        label: p.is_reprint ? "补打码单" : "打印码单",
+        label: isVoucher ? (p.is_reprint ? "补打发货凭证" : "打印发货凭证") : p.is_reprint ? "补打码单" : "打印码单",
         actor: names(p.operator_id),
         tone: p.result === "success" ? "neutral" : "danger",
         detail: `${p.printer_name} · ${p.paper} · ${p.result === "success" ? "已出纸" : `失败：${p.error_msg ?? "原因未记"}`}`,
@@ -234,14 +249,36 @@ export function OutboundDetailPage() {
                   ? "当前岗位无打印权限"
                   : doc.net_weight_01kg == null
                     ? "本单还没有出库净重，打不出有效票据；请先称重或改单填净重"
-                    : printed > 0
-                      ? `已打 ${printed} 张，票面会标「补打」`
+                    : printedCode > 0
+                      ? `已打 ${printedCode} 张，票面会标「补打」`
                       : undefined
               }
               onClick={printTicket}
             >
               <PrinterIcon />
-              {printed > 0 ? `补打码单（已打 ${printed} 张）` : "打印码单"}
+              {printedCode > 0 ? `补打码单（已打 ${printedCode} 张）` : "打印码单"}
+            </Button>
+            {/*
+              发货凭证：给收货方随车走的交接表单，与码单共用同一条打印路（无预览直打 → 失败才弹
+              预览框）。纸型在预览框里切：A4 激光与 241 针式都能出这张纸，模板编辑器里另起一页改版式。
+            */}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!can("print") || !station || doc.net_weight_01kg == null}
+              title={
+                !can("print")
+                  ? "当前岗位无打印权限"
+                  : doc.net_weight_01kg == null
+                    ? "本单还没有出库净重，打不出有效凭证；请先称重或改单填净重"
+                    : printedVoucher > 0
+                      ? `已打 ${printedVoucher} 张，票面会标「补打」`
+                      : undefined
+              }
+              onClick={printVoucher}
+            >
+              <PrinterIcon />
+              {printedVoucher > 0 ? `补打发货凭证（已打 ${printedVoucher} 张）` : "打印发货凭证"}
             </Button>
             {draft ? (
               <>

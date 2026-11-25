@@ -1379,6 +1379,100 @@ fn migration_0030_widens_print_doc_type_without_disturbing_history() {
     assert_eq!(dangling, 0, "重建后不应有悬挂外键引用");
 }
 
+/// 0036 同 0030 一样重建 `print_log`，只是值域再多一格 `outbound_voucher`（发货凭证）。
+/// 守的与 0030 相同：存量保号、新值写得进、边界仍在、两个索引按原口径建回。
+/// 测试自身也先证一遍"旧结构真的旧"：0036 之前 `outbound_order` 写得进而 `outbound_voucher` 撞 CHECK。
+#[test]
+fn migration_0036_adds_outbound_voucher_to_print_log_without_disturbing_history() {
+    let idx = MIGRATIONS
+        .iter()
+        .position(|m| m.name == "0036_outbound_voucher.sql")
+        .expect("0036 必须已在迁移清单里");
+    let before: &'static [Migration] = &MIGRATIONS[..idx];
+    let through_0036: &'static [Migration] = &MIGRATIONS[..idx + 1];
+    let mut conn = in_memory_migrated("0.1.0-test", before).expect("0036 之前的脚本应能独立跑完");
+
+    let user_id: i64 = conn
+        .query_row("SELECT id FROM user_account ORDER BY id LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    for (n, dt) in [("A", "outbound_order"), ("B", "weigh_order")] {
+        conn.execute(
+            "INSERT INTO print_log (doc_type, doc_id, doc_no, copies, paper, printer_name, channel, is_reprint, result, printed_at, operator_id)
+             VALUES (?1, 7, ?2, 1, 'A4', 'p1', 'pdf_silent', ?3, 'success', '2026-10-08T09:00:00.000', ?4)",
+            rusqlite::params![dt, n, if n == "B" { 1 } else { 0 }, user_id],
+        )
+        .unwrap();
+    }
+    let ids_before: Vec<(i64, String, String, i64)> = {
+        let mut st = conn.prepare("SELECT id, doc_type, doc_no, is_reprint FROM print_log ORDER BY id").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let before_err = conn
+        .execute(
+            "INSERT INTO print_log (doc_type, doc_id, doc_no, copies, paper, printer_name, channel, result, printed_at, operator_id)
+             VALUES ('outbound_voucher', 1, 'V', 1, 'A4', 'p1', 'preview', 'success', '2026-10-08T09:00:00.000', ?1)",
+            rusqlite::params![user_id],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(before_err.contains("CHECK"), "0036 之前 outbound_voucher 就该被拦（这条断言同时证明本测试真的跑在旧结构上）：{before_err}");
+
+    let r = migrate::apply_with(&mut conn, "0.1.0-test", None, None, through_0036)
+        .expect("0036 应当能重建 print_log（它是叶子表，不必关外键）");
+    assert_eq!(r.applied, vec!["0036_outbound_voucher.sql".to_string()]);
+
+    let kept: Vec<(i64, String, String, i64)> = {
+        let mut st = conn.prepare("SELECT id, doc_type, doc_no, is_reprint FROM print_log ORDER BY id").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(kept, ids_before, "存量留痕必须原样保号、补打标记一位都不能变");
+
+    for dt in ["outbound_voucher"] {
+        conn.execute(
+            "INSERT INTO print_log (doc_type, doc_id, doc_no, copies, paper, printer_name, channel, result, printed_at, operator_id)
+             VALUES (?1, 1, ?2, 1, 'A4', 'p1', 'pdf_silent', 'success', '2026-10-08T10:00:00.000', ?3)",
+            rusqlite::params![dt, dt, user_id],
+        )
+        .unwrap_or_else(|e| panic!("{dt} 的留痕写不进去，发货凭证的补打角标就永远不准：{e}"));
+    }
+    let e = conn
+        .execute(
+            "INSERT INTO print_log (doc_type, doc_id, doc_no, copies, paper, printer_name, channel, result, printed_at, operator_id)
+             VALUES ('passport', 1, 'X', 1, 'A4', 'p1', 'preview', 'success', '2026-10-08T10:00:00.000', ?1)",
+            rusqlite::params![user_id],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("CHECK"), "值域仍要有边界，实际：{e}");
+
+    let idx_names: Vec<String> = {
+        let mut st = conn
+            .prepare("SELECT name FROM pragma_index_list('print_log') WHERE name LIKE 'idx_print%' ORDER BY name")
+            .unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+    };
+    assert_eq!(idx_names, vec!["idx_print_date", "idx_print_doc"], "两个打印索引必须都建回来");
+    let doc_cols: Vec<String> = {
+        let mut st = conn
+            .prepare("SELECT name FROM pragma_index_info('idx_print_doc') ORDER BY seqno")
+            .unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+    };
+    assert_eq!(doc_cols, vec!["doc_type", "doc_id"], "idx_print_doc 的列序变了");
+
+    let dangling: i64 = {
+        let mut st = conn.prepare("PRAGMA foreign_key_check").unwrap();
+        st.query_map([], |_| Ok(())).unwrap().count() as i64
+    };
+    assert_eq!(dangling, 0, "重建后不应有悬挂外键引用");
+}
+
 /// 0025 把样品号与留样号纳入统一取号，顺带回灌存量、建部分唯一索引。
 ///
 /// 这条脚本最会咬人的不是回灌本身，而是**回灌完不给 `seq_counter` 补账**：某一天的号已经

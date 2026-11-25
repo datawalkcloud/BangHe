@@ -4,7 +4,7 @@
  * 默认模板只是「起点」：用户在小票模板编辑器里改完保存后，覆盖写进本地存储，
  * 打印时以用户模板为准；点「恢复默认」即回到这里。
  */
-import type { ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
+import type { FieldKind, GridCell, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
 import { defaultLayout } from "./paper";
 
 const BASELINE = "2026-09-12T00:00:00+08:00";
@@ -184,6 +184,35 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
           { id: uid(), kind: "sign", signers: ["制单人", "值仓（确认出仓）", "承运人 / 领用人签字"] },
         ],
       };
+    case "outbound_voucher":
+      return {
+        scenario,
+        name: "发货凭证（默认）",
+        paper: "A4",
+        title: "发货凭证",
+        copyNote: "第一联 存根（发货方留存）",
+        showReprintBadge: true,
+        updatedAt: BASELINE,
+        sections: [
+          {
+            id: uid(),
+            kind: "kv",
+            // 按纸面表单的行序排字段，分组当行标题（票面小标题由字段所属分组带出）。
+            // 表单上没有数据源的栏（合同号/司机/箱封/运费/水分）解析成空串——这张纸
+            // 现场还要手填，印「—」反而没处下笔（见 scenarios.tsx 的 VOUCHER_FIELDS 注释）。
+            fields: [
+              "variety_name", "vehicle_no", "moisture_pct", "grade",
+              "receiver", "contract_no", "warehouse",
+              "gross_weight", "tare_weight", "net_weight", "gross_at", "tare_at",
+              "price_per_kg", "price_per_jin", "goods_amount_upper", "goods_amount",
+              "driver_name", "driver_phone",
+              "front_box_no", "rear_box_no", "front_seal_no", "rear_seal_no",
+              "remark", "freight",
+            ],
+          },
+          { id: uid(), kind: "sign", signers: ["发货方负责人", "检斤员", "收货方"] },
+        ],
+      };
     case "ledger":
       return {
         scenario,
@@ -218,6 +247,69 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
 /** 某场景的出厂默认模板 */
 export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
   return withLayout(buildTemplate(scenario));
+}
+
+/* ------------------------------------------------ 收购凭证（磅单的固定表格预设） */
+
+/**
+ * 「收购凭证」固定表格：格子与标签照纸质票样排，取值绑磅单场景字段。
+ *
+ * 与过磅单默认模板的分工：那份是系统单据（字段区 + 凭票码 + 结算提示），这份是照
+ * 现场手写单据排的固定表格（收购凭证），给习惯传统票面的站点用。表格区块（grid）
+ * 只在 A4 / 241 单据风格里画格子，热敏纸上降级成「标签 + 值」行（见 render.tsx / escpos.ts）。
+ */
+function cell(label: string, key?: string, kind?: FieldKind, colspan?: number): GridCell {
+  return { label, ...(key ? { key } : {}), ...(kind ? { kind } : {}), ...(colspan ? { colspan } : {}) };
+}
+
+/** 收购凭证预设：paper 传 A4 或 dot241，票面版式与格子结构同一份 */
+export function acquisitionVoucherTemplate(paper: "A4" | "dot241"): ReceiptTemplate {
+  return withLayout({
+    scenario: "weigh_order",
+    name: `收购凭证（${paper === "A4" ? "A4" : "241 针式"}）`,
+    paper,
+    title: "收购凭证",
+    copyNote: "第一联 存根（粮站留存）",
+    showReprintBadge: true,
+    // 日期与检质证号印在表格顶行（与票样同形），票头不再重复单号/日期/地址/电话那几行；
+    // 站名照常打——票第一眼要认得出是哪家的
+    showDocNo: false,
+    showDocDate: false,
+    showStationAddress: false,
+    showStationPhone: false,
+    updatedAt: BASELINE,
+    sections: [
+      {
+        id: uid(),
+        kind: "grid",
+        rows: [
+          { cells: [cell("日期", "business_date"), cell("计量单位 kg、元"), cell("检质证号", "qc_report_no")] },
+          { cells: [cell("品名", "variety_name"), cell("车号", "vehicle_no"), cell("卖方名称", "party_name"), cell("实方电话", "party_phone")] },
+          { cells: [cell("身份证号", "id_card_masked"), cell("银行名称", "bank_name"), cell("银行卡号", "bank_account")] },
+          { cells: [cell("容量(g/L)", "bulk_density"), cell("水分(%)", "moisture_pct", "percent"), cell("杂质(%)", "impurity_pct", "percent")] },
+          { cells: [cell("现场扣量", "other_deduct", "weight"), cell("水扣量", "moisture_deduct", "weight"), cell("杂质扣量", "impurity_deduct", "weight"), cell("霉变(%)", "mold_pct", "percent"), cell("不完善粒(%)", "unsound_pct", "percent")] },
+          { cells: [cell("毛重", "gross_weight", "weight"), cell("皮重", "tare_weight", "weight"), cell("净重", "net_weight", "weight"), cell("总扣量", "deduct_total", "weight"), cell("计价净重", "settlement_weight", "weight")] },
+          { cells: [cell("公斤价", "price_per_kg", "money"), cell("市斤价", "price_per_jin", "money"), cell("金额", "goods_amount", "money"), cell("卸车费", "deduction_fee", "money")] },
+          { cells: [cell("折干水扣量", "moisture_deduct", "weight"), cell("扣后量", "settlement_weight", "weight"), cell("实付大写", "payable_upper", "text", 2)] },
+          { cells: [cell("毛检日期", "gross_at", "datetime"), cell("皮检日期", "tare_at", "datetime"), cell("备注", "remark"), cell("入库仓号", "warehouse")] },
+          { cells: [cell("地址及电话", "party_contact", undefined, 4)] },
+        ],
+      },
+      { id: uid(), kind: "sign", signers: ["检斤员", "付款员"] },
+    ],
+  });
+}
+
+/**
+ * 某场景可「载入」的版式预设：出厂默认排第一，后面是该场景的附加预设
+ * （磅单多两份收购凭证固定表格）。编辑器里选一份整体覆盖草稿。
+ */
+export function presetsFor(scenario: ReceiptScenario): ReceiptTemplate[] {
+  const presets = [defaultTemplate(scenario)];
+  if (scenario === "weigh_order") {
+    presets.push(acquisitionVoucherTemplate("A4"), acquisitionVoucherTemplate("dot241"));
+  }
+  return presets;
 }
 
 /**

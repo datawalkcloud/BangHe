@@ -22,12 +22,14 @@ import {
 } from "@/lib/constants";
 import {
   dateTime,
+  density,
   maskIdCard,
   money,
   percent,
   price,
   rmbUpper,
   ton,
+  toYuanPerKg,
   varietyLabel,
   weight,
 } from "@/lib/format";
@@ -37,6 +39,7 @@ import type {
   DailyReport,
   LedgerRow,
   OutboundDetail,
+  Party,
   PaymentRecord,
   QcReport,
   Settlement,
@@ -124,6 +127,29 @@ const SAMPLE_ORDER: WeighOrder = {
   keeper_id: null,
   remark: "农户自带编织袋，已当面点清。",
   created_at: "2026-09-12T08:42:10+08:00",
+};
+
+/** 收购凭证几格印的是售粮人档案真值，样例也走档案形状（与 SAMPLE_ORDER.party_id 同人） */
+const SAMPLE_PARTY: Party = {
+  id: 88,
+  code: "NG0012",
+  name: "周建国",
+  party_type: "farmer",
+  id_card_no: "330104197203054419",
+  id_card_verified: 1,
+  phone: "13812345678",
+  address: "滨河镇三桥村 12 号",
+  bank_name: "滨河农商银行三桥支行",
+  bank_account: "6230 1234 5678 9012 345",
+  credit_limit_fen: 0,
+  default_warehouse_id: null,
+  default_slot_id: null,
+  default_vehicle_no: null,
+  last_tare_01kg: 14500,
+  remark: null,
+  status: "active",
+  created_at: "2026-08-01T09:00:00+08:00",
+  photo_attachment_id: null,
 };
 
 const SAMPLE_QC: QcReport = {
@@ -225,6 +251,7 @@ const SAMPLE_OUTBOUND: OutboundDetail = {
   slot_id: 7,
   slot_label: "C01-02",
   vehicle_no: "豫PA2317",
+  driver_name: "刘师傅",
   net_weight_01kg: 184000,
   weight_source: "scale",
   gross_weight_01kg: 250000,
@@ -246,6 +273,15 @@ const SAMPLE_OUTBOUND: OutboundDetail = {
   records: [],
   photos: [],
   prints: [],
+};
+
+/** 发货凭证的编辑器样例：带两条称重轨迹，毛检/皮检时间两栏才看得出样子 */
+const SAMPLE_VOUCHER_OUTBOUND: OutboundDetail = {
+  ...SAMPLE_OUTBOUND,
+  records: [
+    { id: 1, seq: 1, weigh_type: "gross", weight_01kg: 250000, aligned_weight_01kg: 250000, is_adopted: 1, adopt_reason: null, source: "scale", device_code: "scale1", raw_frame: null, stable: 1, captured_at: "2026-09-12T09:28:00+08:00", operator_id: 3, has_photo: false },
+    { id: 2, seq: 2, weigh_type: "tare", weight_01kg: 66000, aligned_weight_01kg: 66000, is_adopted: 1, adopt_reason: null, source: "scale", device_code: "scale1", raw_frame: null, stable: 1, captured_at: "2026-09-12T09:32:00+08:00", operator_id: 3, has_photo: false },
+  ],
 };
 
 const SAMPLE_LEDGER: LedgerRow[] = [
@@ -329,10 +365,25 @@ function settledOrPreview(o: WeighOrder, qc: QcReport | null | undefined, settle
   return p == null ? settled : `${preview(p)}${EST_SUFFIX}`;
 }
 
+/** 分/吨 → 市斤价（元/斤）展示串：元/吨 ÷ 2000。只给收购凭证这类印「市斤价」的票面用 */
+function pricePerJin(fenPerTon: number | null | undefined): string {
+  if (fenPerTon == null) return "—";
+  const yuanPerJin = fenPerTon / 100 / 2000;
+  return `${(Math.round(yuanPerJin * 1000) / 1000).toLocaleString("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 3,
+  })} 元/斤`;
+}
+
 const WEIGH_FIELDS: FieldDef[] = [
   mk("party_name", "售粮人", "售粮人", "text"),
   mk("id_card_masked", "身份证号(脱敏)", "售粮人", "text"),
   mk("party_type_label", "身份", "售粮人", "enum"),
+  // 收购凭证的实方电话 / 银行 / 地址印的是售粮人档案真值（磅单不存这几项，由打印入口带 party）
+  mk("party_phone", "售粮人电话", "售粮人", "text"),
+  mk("bank_name", "银行名称", "售粮人", "text"),
+  mk("bank_account", "银行卡号", "售粮人", "text"),
+  mk("party_contact", "地址及电话", "售粮人", "text"),
   mk("vehicle_no", "车牌", "车辆", "text"),
   mk("driver_name", "驾驶员", "车辆", "text"),
   mk("variety_name", "品种", "品种等级", "text"),
@@ -340,6 +391,10 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("grade_from_qc", "等级(化验)", "品种等级", "enum"),
   mk("moisture_pct", "水分", "品种等级", "percent"),
   mk("impurity_pct", "杂质", "品种等级", "percent"),
+  // 收购凭证票面上的化验三项：容量 / 霉变 / 不完善粒都读质检指标，没化验过的指标印「—」
+  mk("bulk_density", "容量(g/L)", "品种等级", "text"),
+  mk("mold_pct", "霉变", "品种等级", "percent"),
+  mk("unsound_pct", "不完善粒", "品种等级", "percent"),
   mk("warehouse", "仓房/货位", "仓储状态", "text"),
   mk("status_label", "状态", "仓储状态", "enum"),
   mk("weight_source_label", "称重方式", "仓储状态", "enum"),
@@ -356,6 +411,7 @@ const WEIGH_FIELDS: FieldDef[] = [
   // 皮重偏差超容差的醒目提醒：捕获不被拦下，但票面必须印得出来（迎检与事后核对都看这一栏）
   mk("tare_warning", "皮重警示", "重量明细", "text"),
   mk("price_per_kg", "单价(元/公斤)", "金额", "money"),
+  mk("price_per_jin", "市斤价(元/斤)", "金额", "money"),
   mk("goods_amount", "粮款", "金额", "money"),
   mk("deduction_fee", "扣款", "金额", "money"),
   mk("advance_fee", "预付款", "金额", "money"),
@@ -365,6 +421,8 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("payment_status_label", "付款状态", "金额", "enum"),
   mk("payment_method_label", "付款方式", "金额", "enum"),
   mk("price_override_reason", "改价原因", "金额", "text"),
+  mk("business_date", "业务日期", "时间线", "text"),
+  mk("qc_report_no", "检质证号", "时间线", "text"),
   mk("registered_at", "制单时间", "时间线", "datetime"),
   mk("gross_at", "毛重时间", "时间线", "datetime"),
   mk("tare_at", "皮重时间", "时间线", "datetime"),
@@ -564,6 +622,43 @@ const OUTBOUND_FIELDS: FieldDef[] = [
   mk("ticket_code", "票面码（= 单号）", "基本信息", "text"),
 ];
 
+/* ------------------------------------------------------ 场景 8：发货凭证 */
+
+/**
+ * 发货凭证的字段目录。这张纸是**给收货方随车走的手填表单**，与出库码单分工不同：
+ * 码单是系统里的定位凭据（带码、防伪、进检索框），发货凭证是站里对外交接的单据，
+ * 所以表上没有数据源的栏（合同号、司机、箱封号、运费、水分）**解析成空串留白手填**，
+ * 不印「—」——印了反而没处下笔。毛检/皮检时间从称重轨迹里取（优先当前采用的那一捕）。
+ */
+const VOUCHER_FIELDS: FieldDef[] = [
+  mk("order_no", "凭证号", "基本信息", "text"),
+  mk("business_date", "日期", "基本信息", "text"),
+  mk("variety_name", "品种", "基本信息", "text"),
+  mk("vehicle_no", "车号", "基本信息", "text"),
+  mk("moisture_pct", "水分(%)", "基本信息", "percent"),
+  mk("grade", "等级", "基本信息", "enum"),
+  mk("receiver", "收货方", "基本信息", "text"),
+  mk("contract_no", "合同号", "基本信息", "text"),
+  mk("warehouse", "出库仓号", "基本信息", "text"),
+  mk("gross_weight", "毛重", "重量", "weight"),
+  mk("tare_weight", "皮重", "重量", "weight"),
+  mk("net_weight", "净重", "重量", "weight"),
+  mk("gross_at", "毛检时间", "重量", "datetime"),
+  mk("tare_at", "皮检时间", "重量", "datetime"),
+  mk("price_per_kg", "公斤价", "金额", "money"),
+  mk("price_per_jin", "市斤价", "金额", "money"),
+  mk("goods_amount_upper", "总金额大写", "金额", "text"),
+  mk("goods_amount", "金额", "金额", "money"),
+  mk("driver_name", "司机名称", "车辆", "text"),
+  mk("driver_phone", "司机电话", "车辆", "text"),
+  mk("front_box_no", "前箱号", "箱封", "text"),
+  mk("rear_box_no", "后箱号", "箱封", "text"),
+  mk("front_seal_no", "前封号", "箱封", "text"),
+  mk("rear_seal_no", "后封号", "箱封", "text"),
+  mk("remark", "备注", "备注", "text"),
+  mk("freight", "运费", "备注", "money"),
+];
+
 /* ----------------------------------------------------------- 解析器实现 */
 
 const WEIGH_SPEC: ScenarioSpec = {
@@ -572,7 +667,7 @@ const WEIGH_SPEC: ScenarioSpec = {
   entry: "工作台过磅完成 / 磅单详情 / 快捷详情",
   fields: WEIGH_FIELDS,
   groups: WEIGH_GROUPS,
-  sampleContext: () => ({ station: SAMPLE_STATION, names: sampleNames, order: SAMPLE_ORDER, qc: SAMPLE_QC }),
+  sampleContext: () => ({ station: SAMPLE_STATION, names: sampleNames, order: SAMPLE_ORDER, qc: SAMPLE_QC, party: SAMPLE_PARTY }),
   resolveField: (key, ctx) => {
     const o = ctx.order;
     if (!o) return "—";
@@ -581,6 +676,12 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "party_name": return o.party_name;
       case "id_card_masked": return maskIdCard(o.id_card_no);
       case "party_type_label": return PARTY_TYPE[o.party_type];
+      // 收购凭证四格：档案没取到（老库缺档案/接口失败）就印「—」，比留空诚实——票上那一格
+      // 本来就不该给客户手写补白
+      case "party_phone": return ctx.party?.phone ?? "—";
+      case "bank_name": return ctx.party?.bank_name ?? "—";
+      case "bank_account": return ctx.party?.bank_account ?? "—";
+      case "party_contact": return ctx.party ? `${ctx.party.address} ${ctx.party.phone}` : "—";
       case "vehicle_no": return o.vehicle_no ?? "—";
       case "driver_name": return o.driver_name ?? "—";
       case "variety_name": return varietyLabel(o.variety_name);
@@ -588,6 +689,10 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "grade_from_qc": return qc?.grade ?? "未化验";
       case "moisture_pct": return percent(indicatorValue(qc, "moisture"));
       case "impurity_pct": return percent(indicatorValue(qc, "impurity"));
+      // 收购凭证化验三项：容量是 g/L 原样展示，霉变/不完善粒按百分数
+      case "bulk_density": return density(indicatorValue(qc, "bulk_density"));
+      case "mold_pct": return percent(indicatorValue(qc, "mold"));
+      case "unsound_pct": return percent(indicatorValue(qc, "unsound"));
       case "warehouse": return `${o.warehouse_name ?? "—"}${o.slot_label ? ` / ${o.slot_label}` : ""}`;
       case "status_label": return ORDER_STATUS[o.status].label;
       case "weight_source_label": return o.weight_source === "scale" ? "地磅读数" : "人工手录";
@@ -610,6 +715,7 @@ const WEIGH_SPEC: ScenarioSpec = {
       // 单价是**确定值**：制单那一刻就按价目表落过价，磅房事后改的也落在这同一列上
       // （见 `orders.rs::create_order` / `set_price`）。所以票面这一栏不再是"—"。
       case "price_per_kg": return price(o.price_fen_per_ton);
+      case "price_per_jin": return pricePerJin(o.price_fen_per_ton);
       case "goods_amount": return settledOrPreview(o, qc, money(o.goods_amount_fen), (p) => money(p.goods_amount_fen));
       case "deduction_fee": return money(o.deduction_fee_fen);
       case "advance_fee": return money(o.advance_fee_fen);
@@ -620,6 +726,9 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "payment_status_label": return o.payable_amount_fen == null ? "待结算" : PAYMENT_STATUS[o.payment_status].label;
       case "payment_method_label": return o.payment_method ? PAYMENT_METHOD[o.payment_method] : "—";
       case "price_override_reason": return o.price_override_reason ?? "—";
+      case "business_date": return o.business_date;
+      // 检质证号 = 这张磅单关联的质检报告号；没化验过印「—」（票面与窗口口径一致）
+      case "qc_report_no": return qc?.report_no ?? "—";
       case "registered_at": return dateTime(o.registered_at);
       case "gross_at": return dateTime(o.gross_at);
       case "tare_at": return dateTime(o.tare_at);
@@ -811,6 +920,62 @@ const OUTBOUND_SPEC: ScenarioSpec = {
   },
 };
 
+/** 毛检/皮检时间：先认「当前采用」的那一捕，没有就退回该类型最近一次；没上过磅留白 */
+function voucherWeighTime(o: OutboundDetail, type: "gross" | "tare"): string {
+  const recs = o.records ?? [];
+  const hit = [...recs].reverse().find((r) => r.weigh_type === type && r.is_adopted === 1) ??
+    [...recs].reverse().find((r) => r.weigh_type === type);
+  return hit ? dateTime(hit.captured_at) : "";
+}
+
+const VOUCHER_SPEC: ScenarioSpec = {
+  id: "outbound_voucher",
+  label: "发货凭证",
+  entry: "出库单详情「打印发货凭证」",
+  fields: VOUCHER_FIELDS,
+  groups: ["基本信息", "重量", "金额", "车辆", "箱封", "备注"],
+  sampleContext: () => ({ station: SAMPLE_STATION, names: sampleNames, outbound: SAMPLE_VOUCHER_OUTBOUND }),
+  resolveField: (key, ctx) => {
+    const o = ctx.outbound;
+    if (!o) return "—";
+    switch (key) {
+      case "order_no": return o.order_no;
+      case "business_date": return o.business_date;
+      case "variety_name": return varietyLabel(o.variety_name);
+      case "vehicle_no": return o.vehicle_no ?? "";
+      // 出库单不化验水分、不记合同/司机电话/箱封/运费：这些栏留白给现场手填，不印「—」占位
+      case "moisture_pct": return "";
+      case "grade": return o.grade ?? "";
+      case "receiver": return o.party_name ?? o.counterparty_label ?? "";
+      case "contract_no": return "";
+      case "warehouse": return `${o.warehouse_name}${o.slot_label ? ` / ${o.slot_label}` : ""}`;
+      case "gross_weight": return weight(o.gross_weight_01kg);
+      case "tare_weight": return weight(o.tare_weight_01kg);
+      case "net_weight": return weight(o.net_weight_01kg);
+      case "gross_at": return voucherWeighTime(o, "gross");
+      case "tare_at": return voucherWeighTime(o, "tare");
+      case "price_per_kg": return price(o.price_fen_per_ton);
+      // 市斤价 = 公斤价 ÷ 2，与价目表同一处换算（分/吨 → 元/公斤），位数口径照 priceNumber
+      case "price_per_jin": {
+        if (o.price_fen_per_ton == null) return "";
+        const perJin = toYuanPerKg(o.price_fen_per_ton) / 2;
+        return `${(Math.round(perJin * 1000) / 1000).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 3 })} 元/市斤`;
+      }
+      case "goods_amount_upper": return o.goods_amount_fen == null ? "" : rmbUpper(o.goods_amount_fen);
+      case "goods_amount": return money(o.goods_amount_fen);
+      case "driver_name": return o.driver_name ?? "";
+      case "driver_phone": return "";
+      case "front_box_no": return "";
+      case "rear_box_no": return "";
+      case "front_seal_no": return "";
+      case "rear_seal_no": return "";
+      case "remark": return o.remark ?? "";
+      case "freight": return "";
+      default: return "—";
+    }
+  },
+};
+
 const LEDGER_SPEC: ScenarioSpec = {
   id: "ledger",
   label: "收购明细台账",
@@ -896,6 +1061,7 @@ export const SCENARIOS: Record<ReceiptScenario, ScenarioSpec> = {
   settlement_voucher: SETTLE_SPEC,
   payment_receipt: PAY_SPEC,
   outbound_order: OUTBOUND_SPEC,
+  outbound_voucher: VOUCHER_SPEC,
   ledger: LEDGER_SPEC,
   daily_report: DAILY_SPEC,
 };

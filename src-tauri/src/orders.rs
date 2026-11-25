@@ -763,7 +763,7 @@ pub(crate) fn load_records(conn: &Connection, doc_kind: &str, order_id: i64) -> 
 const PRINT_COLS: &str = "id, doc_type, doc_no, copies, paper, printer_name, channel, is_reprint,
          authorized_by, result, error_msg, printed_at, operator_id";
 
-/// 某张单据的打印留痕。
+/// 某张单据的打印留痕（按票种集合查）。
 ///
 /// **`doc_type` 必须进 WHERE**：号面上不再有字母前缀（0026 把票种从号里撤了），而
 /// `seq_counter` 是按票种分键各自从 1 号排起的（§3.5），所以同一站点同一月里
@@ -771,14 +771,21 @@ const PRINT_COLS: &str = "id, doc_type, doc_no, copies, paper, printer_name, cha
 /// 撞上了也没人去看那条打印记录；出库码单（F11.7）一上详情页的「已打 N 张」，
 /// 只按 `doc_no` 查就会把别的票种的打印算进这张单，补打角标跟着一起不准。
 /// 前端那几处 `filter((p) => p.doc_type === ...)` 是第二道，不是替代这一道。
-pub(crate) fn load_prints_of(conn: &Connection, doc_type: &str, doc_no: &str) -> Result<Vec<PrintLog>, String> {
+pub(crate) fn load_prints_of(conn: &Connection, doc_types: &[&str], doc_no: &str) -> Result<Vec<PrintLog>, String> {
+    let placeholders = vec!["?"; doc_types.len()].join(",");
     let mut stmt = match conn.prepare(&format!(
-        "SELECT {PRINT_COLS} FROM print_log WHERE doc_type = ?1 AND doc_no = ?2 ORDER BY printed_at"
+        "SELECT {PRINT_COLS} FROM print_log WHERE doc_type IN ({placeholders}) AND doc_no = ?{} ORDER BY printed_at",
+        doc_types.len() + 1
     )) {
         Ok(s) => s,
         Err(e) => return Err(format!("读取打印记录失败：{e}")),
     };
-    stmt.query_map(params![doc_type, doc_no], |r| {
+    let args = doc_types
+        .iter()
+        .map(|t| rusqlite::types::Value::Text(t.to_string()))
+        .chain(std::iter::once(rusqlite::types::Value::Text(doc_no.to_string())))
+        .collect::<Vec<_>>();
+    stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
         Ok(PrintLog {
             id: r.get(0)?,
             doc_type: r.get(1)?,
@@ -1096,7 +1103,7 @@ pub fn load_order_full(conn: &Connection, by_no: &str) -> Result<Option<WeighOrd
     let settlement = load_settlement_of(conn, o.id)?;
     o.photos = Some(build_capture_wall(conn, &records)?);
     o.timeline = Some(build_timeline(conn, &o, &records, qc.as_ref(), settlement.as_ref()));
-    o.prints = Some(load_prints_of(conn, "weigh_order", &o.order_no)?);
+    o.prints = Some(load_prints_of(conn, &["weigh_order"], &o.order_no)?);
     o.records = Some(records);
     Ok(Some(o))
 }

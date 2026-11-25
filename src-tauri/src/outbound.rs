@@ -994,8 +994,9 @@ pub fn detail(conn: &Connection, order_no: &str) -> Result<Option<OutboundDetail
     // 抓拍墙同借磅单侧那一只（判据同源：attachment 挂在 adopted 轨迹上）。
     let photos = crate::orders::build_capture_wall(conn, &records)?;
     // 打印留痕同理走 `orders::load_prints_of` 那一只口（0030）：按号 + 票种两个条件查，
-    // 判据写一处，出库侧不再拼第二遍。
-    let prints = crate::orders::load_prints_of(conn, "outbound_order", &order.order_no)?;
+    // 判据写一处，出库侧不再拼第二遍。出库码单与发货凭证（0036）都算这张单的留痕——
+    // 详情页时间轴全展示，两枚按钮各自按自己的票种数「已打 N 张」。
+    let prints = crate::orders::load_prints_of(conn, &["outbound_order", "outbound_voucher"], &order.order_no)?;
     Ok(Some(OutboundDetail { order, movements, records, photos, prints }))
 }
 

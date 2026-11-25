@@ -17,6 +17,7 @@ import type {
   DailyReport,
   LedgerRow,
   OutboundDetail,
+  Party,
   PaymentRecord,
   QcReport,
   Settlement,
@@ -38,6 +39,7 @@ export type ReceiptScenario =
   | "settlement_voucher"
   | "payment_receipt"
   | "outbound_order"
+  | "outbound_voucher"
   | "ledger"
   | "daily_report";
 
@@ -79,7 +81,7 @@ export interface TableDef {
  * 这个 kind 叫 `qr`、装的却可能是条码（`codeStyle`）：**kind 是存进用户本机模板里的字符串**，
  * 改名等于让所有存过码区块的站点一觉醒来发现票上没码了。所以加字段不改名，界面上叫「条码 / 二维码」。
  */
-export type BlockKind = "kv" | "table" | "sign" | "text" | "qr";
+export type BlockKind = "kv" | "table" | "sign" | "text" | "qr" | "grid";
 
 /**
  * 码区块要画哪一种码。
@@ -100,6 +102,7 @@ export const BLOCK_LABEL: Record<BlockKind, string> = {
   sign: "署名区",
   text: "文本行",
   qr: "条码 / 二维码",
+  grid: "表格版式",
 };
 
 /** 码制选项的中文名（`ReceiptSection.codeStyle`） */
@@ -108,6 +111,26 @@ export const CODE_STYLE_LABEL: Record<CodeStyle, string> = {
   barcode: "仅一维条码（CODE128）",
   both: "二维码 + 条码都打",
 };
+
+/**
+ * 表格版式（grid 区块）里的一格：标签印在上方，取值印在下方，与印好的收购凭证这类
+ * 固定表格单据同形。`key` 缺省 = 纯标签格（票面上只印标签，留空供手写）。
+ */
+export interface GridCell {
+  /** 绑定场景字段 key；缺省 = 纯标签格（如「备注」这种大空格） */
+  key?: string;
+  label: string;
+  /** 跨列数（表单里「实付大写」那种通栏大格），缺省 1 */
+  colspan?: number;
+  /** 跨行数，缺省 1 */
+  rowspan?: number;
+  /** 数值类用等宽，便于一列对齐 */
+  kind?: FieldKind;
+}
+
+export interface GridRow {
+  cells: GridCell[];
+}
 
 export interface ReceiptSection {
   id: string;
@@ -121,6 +144,8 @@ export interface ReceiptSection {
   columns?: string[];
   /** sign：署名栏标签，如 ["磅员","化验员","售粮人签字"] */
   signers?: string[];
+  /** grid：固定表格的行列定义（按行列出格子，跨列/跨行由格子上声明） */
+  rows?: GridRow[];
   /** text / qr：自由文本行（如备注、提示语），qr 区块里这条就是码的载荷，支持 {{字段}} 占位 */
   text?: string;
   /** qr：画哪种码。缺省 `"qr"`（这个字段出现之前存下来的模板全都只有二维码） */
@@ -215,6 +240,8 @@ export interface ReceiptContext {
   reprint?: boolean;
   order?: WeighOrder;
   qc?: QcReport | null;
+  /** 售粮人档案（收购凭证的实方电话 / 银行 / 地址几格印真值，磅单本身没存这些） */
+  party?: Party | null;
   settlement?: Settlement;
   payment?: PaymentRecord;
   /** 出库码单（F11.7）。带 0029 的毛/皮与称重轨迹，票面才印得出「这重量怎么来的」 */

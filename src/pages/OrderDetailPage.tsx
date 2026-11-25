@@ -401,7 +401,7 @@ export function OrderDetailBody({
       scenario: "weigh_order",
       docNo: order.order_no,
       isReprint: weighPrinted > 0,
-      context: { station, names, order, qc },
+      context: { station, names, order, qc, party: partyDetail ?? null },
     });
   };
   const reprintQcReport = () => {

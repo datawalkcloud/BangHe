@@ -183,6 +183,18 @@ export function receiptLines(
     if (sec.kind === "text") {
       const text = fillText(sec.text ?? "", (key) => asText(spec.resolveField(key, ctx)));
       out.push({ kind: "text", text });
+      continue;
+    }
+
+    // 表格版式（收购凭证那类固定表格）在小票机上没有格子可画，降级成「标签 + 值」行：
+    // 带字段的格子按行序排，纯标签格跳过。A4 / 针式走打印队列时才吃 GridBlock 的格子画法
+    if (sec.kind === "grid") {
+      const cells = (sec.rows ?? []).flatMap((r) => r.cells).filter((c) => c.key);
+      if (cells.length === 0) continue;
+      if (sec.title) out.push({ kind: "text", text: sec.title, bold: true });
+      for (const c of cells) {
+        out.push({ kind: "kv", label: c.label, value: asText(spec.resolveField(c.key!, ctx)) });
+      }
     }
   }
 

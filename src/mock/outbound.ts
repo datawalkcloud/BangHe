@@ -760,7 +760,8 @@ export function getOutbound(no: string): OutboundDetail | null {
     photos: photosOfOutbound(records),
     // 与真库 `orders::load_prints_of` 同一条判据：**号 + 票种两个条件**一起查。
     // 只按号查会把同站同月那张同号磅单的打印算到这张出库单头上（0026 之后号面上没有票种字母）。
-    prints: printLogs.filter((p) => p.doc_type === "outbound_order" && p.doc_no === d.order_no).map((p) => ({ ...p })),
+    // 出库码单与发货凭证两种票都算这张单的打印留痕（时间轴全展示，按钮各自按票种数数）。
+    prints: printLogs.filter((p) => (p.doc_type === "outbound_order" || p.doc_type === "outbound_voucher") && p.doc_no === d.order_no).map((p) => ({ ...p })),
   };
 }
 

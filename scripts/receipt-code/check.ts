@@ -24,7 +24,7 @@ import { CODE128_QUIET_MODULES, code128Runs, encodeCode128, measureCode128 } fro
 import { kvClusters } from "../../src/components/print/receipt/render";
 import { measureQr, qrSideDots } from "../../src/components/print/receipt/QrGraphic";
 import { receiptLines } from "../../src/components/print/receipt/escpos";
-import { defaultTemplate, normalizeTemplate } from "../../src/components/print/receipt/defaults";
+import { defaultTemplate, normalizeTemplate, acquisitionVoucherTemplate, presetsFor } from "../../src/components/print/receipt/defaults";
 import { SCENARIOS } from "../../src/components/print/receipt/scenarios";
 import { DOC_KIND_BY_CODE, encodeOrderCode, parseScannedCode, searchKeyword, settleable } from "../../src/lib/ticket-code";
 import type { ReceiptSection, ReceiptTemplate } from "../../src/components/print/receipt/types";
@@ -628,6 +628,57 @@ const boxMisses = tsxFiles.filter((f) => {
 ok("L1 写了「单号」的输入框都过了 searchKeyword（漏的文件列在这里）", boxMisses.length === 0, boxMisses);
 const staleExempt = Object.keys(BOX_EXEMPT).filter((f) => !existsSync(f) || !/placeholder="[^"]*单号/.test(readFileSync(f, "utf8")));
 ok("L2 豁免名单没有过时条目（不写「单号」了就把它删掉）", staleExempt.length === 0, staleExempt);
+
+/* ---------------- O. 收购凭证预设（磅单的固定表格模板） */
+// 格子上的字段键是手写的字符串，绑错一个就打出一整列「—」；两纸型版本同形，免得改了 A4 忘了 241。
+const acqA4 = acquisitionVoucherTemplate("A4");
+const acq241 = acquisitionVoucherTemplate("dot241");
+const acqCells = acqA4.sections.flatMap((s) => (s.kind === "grid" ? (s.rows ?? []).flatMap((r) => r.cells) : []));
+const weighKeys = SCENARIOS.weigh_order.fields.map((f) => f.key);
+const acqBadKeys = acqCells.filter((c) => c.key && !weighKeys.includes(c.key)).map((c) => c.key);
+// 区块 id 是随机数，比「同形」得先剥掉它
+const acqShape = (sections: ReceiptSection[]) => JSON.stringify(sections.map(({ id: _id, ...rest }) => rest));
+ok(
+  "O1 收购凭证两个纸型版本同形（行列与绑定一致，只有纸型/名字不同）",
+  acq241.paper === "dot241" && acqA4.paper === "A4" && acqShape(acq241.sections) === acqShape(acqA4.sections),
+  { a4: acqA4.paper, s241: acq241.paper },
+);
+ok("O2 表格里绑定的字段都登记在磅单场景目录（绑错一个就打一列「—」）", acqBadKeys.length === 0, acqBadKeys);
+ok("O3 收购凭证不带任何码块（带码的票都得过 F6 那道同号闸门，这张不参与）", !acqA4.sections.some((s) => s.kind === "qr"));
+ok("O4 版式是单据风格（固定表格只在单据风格里画格子）", acqA4.layout === "sheet" && acq241.layout === "sheet");
+// 小票机降级：带字段的格子按票面行序排成「标签 + 值」，纯标签格跳过（与 render.tsx 的 GridBlock 同一条口径）
+const acqKv = receiptLines(acqA4, ctx).filter((l) => l.kind === "kv" && l.value !== "＿＿＿＿＿＿").map((l) => l.label);
+const acqExpect = [
+  "日期", "检质证号", "品名", "车号", "卖方名称", "实方电话", "身份证号", "银行名称", "银行卡号",
+  "容量(g/L)", "水分(%)", "杂质(%)", "现场扣量", "水扣量", "杂质扣量", "霉变(%)", "不完善粒(%)",
+  "毛重", "皮重", "净重", "总扣量", "计价净重",
+  "公斤价", "市斤价", "金额", "卸车费", "折干水扣量", "扣后量", "实付大写",
+  "毛检日期", "皮检日期", "备注", "入库仓号", "地址及电话",
+];
+ok(
+  "O5 热敏降级：格子上的字段一个不落、顺序照票面（纯标签格「计量单位」不掺进来）",
+  acqKv.length === acqExpect.length && acqKv.every((v, i) => v === acqExpect[i]),
+  { got: acqKv, want: acqExpect },
+);
+// 档案四格（电话/银行/卡号/地址）的值只可能来自打印上下文里的 party：带上取到值、摘掉全「—」，
+// 证明票面印的是档案真值而不是写死的样例，也证明打印入口漏传 party 时打出来的是「—」而不是假号
+const acqPartyKeys = ["party_phone", "bank_name", "bank_account", "party_contact"];
+const acqWithParty = acqPartyKeys.map((k) => String(SCENARIOS.weigh_order.resolveField(k, ctx)));
+const acqNoParty = acqPartyKeys.map((k) => String(SCENARIOS.weigh_order.resolveField(k, { ...ctx, party: null })));
+ok(
+  "O6 档案四格取值全部走 ctx.party（带上有值、摘掉全「—」）",
+  acqWithParty.every((v) => v !== "—" && v !== "undefined") && acqNoParty.every((v) => v === "—"),
+  { withParty: acqWithParty, noParty: acqNoParty },
+);
+// 编辑器「载入预设」下拉的候选就是这份：磅单三份、其余场景只有出厂默认
+const acqPresets = presetsFor("weigh_order");
+ok(
+  "O7 预设候选：磅单三份且名字互不相同，其余场景只有出厂默认",
+  acqPresets.length === 3 &&
+    new Set(acqPresets.map((p) => p.name)).size === 3 &&
+    Object.values(SCENARIOS).every((s) => s.id === "weigh_order" || presetsFor(s.id).length === 1),
+  { weigh: acqPresets.map((p) => `${p.name}/${p.paper}`) },
+);
 
 console.log(fails === 0 ? "\n全部通过" : `\n${fails} 条不通过`);
 process.exit(fails === 0 ? 0 : 1);

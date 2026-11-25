@@ -400,7 +400,7 @@ export interface PrintLog {
    * 也与前端场景 id `ReceiptScenario` 逐字相同——`silent.ts` 把 scenario 原样写进这一列，
    * 中间没有第二份映射，所以三处必须一起改（钉它的是 receipt-code 自检 N 段）。
    */
-  doc_type: "weigh_order" | "quality_report" | "settlement_voucher" | "payment_receipt" | "outbound_order" | "ledger" | "daily_report";
+  doc_type: "weigh_order" | "quality_report" | "settlement_voucher" | "payment_receipt" | "outbound_order" | "outbound_voucher" | "ledger" | "daily_report";
   doc_no: string;
   copies: number;
   paper: PaperKind;
@@ -751,8 +751,10 @@ export interface OutboundDetail extends OutboundOrder {
    */
   photos: CapturePhoto[];
   /**
-   * 这张出库单打过的票（0030 / F11.7 出库码单）。详情页据此显示「已打 N 张」并决定下一次算不算补打。
-   * 后端按 `doc_type='outbound_order'` + 单号查，不是只按号——同站同月的磅单与出库单会撞成同一串数字。
+   * 这张出库单打过的票（0030 / F11.7 出库码单，发货凭证起另有 `outbound_voucher`）。
+   * 详情页据此显示「已打 N 张」并决定下一次算不算补打。
+   * 后端按 `doc_type IN ('outbound_order','outbound_voucher')` + 单号查，不是只按号——
+   * 同站同月的磅单与出库单会撞成同一串数字。
    */
   prints: PrintLog[];
 }

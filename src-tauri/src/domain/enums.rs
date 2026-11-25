@@ -269,6 +269,7 @@ crate::db_enum! {
         SettlementVoucher => "settlement_voucher",
         PaymentReceipt => "payment_receipt",
         OutboundOrder => "outbound_order",
+        OutboundVoucher => "outbound_voucher",
         InternalFlow => "internal_flow",
         Ledger => "ledger",
         DailyReport => "daily_report",

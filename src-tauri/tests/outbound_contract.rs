@@ -849,13 +849,15 @@ fn print_log_accepts_the_new_doc_types() {
     let doc = outbound::save(&conn, &actor(), sale_input(wh, xm, party, 12000, 260000)).unwrap();
 
     log_ticket(&conn, "outbound_order", &doc.order_no, false);
+    log_ticket(&conn, "outbound_voucher", &doc.order_no, false);
     log_ticket(&conn, "payment_receipt", "FK-TEST-1", true);
-    let (out_rows, pay_rows): (i64, i64) = {
+    let (out_rows, vch_rows, pay_rows): (i64, i64, i64) = {
         let a = conn.query_row("SELECT COUNT(1) FROM print_log WHERE doc_type = 'outbound_order'", [], |r| r.get(0)).unwrap();
-        let b = conn.query_row("SELECT COUNT(1) FROM print_log WHERE doc_type = 'payment_receipt'", [], |r| r.get(0)).unwrap();
-        (a, b)
+        let b = conn.query_row("SELECT COUNT(1) FROM print_log WHERE doc_type = 'outbound_voucher'", [], |r| r.get(0)).unwrap();
+        let c = conn.query_row("SELECT COUNT(1) FROM print_log WHERE doc_type = 'payment_receipt'", [], |r| r.get(0)).unwrap();
+        (a, b, c)
     };
-    assert_eq!((out_rows, pay_rows), (1, 1), "两种新票种的留痕都必须写得进 print_log");
+    assert_eq!((out_rows, vch_rows, pay_rows), (1, 1, 1), "发货凭证与出库码单、付款小票的留痕都必须写得进 print_log");
 
     // 值域仍然有边界：没扩进去的种类照样撞 CHECK（不是把闸门一拆了之）
     let e = conn
@@ -910,11 +912,14 @@ fn print_history_does_not_leak_across_same_numbered_docs() {
     log_ticket(&conn, "weigh_order", "01202610000007", false);
     log_ticket(&conn, "outbound_order", "01202610000007", false);
     log_ticket(&conn, "outbound_order", "01202610000007", true);
+    log_ticket(&conn, "outbound_voucher", "01202610000007", false);
 
     let detail = outbound::detail(&conn, "01202610000007").unwrap().expect("出库单读得回来");
     assert_eq!(detail.order.id, doc.id, "同号时按号取详情取到的是出库这一张");
-    assert_eq!(detail.prints.len(), 2, "出库详情只该看见出库自己的两条留痕");
-    assert!(detail.prints.iter().all(|p| p.doc_type == "outbound_order"));
+    assert_eq!(detail.prints.len(), 3, "出库详情只该看见出库自己的三条留痕（码单两条 + 发货凭证一条）");
+    assert!(detail.prints.iter().all(|p| p.doc_type == "outbound_order" || p.doc_type == "outbound_voucher"));
+    assert_eq!(detail.prints.iter().filter(|p| p.doc_type == "outbound_order").count(), 2, "码单自己的两条");
+    assert_eq!(detail.prints.iter().filter(|p| p.doc_type == "outbound_voucher").count(), 1, "发货凭证一条");
     assert_eq!(detail.prints.iter().filter(|p| p.is_reprint == 1).count(), 1, "一条首打一条补打");
 
     let full = orders::load_order_full(&conn, "01202610000007").unwrap().expect("磅单读得回来");

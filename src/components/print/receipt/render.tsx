@@ -40,6 +40,7 @@ const DOC_BY_SCENARIO: Record<ReceiptScenario, (ctx: ReceiptContext) => { docNo:
   settlement_voucher: (c) => (c.settlement ? { docNo: c.settlement.settle_no, dateText: c.settlement.business_date } : null),
   payment_receipt: (c) => (c.payment ? { docNo: c.payment.pay_no, dateText: c.payment.paid_at.slice(0, 10) } : null),
   outbound_order: (c) => (c.outbound ? { docNo: c.outbound.order_no, dateText: c.outbound.business_date } : null),
+  outbound_voucher: (c) => (c.outbound ? { docNo: c.outbound.order_no, dateText: c.outbound.business_date } : null),
   daily_report: (c) => (c.daily ? { docNo: `日报 ${c.daily.date}`, dateText: c.daily.date } : null),
   ledger: (c) => (c.ledgerRows?.length ? { docNo: `台账 ${c.ledgerRows[0].business_date}`, dateText: c.ledgerRows[0].business_date } : null),
 };
@@ -354,6 +355,72 @@ function CodeBlock({
   );
 }
 
+/**
+ * 表格版式（grid 区块）：固定网格单据，如收购凭证。
+ *
+ * 只给单据风格（A4 / 241 针式）画格子——每一格「标签在上、取值在下」，与印好的表格单据同形；
+ * 纯标签格（没有绑字段）只印标签、留出空白，供现场手写。小票风格（热敏）没有格子可画，
+ * 降级成「标签 + 值」行（与 `escpos.ts` 同一条口径：带字段的格子按行序排，纯标签格跳过）。
+ */
+function GridBlock({
+  section,
+  ctx,
+  scenario,
+  layout,
+}: {
+  section: ReceiptSection;
+  ctx: ReceiptContext;
+  scenario: ReceiptScenario;
+  layout: ReceiptLayout;
+}) {
+  const spec = getSpec(scenario);
+  const rows = section.rows ?? [];
+  if (rows.length === 0) return null;
+  const boundCells = rows.flatMap((r, ri) => r.cells.map((c, ci) => ({ c, key: `${ri}-${ci}` }))).filter((x) => x.c.key);
+
+  if (layout === "receipt") {
+    if (boundCells.length === 0) return null;
+    return (
+      <div className="mt-1.5">
+        {section.title && <p className="font-bold">{section.title}</p>}
+        {boundCells.map(({ c, key }) => (
+          <div key={key} className="flex items-baseline justify-between gap-2">
+            <span className="shrink-0">{c.label}</span>
+            <span className={`min-w-0 text-right font-medium ${valueClass(c.kind ?? "text")}`}>{spec.resolveField(c.key!, ctx)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2">
+      {section.title && <p className="mb-0.5 text-[11px] font-bold">{section.title}</p>}
+      <table className="w-full table-fixed border-collapse text-[11px]">
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i}>
+              {row.cells.map((c, j) => (
+                <td
+                  key={j}
+                  colSpan={c.colspan ?? 1}
+                  rowSpan={c.rowspan ?? 1}
+                  className="border border-black px-1.5 py-0.5 align-top break-inside-avoid"
+                >
+                  <p className="text-[10px] leading-[1.2] text-black/60">{c.label}</p>
+                  <p className={`mt-0.5 min-h-[1.3em] leading-[1.35] ${valueClass(c.kind ?? "text")}`}>
+                    {c.key != null ? spec.resolveField(c.key, ctx) : "\u00A0"}
+                  </p>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SignBlock({ section, layout }: { section: ReceiptSection; layout: ReceiptLayout }) {
   const signers = section.signers ?? [];
   if (signers.length === 0) return null;
@@ -429,6 +496,8 @@ function sectionBody(
       return <KVBlock section={sec} ctx={a.ctx} scenario={a.scenario} layout={a.layout} />;
     case "table":
       return <TableBlock section={sec} ctx={a.ctx} scenario={a.scenario} layout={a.layout} />;
+    case "grid":
+      return <GridBlock section={sec} ctx={a.ctx} scenario={a.scenario} layout={a.layout} />;
     case "sign":
       return <SignBlock section={sec} layout={a.layout} />;
     case "qr":

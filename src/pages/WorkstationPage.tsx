@@ -358,7 +358,8 @@ export function WorkstationPage() {
       announce("这一单还没有出库净重，先不出票", `ws-ob-print-nonet:${target}`);
       return;
     }
-    const printed = (fresh.prints ?? []).filter((p) => p.result === "success").length;
+    // 补打角标只数码单自己那几条：详情里现在同时挂着发货凭证的留痕（另一种票各数各的）
+    const printed = (fresh.prints ?? []).filter((p) => p.doc_type === "outbound_order" && p.result === "success").length;
     void printReceipt({
       scenario: "outbound_order",
       docNo: target,
@@ -869,6 +870,12 @@ export function WorkstationPage() {
     queryFn: () => (printTarget ? api.listQc({ keyword: printTarget }) : Promise.resolve([])),
     enabled: printTarget != null,
   });
+  /** 收购凭证那几格要印售粮人档案真值，打印上下文单独取一份 party */
+  const { data: printParty } = useQuery({
+    queryKey: ["party", printOrder?.party_id],
+    queryFn: () => (printOrder?.party_id != null ? api.getParty(printOrder.party_id) : Promise.resolve(null)),
+    enabled: printOrder?.party_id != null,
+  });
   const printQc = printOrder?.qc_report_id != null ? printQcRows.find((r) => r.id === printOrder.qc_report_id) ?? null : null;
   /** 只认 print_log 里成功的那几条（补打角标进监管台账，不能由"对话框开合过"决定） */
   const printTimes = (printOrder?.prints ?? []).filter((p) => p.doc_type === "weigh_order" && p.result === "success").length;
@@ -882,7 +889,7 @@ export function WorkstationPage() {
       scenario: "weigh_order",
       docNo: printTarget,
       isReprint: printTimes > 0,
-      context: { station, names, order: printOrder, qc: printQc },
+      context: { station, names, order: printOrder, qc: printQc, party: printParty ?? null },
     });
     // 刻意不回头"清零" printSeq：它只表示"出票意图发生过第几次"，重复出票由上面的 `printedFor` 挡。
     // 清一个布尔量回来，反倒会把"目标单号已改、而 station/printOrder 还没就绪"的那一轮一起抹掉。

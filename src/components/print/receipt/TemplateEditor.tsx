@@ -24,7 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Choose } from "@/components/business/Choose";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
-import { defaultTemplate } from "./defaults";
+import { defaultTemplate, presetsFor, uid } from "./defaults";
 import { receiptLines } from "./escpos";
 import { printJob } from "../printPage";
 import { SCENARIOS } from "./scenarios";
@@ -35,7 +35,6 @@ import { CODE_SCALE_DOTS, CODE_SCALE_LABEL, type CodeScale, dotsToMm, printableD
 import { defaultLayout, LAYOUT, PAPER_SPEC } from "./paper";
 import type { ReceiptLayout } from "./paper";
 import { effectiveTemplate, useReceiptStore } from "./store";
-import { uid } from "./defaults";
 import type { BlockKind, CodeStyle, ReceiptContext, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
 import { BLOCK_LABEL, CODE_STYLE_LABEL } from "./types";
 
@@ -55,6 +54,9 @@ export function ReceiptTemplateEditor() {
   const [scenario, setScenario] = useState<ReceiptScenario>("weigh_order");
   const spec = SCENARIOS[scenario];
   const [draft, setDraft] = useState<ReceiptTemplate>(() => effectiveTemplate(scenario));
+  /** 版式预设下拉的选中值：常态停在被遮蔽的「载入预设…」项上，选一份即覆盖草稿并复位 */
+  const [presetChoice, setPresetChoice] = useState("__preset__");
+  const presets = useMemo(() => presetsFor(scenario), [scenario]);
 
   /**
    * 左栏当前选中的区块：预览里对应的那一格会被描一圈。
@@ -67,6 +69,7 @@ export function ReceiptTemplateEditor() {
   // 切换场景时载入该场景当前生效模板（用户覆盖优先；effectiveTemplate 会补回出库码单的必备码）
   useEffect(() => {
     setDraft(effectiveTemplate(scenario));
+    setPresetChoice("__preset__");
     // 区块 id 是"每个场景各自一套"，留着上一个场景的选中会把高亮指到不存在的那一格
     setActiveSection(null);
   }, [scenario]);
@@ -136,10 +139,12 @@ export function ReceiptTemplateEditor() {
           ? { id: uid(), kind, title: spec.tables?.[0]?.label ?? "表格", dataset: spec.tables?.[0]?.dataset, columns: spec.tables?.[0]?.columns.map((c) => c.key) }
           : kind === "sign"
             ? { id: uid(), kind, title: "署名", signers: ["经办人", "复核"] }
-            : kind === "qr"
-              // 不写 codeStyle = 只出二维码，与历史模板一致；要条码在区块里切「码制」
-              ? { id: uid(), kind, title: "条码 / 二维码", text: "{{ticket_code}}", qrCaption: true }
-              : { id: uid(), kind, text: "说明：{{空缺}}" };
+            : kind === "grid"
+              ? { id: uid(), kind, title: "表格版式", rows: [{ cells: [{ label: "新格子", key: spec.fields[0]?.key }] }] }
+              : kind === "qr"
+                // 不写 codeStyle = 只出二维码，与历史模板一致；要条码在区块里切「码制」
+                ? { id: uid(), kind, title: "条码 / 二维码", text: "{{ticket_code}}", qrCaption: true }
+                : { id: uid(), kind, text: "说明：{{空缺}}" };
     setDraft((d) => ({ ...d, sections: [...d.sections, base] }));
     // 票面动辄比预览框长几屏，接在末尾的新块不选中就等于"加了却不知道加在哪儿"
     focusSection(base.id);
@@ -294,6 +299,31 @@ export function ReceiptTemplateEditor() {
         <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
           <section className="space-y-2 border bg-card p-3">
             <h3 className="text-sm font-semibold">基础设置</h3>
+            {presets.length > 1 && (
+              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                载入版式预设
+                <Choose
+                  value={presetChoice}
+                  onChange={(v) => {
+                    if (v === "__preset__") return;
+                    const preset = presets[Number(v)];
+                    if (!preset) return;
+                    setDraft(structuredClone(preset));
+                    setPresetChoice("__preset__");
+                    toast.message(`已载入「${preset.name}」`, {
+                      description: "点「保存模板」后，该场景打印即用这份版式。",
+                    });
+                  }}
+                  options={[
+                    { value: "__preset__", label: "载入预设…" },
+                    ...presets.map((p, i) => ({ value: String(i), label: p.name })),
+                  ]}
+                  size="sm"
+                  aria-label="载入版式预设"
+                />
+                <span className="text-[10px] text-muted-foreground">选一份整体覆盖当前编辑区，保存后才对该场景打印生效。</span>
+              </Label>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 票据标题
@@ -413,7 +443,7 @@ export function ReceiptTemplateEditor() {
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">区块（{draft.sections.length}）</h3>
               <div className="flex gap-1">
-                {(["kv", "table", "sign", "text", "qr"] as BlockKind[]).map((k) => (
+                {(["kv", "table", "grid", "sign", "text", "qr"] as BlockKind[]).map((k) => (
                   <Button key={k} size="xs" variant="outline" onClick={() => addSection(k)}>
                     <PlusIcon />
                     {BLOCK_LABEL[k]}
@@ -532,7 +562,7 @@ function SectionEditor({
         </div>
       </div>
 
-      {(sec.kind === "kv" || sec.kind === "table" || sec.kind === "sign" || sec.kind === "qr") && (
+      {(sec.kind === "kv" || sec.kind === "table" || sec.kind === "grid" || sec.kind === "sign" || sec.kind === "qr") && (
         <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
           区块标题
           <Input value={sec.title ?? ""} onChange={(e) => onPatch({ title: e.target.value })} className="h-7 text-xs" />
@@ -548,6 +578,7 @@ function SectionEditor({
       {sec.kind === "table" && spec.tables && (
         <TablePicker sec={sec} scenario={scenario} onPatch={onPatch} />
       )}
+      {sec.kind === "grid" && <GridEditor sec={sec} scenario={scenario} onPatch={onPatch} />}
       {sec.kind === "sign" && <SignEditor sec={sec} onPatch={onPatch} />}
       {sec.kind === "qr" && <CodeEditor sec={sec} scenario={scenario} paper={paper} sample={sample} onPatch={onPatch} />}
       {sec.kind === "text" && (
@@ -774,8 +805,48 @@ function KvPicker({
   );
 }
 
-/** 表格区：选数据集 + 选列 */
-function TablePicker({
+/**
+ * 表格版式（grid）：行列结构来自预设，这里只开放改格子上的标签文字。
+ * 增删格子/改字段绑定要动格子几何（跨列、跨行），编辑器不开放——要用别的版式请换「字段区」。
+ */
+function GridEditor({
+  sec,
+  scenario,
+  onPatch,
+}: {
+  sec: ReceiptSection;
+  scenario: ReceiptScenario;
+  onPatch: (p: Partial<ReceiptSection>) => void;
+}) {
+  const spec = SCENARIOS[scenario];
+  const rows = sec.rows ?? [];
+  function patchLabel(ri: number, ci: number, label: string) {
+    onPatch({
+      rows: rows.map((r, i) => (i === ri ? { cells: r.cells.map((c, j) => (j === ci ? { ...c, label } : c)) } : r)),
+    });
+  }
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[10px] text-muted-foreground">
+        固定表格：一行几格、格子绑哪个字段由预设定好，这里只改格子上的标签文字；纯标签格票面上留空供手写。
+      </p>
+      {rows.map((r, i) => (
+        <div key={i} className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-1 rounded border bg-background/60 p-1.5">
+          {r.cells.map((c, j) => (
+            <Label key={j} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+              <Input value={c.label} onChange={(e) => patchLabel(i, j, e.target.value)} className="h-6 text-[11px]" />
+              <span className="truncate text-[10px]" title={c.key}>
+                {c.key ? spec.fields.find((f) => f.key === c.key)?.label ?? c.key : "纯标签格（留空手写）"}
+              </span>
+            </Label>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 表格区：选数据集 + 选列 */function TablePicker({
   sec,
   scenario,
   onPatch,
