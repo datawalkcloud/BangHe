@@ -20,6 +20,8 @@ displayName: Gitee 发布（下载镜像 + 发行版）
 #   那是系统级参数保留前缀。可选 BH_GITEE_USER（私人令牌所属账号的登录名；
 #   不配则用令牌调 /api/v5/user 反查）。其余缺省值写死在
 #   scripts/release-notes/gitee_publish.py 里。
+variables:
+  BH_PROBE: probe-value
 stages:
   - stage:
     name: publish
@@ -34,8 +36,8 @@ stages:
         pythonVersion: 3.9
         commands:
           - python3 -V
-          # 只打印变量名不打印值：确认通用变量有没有进构建环境
-          - set +x; env | cut -d= -f1 | grep -iE '(token|gitee|bh_)' | sort | tr '\n' ' '; echo
+          # 只打印长度不打印值：检测 ${} 替换与检出凭据可用性（gitee_probe.py）
+          - set +x; T='${BH_GITEE_TOKEN}'; P='${BH_PROBE}'; echo "subst token_len=${#T} probe_len=${#P}"; python3 scripts/release-notes/gitee_probe.py
           # set +x 先关回显，免得令牌以明文出现在公开的构建日志里
           - set +x; python3 scripts/release-notes/gitee_publish.py
         notify: []
