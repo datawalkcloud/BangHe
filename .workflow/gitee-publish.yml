@@ -15,10 +15,11 @@ displayName: Gitee 发布（下载镜像 + 发行版）
 # 加了就是每同步一次跑一遍发布。
 #
 # 一次性配置（都在 Gitee 侧，不进仓库）：
-#   Gitee Go → 本项目 → 全局参数：GITEE_TOKEN（私人令牌，勾 projects 权限，
-#   要能推 datawalkcloud/banghe-release 与调 v5 发行版接口）。可选 GITEE_USER
-#   （私人令牌所属账号的登录名；不配则用令牌调 /api/v5/user 反查）。
-#   其余缺省值写死在 scripts/release-notes/gitee_publish.py 里。
+#   Gitee Go → 通用变量：BH_GITEE_TOKEN（私人令牌，勾 projects 权限，要能推
+#   datawalkcloud/banghe-release 与调 v5 发行版接口）。名字不能用 GITEE_ 开头——
+#   那是系统级参数保留前缀。可选 BH_GITEE_USER（私人令牌所属账号的登录名；
+#   不配则用令牌调 /api/v5/user 反查）。其余缺省值写死在
+#   scripts/release-notes/gitee_publish.py 里。
 stages:
   - stage:
     name: publish

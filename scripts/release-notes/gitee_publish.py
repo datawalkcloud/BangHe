@@ -24,9 +24,10 @@ Windows runner，所以 Tauri + NSIS 的构建仍留在 GitHub。
        （提交与 GitHub 一致，之后的镜像同步不会打架）；
   5. 回读 raw latest.json，确认客户端实际拉的地址已是本次版本。
 
-凭据（Gitee Go 项目级「全局参数」，界面配置，不进仓库）：
-  GITEE_TOKEN  必填，私人令牌（projects 权限）
-  GITEE_USER   可选，令牌所属账号登录名；缺省用令牌调 /api/v5/user 反查
+凭据（Gitee Go 仓库级「通用变量」，界面配置，不进仓库；名字不能以 GITEE_ 开头）：
+  BH_GITEE_TOKEN  必填，私人令牌（projects 权限）
+  BH_GITEE_USER   可选，令牌所属账号登录名；缺省用令牌调 /api/v5/user 反查
+本地手工跑时用 GITEE_TOKEN / GITEE_USER 也行（同名变量优先取 BH_ 前缀的）。
 其余可用环境变量覆盖：GITEE_OWNER / GITEE_REPO / GITEE_SRC_REPO / GITEE_BRANCH /
 GH_REPO / TARGET_TAG。
 
@@ -56,7 +57,19 @@ REPO = os.environ.get("GITEE_REPO", "banghe-release").strip()
 SRC_REPO = os.environ.get("GITEE_SRC_REPO", "BangHe").strip()
 BRANCH = os.environ.get("GITEE_BRANCH", "master").strip()
 GH_REPO = os.environ.get("GH_REPO", "datawalkcloud/BangHe").strip()
-TOKEN = os.environ.get("GITEE_TOKEN", "").strip()
+
+
+def env_first(*names: str) -> str:
+    for name in names:
+        val = os.environ.get(name, "").strip()
+        if val:
+            return val
+    return ""
+
+
+# Gitee Go 的「通用变量」不许用 GITEE_ 前缀（系统级参数占用），流水线里配的是
+# BH_GITEE_TOKEN / BH_GITEE_USER；GITEE_* 留给本地手工跑与 GitHub Actions。
+TOKEN = env_first("BH_GITEE_TOKEN", "GITEE_TOKEN")
 
 ASSET_TPL = "banghe-{version}-windows-x64-setup.exe"
 STABLE_ASSET = "banghe-latest-windows-x64-setup.exe"
@@ -164,7 +177,7 @@ def gitee_raw_version() -> str | None:
 
 
 def push_user() -> str:
-    user = os.environ.get("GITEE_USER", "").strip()
+    user = env_first("BH_GITEE_USER", "GITEE_USER")
     if user:
         return user
     status, body = http(
@@ -248,7 +261,11 @@ def build_tree(work: str, exe: str, manifest: dict) -> tuple[str, str]:
 
 def main() -> None:
     if not TOKEN:
-        fail("没有 GITEE_TOKEN：到 Gitee Go → 本项目 → 全局参数 里配私人令牌（projects 权限）")
+        fail("没有 GITEE_TOKEN：Gitee Go 自带的仓库凭据只用于检出当前仓库（以 git extraheader 注入，"
+             "不是环境变量、也不是可调 OpenAPI 的令牌），而本流水线要推 banghe-release 并调 v5 发行版"
+             "接口，必须用你自己的私人令牌。到 Gitee Go → 通用变量 新建 BH_GITEE_TOKEN（名字不能用 "
+             "GITEE_ 开头，那是系统保留前缀；值填私人令牌，勾 projects；可选 BH_GITEE_USER=登录名），"
+             "重跑；仍报这条说明该流水线没引用这个变量，到流水线编辑里引用/关联一次")
 
     tag = resolve_tag()
     if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
