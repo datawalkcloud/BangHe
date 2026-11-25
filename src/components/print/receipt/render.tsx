@@ -21,7 +21,7 @@ import { QrGraphic } from "./QrGraphic";
 import { BarcodeGraphic } from "./BarcodeGraphic";
 import { measureCode128 } from "./code128";
 import { printableDots, scaleOf } from "./code-size";
-import { BLOCK_LABEL, type CodeStyle, type FieldKind, type ReceiptContext, type ReceiptScenario, type ReceiptSection, type ReceiptTemplate, type ScenarioSpec } from "./types";
+import { BLOCK_LABEL, gridValueLines, type CodeStyle, type FieldKind, type ReceiptContext, type ReceiptScenario, type ReceiptSection, type ReceiptTemplate, type ScenarioSpec } from "./types";
 
 const SONG = { fontFamily: '"SimSun", "宋体", "NSimSun", serif' } as const;
 
@@ -356,11 +356,13 @@ function CodeBlock({
 }
 
 /**
- * 表格版式（grid 区块）：固定网格单据，如收购凭证。
+ * 表格版式（grid 区块）：固定网格单据，如收购凭证、出库磅单。
  *
- * 只给单据风格（A4 / 241 针式）画格子——每一格「标签在上、取值在下」，与印好的表格单据同形；
- * 纯标签格（没有绑字段）只印标签、留出空白，供现场手写。小票风格（热敏）没有格子可画，
- * 降级成「标签 + 值」行（与 `escpos.ts` 同一条口径：带字段的格子按行序排，纯标签格跳过）。
+ * 只给单据风格（A4 / 241 针式）画格子，格子有两种画法（`GridCell`）：表头格与值格左右并排
+ * （出厂那两份固定表格——收购凭证、出库磅单——都是这种），或缺省那种标签在上、取值在下挤一格
+ * （用户自己排的格子）；既没绑字段又没写标签的格子只留空白，供现场手写。小票风格（热敏）没有
+ * 格子可画，降级成「标签 + 值」行（与 `escpos.ts` 同一条口径，两边都走 `types.ts::gridValueLines`，
+ * 不许各排一份）。
  */
 function GridBlock({
   section,
@@ -376,15 +378,15 @@ function GridBlock({
   const spec = getSpec(scenario);
   const rows = section.rows ?? [];
   if (rows.length === 0) return null;
-  const boundCells = rows.flatMap((r, ri) => r.cells.map((c, ci) => ({ c, key: `${ri}-${ci}` }))).filter((x) => x.c.key);
 
   if (layout === "receipt") {
-    if (boundCells.length === 0) return null;
+    const lines = gridValueLines(rows);
+    if (lines.length === 0) return null;
     return (
       <div className="mt-1.5">
         {section.title && <p className="font-bold">{section.title}</p>}
-        {boundCells.map(({ c, key }) => (
-          <div key={key} className="flex items-baseline justify-between gap-2">
+        {lines.map((c, i) => (
+          <div key={i} className="flex items-baseline justify-between gap-2">
             <span className="shrink-0">{c.label}</span>
             <span className={`min-w-0 text-right font-medium ${valueClass(c.kind ?? "text")}`}>{spec.resolveField(c.key!, ctx)}</span>
           </div>
@@ -393,6 +395,7 @@ function GridBlock({
     );
   }
 
+  // 格线宽度由 `table-fixed` 均分（第一行各格按 colspan 平分），与票样那种等宽格线一致
   return (
     <div className="mt-2">
       {section.title && <p className="mb-0.5 text-[11px] font-bold">{section.title}</p>}
@@ -400,19 +403,29 @@ function GridBlock({
         <tbody>
           {rows.map((row, i) => (
             <tr key={i}>
-              {row.cells.map((c, j) => (
-                <td
-                  key={j}
-                  colSpan={c.colspan ?? 1}
-                  rowSpan={c.rowspan ?? 1}
-                  className="border border-black px-1.5 py-0.5 align-top break-inside-avoid"
-                >
-                  <p className="text-[10px] leading-[1.2] text-black/60">{c.label}</p>
-                  <p className={`mt-0.5 min-h-[1.3em] leading-[1.35] ${valueClass(c.kind ?? "text")}`}>
-                    {c.key != null ? spec.resolveField(c.key, ctx) : "\u00A0"}
-                  </p>
-                </td>
-              ))}
+              {row.cells.map((c, j) => {
+                // 表头格与不写标签的值格都只有一样内容，居中排；标签在上那一格照旧顶对齐
+                const single = c.head || !c.label;
+                return (
+                  <td
+                    key={j}
+                    colSpan={c.colspan ?? 1}
+                    rowSpan={c.rowspan ?? 1}
+                    className={`border border-black px-1.5 py-0.5 break-inside-avoid ${single ? "text-center align-middle" : "align-top"}`}
+                  >
+                    {c.head ? (
+                      c.label
+                    ) : (
+                      <>
+                        {c.label && <p className="text-[10px] leading-[1.2] text-black/60">{c.label}</p>}
+                        <p className={`${c.label ? "mt-0.5" : ""} min-h-[1.3em] leading-[1.35] ${valueClass(c.kind ?? "text")}`}>
+                          {c.key != null ? spec.resolveField(c.key, ctx) : "\u00A0"}
+                        </p>
+                      </>
+                    )}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>

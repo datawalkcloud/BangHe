@@ -113,11 +113,15 @@ export const CODE_STYLE_LABEL: Record<CodeStyle, string> = {
 };
 
 /**
- * 表格版式（grid 区块）里的一格：标签印在上方，取值印在下方，与印好的收购凭证这类
- * 固定表格单据同形。`key` 缺省 = 纯标签格（票面上只印标签，留空供手写）。
+ * 表格版式（grid 区块）里的一格。两种画法，对应两种纸质单据：
+ *  - 缺省「标签在上、取值在下」挤在同一格，给要在一格里同时印名字与数值的栏用（出厂的两张
+ *    固定表格都不再用这种，但用户自己排的格子还是这个默认形状）；
+ *  - `head` = 表头格，只印标签、不印取值，与右侧的值格左右并排，与收购凭证 / 出库磅单这类
+ *    「品种 ｜ ＿ ｜ 车号 ｜ ＿」的表单同形。值格不写标签（`label` 留空）就只印取值。
+ * 既没绑 `key` 也没写标签的格子 = 空白格，票面上留空供手写。
  */
 export interface GridCell {
-  /** 绑定场景字段 key；缺省 = 纯标签格（如「备注」这种大空格） */
+  /** 绑定场景字段 key；缺省 = 空白格（票面上留空供手写） */
   key?: string;
   label: string;
   /** 跨列数（表单里「实付大写」那种通栏大格），缺省 1 */
@@ -126,10 +130,43 @@ export interface GridCell {
   rowspan?: number;
   /** 数值类用等宽，便于一列对齐 */
   kind?: FieldKind;
+  /** 表头格：只印标签、垂直居中，取值在它右边那一格（见上面的说明） */
+  head?: boolean;
 }
 
 export interface GridRow {
   cells: GridCell[];
+}
+
+/**
+ * 表格版式降级成「标签 + 值」行时的行序（`render.tsx` 的小票风格分支与 `escpos.ts` 共用）。
+ *
+ * 值格不写标签，标签从哪儿补：先认同一行左边最近的表头格（「品种 ｜ ＿」左右两格），
+ * 整行只有值格时（「毛重 / 皮重 …」表头行 + 下面一整行空格）认上一行同一列的标签。
+ * 画格子那一侧由浏览器排版，降级这一侧没有格子可画、只能靠这份行序——两处必须同一个解析，
+ * 否则纸上少掉的正是预览里看到的那几格。没绑字段的格子不打行（标签格与空白格都不掺进来）。
+ */
+export function gridValueLines(rows: GridRow[]): GridCell[] {
+  const out: GridCell[] = [];
+  let prev: { label: string; start: number; span: number }[] = [];
+  for (const row of rows) {
+    const cur: { label: string; start: number; span: number }[] = [];
+    let col = 0;
+    let pending = "";
+    for (const c of row.cells) {
+      const span = c.colspan ?? 1;
+      if (c.key) {
+        const above = prev.find((p) => col >= p.start && col < p.start + p.span)?.label ?? "";
+        out.push({ ...c, label: c.label || pending || above });
+      } else if (c.label) {
+        pending = c.label;
+      }
+      cur.push({ label: c.label, start: col, span });
+      col += span;
+    }
+    prev = cur;
+  }
+  return out;
 }
 
 export interface ReceiptSection {
@@ -172,10 +209,11 @@ export interface ReceiptSection {
   /**
    * 业务流程必备件：编辑器不给删、取用模板时缺了会被补回（`defaults.ts::normalizeTemplate`）。
    *
-   * 现在只有**出库码单**的凭单码带这个标记：出库那条路扫到码才定位单据，删掉它等于让
-   * 手上这张纸在系统里查不到。磅单的凭票码不再属于必备件（2026-11-19 起可选）——
-   * 没有扫码枪、或 58 纸嫌它占版的站点可以在编辑器里直接删掉，结算窗口仍能按单号手敲
-   * 或刷流转卡找到这张单。出厂默认照样带着它，只是删除入口不再锁死。
+   * 现在只有**出库码单**的凭单码带这个标记，而那张票自 2026-11-25 起既不出票、也不在编辑器标签排里
+   * （出库合一到出库磅单一张纸上）——留着它是因为存过这版自定义模板的站点，取用侧仍按同一套规矩
+   * 补齐，不因为一次版式合并就改人家存过的东西。磅单的凭票码不再属于必备件（2026-11-19
+   * 起可选）——没有扫码枪、或 58 纸嫌它占版的站点可以在编辑器里直接删掉，结算窗口仍能按单号
+   * 手敲或刷流转卡找到这张单。出厂默认照样带着它，只是删除入口不再锁死。
    */
   required?: boolean;
 }
@@ -240,7 +278,7 @@ export interface ReceiptContext {
   reprint?: boolean;
   order?: WeighOrder;
   qc?: QcReport | null;
-  /** 售粮人档案（收购凭证的实方电话 / 银行 / 地址几格印真值，磅单本身没存这些） */
+  /** 售粮人档案（收购凭证的卖方电话 / 银行 / 地址几格印真值，磅单本身没存这些） */
   party?: Party | null;
   settlement?: Settlement;
   payment?: PaymentRecord;

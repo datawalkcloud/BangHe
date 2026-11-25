@@ -29,7 +29,7 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
     case "weigh_order":
       return {
         scenario,
-        name: "过磅单（默认）",
+        name: "收购磅单（默认）",
         paper: "A4",
         title: "收购码单（过磅单）",
         copyNote: "第一联 存根（粮站留存）",
@@ -185,34 +185,9 @@ function buildTemplate(scenario: ReceiptScenario): ReceiptTemplate {
         ],
       };
     case "outbound_voucher":
-      return {
-        scenario,
-        name: "发货凭证（默认）",
-        paper: "A4",
-        title: "发货凭证",
-        copyNote: "第一联 存根（发货方留存）",
-        showReprintBadge: true,
-        updatedAt: BASELINE,
-        sections: [
-          {
-            id: uid(),
-            kind: "kv",
-            // 按纸面表单的行序排字段，分组当行标题（票面小标题由字段所属分组带出）。
-            // 表单上没有数据源的栏（合同号/司机/箱封/运费/水分）解析成空串——这张纸
-            // 现场还要手填，印「—」反而没处下笔（见 scenarios.tsx 的 VOUCHER_FIELDS 注释）。
-            fields: [
-              "variety_name", "vehicle_no", "moisture_pct", "grade",
-              "receiver", "contract_no", "warehouse",
-              "gross_weight", "tare_weight", "net_weight", "gross_at", "tare_at",
-              "price_per_kg", "price_per_jin", "goods_amount_upper", "goods_amount",
-              "driver_name", "driver_phone",
-              "front_box_no", "rear_box_no", "front_seal_no", "rear_seal_no",
-              "remark", "freight",
-            ],
-          },
-          { id: uid(), kind: "sign", signers: ["发货方负责人", "检斤员", "收货方"] },
-        ],
-      };
+      // 出库唯一的一张纸：详情页那个按钮与工作台 F9 都打这份（从前还并列一个「打印码单」，
+      // 2026-11-25 合一之后退役，只留 `outbound_order` 那一页给历史留痕对版式）
+      return outboundWeighTicketTemplate("A4");
     case "ledger":
       return {
         scenario,
@@ -254,15 +229,15 @@ export function defaultTemplate(scenario: ReceiptScenario): ReceiptTemplate {
 /**
  * 「收购凭证」固定表格：格子与标签照纸质票样排，取值绑磅单场景字段。
  *
- * 与过磅单默认模板的分工：那份是系统单据（字段区 + 凭票码 + 结算提示），这份是照
+ * 与收购磅单默认模板的分工：那份是系统单据（字段区 + 凭票码 + 结算提示），这份是照
  * 现场手写单据排的固定表格（收购凭证），给习惯传统票面的站点用。表格区块（grid）
  * 只在 A4 / 241 单据风格里画格子，热敏纸上降级成「标签 + 值」行（见 render.tsx / escpos.ts）。
+ *
+ * 2026-11-25 照现场票样重排：这张纸从头到尾是「标签格 ｜ 值格」左右并排（先前那版把标签印在
+ * 值上面，还漏了霉变扣量、不完善粒扣量两栏），整表按十列均分，毛重那一行是「表头行 + 一整行值格」
+ * 的排法（与出库磅单同一机制）。票样上「折干水扣量/扣后量」那一格印的是斜杠、没有数据源，
+ * 照空白格处理；霉变扣量与不完善粒扣量库里没有对应字段，同样留白给现场手写。
  */
-function cell(label: string, key?: string, kind?: FieldKind, colspan?: number): GridCell {
-  return { label, ...(key ? { key } : {}), ...(kind ? { kind } : {}), ...(colspan ? { colspan } : {}) };
-}
-
-/** 收购凭证预设：paper 传 A4 或 dot241，票面版式与格子结构同一份 */
 export function acquisitionVoucherTemplate(paper: "A4" | "dot241"): ReceiptTemplate {
   return withLayout({
     scenario: "weigh_order",
@@ -283,16 +258,16 @@ export function acquisitionVoucherTemplate(paper: "A4" | "dot241"): ReceiptTempl
         id: uid(),
         kind: "grid",
         rows: [
-          { cells: [cell("日期", "business_date"), cell("计量单位 kg、元"), cell("检质证号", "qc_report_no")] },
-          { cells: [cell("品名", "variety_name"), cell("车号", "vehicle_no"), cell("卖方名称", "party_name"), cell("实方电话", "party_phone")] },
-          { cells: [cell("身份证号", "id_card_masked"), cell("银行名称", "bank_name"), cell("银行卡号", "bank_account")] },
-          { cells: [cell("容量(g/L)", "bulk_density"), cell("水分(%)", "moisture_pct", "percent"), cell("杂质(%)", "impurity_pct", "percent")] },
-          { cells: [cell("现场扣量", "other_deduct", "weight"), cell("水扣量", "moisture_deduct", "weight"), cell("杂质扣量", "impurity_deduct", "weight"), cell("霉变(%)", "mold_pct", "percent"), cell("不完善粒(%)", "unsound_pct", "percent")] },
-          { cells: [cell("毛重", "gross_weight", "weight"), cell("皮重", "tare_weight", "weight"), cell("净重", "net_weight", "weight"), cell("总扣量", "deduct_total", "weight"), cell("计价净重", "settlement_weight", "weight")] },
-          { cells: [cell("公斤价", "price_per_kg", "money"), cell("市斤价", "price_per_jin", "money"), cell("金额", "goods_amount", "money"), cell("卸车费", "deduction_fee", "money")] },
-          { cells: [cell("折干水扣量", "moisture_deduct", "weight"), cell("扣后量", "settlement_weight", "weight"), cell("实付大写", "payable_upper", "text", 2)] },
-          { cells: [cell("毛检日期", "gross_at", "datetime"), cell("皮检日期", "tare_at", "datetime"), cell("备注", "remark"), cell("入库仓号", "warehouse")] },
-          { cells: [cell("地址及电话", "party_contact", undefined, 4)] },
+          { cells: [head("日期"), val("business_date", undefined, 4), head("单位：kg、元", 2), head("检质证号"), val("qc_report_no", undefined, 2)] },
+          { cells: [head("品名"), val("variety_name"), head("车号"), val("vehicle_no"), head("卖方名称"), val("party_name", undefined, 2), head("卖方电话"), val("party_phone", undefined, 2)] },
+          { cells: [head("身份证号"), val("id_card_masked", undefined, 2), head("银行名称"), val("bank_name", undefined, 2), head("银行卡号"), val("bank_account", undefined, 3)] },
+          { cells: [head("容重(g/L)"), val("bulk_density"), head("水分(%)"), val("moisture_pct", "percent"), head("杂质(%)"), val("impurity_pct", "percent"), head("霉变(%)"), val("mold_pct", "percent"), head("不完善粒(%)"), val("unsound_pct", "percent")] },
+          { cells: [head("现场扣量"), val("other_deduct", "weight"), head("水扣量"), val("moisture_deduct", "weight"), head("杂质扣量"), val("impurity_deduct", "weight"), head("霉变扣量"), blank(), head("不完善粒扣量"), blank()] },
+          { cells: [head("毛重"), head("皮重"), head("净重"), head("总扣量"), head("计价净重"), head("公斤价"), head("市斤价"), head("金额", 2), head("卸车费")] },
+          { cells: [val("gross_weight", "weight"), val("tare_weight", "weight"), val("net_weight", "weight"), val("deduct_total", "weight"), val("settlement_weight", "weight"), val("price_per_kg", "money"), val("price_per_jin", "money"), val("goods_amount", "money", 2), val("deduction_fee", "money")] },
+          { cells: [head("折干水扣量/扣后量"), blank(), head("实付大写"), val("payable_upper", undefined, 4), head("实付"), val("paid_amount", "money", 2)] },
+          { cells: [head("毛检日期"), val("gross_at", "datetime", 3), head("皮检日期"), val("tare_at", "datetime", 3), head("入库仓号"), val("warehouse")] },
+          { cells: [head("地址及电话"), val("party_contact", undefined, 3), head("备注"), val("remark", undefined, 5)] },
         ],
       },
       { id: uid(), kind: "sign", signers: ["检斤员", "付款员"] },
@@ -300,14 +275,79 @@ export function acquisitionVoucherTemplate(paper: "A4" | "dot241"): ReceiptTempl
   });
 }
 
+/** 表头格：只印标签、与右侧的值格左右并排（纸质表单「品种 ｜ ＿」那种两格） */
+function head(label: string, colspan?: number): GridCell {
+  return { label, head: true, ...(colspan ? { colspan } : {}) };
+}
+
+/** 值格：只印取值，标签在同一行左边的表头格里（整行都是值格时取上一行同一列） */
+function val(key: string, kind?: FieldKind, colspan?: number): GridCell {
+  return { label: "", key, ...(kind ? { kind } : {}), ...(colspan ? { colspan } : {}) };
+}
+
+/** 空白格：票面上留着给现场手写——出库磅单的合同号、箱封号、运费几栏没有数据源，就是这么用的 */
+function blank(colspan?: number): GridCell {
+  return { label: "", ...(colspan ? { colspan } : {}) };
+}
+
+/**
+ * 「出库磅单」固定表格：照现场那张纸的格线排，八列均分，A4 与 241 针式同形。
+ *
+ * 抬头原样照票样印的是「发货凭证」，2026-11-25 改名出库磅单（`title` 与界面标签一起改，
+ * 场景 id 与 `print_log.doc_type` 仍是 `outbound_voucher`，不动值域也就不动历史）。
+ *
+ * 与收购凭证那份是同一套格子画法（表头格 ｜ 值格左右并排，外加毛重 / 皮重 / 净重那一整行只有值、
+ * 标签在上一行表头格里的排法）；分别是这张八列均分、收购凭证十列，栏位也各照各的票样。
+ * 没有数据源的栏（水分、合同号、司机电话、箱封号、运费）排成空白格留现场手填，
+ * 不印「—」——印了就没处下笔（见 scenarios.tsx 的 VOUCHER_FIELDS 注释）。
+ */
+export function outboundWeighTicketTemplate(paper: "A4" | "dot241"): ReceiptTemplate {
+  return withLayout({
+    scenario: "outbound_voucher",
+    name: `出库磅单（${paper === "A4" ? "A4" : "241 针式"}）`,
+    paper,
+    title: "出库磅单",
+    copyNote: "第一联 存根（发货方留存）",
+    showReprintBadge: true,
+    // 日期与凭证号印在表格顶行（与票样同形），票头不再重复单号/日期/地址/电话那几行；
+    // 站名照常打——票第一眼要认得出是哪家的
+    showDocNo: false,
+    showDocDate: false,
+    showStationAddress: false,
+    showStationPhone: false,
+    updatedAt: BASELINE,
+    sections: [
+      {
+        id: uid(),
+        kind: "grid",
+        rows: [
+          { cells: [head("日期"), val("business_date", undefined, 2), head("单位：kg、元", 2), head("凭证号"), val("order_no", undefined, 2)] },
+          { cells: [head("品种"), val("variety_name"), head("车号"), val("vehicle_no"), head("水分(%)"), blank(), head("等级"), val("grade")] },
+          { cells: [head("收货方"), val("receiver", undefined, 2), head("合同号"), blank(2), head("出库仓号"), val("warehouse")] },
+          { cells: [head("毛重"), head("皮重"), head("净重"), head("公斤价"), head("市斤价"), head("司机名称"), head("司机电话", 2)] },
+          { cells: [val("gross_weight", "weight"), val("tare_weight", "weight"), val("net_weight", "weight"), val("price_per_kg", "money"), val("price_per_jin", "money"), val("driver_name"), blank(2)] },
+          { cells: [head("总金额大写"), val("goods_amount_upper", undefined, 4), head("金额"), val("goods_amount", "money", 2)] },
+          { cells: [head("毛检时间"), val("gross_at", "datetime", 3), head("皮检时间"), val("tare_at", "datetime", 3)] },
+          { cells: [head("前箱号"), blank(), head("后箱号"), blank(), head("前封号"), blank(), head("后封号"), blank()] },
+          { cells: [head("备注"), val("remark", undefined, 5), head("运费"), blank()] },
+        ],
+      },
+      { id: uid(), kind: "sign", signers: ["发货方负责人", "检斤员", "收货方"] },
+    ],
+  });
+}
+
 /**
  * 某场景可「载入」的版式预设：出厂默认排第一，后面是该场景的附加预设
- * （磅单多两份收购凭证固定表格）。编辑器里选一份整体覆盖草稿。
+ * （磅单多两份收购凭证固定表格，出库磅单多一份 241 针式）。编辑器里选一份整体覆盖草稿。
  */
 export function presetsFor(scenario: ReceiptScenario): ReceiptTemplate[] {
   const presets = [defaultTemplate(scenario)];
   if (scenario === "weigh_order") {
     presets.push(acquisitionVoucherTemplate("A4"), acquisitionVoucherTemplate("dot241"));
+  }
+  if (scenario === "outbound_voucher") {
+    presets.push(outboundWeighTicketTemplate("dot241"));
   }
   return presets;
 }

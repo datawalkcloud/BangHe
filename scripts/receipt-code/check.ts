@@ -24,9 +24,9 @@ import { CODE128_QUIET_MODULES, code128Runs, encodeCode128, measureCode128 } fro
 import { kvClusters } from "../../src/components/print/receipt/render";
 import { measureQr, qrSideDots } from "../../src/components/print/receipt/QrGraphic";
 import { receiptLines } from "../../src/components/print/receipt/escpos";
-import { defaultTemplate, normalizeTemplate, acquisitionVoucherTemplate, presetsFor } from "../../src/components/print/receipt/defaults";
+import { defaultTemplate, normalizeTemplate, acquisitionVoucherTemplate, outboundWeighTicketTemplate, presetsFor } from "../../src/components/print/receipt/defaults";
 import { SCENARIOS } from "../../src/components/print/receipt/scenarios";
-import { DOC_KIND_BY_CODE, encodeOrderCode, parseScannedCode, searchKeyword, settleable } from "../../src/lib/ticket-code";
+import { DOC_KIND_BY_CODE, encodeOrderCode, encodeTicketCode, parseScannedCode, searchKeyword, settleable } from "../../src/lib/ticket-code";
 import type { ReceiptSection, ReceiptTemplate } from "../../src/components/print/receipt/types";
 import type { NativePrintLine } from "../../src/lib/native";
 
@@ -646,17 +646,35 @@ ok(
 ok("O2 表格里绑定的字段都登记在磅单场景目录（绑错一个就打一列「—」）", acqBadKeys.length === 0, acqBadKeys);
 ok("O3 收购凭证不带任何码块（带码的票都得过 F6 那道同号闸门，这张不参与）", !acqA4.sections.some((s) => s.kind === "qr"));
 ok("O4 版式是单据风格（固定表格只在单据风格里画格子）", acqA4.layout === "sheet" && acq241.layout === "sheet");
-// 小票机降级：带字段的格子按票面行序排成「标签 + 值」，纯标签格跳过（与 render.tsx 的 GridBlock 同一条口径）
+// `table-fixed` 的列数由第一行各格的 colspan 之和定下来（与 P3 同一条道理）：哪一行多一格少一格，
+// 值就跑到隔壁标签那一列底下，A4 预览只表现为「有点歪」，最容易放过
+const acqGridSec = acqA4.sections.find((s) => s.kind === "grid") as ReceiptSection;
+const acqSpans = (acqGridSec.rows ?? []).map((r) => r.cells.reduce((a, c) => a + (c.colspan ?? 1), 0));
+ok("O5 每行的列数之和相等（错一格整张纸的格线就歪）", acqSpans.every((n) => n === acqSpans[0]), acqSpans);
+// 票样上「霉变扣量 / 不完善粒扣量 / 折干水扣量」三栏是手写的：库里只有水扣、杂扣、其他扣与扣重合计
+// （化验那几项只出百分比，不单独折算成扣量），绑上去解析器给「—」，纸上就没处下笔
+const acqBlankHeads = ["霉变扣量", "不完善粒扣量", "折干水扣量/扣后量"];
+const acqAllCells = (acqGridSec.rows ?? []).flatMap((r) => r.cells);
+const acqRightOfHead = acqBlankHeads.map((label) => {
+  const i = acqAllCells.findIndex((c) => c.label === label);
+  return i < 0 ? undefined : acqAllCells[i + 1];
+});
+ok(
+  "O5b 无数据源的三栏留空白格，不绑字段（绑了假字段更骗人）",
+  acqRightOfHead.every((c) => c && !c.key),
+  acqBlankHeads.map((label, i) => `${label}→${acqRightOfHead[i]?.key ?? "空白"}`),
+);
+// 小票机降级：值格的标签从同行左侧的表头格补，整行只有值格时从上一行同列补；纯表头格与空白格不掺进来
 const acqKv = receiptLines(acqA4, ctx).filter((l) => l.kind === "kv" && l.value !== "＿＿＿＿＿＿").map((l) => l.label);
 const acqExpect = [
-  "日期", "检质证号", "品名", "车号", "卖方名称", "实方电话", "身份证号", "银行名称", "银行卡号",
-  "容量(g/L)", "水分(%)", "杂质(%)", "现场扣量", "水扣量", "杂质扣量", "霉变(%)", "不完善粒(%)",
-  "毛重", "皮重", "净重", "总扣量", "计价净重",
-  "公斤价", "市斤价", "金额", "卸车费", "折干水扣量", "扣后量", "实付大写",
-  "毛检日期", "皮检日期", "备注", "入库仓号", "地址及电话",
+  "日期", "检质证号", "品名", "车号", "卖方名称", "卖方电话", "身份证号", "银行名称", "银行卡号",
+  "容重(g/L)", "水分(%)", "杂质(%)", "霉变(%)", "不完善粒(%)",
+  "现场扣量", "水扣量", "杂质扣量",
+  "毛重", "皮重", "净重", "总扣量", "计价净重", "公斤价", "市斤价", "金额", "卸车费",
+  "实付大写", "实付", "毛检日期", "皮检日期", "入库仓号", "地址及电话", "备注",
 ];
 ok(
-  "O5 热敏降级：格子上的字段一个不落、顺序照票面（纯标签格「计量单位」不掺进来）",
+  "O6 热敏降级：格子上的字段一个不落、顺序照票面（霉变扣量等空白格不掺进来）",
   acqKv.length === acqExpect.length && acqKv.every((v, i) => v === acqExpect[i]),
   { got: acqKv, want: acqExpect },
 );
@@ -666,19 +684,94 @@ const acqPartyKeys = ["party_phone", "bank_name", "bank_account", "party_contact
 const acqWithParty = acqPartyKeys.map((k) => String(SCENARIOS.weigh_order.resolveField(k, ctx)));
 const acqNoParty = acqPartyKeys.map((k) => String(SCENARIOS.weigh_order.resolveField(k, { ...ctx, party: null })));
 ok(
-  "O6 档案四格取值全部走 ctx.party（带上有值、摘掉全「—」）",
+  "O7 档案四格取值全部走 ctx.party（带上有值、摘掉全「—」）",
   acqWithParty.every((v) => v !== "—" && v !== "undefined") && acqNoParty.every((v) => v === "—"),
   { withParty: acqWithParty, noParty: acqNoParty },
 );
-// 编辑器「载入预设」下拉的候选就是这份：磅单三份、其余场景只有出厂默认
+// 编辑器「载入预设」下拉的候选就是这份：磅单三份、出库磅单两份、其余场景只有出厂默认
 const acqPresets = presetsFor("weigh_order");
+const PRESET_COUNT: Record<string, number> = { weigh_order: 3, outbound_voucher: 2 };
 ok(
-  "O7 预设候选：磅单三份且名字互不相同，其余场景只有出厂默认",
+  "O8 预设候选数量与名字钉死（磅单三份、出库磅单两份，其余只有出厂默认）",
   acqPresets.length === 3 &&
     new Set(acqPresets.map((p) => p.name)).size === 3 &&
-    Object.values(SCENARIOS).every((s) => s.id === "weigh_order" || presetsFor(s.id).length === 1),
-  { weigh: acqPresets.map((p) => `${p.name}/${p.paper}`) },
+    Object.values(SCENARIOS).every((s) => presetsFor(s.id).length === (PRESET_COUNT[s.id] ?? 1)),
+  Object.values(SCENARIOS).map((s) => `${s.id}:${presetsFor(s.id).length}`),
 );
+
+/* ---------------- P. 出库磅单固定表格（出库单的票样还原） */
+// 与 O 段同一条道理，但这份的格子是「表头格 ｜ 值格」左右两格：几何一错，整张纸的格线就歪，
+// 而值格的标签不在自己格子里，降级成行时最容易整列丢掉名字。
+const shipA4 = outboundWeighTicketTemplate("A4");
+const ship241 = outboundWeighTicketTemplate("dot241");
+const shipShape = (sections: ReceiptSection[]) => JSON.stringify(sections.map(({ id: _id, ...rest }) => rest));
+ok(
+  "P1 两个纸型同形（行列与绑定一致，只有纸型/名字不同）",
+  shipA4.paper === "A4" && ship241.paper === "dot241" && shipShape(ship241.sections) === shipShape(shipA4.sections),
+  { a4: shipA4.paper, s241: ship241.paper },
+);
+ok("P2 出厂默认就是这份 A4 表格（点「打印出库磅单」出来的即票样，不用先载预设）", shipShape(defaultTemplate("outbound_voucher").sections) === shipShape(shipA4.sections));
+const shipGridSec = shipA4.sections.find((s) => s.kind === "grid") as ReceiptSection;
+const shipRows = shipGridSec.rows ?? [];
+// `table-fixed` 的列数由第一行各格的 colspan 之和定下来，后面哪一行多一格少一格，
+// 值就会跑到隔壁标签那一列底下去——预览里只表现为"有点歪"，肉眼最容易放过
+const shipSpans = shipRows.map((r) => r.cells.reduce((a, c) => a + (c.colspan ?? 1), 0));
+ok("P3 每行的列数之和相等（错一格整张纸的格线就歪）", shipSpans.every((n) => n === shipSpans[0]), shipSpans);
+const shipKeys = SCENARIOS.outbound_voucher.fields.map((f) => f.key);
+const shipBadKeys = shipRows.flatMap((r) => r.cells).filter((c) => c.key && !shipKeys.includes(c.key)).map((c) => c.key);
+ok("P4 表格里绑定的字段都登记在出库磅单场景目录（绑错一个就打一列「—」）", shipBadKeys.length === 0, shipBadKeys);
+// 票样上没有数据源的栏（水分/合同号/司机电话/箱封号/运费）排成**不绑字段**的空白格：
+// 绑上去解析器照样给空串，可编辑器里看着像接了真数据，改单时就会有人以为票上会有值
+const shipUnbound = ["moisture_pct", "contract_no", "driver_phone", "front_box_no", "rear_box_no", "front_seal_no", "rear_seal_no", "freight"];
+const shipBound = new Set(shipRows.flatMap((r) => r.cells).map((c) => c.key).filter(Boolean));
+ok("P5 无数据源的栏留空白格，不绑字段（印「—」就没处下笔，绑了假字段更骗人）", shipUnbound.every((k) => !shipBound.has(k)), shipUnbound.filter((k) => shipBound.has(k)));
+// 热敏 / 241 静默直打没有格子可画：值格的标签从同行左侧的表头格补，整行只有值格时从上一行同列补。
+// 少一格 = 纸上整栏不见，而 A4 预览一切正常
+const shipKv = receiptLines(shipA4, SCENARIOS.outbound_voucher.sampleContext()).filter((l) => l.kind === "kv" && l.value !== "＿＿＿＿＿＿").map((l) => l.label);
+const shipExpect = [
+  "日期", "凭证号",
+  "品种", "车号", "等级",
+  "收货方", "出库仓号",
+  "毛重", "皮重", "净重", "公斤价", "市斤价", "司机名称",
+  "总金额大写", "金额",
+  "毛检时间", "皮检时间",
+  "备注",
+];
+ok(
+  "P6 降级行序：值格的标签一格不落补上（纯表头格与空白格不掺进来）",
+  shipKv.length === shipExpect.length && shipKv.every((v, i) => v === shipExpect[i]),
+  { got: shipKv, want: shipExpect },
+);
+ok("P7 出库磅单不带任何码块（带码的票都得过 F6 那道同号闸门）", !shipA4.sections.some((s) => s.kind === "qr"));
+
+/* ---------------- Q. 出库合一：现场只印一张纸（2026-11-25 拍板） */
+
+// 出库从前有两个打印按钮（码单与随车交接表单），同一张单出两种纸。合一之后全仓不许再出现按
+// `outbound_order` 出票的调用点。**按内容扫整棵 src 而不是钉文件名**：出库板这类文件正在被拆分
+// 搬家，钉名字等于给重构添堵，而这条契约管的是"还有没有人打那张纸"。
+const obCodePrints = tsxFiles.filter((f) => /scenario:\s*"outbound_order"/.test(readFileSync(f, "utf8")));
+ok("Q1 全仓没有一处再按 `outbound_order` 出票（码单入口全退役）", obCodePrints.length === 0, obCodePrints);
+const obVoucherPrints = tsxFiles.filter((f) => /scenario:\s*"outbound_voucher"/.test(readFileSync(f, "utf8")));
+ok("Q2 出库的出票点都指向出库磅单（详情页与工作台 F9 至少各一处）", obVoucherPrints.length >= 1, obVoucherPrints);
+// 补打角标合着数两种票的留痕：只数新票种，则从前打过码单的单在合一后第一次补打会打得像首打。
+// 只禁「按 outbound_order 过滤成功留痕」这一种写法——留痕列表本身仍按票种分标（旧纸确实叫码单）。
+const obSplitCount = tsxFiles.filter((f) => /doc_type === "outbound_order"[^\n]*result === "success"/.test(readFileSync(f, "utf8")));
+ok("Q3 计数不再按票种分（旧纸就是这张单的前一次出纸）", obSplitCount.length === 0, obSplitCount);
+// 合一的代价是票样上没码可扫。定位办法两条：顶行那格「凭证号」手输进检索框（L 段守的就是这条），
+// 以及要扫码的站在编辑器里加一个码区块绑「凭证号」——出库那枚码的载荷本就是单号本体
+// （`encodeTicketCode`），绑 `order_no` 与从前码单上那枚同形，不必改一行代码。
+const shipNo = SCENARIOS.outbound_voucher.sampleContext().outbound!.order_no;
+ok(
+  "Q4 加一枚绑「凭证号」的码块就等于从前那枚出库码（同形，不必改代码）",
+  encodeTicketCode(shipNo) === shipNo && SCENARIOS.outbound_voucher.fields.some((f) => f.key === "order_no"),
+  { sample: shipNo, payload: encodeTicketCode(shipNo) },
+);
+// 不出票的票不该在标签排里留一页可调（调完没人打，等于骗人改版式）：注册表与 `doc_type` 值域留着
+// 是给老纸的留痕读回版式，编辑器那一页摘掉。摘在 `SCENARIO_LIST` 那一行，别在渲染处打补丁。
+const editorPath = "src/components/print/receipt/TemplateEditor.tsx";
+const editorSrc = existsSync(editorPath) ? readFileSync(editorPath, "utf8") : "";
+const tabList = editorSrc.match(/const SCENARIO_LIST[\s\S]*?;\n/)?.[0] ?? "";
+ok("Q5 编辑器标签排里点名摘掉「出库码单」", /outbound_order/.test(tabList), tabList.trim() || `找不到 ${editorPath} 里的 SCENARIO_LIST`);
 
 console.log(fails === 0 ? "\n全部通过" : `\n${fails} 条不通过`);
 process.exit(fails === 0 ? 0 : 1);

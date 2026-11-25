@@ -275,7 +275,7 @@ const SAMPLE_OUTBOUND: OutboundDetail = {
   prints: [],
 };
 
-/** 发货凭证的编辑器样例：带两条称重轨迹，毛检/皮检时间两栏才看得出样子 */
+/** 出库磅单的编辑器样例：带两条称重轨迹，毛检/皮检时间两栏才看得出样子 */
 const SAMPLE_VOUCHER_OUTBOUND: OutboundDetail = {
   ...SAMPLE_OUTBOUND,
   records: [
@@ -379,7 +379,7 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("party_name", "售粮人", "售粮人", "text"),
   mk("id_card_masked", "身份证号(脱敏)", "售粮人", "text"),
   mk("party_type_label", "身份", "售粮人", "enum"),
-  // 收购凭证的实方电话 / 银行 / 地址印的是售粮人档案真值（磅单不存这几项，由打印入口带 party）
+  // 收购凭证的卖方电话 / 银行 / 地址印的是售粮人档案真值（磅单不存这几项，由打印入口带 party）
   mk("party_phone", "售粮人电话", "售粮人", "text"),
   mk("bank_name", "银行名称", "售粮人", "text"),
   mk("bank_account", "银行卡号", "售粮人", "text"),
@@ -391,8 +391,8 @@ const WEIGH_FIELDS: FieldDef[] = [
   mk("grade_from_qc", "等级(化验)", "品种等级", "enum"),
   mk("moisture_pct", "水分", "品种等级", "percent"),
   mk("impurity_pct", "杂质", "品种等级", "percent"),
-  // 收购凭证票面上的化验三项：容量 / 霉变 / 不完善粒都读质检指标，没化验过的指标印「—」
-  mk("bulk_density", "容量(g/L)", "品种等级", "text"),
+  // 收购凭证票面上的化验三项：容重 / 霉变 / 不完善粒都读质检指标，没化验过的指标印「—」
+  mk("bulk_density", "容重(g/L)", "品种等级", "text"),
   mk("mold_pct", "霉变", "品种等级", "percent"),
   mk("unsound_pct", "不完善粒", "品种等级", "percent"),
   mk("warehouse", "仓房/货位", "仓储状态", "text"),
@@ -622,13 +622,16 @@ const OUTBOUND_FIELDS: FieldDef[] = [
   mk("ticket_code", "票面码（= 单号）", "基本信息", "text"),
 ];
 
-/* ------------------------------------------------------ 场景 8：发货凭证 */
+/* ------------------------------------------------------ 场景 8：出库磅单 */
 
 /**
- * 发货凭证的字段目录。这张纸是**给收货方随车走的手填表单**，与出库码单分工不同：
- * 码单是系统里的定位凭据（带码、防伪、进检索框），发货凭证是站里对外交接的单据，
- * 所以表上没有数据源的栏（合同号、司机、箱封号、运费、水分）**解析成空串留白手填**，
+ * 出库磅单的字段目录。出库从前打两种纸，现在**只打这一张**（详情页与工作台 F9 都走它），
+ * 所以它兼了从前码单的分工：既是给收货方随车走的交接表单，也是这张出库单在纸上的唯一凭据。
+ * 票样上没有数据源的栏（合同号、司机电话、箱封号、运费、水分）**解析成空串留白手填**，
  * 不印「—」——印了反而没处下笔。毛检/皮检时间从称重轨迹里取（优先当前采用的那一捕）。
+ *
+ * 出厂版式不带码（照现场那张纸的格线排），要找回这张单靠顶行那格「凭证号」在检索框里输。
+ * 站里要扫码定位的，在模板编辑器里加一个码区块绑「凭证号」就行——出库那枚码的载荷就是单号本体。
  */
 const VOUCHER_FIELDS: FieldDef[] = [
   mk("order_no", "凭证号", "基本信息", "text"),
@@ -663,7 +666,7 @@ const VOUCHER_FIELDS: FieldDef[] = [
 
 const WEIGH_SPEC: ScenarioSpec = {
   id: "weigh_order",
-  label: "收购过磅单",
+  label: "收购磅单",
   entry: "工作台过磅完成 / 磅单详情 / 快捷详情",
   fields: WEIGH_FIELDS,
   groups: WEIGH_GROUPS,
@@ -689,7 +692,7 @@ const WEIGH_SPEC: ScenarioSpec = {
       case "grade_from_qc": return qc?.grade ?? "未化验";
       case "moisture_pct": return percent(indicatorValue(qc, "moisture"));
       case "impurity_pct": return percent(indicatorValue(qc, "impurity"));
-      // 收购凭证化验三项：容量是 g/L 原样展示，霉变/不完善粒按百分数
+      // 收购凭证化验三项：容重是 g/L 原样展示，霉变/不完善粒按百分数
       case "bulk_density": return density(indicatorValue(qc, "bulk_density"));
       case "mold_pct": return percent(indicatorValue(qc, "mold"));
       case "unsound_pct": return percent(indicatorValue(qc, "unsound"));
@@ -865,7 +868,12 @@ const PAY_SPEC: ScenarioSpec = {
 const OUTBOUND_SPEC: ScenarioSpec = {
   id: "outbound_order",
   label: "出库码单",
-  entry: "出库单详情「打印码单」/ 完成出库后补打",
+  /**
+   * 出库单详情的「打印码单」与工作台 F9 已合一进出库磅单（现场只印一张纸），这一页因此也不在
+   * 模板编辑器的标签排里（`TemplateEditor` 的 `SCENARIO_LIST` 点名摘掉）。注册表与 `doc_type`
+   * 值域都留着：老纸的**历史留痕**要能按票种读回当时那套版式，删了它等于把旧单据的来路抹掉。
+   */
+  entry: "已并入「出库磅单」：不出票，编辑器里也没有这一页",
   fields: OUTBOUND_FIELDS,
   groups: ["基本信息", "重量", "金额", "署名"],
   sampleContext: () => ({ station: SAMPLE_STATION, names: sampleNames, outbound: SAMPLE_OUTBOUND }),
@@ -930,8 +938,8 @@ function voucherWeighTime(o: OutboundDetail, type: "gross" | "tare"): string {
 
 const VOUCHER_SPEC: ScenarioSpec = {
   id: "outbound_voucher",
-  label: "发货凭证",
-  entry: "出库单详情「打印发货凭证」",
+  label: "出库磅单",
+  entry: "出库单详情 / 出库板的打印按钮、工作台 F9（出库只打这一张）",
   fields: VOUCHER_FIELDS,
   groups: ["基本信息", "重量", "金额", "车辆", "箱封", "备注"],
   sampleContext: () => ({ station: SAMPLE_STATION, names: sampleNames, outbound: SAMPLE_VOUCHER_OUTBOUND }),

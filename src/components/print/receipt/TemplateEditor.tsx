@@ -41,7 +41,16 @@ import { BLOCK_LABEL, CODE_STYLE_LABEL } from "./types";
 /** 只有热敏纸能进小票机；A4 / 针式是系统打印队列的设备，不是同一台机器 */
 const THERMAL: PaperKind[] = ["thermal80", "thermal58"];
 
-const SCENARIO_LIST = Object.values(SCENARIOS) as { id: ReceiptScenario; label: string; entry: string }[];
+/**
+ * 编辑器的场景标签页。
+ *
+ * `outbound_order`（出库码单）刻意不在其中：出库自 2026-11-25 合一，三个出票点（详情页 / 出库板 /
+ * 工作台 F9）全打出库磅单那一张，这一票种只剩 `print_log` 里的历史留痕。场景注册表与 `doc_type`
+ * 值域都留着（老单据的打印记录要能读回当时那套版式），但标签排里摆一页没人打的票＝骗人进去调版式。
+ */
+const SCENARIO_LIST = (Object.values(SCENARIOS) as { id: ReceiptScenario; label: string; entry: string }[]).filter(
+  (s) => s.id !== "outbound_order",
+);
 
 export function ReceiptTemplateEditor() {
   const canEdit = useSession((s) => s.can("setting.write"));
@@ -828,7 +837,7 @@ function GridEditor({
   return (
     <div className="space-y-1.5">
       <p className="text-[10px] text-muted-foreground">
-        固定表格：一行几格、格子绑哪个字段由预设定好，这里只改格子上的标签文字；纯标签格票面上留空供手写。
+        固定表格：一行几格、格子绑哪个字段由预设定好，这里只改格子上的标签文字；空白格票面上留空供手写。
       </p>
       {rows.map((r, i) => (
         <div key={i} className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-1 rounded border bg-background/60 p-1.5">
@@ -836,7 +845,7 @@ function GridEditor({
             <Label key={j} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
               <Input value={c.label} onChange={(e) => patchLabel(i, j, e.target.value)} className="h-6 text-[11px]" />
               <span className="truncate text-[10px]" title={c.key}>
-                {c.key ? spec.fields.find((f) => f.key === c.key)?.label ?? c.key : "纯标签格（留空手写）"}
+                {c.key ? spec.fields.find((f) => f.key === c.key)?.label ?? c.key : c.head ? "表头格（只印标签，取值在右邻格）" : "空白格（留空手写）"}
               </span>
             </Label>
           ))}
