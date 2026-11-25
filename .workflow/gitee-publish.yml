@@ -34,7 +34,9 @@ stages:
         pythonVersion: 3.9
         commands:
           - python3 -V
-          - python3 scripts/release-notes/gitee_publish.py
+          # 通用变量不会自动注入环境变量，只能按 ${} 模板替换；set +x 先关回显，
+          # 免得私人令牌以明文出现在公开的构建日志里
+          - set +x; BH_GITEE_TOKEN='${BH_GITEE_TOKEN}' python3 scripts/release-notes/gitee_publish.py
         notify: []
         strategy:
           retry: '0'

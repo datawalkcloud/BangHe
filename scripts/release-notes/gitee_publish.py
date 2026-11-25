@@ -267,6 +267,10 @@ def main() -> None:
              "GITEE_ 开头，那是系统保留前缀；值填私人令牌，勾 projects；可选 BH_GITEE_USER=登录名），"
              "重跑；仍报这条说明该流水线没引用这个变量，到流水线编辑里引用/关联一次")
 
+    if "${" in TOKEN:
+        fail("BH_GITEE_TOKEN 拿到的还是 ${...} 字面量：Gitee Go 没有把通用变量替换进命令。"
+             "到流水线编辑（图形/代码视图）里确认 BH_GITEE_TOKEN 已建、且已关联/引用到这条流水线")
+
     tag = resolve_tag()
     if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         fail(f"tag「{tag}」不是 vX.Y.Z 形态，安装包名与发行版标题会对不齐")
