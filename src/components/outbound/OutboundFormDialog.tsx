@@ -1,5 +1,7 @@
 /**
- * 出库单表单（02 §M11 F11.1、05 §4）。新建与改草稿共用一张表单。
+ * 出库单表单弹窗（02 §M11 F11.1）：「库存与出库」列表与出库详情页的建单 / 改草稿用这一张。
+ * 磅房工作台的出库模式**不走弹窗**，用的是同一份模型下的就地编辑格子 `OutboundFormPanel`；
+ * 两边的字段集、单位换算与必填判据都在 `lib/outbound-form.ts`，只有版式各自一份。
  *
  * 三条界面纪律跟着收购侧的老规矩走：
  *  1. **校验以后端为准**：这里只做「一眼能看出没填」的即时提示，真正拦下请求的是
@@ -17,12 +19,22 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { amountFen } from "@/lib/calc";
-import { GRADES, OUTBOUND_KIND, type OutboundKind } from "@/lib/constants";
-import { fromKg, fromYuanPerKg, money, toYuanPerKg, ton, todayISO, weight } from "@/lib/format";
+import { GRADES, OUTBOUND_KIND, PARTY_TYPE, type OutboundKind } from "@/lib/constants";
+import { money, ton, weight } from "@/lib/format";
+import {
+  EMPTY_OUTBOUND_DRAFT,
+  missingOutboundFields,
+  outboundDraftOf,
+  outboundGoodsFen,
+  outboundNumbers,
+  outboundSaveInput,
+  outboundWeighed,
+  type OutboundDraft,
+} from "@/lib/outbound-form";
 import { useSlots, useVarieties, useWarehouses } from "@/hooks/useLookups";
 import { actorId } from "@/store/session";
 import { Choose } from "@/components/business/Choose";
+import { NewPartyButton } from "@/components/outbound/NewPartyButton";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
 import {
@@ -32,73 +44,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { OutboundOrder } from "@/mock/types";
 
-/** 表单态一律用「人看的单位」（kg / 元每公斤），提交时才换算成定点整数，避免两处 ÷1000 各算各的 */
-type Draft = {
-  kind: OutboundKind;
-  business_date: string;
-  party_id: string;
-  counterparty_label: string;
-  variety_id: string;
-  grade: string;
-  warehouse_id: string;
-  slot_id: string;
-  vehicle_no: string;
-  driver_name: string;
-  net_kg: string;
-  price_yuan_kg: string;
-  remark: string;
-};
-
-const EMPTY: Draft = {
-  kind: "sale",
-  business_date: todayISO(),
-  party_id: "",
-  counterparty_label: "",
-  variety_id: "",
-  grade: "",
-  warehouse_id: "",
-  slot_id: "",
-  vehicle_no: "",
-  driver_name: "",
-  net_kg: "",
-  price_yuan_kg: "",
-  remark: "",
-};
-
-function draftOf(o: OutboundOrder | null): Draft {
-  if (!o) return { ...EMPTY, business_date: todayISO() };
-  return {
-    kind: o.kind,
-    business_date: o.business_date,
-    party_id: o.party_id == null ? "" : String(o.party_id),
-    counterparty_label: o.counterparty_label ?? "",
-    variety_id: o.variety_id == null ? "" : String(o.variety_id),
-    grade: o.grade ?? "",
-    warehouse_id: String(o.warehouse_id),
-    slot_id: o.slot_id == null ? "" : String(o.slot_id),
-    vehicle_no: o.vehicle_no ?? "",
-    driver_name: o.driver_name ?? "",
-    net_kg: o.net_weight_01kg == null ? "" : String(o.net_weight_01kg / 10),
-    price_yuan_kg: o.price_fen_per_ton == null ? "" : String(toYuanPerKg(o.price_fen_per_ton)),
-    remark: o.remark ?? "",
-  };
-}
-
 export function OutboundFormDialog({
   open,
   onOpenChange,
   editing,
-  onSaved,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   /** null＝新建 */
   editing: OutboundOrder | null;
-  /**
-   * 保存成功、库已回读之后把那一行交出去（新建时工作台用它自动选中刚开的单）。
-   * 关框照旧由这里做，调用方只在拿到的行上做「顺手指过去」那一下。
-   */
-  onSaved?: (row: OutboundOrder) => void;
 }) {
   const qc = useQueryClient();
   const { data: varieties = [] } = useVarieties();
@@ -114,26 +68,25 @@ export function OutboundFormDialog({
   const partiesQ = useQuery({ queryKey: ["parties", "outbound"], queryFn: () => api.listParties("") });
   const parties = useMemo(() => (partiesQ.data ?? []).filter((p) => p.status === "active"), [partiesQ.data]);
 
-  const [d, setD] = useState<Draft>(EMPTY);
-  const patch = (p: Partial<Draft>) => setD((v) => ({ ...v, ...p }));
+  const [d, setD] = useState<OutboundDraft>(EMPTY_OUTBOUND_DRAFT);
+  const patch = (p: Partial<OutboundDraft>) => setD((v) => ({ ...v, ...p }));
   // 每次打开都按当前编辑对象重置：改单和新建复用同一份表单，留着上一次的残值是串单的头号来源
   useEffect(() => {
-    if (open) setD(draftOf(editing));
+    if (open) setD(outboundDraftOf(editing));
   }, [open, editing]);
 
   const isSale = d.kind === "sale";
   const whId = Number(d.warehouse_id) || null;
   const varId = Number(d.variety_id) || null;
-  const net01 = d.net_kg.trim() === "" ? null : Math.round(fromKg(d.net_kg));
-  const priceFen = d.price_yuan_kg.trim() === "" ? null : Math.round(fromYuanPerKg(d.price_yuan_kg));
-  const goods = isSale && net01 != null && priceFen != null ? amountFen(net01, priceFen) : null;
+  const { net01 } = outboundNumbers(d);
+  const goods = outboundGoodsFen(d);
 
   /**
    * 本单是否已过地磅（0029）。判据是**毛/皮任一非空**，不是 `weight_source === 'scale'`：
    * 手录那一捕也会留下毛/皮（来源标 manual），那时候这一格同样不该再让人手改——
    * 轨迹里已经有一行秤/人的读数了对着它，手改就等于凭空多出第三份数字。
    */
-  const weighed = editing?.gross_weight_01kg != null || editing?.tare_weight_01kg != null;
+  const weighed = outboundWeighed(editing);
   const scaleGross = editing?.gross_weight_01kg == null ? "—" : weight(editing.gross_weight_01kg);
   const scaleTare = editing?.tare_weight_01kg == null ? "—" : weight(editing.tare_weight_01kg);
 
@@ -150,28 +103,10 @@ export function OutboundFormDialog({
   }, [balanceQ.data, whId, varId]);
 
   const save = useMutation({
-    mutationFn: () =>
-      api.saveOutbound({
-        order_no: editing?.order_no ?? null,
-        kind: d.kind,
-        business_date: d.business_date,
-        party_id: isSale ? Number(d.party_id) : d.party_id ? Number(d.party_id) : null,
-        counterparty_label: d.counterparty_label.trim() || null,
-        variety_id: varId,
-        grade: d.grade || null,
-        warehouse_id: Number(d.warehouse_id),
-        slot_id: d.slot_id ? Number(d.slot_id) : null,
-        vehicle_no: d.vehicle_no.trim() || null,
-        driver_name: d.driver_name.trim() || null,
-        net_weight_01kg: net01,
-        price_fen_per_ton: isSale ? priceFen : null,
-        remark: d.remark.trim() || null,
-        operator_id: actorId(),
-      }),
+    mutationFn: () => api.saveOutbound(outboundSaveInput(d, editing?.order_no ?? null, actorId())),
     onSuccess: (row) => {
       toast.success(`${editing ? "已修改" : "已制单"} ${row.order_no}`);
       qc.invalidateQueries({ queryKey: ["outbound"] });
-      onSaved?.(row);
       onOpenChange(false);
     },
     // 服务端原因原样透传：Rust 回的都是"登记出库不计价，单价请留空"这种人话
@@ -183,11 +118,7 @@ export function OutboundFormDialog({
    * 制单那颗按钮从前只是灰着不说明原因，现场只能一颗颗格子点过去试——把缺的项念出来，
    * 顺带在标签上标「必填」，与「货位（选填）」那两格同一套写法。
    */
-  const missing = [
-    d.warehouse_id === "" && "出仓仓房",
-    d.variety_id === "" && "品种",
-    isSale && d.party_id === "" && "领出方档案",
-  ].filter(Boolean) as string[];
+  const missing = missingOutboundFields(d);
   const canSubmit = missing.length === 0 && !save.isPending;
 
   return (
@@ -224,28 +155,38 @@ export function OutboundFormDialog({
             <DatePicker value={d.business_date} onChange={(v) => patch({ business_date: v })} aria-label="业务日期" />
           </Label>
 
-          <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {isSale ? "领出方（售粮人档案，必填）" : "领出方（可只填下方文字）"}
-            <Choose
-              aria-label="领出方"
-              value={d.party_id}
-              onChange={(v) => patch({ party_id: v })}
-              options={[
-                {
-                  value: "",
-                  // 空表要说清是"还没加载"还是"真没有"，不然现场只当是卡住了
-                  label: partiesQ.isPending
-                    ? "档案加载中…"
-                    : parties.length === 0
-                      ? "暂无可用档案（先到往来单位建档）"
-                      : isSale
-                        ? "请选择"
-                        : "不挂档案",
-                },
-                ...parties.map((p) => ({ value: String(p.id), label: `${p.name}（${p.party_type === "company" ? "企业" : p.party_type === "broker" ? "经纪人" : "个人"}）` })),
-              ]}
-            />
-          </Label>
+          {/* 领出方这格刻意不用 <Label> 包：框里要放「建档」那颗按钮，而 Label 会把落在自己
+              身上的点击转给表单控件，按钮就成了第二颗"打开下拉"。写法与 QuickPartyDialog 的字段同形。 */}
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>{isSale ? "领出方（售粮人档案，必填）" : "领出方（可只填下方文字）"}</span>
+            <div className="flex items-center gap-1.5">
+              <Choose
+                aria-label="领出方"
+                className="w-auto min-w-0 flex-1"
+                value={d.party_id}
+                onChange={(v) => patch({ party_id: v })}
+                options={[
+                  {
+                    value: "",
+                    // 空表要说清是"还没加载"还是"真没有"，不然现场只当是卡住了
+                    label: partiesQ.isPending
+                      ? "档案加载中…"
+                      : parties.length === 0
+                        ? "暂无档案（点旁边「建档」现建一张）"
+                        : isSale
+                          ? "请选择"
+                          : "不挂档案",
+                  },
+                  ...parties.map((p) => ({
+                    value: String(p.id),
+                    label: `${p.name}（${p.party_type === "farmer" || p.party_type === "large_grower" ? "个人" : PARTY_TYPE[p.party_type]}）`,
+                  })),
+                ]}
+              />
+              {/* 就地建档：新领出方不必先跑「农户单位」页建一张再回来搜（02 §F1.1 同一口径） */}
+              <NewPartyButton parties={parties} onPicked={(p) => patch({ party_id: String(p.id) })} />
+            </div>
+          </div>
           <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
             领用方 / 用途对象
             <Input

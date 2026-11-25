@@ -1,20 +1,24 @@
 /**
- * 出库单详情（05 §3 `/outbound/$no`）。
+ * 出库单详情（05 §3 `/outbound/$no`，正文同时喂给右侧详情抽屉 05 §6.3）。
  *
  * 与磅单详情同一个存在理由：迎检与纠纷。所以不做美化，把
  * **谁在什么时间以什么来源留下了什么数字** 完整摊开：
  *   基本信息 → 超库存警示 → 这张单在库存账上留下的流水 → 单据时间轴
  *
- * 页面上三处写操作：改草稿、完成出库、作废 / 红冲。状态机判据只在 Rust 一份，
+ * 页面上四处写操作：改草稿、完成出库、作废 / 红冲、删除草稿。状态机判据只在 Rust 一份，
  * 这里按 `status` 决定哪些按钮可用，被拦下时原样显示服务端那句中文原因。
  *
  * 库存流水那一栏刻意显示带符号的变动量并保留被红冲的原始出库行——
  * 「账本不涂改」这件事必须在界面上看得见，否则下一个来查账的人会以为红冲删了记录。
+ *
+ * `embedded` 给抽屉用（与 `OrderDetailBody` 同一套）：标题条让开 Sheet 右上角的关闭按钮，
+ * 「返回列表」由整页壳经 `headerExtra` 传进来；抽屉里点去库存账这种跨页链接、以及删完这张单
+ * 要离开，都得先把抽屉收掉，否则抽屉盖在新页面上。
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangleIcon, ArrowLeftIcon, PrinterIcon } from "lucide-react";
+import { AlertTriangleIcon, ArrowLeftIcon, PrinterIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { OUTBOUND_KIND, OUTBOUND_STATUS } from "@/lib/constants";
@@ -28,6 +32,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { DocTimeline } from "@/components/business/DocTimeline";
 import { CallOut, InfoGrid, PageHeader } from "@/components/business/layout";
 import { PaymentStatusBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
+import { useQuickDetail } from "@/components/business/quickDetail";
 import { OutboundFormDialog } from "@/components/outbound/OutboundFormDialog";
 import { OutboundWeighPanel } from "@/components/outbound/OutboundWeighPanel";
 import { CloseOutboundDialog } from "@/components/outbound/CloseOutboundDialog";
@@ -63,13 +68,22 @@ const MOVE_COLUMNS: Column<StockMovementRow>[] = [
   { key: "remark", header: "备注", cell: (r) => <span className="text-xs text-muted-foreground">{orDash(r.remark)}</span> },
 ];
 
-export function OutboundDetailPage() {
-  const { no } = useParams({ from: "/outbound/$no" });
+export function OutboundDetailBody({
+  no,
+  embedded = false,
+  headerExtra,
+}: {
+  no: string;
+  embedded?: boolean;
+  headerExtra?: ReactNode;
+}) {
   const navigate = useNavigate();
+  const closeDetail = useQuickDetail((s) => s.close);
   const qc = useQueryClient();
   const can = useSession((s) => s.can);
   const [editOpen, setEditOpen] = useState(false);
-  const [closeMode, setCloseMode] = useState<"void" | "reverse" | null>(null);
+  /** void＝草稿作废；reverse＝已过账红冲；delete＝真删没上过磅的草稿（三种共用同一张原因框） */
+  const [closeMode, setCloseMode] = useState<"void" | "reverse" | "delete" | null>(null);
   const { data: station } = useStation();
   const names = useStaffNames();
   /**
@@ -78,6 +92,9 @@ export function OutboundDetailPage() {
    * 用 hook 的缺省值（磅单那条）打完「已打 N 张」不会动，下一次还当首打。
    */
   const { print: printReceipt, preview: printFallback } = useSilentReceiptPrint();
+
+  /** 离开这张单：整页回列表，抽屉只是收起（列表还在抽屉背后） */
+  const leave = () => (embedded ? closeDetail() : void navigate({ to: "/outbound" }));
 
   const query = useQuery({ queryKey: ["outbound", no], queryFn: () => api.getOutbound(no) });
   const doc = query.data ?? null;
@@ -101,29 +118,23 @@ export function OutboundDetailPage() {
   /**
    * 已打几张只看 `print_log` 里真出过纸的那几条（`result === 'success'`），与磅单同一口径：
    * 「框开合过」不等于「纸上印过」，靠前者判断会让取消预览的那次也算成一张。
-   * 码单与发货凭证是两种票、各数各的：补打角标只该由同一种票的历史决定。
+   *
+   * 出库从前打两种纸（码单与随车那张表单）各数各的；合一之后一种单只出一种纸，所以两种票的
+   * 留痕**合起来数**——从前打的那张码单就是这张单的前一次出纸，只数新票种会让第一次补打
+   * 打得像首打，纸上看不出这已经是第二张。时间轴里仍按 `doc_type` 分标（旧纸确实叫码单）。
    */
-  const printedCode = (doc?.prints ?? []).filter((p) => p.doc_type === "outbound_order" && p.result === "success").length;
-  const printedVoucher = (doc?.prints ?? []).filter((p) => p.doc_type === "outbound_voucher" && p.result === "success").length;
+  const printed = (doc?.prints ?? []).filter((p) => p.result === "success").length;
 
+  /**
+   * 出库单唯一的那张纸：`outboundWeighTicketTemplate` 照现场票样排的固定表格。
+   * A4 / 241 针式在预览框里切，纸型与版式都在小票模板编辑器的「出库磅单」那一页改。
+   */
   const printTicket = () => {
-    if (!doc || !station) return;
-    void printReceipt({
-      scenario: "outbound_order",
-      docNo: doc.order_no,
-      isReprint: printedCode > 0,
-      context: { station, names, outbound: doc },
-      invalidate: ["outbound"],
-    });
-  };
-
-  /** 发货凭证：随车交接的表单，与码单同一套打印通道（A4 / 241 针式走预览框，纸型在框里切） */
-  const printVoucher = () => {
     if (!doc || !station) return;
     void printReceipt({
       scenario: "outbound_voucher",
       docNo: doc.order_no,
-      isReprint: printedVoucher > 0,
+      isReprint: printed > 0,
       context: { station, names, outbound: doc },
       invalidate: ["outbound"],
     });
@@ -186,7 +197,7 @@ export function OutboundDetailPage() {
       out.push({
         at: p.printed_at,
         action: p.is_reprint ? "reprint" : "print",
-        label: isVoucher ? (p.is_reprint ? "补打发货凭证" : "打印发货凭证") : p.is_reprint ? "补打码单" : "打印码单",
+        label: isVoucher ? (p.is_reprint ? "补打出库磅单" : "打印出库磅单") : p.is_reprint ? "补打码单" : "打印码单",
         actor: names(p.operator_id),
         tone: p.result === "success" ? "neutral" : "danger",
         detail: `${p.printer_name} · ${p.paper} · ${p.result === "success" ? "已出纸" : `失败：${p.error_msg ?? "原因未记"}`}`,
@@ -209,7 +220,7 @@ export function OutboundDetailPage() {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
         <p className="text-sm">出库单 {no} 不存在</p>
-        <Button size="sm" variant="outline" onClick={() => navigate({ to: "/outbound" })}>
+        <Button size="sm" variant="outline" onClick={leave}>
           返回出库单中心
         </Button>
       </div>
@@ -222,6 +233,7 @@ export function OutboundDetailPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        className={embedded ? "pr-11" : undefined}
         title={
           <span className="flex items-center gap-2">
             出库单 {doc.order_no}
@@ -231,12 +243,11 @@ export function OutboundDetailPage() {
         description={`${OUTBOUND_KIND[doc.kind].label} · ${doc.business_date} · ${orDash(doc.party_name ?? doc.counterparty_label)} · ${orDash(doc.variety_name)}`}
         actions={
           <>
-            <Button size="sm" variant="ghost" onClick={() => navigate({ to: "/outbound" })}>
-              <ArrowLeftIcon />
-              返回列表
-            </Button>
+            {headerExtra}
             {/*
-              打印码单。岗位闸与磅单详情同一条（`print`），不另设新权；首打与补打是同一个按钮，
+              出库只印这一张（出库磅单）：从前这里并着两个按钮、一张单出两种纸，
+              同一张单出两种纸，站里要分辨哪张给谁。合一后只留一个入口，票面就是现场那张纸。
+              岗位闸与磅单详情同一条（`print`），不另设新权；首打与补打是同一个按钮，
               差别只写进 `isReprint`（票面补打角标由它决定）。
               没有净重就打不出有意义的票，所以那格空着时禁用并说明原因（05 §5「禁用必须带文字」）。
             */}
@@ -249,36 +260,14 @@ export function OutboundDetailPage() {
                   ? "当前岗位无打印权限"
                   : doc.net_weight_01kg == null
                     ? "本单还没有出库净重，打不出有效票据；请先称重或改单填净重"
-                    : printedCode > 0
-                      ? `已打 ${printedCode} 张，票面会标「补打」`
+                    : printed > 0
+                      ? `已打 ${printed} 张，票面会标「补打」`
                       : undefined
               }
               onClick={printTicket}
             >
               <PrinterIcon />
-              {printedCode > 0 ? `补打码单（已打 ${printedCode} 张）` : "打印码单"}
-            </Button>
-            {/*
-              发货凭证：给收货方随车走的交接表单，与码单共用同一条打印路（无预览直打 → 失败才弹
-              预览框）。纸型在预览框里切：A4 激光与 241 针式都能出这张纸，模板编辑器里另起一页改版式。
-            */}
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!can("print") || !station || doc.net_weight_01kg == null}
-              title={
-                !can("print")
-                  ? "当前岗位无打印权限"
-                  : doc.net_weight_01kg == null
-                    ? "本单还没有出库净重，打不出有效凭证；请先称重或改单填净重"
-                    : printedVoucher > 0
-                      ? `已打 ${printedVoucher} 张，票面会标「补打」`
-                      : undefined
-              }
-              onClick={printVoucher}
-            >
-              <PrinterIcon />
-              {printedVoucher > 0 ? `补打发货凭证（已打 ${printedVoucher} 张）` : "打印发货凭证"}
+              {printed > 0 ? `补打出库磅单（已打 ${printed} 张）` : "打印出库磅单"}
             </Button>
             {draft ? (
               <>
@@ -290,6 +279,22 @@ export function OutboundDetailPage() {
                 </Button>
                 <Button size="sm" variant="outline" disabled={!can("outbound.void")} onClick={() => setCloseMode("void")}>
                   作废
+                </Button>
+                {/*
+                  删除＝把这一行从出库账里真去掉，判据（非草稿、上过磅一律不许删）在 Rust。
+                  闸门与制单同岗（`outbound.create`）而不是 `outbound.void`：清的是自己刚开错的
+                  那张空单；作废/红冲要更正别人的账，才要站长那一档。原因选填，动作必进审计。
+                */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-destructive"
+                  disabled={!can("outbound.create")}
+                  title="真删这张草稿：只允许还没留下称重读数的草稿；删掉后纸上不留字，号也不回收"
+                  onClick={() => setCloseMode("delete")}
+                >
+                  <Trash2Icon />
+                  删除
                 </Button>
               </>
             ) : null}
@@ -356,7 +361,7 @@ export function OutboundDetailPage() {
           </Card>
 
           {/*
-            地磅称重：这一页的三处写操作之外的第四处（改草稿 / 称重 / 完成出库 / 作废红冲）。
+            地磅称重：与顶上那几处写操作并列（改草稿 / 称重 / 完成出库 / 作废红冲 / 删除草稿）。
             常驻而不是只在草稿态出现——已过账的单照样要看得到毛皮两个采用值与复称轨迹，
             「谁在什么时间以什么来源留下了什么数字」这句话对本页的每一种状态都成立。
           */}
@@ -381,7 +386,7 @@ export function OutboundDetailPage() {
               <p className="mt-2 text-xs text-muted-foreground">
                 红冲另补一条「红冲回仓」，
                 <b>被冲掉的那条出仓记录保留、不涂改</b>。要核对整个仓房的账，去
-                <Link to="/stock" className="mx-1 underline underline-offset-2">库存账</Link>
+                <Link to="/stock" onClick={() => embedded && closeDetail()} className="mx-1 underline underline-offset-2">库存账</Link>
                 按仓房与品种下钻。
               </p>
             </CardContent>
@@ -407,7 +412,28 @@ export function OutboundDetailPage() {
         }}
         order={doc}
         mode={closeMode ?? "void"}
+        onDone={() => {
+          // 行真被删掉了，这一页再无数据可显示（查询会一直回 null），所以离开这张单；
+          // 作废/红冲不走这里——那张纸还在，留在本页看留痕才对。
+          leave();
+        }}
       />
     </div>
+  );
+}
+
+/** 整页壳：只负责把路由上的单号喂给正文，「返回列表」这颗导航钮也只在整页上有 */
+export function OutboundDetailPage() {
+  const { no } = useParams({ from: "/outbound/$no" });
+  return (
+    <OutboundDetailBody
+      no={no}
+      headerExtra={
+        <Button size="sm" variant="outline" render={<Link to="/outbound" />}>
+          <ArrowLeftIcon />
+          返回列表
+        </Button>
+      }
+    />
   );
 }

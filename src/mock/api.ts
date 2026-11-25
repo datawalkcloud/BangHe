@@ -85,6 +85,7 @@ import {
 import {
   captureOutbound,
   completeOutbound,
+  deleteOutbound,
   getOutbound,
   listOutbound,
   reverseOutbound,
@@ -2061,6 +2062,11 @@ export const api = {
   async voidOutbound(i: OutboundCloseInput): Promise<OutboundOrder> {
     await sleep(0);
     return voidOutbound(i);
+  },
+  /** 真删草稿（只允许还没上过磅的 draft）：返回被删的单号，查不到为 null */
+  async deleteOutbound(i: OutboundCloseInput): Promise<string | null> {
+    await sleep(0);
+    return deleteOutbound(i);
   },
   async reverseOutbound(i: OutboundCloseInput): Promise<OutboundOrder> {
     await sleep(0);

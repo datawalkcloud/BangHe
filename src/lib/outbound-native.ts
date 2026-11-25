@@ -90,6 +90,12 @@ export const outboundApi = {
   completeOutbound: routeSave<OutboundOrder, OutboundCompleteInput>("outbound_complete", (i) => mock.completeOutbound(i)),
   /** 过账前作废：不动库存 */
   voidOutbound: routeSave<OutboundOrder | null, OutboundCloseInput>("outbound_void", (i) => mock.voidOutbound(i)),
+  /**
+   * 真删草稿：行直接从 `outbound_order` 里去掉，只允许**还没留下任何称重读数**的 draft。
+   * 上过磅就不给删（读数和挂在读数上的过磅抓拍是计量证据），那种只能作废；
+   * 返回被删的单号，行已不在（别人刚删）时为 `null`。
+   */
+  deleteOutbound: routeSave<string | null, OutboundCloseInput>("outbound_delete", (i) => mock.deleteOutbound(i)),
   /** 过账后红冲：原单置 reversed，补一条对称入库流水，原流水不删 */
   reverseOutbound: routeSave<OutboundOrder | null, OutboundCloseInput>("outbound_reverse", (i) => mock.reverseOutbound(i)),
   /**

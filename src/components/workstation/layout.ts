@@ -27,6 +27,8 @@ import { useSession } from "@/store/session";
 
 /** 服务端 §9.25 里的偏好键，字符集要与 `prefs.rs::check_key` 兼容 */
 export const LAYOUT_KEY = "workstation.layout";
+/** 出库模式那一套面板的排布：与入库**各存一份**，两边各自拖各自的，谁也不挤动谁的格子 */
+export const OUT_LAYOUT_KEY = "workstation.layout.out";
 
 export const GRID_COLS = 12;
 /** 行预算。行高按视口换算，24 行正好铺满工作区；拖过头时允许排到预算以外，由外层滚动条接住 */
@@ -55,9 +57,14 @@ export const GRID_MIN_WIDTH = 1280;
 const SAVE_DEBOUNCE_MS = 400;
 
 export type PanelId = "identity" | "tare" | "camera" | "weigh" | "qc" | "open";
+/**
+ * 出库模式那一桌的面板。id 与入库那套各自成表（各存各的偏好键），所以同名（`camera` / `weigh`）
+ * 不冲突——两块称重面板本来就不是一份东西：入库围绕流转卡推进，出库只填一单过账。
+ */
+export type OutboundPanelId = "queue" | "form" | "camera" | "weigh";
 
-export interface PanelSpec {
-  id: PanelId;
+export interface PanelSpec<I extends string = PanelId> {
+  id: I;
   /** 编辑态把手上显示的名字，与面板自己 CardTitle 一致 */
   title: string;
   /** 面板选择菜单里的副文案：这块是干什么的 */
@@ -99,10 +106,51 @@ export const PANELS: readonly PanelSpec[] = [
 
 const SPEC_BY_ID = new Map<string, PanelSpec>(PANELS.map((p) => [p.id, p]));
 
+/**
+ * 出库模式的默认格子（2026-11-25 首版，照入库那张桌子的列宽分法 2/3/4/3 摆）：
+ * 草稿队列、出库单（就地编辑）、地磅称重、过磅画面四格通高，一进来没有空区。
+ * 画面给到通高是因为现场的第一句反馈就是"过磅的时候看不见画面"——宁可让磅员自己收小，
+ * 也别默认给他一条几十像素的黑带。
+ */
+export const OUT_PANELS: readonly PanelSpec<OutboundPanelId>[] = [
+  { id: "queue", title: "出库草稿", hint: "现场手里那张纸，点一张接着称", box: { x: 0, y: 0, w: 2, h: 24 }, min: { w: 2, h: 4 } },
+  { id: "form", title: "出库单", hint: "制单与改单都在这里，改完自动存", box: { x: 2, y: 0, w: 3, h: 24 }, min: { w: 2, h: 9 } },
+  { id: "weigh", title: "地磅称重", hint: "毛重皮重与过磅抓拍", box: { x: 5, y: 0, w: 4, h: 24 }, min: { w: 3, h: 8 } },
+  { id: "camera", title: "过磅画面", hint: "实时预览，压没压边靠眼睛", box: { x: 9, y: 0, w: 3, h: 24 }, min: { w: 3, h: 4 } },
+];
+
+const OUT_SPEC_BY_ID = new Map<string, PanelSpec<OutboundPanelId>>(OUT_PANELS.map((p) => [p.id, p]));
+
+/**
+ * 一套面板 = 一个偏好键 + 一份注册表 + 它的 id 查表。
+ * 入库与出库共用下面整套规整逻辑（夹边界、退回默认、压字挤开、防抖落库），只差这三样。
+ */
+export interface LayoutKit<I extends string> {
+  key: string;
+  panels: readonly PanelSpec<I>[];
+  byId: Map<string, PanelSpec<I>>;
+  defaultDoc(): LayoutDoc<I>;
+  parseDoc(raw: string | null): LayoutDoc<I>;
+}
+
+function makeKit<I extends string>(key: string, panels: readonly PanelSpec<I>[], byId: Map<string, PanelSpec<I>>): LayoutKit<I> {
+  const kit: LayoutKit<I> = {
+    key,
+    panels,
+    byId,
+    defaultDoc: () => defaultDocIn(kit),
+    parseDoc: (raw) => parseDocIn(raw, kit),
+  };
+  return kit;
+}
+
+const IN_KIT: LayoutKit<PanelId> = makeKit(LAYOUT_KEY, PANELS, SPEC_BY_ID);
+const OUT_KIT: LayoutKit<OutboundPanelId> = makeKit(OUT_LAYOUT_KEY, OUT_PANELS, OUT_SPEC_BY_ID);
+
 /** 存库的排布。`items` 恒含全部面板（收起来的那格也留着，再放回来还在老地方），`hidden` 只是显隐标记 */
-export interface LayoutDoc {
+export interface LayoutDoc<I extends string = PanelId> {
   items: Layout;
-  hidden: PanelId[];
+  hidden: I[];
 }
 
 function intIn(value: unknown, lo: number, hi: number): number | null {
@@ -111,7 +159,7 @@ function intIn(value: unknown, lo: number, hi: number): number | null {
 }
 
 /** 面板当前该占的格子：尺寸/位置都夹在合法区间内，minW/minH 一律取注册表而不是存值 */
-function toLayoutItem(spec: PanelSpec, raw?: Partial<LayoutItem>): LayoutItem {
+function toLayoutItem<I extends string>(spec: PanelSpec<I>, raw?: Partial<LayoutItem>): LayoutItem {
   const minX = intIn(raw?.x, 0, GRID_COLS - spec.min.w) ?? spec.box.x;
   const w = intIn(raw?.w, spec.min.w, GRID_COLS - minX) ?? spec.box.w;
   const x = Math.min(minX, GRID_COLS - w);
@@ -141,21 +189,26 @@ function isStackable(items: Layout): boolean {
  * 网格在一次缩放的中间帧就是会报回压字的格子（把别人挤开是手势结束时它自己做的事），
  * 而库里读回来的脏值需要 `normalize` 那道退回默认的闸门。
  */
-function sanitize(rawItems: unknown, rawHidden: unknown, opts?: { hidePanelsAbsentFromStore?: boolean }): LayoutDoc {
+function sanitize<I extends string>(
+  rawItems: unknown,
+  rawHidden: unknown,
+  kit: LayoutKit<I>,
+  opts?: { hidePanelsAbsentFromStore?: boolean },
+): LayoutDoc<I> {
   const seen = new Set<string>();
   const items: LayoutItem[] = [];
   const list = Array.isArray(rawItems) ? rawItems : [];
   for (const entry of list) {
-    const spec = typeof entry?.i === "string" ? SPEC_BY_ID.get(entry.i) : undefined;
+    const spec = typeof entry?.i === "string" ? kit.byId.get(entry.i) : undefined;
     if (!spec || seen.has(spec.id)) continue;
     seen.add(spec.id);
     items.push(toLayoutItem(spec, entry));
   }
-  const hidden: PanelId[] = Array.isArray(rawHidden)
-    ? rawHidden.filter((id): id is PanelId => typeof id === "string" && SPEC_BY_ID.has(id))
+  const hidden: I[] = Array.isArray(rawHidden)
+    ? rawHidden.filter((id): id is I => typeof id === "string" && kit.byId.has(id))
     : [];
   const alreadyHidden = new Set(hidden);
-  for (const spec of PANELS) {
+  for (const spec of kit.panels) {
     if (seen.has(spec.id)) continue;
     items.push(toLayoutItem(spec));
     // 这一格在档案里压根没有 ⇒ 那份排布是本面板上线以前写的：后加的面板按「收起」补进来，
@@ -171,10 +224,10 @@ function sanitize(rawItems: unknown, rawHidden: unknown, opts?: { hidePanelsAbse
  * 它那一格让给谁都可以，放回来时由网格自己挤开。全收起来也退回默认，
  * 否则界面上就没有可操作的东西了。
  */
-function normalize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
-  const doc = sanitize(rawItems, rawHidden, { hidePanelsAbsentFromStore: true });
-  const visible = doc.items.filter((it) => !doc.hidden.includes(it.i as PanelId));
-  if (!isStackable(visible) || visible.length === 0) return defaultDoc();
+function normalize<I extends string>(rawItems: unknown, rawHidden: unknown, kit: LayoutKit<I>): LayoutDoc<I> {
+  const doc = sanitize(rawItems, rawHidden, kit, { hidePanelsAbsentFromStore: true });
+  const visible = doc.items.filter((it) => !doc.hidden.includes(it.i as I));
+  if (!isStackable(visible) || visible.length === 0) return defaultDocIn(kit);
   return doc;
 }
 
@@ -186,33 +239,51 @@ function normalize(rawItems: unknown, rawHidden: unknown): LayoutDoc {
  * 脏值一进库，下次读回来就被 `normalize` 那道闸门整体退回默认——用户这次拖的、缩的白做，
  * 表现就是"一松手弹回原样"。本地显示什么我们不动它，只保证**进库的那份一定站得住**。
  */
-function settle(doc: LayoutDoc): LayoutDoc {
-  const hiddenItems = doc.items.filter((it) => doc.hidden.includes(it.i as PanelId));
-  const visible = doc.items.filter((it) => !doc.hidden.includes(it.i as PanelId));
+function settle<I extends string>(doc: LayoutDoc<I>, kit: LayoutKit<I>): LayoutDoc<I> {
+  const hiddenItems = doc.items.filter((it) => doc.hidden.includes(it.i as I));
+  const visible = doc.items.filter((it) => !doc.hidden.includes(it.i as I));
   if (isStackable(visible)) return doc;
-  return sanitize([...verticalCompactor.compact(visible, GRID_COLS), ...hiddenItems], doc.hidden);
+  return sanitize([...verticalCompactor.compact(visible, GRID_COLS), ...hiddenItems], doc.hidden, kit);
 }
 
 /**
- * 默认排布：`PANELS` 的 box + 本次版本的所有面板都在位。这里**不**读 `defaultHidden`——
+ * 默认排布：注册表里的 box + 本次版本的所有面板都在位。这里**不**读 `defaultHidden`——
  * 那个标记只管"库里那份老排布别被新面板挤动"（走 `normalize`），
  * 而压根没存过排布的账号第一眼就该看见新面板，不该还要自己去菜单里勾一下。
  */
-export function defaultDoc(): LayoutDoc {
-  return { items: PANELS.map((spec) => toLayoutItem(spec)), hidden: [] };
+function defaultDocIn<I extends string>(kit: LayoutKit<I>): LayoutDoc<I> {
+  return { items: kit.panels.map((spec) => toLayoutItem(spec)), hidden: [] };
 }
 
-export function parseDoc(raw: string | null): LayoutDoc {
-  if (!raw) return defaultDoc();
+function parseDocIn<I extends string>(raw: string | null, kit: LayoutKit<I>): LayoutDoc<I> {
+  if (!raw) return defaultDocIn(kit);
   try {
     const parsed = JSON.parse(raw) as { items?: unknown; hidden?: unknown };
-    return normalize(parsed.items, parsed.hidden);
+    return normalize(parsed.items, parsed.hidden, kit);
   } catch {
-    return defaultDoc();
+    return defaultDocIn(kit);
   }
 }
 
-export function stringifyDoc(doc: LayoutDoc): string {
+/** 入库那一套的自由函数出口：老调用方（含 `scripts/workstation-layout/check.ts`）不必带 kit */
+export function defaultDoc(): LayoutDoc<PanelId> {
+  return IN_KIT.defaultDoc();
+}
+
+export function parseDoc(raw: string | null): LayoutDoc<PanelId> {
+  return IN_KIT.parseDoc(raw);
+}
+
+/** 出库那一套的同样两个出口（自检脚本与任何不想挂 hook 的调用方用） */
+export function outDefaultDoc(): LayoutDoc<OutboundPanelId> {
+  return OUT_KIT.defaultDoc();
+}
+
+export function outParseDoc(raw: string | null): LayoutDoc<OutboundPanelId> {
+  return OUT_KIT.parseDoc(raw);
+}
+
+export function stringifyDoc<I extends string>(doc: LayoutDoc<I>): string {
   return JSON.stringify({
     version: 1,
     items: doc.items.map(({ i, x, y, w, h }) => ({ i, x, y, w, h })),
@@ -224,14 +295,14 @@ export function stringifyDoc(doc: LayoutDoc): string {
  * 收起 / 放出面板。格子不动只翻标记：再放回来还在老地方，这是"收起"不是"删除"。
  * 放出后若与别人压字，交给网格的 compactor 当场挤开，下一次 onLayoutChange 就是干净的。
  */
-function withHidden(doc: LayoutDoc, id: PanelId, hide: boolean): LayoutDoc {
-  if (!SPEC_BY_ID.has(id)) return doc;
+function withHidden<I extends string>(doc: LayoutDoc<I>, id: I, hide: boolean, kit: LayoutKit<I>): LayoutDoc<I> {
+  if (!kit.byId.has(id)) return doc;
   const hidden = doc.hidden.includes(id) ? doc.hidden : [...doc.hidden, id];
   return { items: doc.items, hidden: hide ? hidden : doc.hidden.filter((h) => h !== id) };
 }
 
 /**
- * 当前操作员的工作台布局：读一次（跟着账号走）、拖完写一次。
+ * 当前操作员的一套排布：读一次（跟着账号走）、拖完写一次。入库与出库各是一份（`kit.key` 不同）。
  *
  * 写入只在拖拽/缩放**结束**、以及收起/放出/重置时发生。网格在拖动过程中每帧都在报
  * 新格子（react-grid-layout 的行为），那时只更本地状态，不然一次拖动往库里写几十行。
@@ -241,17 +312,17 @@ function withHidden(doc: LayoutDoc, id: PanelId, hide: boolean): LayoutDoc {
  * 下不重取，回来的还是保存前那份旧文本，于是被当成本人的排布灌回本地状态——用户看到的就是
  * "点完完成、切去别的页面再回来，布局还是保存前的"。同一份值两处口径必须一致，别再拆开写。
  */
-export function useWorkstationLayout() {
+function useLayoutDoc<I extends string>(kit: LayoutKit<I>) {
   const actorId = useSession((s) => s.session?.actor.id ?? null);
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: ["pref", LAYOUT_KEY, actorId],
-    queryFn: () => api.getPref(LAYOUT_KEY),
+    queryKey: ["pref", kit.key, actorId],
+    queryFn: () => api.getPref(kit.key),
     enabled: actorId != null,
     staleTime: Infinity,
   });
 
-  const [doc, setDoc] = useState<LayoutDoc>(defaultDoc);
+  const [doc, setDoc] = useState<LayoutDoc<I>>(kit.defaultDoc);
   const docRef = useRef(doc);
   docRef.current = doc;
 
@@ -261,8 +332,8 @@ export function useWorkstationLayout() {
     const stamp = `${actorId}:${query.data ?? ""}`;
     if (loadedFor.current === stamp) return;
     loadedFor.current = stamp;
-    setDoc(parseDoc(query.data ?? null));
-  }, [actorId, query.isFetched, query.data]);
+    setDoc(kit.parseDoc(query.data ?? null));
+  }, [actorId, kit, query.isFetched, query.data]);
 
   /**
    * 已发出的写入序号。落库走的是并发的 IPC，两次快速改动（连点两下面板菜单）的回执可能倒着
@@ -280,25 +351,25 @@ export function useWorkstationLayout() {
   const remember = useCallback(
     (json: string, seq: number) => {
       if (seq !== writeSeq.current) return;
-      void queryClient.setQueryData(["pref", LAYOUT_KEY, actorId], json);
+      void queryClient.setQueryData(["pref", kit.key, actorId], json);
       loadedFor.current = actorId == null ? null : `${actorId}:${json}`;
     },
-    [actorId, queryClient],
+    [actorId, kit.key, queryClient],
   );
 
   const save = useMutation({
-    mutationFn: async (next: LayoutDoc) => {
-      const json = stringifyDoc(settle(next));
+    mutationFn: async (next: LayoutDoc<I>) => {
+      const json = stringifyDoc(settle(next, kit));
       const seq = ++writeSeq.current;
-      await api.setPref(LAYOUT_KEY, json);
+      await api.setPref(kit.key, json);
       return { json, seq };
     },
     onSuccess: ({ json, seq }) => remember(json, seq),
-    onError: (e: Error, next: LayoutDoc) => {
+    onError: (e: Error, next: LayoutDoc<I>) => {
       // 库没写进去，但这一份在本次会话里仍然算数：提示语说了"本机仍生效"，就得真的生效，
       // 否则用户切个页面回来发现调整没了，比"重启后可能回到原样"更难受。序号取当前值——
       // 失败的若是最新那次，它才是该留下的意图。
-      remember(stringifyDoc(settle(next)), writeSeq.current);
+      remember(stringifyDoc(settle(next, kit)), writeSeq.current);
       toast.error(`布局没能保存：${e.message}（本机仍生效，重启后可能回到原样）`);
     },
   });
@@ -313,7 +384,7 @@ export function useWorkstationLayout() {
   }, []);
 
   const commit = useCallback(
-    (next: LayoutDoc, debounce = false) => {
+    (next: LayoutDoc<I>, debounce = false) => {
       loadedFor.current = null; // 服务端那份旧值不该再把刚改的盖回去
       setDoc(next);
       docRef.current = next;
@@ -342,25 +413,25 @@ export function useWorkstationLayout() {
    */
   const applyLayout = useCallback(
     (visible: Layout) => {
-      const hiddenItems = docRef.current.items.filter((it) => docRef.current.hidden.includes(it.i as PanelId));
-      commit(sanitize([...visible, ...hiddenItems], docRef.current.hidden), true);
+      const hiddenItems = docRef.current.items.filter((it) => docRef.current.hidden.includes(it.i as I));
+      commit(sanitize([...visible, ...hiddenItems], docRef.current.hidden, kit), true);
     },
-    [commit],
+    [commit, kit],
   );
   const togglePanel = useCallback(
-    (id: PanelId, hide: boolean) => commit(withHidden(docRef.current, id, hide)),
-    [commit],
+    (id: I, hide: boolean) => commit(withHidden(docRef.current, id, hide, kit)),
+    [commit, kit],
   );
   const reset = useCallback(() => {
-    commit(defaultDoc());
+    commit(kit.defaultDoc());
     toast.success("已恢复默认布局");
-  }, [commit]);
+  }, [commit, kit]);
 
   const hidden = doc.hidden;
-  const specs = useMemo(() => PANELS.map((p) => ({ ...p, shown: !hidden.includes(p.id) })), [hidden]);
+  const specs = useMemo(() => kit.panels.map((p) => ({ ...p, shown: !hidden.includes(p.id) })), [hidden, kit]);
   /** 只含可见面板的格子，直接喂给网格 */
   const visibleItems = useMemo(
-    () => doc.items.filter((it) => !hidden.includes(it.i as PanelId)),
+    () => doc.items.filter((it) => !hidden.includes(it.i as I)),
     [doc.items, hidden],
   );
   /** 渲染顺序按格子走（y→x），窄屏退回单列堆叠时读起来才跟宽屏一个次序 */
@@ -368,8 +439,8 @@ export function useWorkstationLayout() {
     () =>
       [...visibleItems]
         .sort((a, b) => a.y - b.y || a.x - b.x)
-        .map((it) => ({ spec: SPEC_BY_ID.get(it.i)!, item: it })),
-    [visibleItems],
+        .map((it) => ({ spec: kit.byId.get(it.i)!, item: it })),
+    [visibleItems, kit],
   );
 
   return {
@@ -386,4 +457,14 @@ export function useWorkstationLayout() {
     togglePanel,
     reset,
   };
+}
+
+/** 入库那张桌子的排布（键 `workstation.layout`） */
+export function useWorkstationLayout() {
+  return useLayoutDoc(IN_KIT);
+}
+
+/** 出库那张桌子的排布（键 `workstation.layout.out`）：与入库各存一份，互不挤动 */
+export function useOutboundLayout() {
+  return useLayoutDoc(OUT_KIT);
 }

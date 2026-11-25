@@ -27,7 +27,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CctvIcon, FilterIcon, Maximize2Icon } from "lucide-react";
-import type { CapturePhoto, DeviceConfig, WeighOrder } from "@/mock/types";
+import type { CapturePhoto, DeviceConfig } from "@/mock/types";
 import { api } from "@/lib/api";
 import { localCameraSpec } from "@/lib/local-camera";
 import { LocalCameraLive } from "@/components/business/LocalCameraLive";
@@ -53,14 +53,24 @@ const TILE_MIN_WIDTH = 220;
 /** 隐藏相机集合的偏好键（服务端 `user_preference`，键名走 `prefs.rs::check_key` 允许字符集） */
 const HIDDEN_KEY = "workstation.camera.hidden";
 
+/** 画面叠在角上的那一单：磅单与出库单都只用到这两个字段 */
+export interface CameraOrderRef {
+  order_no: string;
+  vehicle_no?: string | null;
+}
+
 export function CameraPanel({
   cameras,
   order,
   photos,
 }: {
   cameras: DeviceConfig[];
-  order: WeighOrder | null;
-  photos: CapturePhoto[];
+  order: CameraOrderRef | null;
+  /**
+   * 本单抓拍。不传＝这一格不管抓拍展示（出库侧的抓拍墙在称重面板里，带真缩略图，
+   * 这里只给画面，免得同一批照片在一栏里出现两遍）。
+   */
+  photos?: CapturePhoto[];
 }) {
   const actorId = useSession((s) => s.session?.actor.id ?? null);
   const [compact, setCompact] = useState(false);
@@ -195,7 +205,7 @@ export function CameraPanel({
           </div>
         )}
 
-        {photos.length > 0 ? (
+        {photos == null ? null : photos.length > 0 ? (
           <div className="flex shrink-0 items-center gap-1">
             <span className="shrink-0 text-[10px] text-muted-foreground">本单抓拍 {photos.length} 张</span>
             {photos.map((p) => (
@@ -242,7 +252,7 @@ export function CameraPanel({
             </DialogTitle>
           </DialogHeader>
           {zoomCam && <ZoomBody cam={zoomCam} order={order} />}
-          {photos.length > 0 && (
+          {!!photos?.length && (
             <div className={cn("grid gap-2", zoomCam ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-2")}>
               {photos.map((p) => (
                 <CapturePhotoThumb key={p.id} photo={p} />
@@ -266,7 +276,7 @@ function CameraTile({
   onZoom,
 }: {
   cam: DeviceConfig;
-  order: WeighOrder | null;
+  order: CameraOrderRef | null;
   compact: boolean;
   onZoom: () => void;
 }) {
@@ -325,7 +335,7 @@ function CameraTile({
 }
 
 /** 放大画面里的实时画面块——跟小卡走同一套通道判断，只是拿 aspect-video 撑大并带上帧信息 */
-function ZoomBody({ cam, order }: { cam: DeviceConfig; order: WeighOrder | null }) {
+function ZoomBody({ cam, order }: { cam: DeviceConfig; order: CameraOrderRef | null }) {
   const spec = localCameraSpec(cam);
   const ip = spec == null ? ipCameraSpec(cam) : null;
   const online = spec != null || ip != null || cam.last_status === "online";

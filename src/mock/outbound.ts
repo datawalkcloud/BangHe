@@ -34,7 +34,7 @@ import { GRADES } from "@/lib/constants";
 import type { Tone } from "@/lib/constants";
 import { parties, users, varieties, warehouses, TODAY, int, pick, DEMO_ALIGN } from "./masters";
 import { applyAlign } from "@/lib/scale-align";
-import { orders, printLogs, captureCameras } from "./orders";
+import { orders, printLogs, captureCameras, auditLogs } from "./orders";
 import { dateKey, isoOf, pad } from "./rng";
 
 /** 站内经办人里能开出库单的那几位（值仓/站长/磅员/登记员）。 */
@@ -558,6 +558,54 @@ export function voidOutbound(i: OutboundCloseInput): OutboundOrder {
   return snapshot(cur);
 }
 
+/**
+ * 真删一张草稿出库单（与 Rust `outbound::delete` 同判据）：只有**还没上过磅的草稿**能删。
+ * 删的是演示档里那一行本身，队列当场少一张；`seq_counter` 那个号不回滚，
+ * 与真库同一对动作——先往 `auditLogs` 写一条 `outbound.delete` 快照，再删行，
+ * 「系统 → 操作审计」那一行就是号段空洞唯一的解释（演示档的库存在 localStorage，删完也留痕）。
+ * **原因选填**（2026-11-25 定）：硬凑六个字只会得到一句废话，留痕的下限在那条审计快照上。
+ * 单号查不到返回 `null`（页面据此提示「这张单已经不在了」），其余不符一律抛人话。
+ */
+export function deleteOutbound(i: OutboundCloseInput): string | null {
+  const at = docs.findIndex((d) => d.order_no === i.order_no);
+  if (at < 0) return null;
+  const cur = docs[at];
+  if (cur.status === "voided") throw new Error("本单已作废：作废行是留痕，不再删除");
+  if (cur.status !== "draft") {
+    throw new Error(`本单已「${STATUS_LABEL[cur.status]}」，库存已扣，只能由站长或保管员走红冲更正`);
+  }
+  const weighed = trail.filter((t) => t.outbound_id === cur.id).length;
+  if (weighed > 0) {
+    throw new Error(
+      `本单已留下 ${weighed} 次称重读数（过磅抓拍就挂在这些读数上），不能删除；这张纸不算了请作废并写明原因`,
+    );
+  }
+  // 与 Rust 同一对动作、同一个顺序：**先写审计快照，再删行**。删完这张单在演示档里
+  // 就只剩「系统 → 操作审计」这一行能说明它当时记的是什么，快照字段逐字对齐 `outbound.rs`。
+  const actor = users.find((u) => u.id === i.operator_id);
+  const snapshot =
+    `删除出库草稿：${cur.kind === "sale" ? "销售出库" : "登记出库"} ${cur.warehouse_name} · ` +
+    `${cur.variety_name ?? "未定品种"} ${cur.grade ?? "未定级"} · ` +
+    `领出方 ${cur.party_name ?? cur.counterparty_label ?? "未填"} · 制单人 ${cur.created_name} · ` +
+    `原因：${i.reason.trim() || "未填"}` +
+    (cur.net_weight_01kg != null ? `；手填净重 ${(cur.net_weight_01kg / 10).toFixed(1)} kg` : "") +
+    (cur.remark?.trim() ? `；备注：${cur.remark.trim()}` : "");
+  auditLogs.unshift({
+    id: auditLogs.length + 1,
+    at: isoOf(new Date()),
+    actor_id: i.operator_id ?? 0,
+    actor_name: actor?.display_name ?? "—",
+    action: "outbound.delete",
+    entity: "outbound_order",
+    entity_no: cur.order_no,
+    reason: snapshot,
+    authorized_by: null,
+    result: "ok",
+  });
+  docs.splice(at, 1);
+  return cur.order_no;
+}
+
 export function reverseOutbound(i: OutboundCloseInput): OutboundOrder {
   const reason = i.reason.trim();
   if ([...reason].length < 6) {
@@ -760,7 +808,7 @@ export function getOutbound(no: string): OutboundDetail | null {
     photos: photosOfOutbound(records),
     // 与真库 `orders::load_prints_of` 同一条判据：**号 + 票种两个条件**一起查。
     // 只按号查会把同站同月那张同号磅单的打印算到这张出库单头上（0026 之后号面上没有票种字母）。
-    // 出库码单与发货凭证两种票都算这张单的打印留痕（时间轴全展示，按钮各自按票种数数）。
+    // 出库码单与出库磅单两种票都算这张单的打印留痕（时间轴全展示，按钮各自按票种数数）。
     prints: printLogs.filter((p) => (p.doc_type === "outbound_order" || p.doc_type === "outbound_voucher") && p.doc_no === d.order_no).map((p) => ({ ...p })),
   };
 }

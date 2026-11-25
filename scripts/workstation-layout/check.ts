@@ -17,7 +17,19 @@
  * 唯一被简化的是 react-grid-layout 的 `verticalCompactor`（落库前那道挤开逻辑）：真实网格在屏幕上跑，
  * 这里只断言"读回来的几何不该动"，所以拿不到它的挤开结果也不影响结论。
  */
-import { PANELS, defaultDoc, parseDoc, stringifyDoc } from "../../src/components/workstation/layout";
+import {
+  GRID_COLS,
+  GRID_ROWS,
+  LAYOUT_KEY,
+  OUT_LAYOUT_KEY,
+  OUT_PANELS,
+  PANELS,
+  defaultDoc,
+  outDefaultDoc,
+  outParseDoc,
+  parseDoc,
+  stringifyDoc,
+} from "../../src/components/workstation/layout";
 
 let fails = 0;
 function ok(name: string, cond: boolean, extra?: unknown) {
@@ -133,6 +145,66 @@ const withSettle = JSON.stringify({
   hidden: [],
 });
 ok("G 认不出的 settle 被丢弃且四格原样", geom(parseDoc(withSettle), "weigh") === "3,7,6,11" && !parseDoc(withSettle).items.some((i) => i.i === "settle"));
+
+/* ── 出库那张桌子（05 §4：与入库同一套引擎、各存一份排布） ── */
+
+/* H. 出库默认排布是 2026-11-25 首版固化的四格通高，逐字对一遍，别被顺手改回去 */
+const expectedOut = {
+  version: 1,
+  items: [
+    { i: "queue", x: 0, y: 0, w: 2, h: 24 },
+    { i: "form", x: 2, y: 0, w: 3, h: 24 },
+    { i: "weigh", x: 5, y: 0, w: 4, h: 24 },
+    { i: "camera", x: 9, y: 0, w: 3, h: 24 },
+  ],
+  hidden: [],
+};
+const outDefault = outDefaultDoc();
+ok(
+  "H 出库默认四格逐字一致、通高铺满 24 行且不压字",
+  JSON.stringify(JSON.parse(stringifyDoc(outDefault))) === JSON.stringify(expectedOut) &&
+    OUT_PANELS.length === 4 &&
+    outDefault.items.every((it) => it.y === 0 && it.h === GRID_ROWS && it.x + it.w <= GRID_COLS),
+  stringifyDoc(outDefault),
+);
+ok("H 出库一格都不许默认收起（首版四格全是主角）", outDefault.hidden.length === 0, outDefault.hidden);
+
+/* I. 两桌各存各的键：键一旦相同，切模式就把另一桌的格子当脏值互相覆盖 */
+ok("I 入库与出库的偏好键不同", LAYOUT_KEY !== OUT_LAYOUT_KEY, { LAYOUT_KEY, OUT_LAYOUT_KEY });
+
+/* I2. 入库那份排布喂进出库的解析器：认不出的 id 全丢，落回自己的默认四格，不报错也不留残格 */
+const inAsOut = outParseDoc(stringifyDoc(parseDoc(oldFull)));
+ok(
+  "I2 读错桌子的排布退回自己的默认，不混进别人的格子",
+  JSON.stringify(JSON.parse(stringifyDoc(inAsOut))) === JSON.stringify(expectedOut) && !inAsOut.items.some((i) => i.i === "tare"),
+  stringifyDoc(inAsOut),
+);
+
+/* J. 出库侧同样有落库往返与压字闸门 */
+const outDragged = JSON.stringify({
+  version: 1,
+  items: [
+    { i: "queue", x: 0, y: 0, w: 3, h: 24 },
+    { i: "form", x: 3, y: 0, w: 4, h: 12 },
+    { i: "weigh", x: 3, y: 12, w: 4, h: 12 },
+    { i: "camera", x: 7, y: 0, w: 5, h: 24 },
+  ],
+  hidden: ["weigh"],
+});
+const j1 = outParseDoc(outDragged);
+const j2 = outParseDoc(stringifyDoc(j1));
+ok("J 出库排布二次往返逐字稳定，收起的那格只翻标记不动格子", JSON.stringify(j1) === JSON.stringify(j2) && j1.hidden.join() === "weigh" && geom(j1, "weigh") === "3,12,4,12", { j1, j2 });
+const outDirty = JSON.stringify({
+  version: 1,
+  items: [
+    { i: "queue", x: 0, y: 0, w: 6, h: 24 },
+    { i: "form", x: 0, y: 0, w: 6, h: 24 },
+    { i: "weigh", x: 6, y: 0, w: 3, h: 24 },
+    { i: "camera", x: 9, y: 0, w: 3, h: 24 },
+  ],
+  hidden: [],
+});
+ok("J 出库压字脏值也整份退回默认", JSON.stringify(outParseDoc(outDirty)) === JSON.stringify(outDefaultDoc()));
 
 console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

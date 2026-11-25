@@ -37,9 +37,9 @@ import { WeightDisplay } from "@/components/business/WeightDisplay";
 import { InlineNumField } from "@/components/business/NumField";
 import { CapturePhotoThumb } from "@/components/business/CapturePhotoThumb";
 import { ToneBadge, WeightSourceBadge } from "@/components/business/badges";
+import { ScaleSwitcher } from "@/components/business/ScaleSwitcher";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "cn";
 import type { DeviceConfig, OutboundDetail } from "@/mock/types";
 
@@ -55,7 +55,8 @@ export function OutboundWeighPanel({
   captureCams = [],
   anyCamOnline = false,
 }: {
-  order: OutboundDetail;
+  /** 当前选中的出库单；工作台在**没点中草稿**时也铺这一格，那时传 null：读数与切磅照看，捕获灰着 */
+  order: OutboundDetail | null;
   /**
    * 台账里启用的真磅（`kind='scale' && is_enabled=1 && is_mock=0`）。
    * 两台以上时头部给「切换当前磅」下拉，与工作台③称重区同一套：切的是台账里的当前磅，
@@ -73,12 +74,6 @@ export function OutboundWeighPanel({
   anyCamOnline?: boolean;
 }) {
   const scale = useDeviceStore((s) => s.scale);
-  /**
-   * 读数归属以帧里的 code 为准，还没收到帧时退回台账当前磅——与③称重区逐字同口径
-   * （见 `workstation/WeighPanel` 同名变量）。下拉显示的是真正的读数来源，不是刚点过的那项。
-   */
-  const currentScale = scales.find((d) => d.code === scale.code) ?? scales.find((d) => d.is_default === 1) ?? null;
-  const scaleItems = scales.map((d) => ({ value: d.code, label: d.name }));
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
 
@@ -93,12 +88,12 @@ export function OutboundWeighPanel({
   const grossRef = useRef<HTMLInputElement>(null);
   const tareRef = useRef<HTMLInputElement>(null);
 
-  const editable = order.status === "draft" && can("outbound.create");
+  const editable = order?.status === "draft" && can("outbound.create");
   const scaleDown = !scale.connected;
 
   /** 这一项此刻库里采用的读数（`null`＝还没捕过） */
   function adopted01(type: WeighType): number | null {
-    return (type === "gross" ? order.gross_weight_01kg : order.tare_weight_01kg) ?? null;
+    return (type === "gross" ? order?.gross_weight_01kg : order?.tare_weight_01kg) ?? null;
   }
 
   /** 这一格该不该是录入框：没捕过天然是框；捕过了要本人点「修改」。过账后整块是死的 */
@@ -124,8 +119,13 @@ export function OutboundWeighPanel({
    * 待捕项：缺哪项优先提示哪项，两项都有则为复称。
    * 与③称重区同一个判法——出库也没有「必须先称毛重」的强制顺序（03 §9.28）。
    */
-  const next: WeighType | null =
-    order.gross_weight_01kg == null ? "gross" : order.tare_weight_01kg == null ? "tare" : null;
+  const next: WeighType | null = !order
+    ? null
+    : order.gross_weight_01kg == null
+      ? "gross"
+      : order.tare_weight_01kg == null
+        ? "tare"
+        : null;
 
   const capture = useMutation({
     mutationFn: async (a: { weigh_type: WeighType; weight_01kg: number; source: "scale" | "manual" }) => {
@@ -133,7 +133,7 @@ export function OutboundWeighPanel({
       // 取不到就按无抓拍提交，抓拍失败不该拖住这次称重。
       const frames = await grabCaptureFrames(captureCams);
       return api.captureOutbound({
-        order_no: order.order_no,
+        order_no: order!.order_no,
         weigh_type: a.weigh_type,
         weight_01kg: a.weight_01kg,
         source: a.source,
@@ -165,6 +165,10 @@ export function OutboundWeighPanel({
   });
 
   function submit(type: WeighType, value01kg: number, source: "scale" | "manual") {
+    if (!order) {
+      toast.warning("还没选出库单：左边点一张草稿，或按「新建出库单」现开一张，取到号才能捕获。");
+      return;
+    }
     if (!editable) {
       toast.error("只有草稿单能称重；本单已过账或当前岗位无权操作");
       return;
@@ -232,10 +236,10 @@ export function OutboundWeighPanel({
   useEffect(() => {
     setDraft({ gross: "", tare: "" });
     setEditing({ gross: false, tare: false });
-  }, [order.order_no]);
+  }, [order?.order_no]);
 
-  const records = order.records ?? [];
-  const weighed = order.gross_weight_01kg != null || order.tare_weight_01kg != null;
+  const records = order?.records ?? [];
+  const weighed = order?.gross_weight_01kg != null || order?.tare_weight_01kg != null;
 
   return (
     <Card>
@@ -243,31 +247,7 @@ export function OutboundWeighPanel({
         <CardTitle className="text-sm">地磅称重</CardTitle>
         <CardAction className="flex items-center gap-2 text-xs text-muted-foreground">
           {/* 一站两磅：与③称重区同一处切，切的是台账"当前磅"，落库归属跟着一起挪 */}
-          {scales.length > 1 && (
-            <Select
-              value={currentScale?.code}
-              items={scaleItems}
-              onValueChange={(v) => {
-                if (v && v !== currentScale?.code) onSelectScale?.(v);
-              }}
-              disabled={switchingScale}
-            >
-              <SelectTrigger
-                size="sm"
-                className="h-6 w-auto gap-1 rounded-md border-dashed px-1.5 py-0 text-xs font-medium text-foreground"
-                aria-label="切换当前地磅"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="end">
-                {scales.map((d) => (
-                  <SelectItem key={d.code} value={d.code}>
-                    {d.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <ScaleSwitcher scales={scales} liveCode={scale.code} onSelect={onSelectScale} switching={switchingScale} />
           {/* 读数归属说清是哪台磅：一站两磅时"这条读数是哪个坑称的"是要问得出来的 */}
           {scale.code ? `${scale.code}${scale.port ? ` · ${scale.port}` : ""}` : "未取到设备读数"}
         </CardAction>
@@ -364,12 +344,12 @@ export function OutboundWeighPanel({
               <div className="flex items-center justify-between gap-2 border-t pt-0.5 text-xs">
                 <span className="font-semibold text-foreground">净重（毛 − 皮）</span>
                 <span className="tnum text-sm font-bold text-primary">
-                  {order.net_weight_01kg != null ? weight(order.net_weight_01kg) : "—"}
+                  {order?.net_weight_01kg != null ? weight(order.net_weight_01kg) : "—"}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2 text-xs">
                 <span className="text-muted-foreground">重量来源</span>
-                <WeightSourceBadge source={order.weight_source} />
+                {order ? <WeightSourceBadge source={order.weight_source} /> : <span className="tnum">—</span>}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -395,9 +375,11 @@ export function OutboundWeighPanel({
 
         {!editable ? (
           <p className="text-xs text-muted-foreground">
-            {order.status === "draft"
-              ? "当前岗位不能称重，需要值仓 / 站长 / 磅员 / 登记员。"
-              : `本单${OUTBOUND_STATUS[order.status].label}，重量已进库存账，不能再称重；要更正只能红冲后另开一张。`}
+            {!order
+              ? "还没选出库单：左边点一张草稿，或按上方「新建出库单」现开一张。取到号之后这里才落重量，实时读数与切磅现在就能看。"
+              : order.status === "draft"
+                ? "当前岗位不能称重，需要值仓 / 站长 / 磅员 / 登记员。"
+                : `本单${OUTBOUND_STATUS[order.status].label}，重量已进库存账，不能再称重；要更正只能红冲后另开一张。`}
           </p>
         ) : null}
 
@@ -437,16 +419,16 @@ export function OutboundWeighPanel({
               ))}
             </ul>
           </div>
-        ) : (
+        ) : order ? (
           <p className="text-xs text-muted-foreground">
             {weighed
               ? "本单已记录毛重 / 皮重，但称重轨迹读不出来，请让站长核查数据。"
               : "还没上过磅，当前净重是手填的。上过磅后改重量只走这一块，表单里的净重格会锁定。"}
           </p>
-        )}
+        ) : null}
 
         {(() => {
-          const photos = order.photos ?? [];
+          const photos = order?.photos ?? [];
           if (photos.length === 0) return null;
           return (
             <div className="flex flex-col gap-1.5 border-t pt-2">

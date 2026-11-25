@@ -239,6 +239,7 @@ pub fn run() {
             outbound::outbound_complete,
             outbound::outbound_void,
             outbound::outbound_reverse,
+            outbound::outbound_delete,
             outbound::outbound_capture,
             stock::stock_balance,
             stock::stock_movements,

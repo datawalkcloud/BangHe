@@ -523,6 +523,12 @@ const AUDIT_ACTION: Record<string, string> = {
   "staff.create": "新增员工",
   "staff.update": "修改员工",
   "password.reset": "重置员工密码",
+  // 出库草稿是**真删行**（02 §F11.8）：库里连纸都不剩，审计这条就是号段那个洞唯一的解释，
+  // 所以这一行绝不能留成机器码。reason 里带的是删除那一刻的整张单快照（性质/仓房/品种/
+  // 领出方/制单人/手填净重/备注 + 那句选填的原因）。
+  // 同族的 `outbound.create` / `update` / `capture` / `complete` / `void` / `reverse` 仍在写、
+  // 暂未进表（落到下面那行机器码兜底），要一起补话术时按同一口径加。
+  "outbound.delete": "删除出库草稿",
 };
 
 const AUDIT_RESULT: Record<AuditLog["result"], { label: string; tone: "success" | "warning" | "danger" }> = {
@@ -533,6 +539,8 @@ const AUDIT_RESULT: Record<AuditLog["result"], { label: string; tone: "success" 
 
 const AUDIT_ENTITY: Record<string, string> = {
   weigh_order: "磅单",
+  // 出库单据的审计主体（02 §M11）：不进表的话每一行出库留痕都只能显示机器码
+  outbound_order: "出库单",
   qc_report: "质检单",
   settlement: "结算单",
   party: "售粮人",

@@ -50,7 +50,7 @@ import { tareMean01kg as tareMeanOf, tareOverTolerance, tareRefRows } from "@/li
 import { awaitingPayment, creditPayGate, scanRejectNote, settleGateOf, unpaidFen, type GateTone, type SettleGate } from "@/lib/settle-gate";
 import { announce } from "@/lib/voice-prompt";
 import { postWeighAction, settleDefaults } from "@/lib/settle-defaults";
-import type { OutboundDetail, QcReport, WeighOrder } from "@/mock/types";
+import type { OutboundDetail, OutboundOrder, QcReport, WeighOrder } from "@/mock/types";
 import { OUTBOUND_STATUS } from "@/lib/constants";
 import { useDeviceStore, selectScale } from "@/store/device";
 import { actorId, useSession } from "@/store/session";
@@ -63,13 +63,15 @@ import { CameraPanel } from "@/components/workstation/CameraPanel";
 import { localCameraSpec } from "@/lib/local-camera";
 import { ipCameraSpec } from "@/components/business/IpCameraLive";
 import { PanelTile, WorkstationGrid } from "@/components/workstation/WorkstationGrid";
-import { useWorkstationLayout } from "@/components/workstation/layout";
-import type { PanelId } from "@/components/workstation/layout";
+import { useOutboundLayout, useWorkstationLayout } from "@/components/workstation/layout";
+import type { OutboundPanelId, PanelId } from "@/components/workstation/layout";
 import { RegistrationDialog } from "@/components/workstation/RegistrationDialog";
 // 测试扫码框暂时不对外展示，渲染与站点参数一起注释着，这一行 import 先停掉
 // import { ScanTestBar } from "@/components/workstation/ScanTestBar";
-import { OutboundBoard } from "@/components/workstation/OutboundBoard";
-import { OutboundFormDialog } from "@/components/outbound/OutboundFormDialog";
+import { OutboundDraftsPanel } from "@/components/workstation/OutboundDraftsPanel";
+import { OutboundFormPanel } from "@/components/outbound/OutboundFormPanel";
+import { CloseOutboundDialog } from "@/components/outbound/CloseOutboundDialog";
+import { OutboundWeighPanel } from "@/components/outbound/OutboundWeighPanel";
 import { useWorkstationMode } from "@/hooks/useWorkstationMode";
 import { useIcWorkflow } from "@/components/workstation/useIcWorkflow";
 import { SettleForm } from "@/components/settlement/SettleForm";
@@ -125,11 +127,30 @@ export function WorkstationPage() {
   const { mode, loading: modeLoading, set: setModePref } = useWorkstationMode();
   const outboundMode = mode === "out";
   /**
-   * 出库模式的当前单据与表单。单号存页面本地：出库没有"在途条点卡片接着干"那样的外链入口，
+   * 出库模式的当前单据。单号存页面本地：出库没有"在途条点卡片接着干"那样的外链入口，
    * 不需要占 URL；离开这一页再回来即从草稿队列重新选。
    */
   const [outboundNo, setOutboundNo] = useState<string | null>(null);
-  const [outboundForm, setOutboundForm] = useState<{ open: boolean; editing: OutboundDetail | null }>({ open: false, editing: null });
+  /**
+   * 出库单的**就地新建**态（05 §4）：「出库单」那一格换成一张空白表单，填齐必填三项即由
+   * 服务端取号成单——不再有制单弹窗，也不会为一个还没成型的单子白占一个号。
+   * 与 `outboundNo` 互斥：点队列里的单会清掉它，点「新建」会清掉选中。
+   */
+  const [outboundNew, setOutboundNew] = useState(false);
+  const pickOutbound = useCallback((no: string) => {
+    setOutboundNew(false);
+    setOutboundNo(no);
+  }, []);
+  const newOutbound = useCallback(() => {
+    setOutboundNo(null);
+    setOutboundNew(true);
+  }, []);
+  /**
+   * 待删除的出库草稿：队列行尾那只垃圾桶把**那一行**塞进来（不必先选中）。
+   * 确认框复用 `CloseOutboundDialog` 的 delete 模式——候选事由、三份 query 的 invalidate
+   * 都跟作废红冲同一条路，不再另写一张框。
+   */
+  const [outboundDel, setOutboundDel] = useState<OutboundOrder | null>(null);
 
   const { data: order, isLoading } = useQuery({
     queryKey: ["order", orderNo],
@@ -220,6 +241,14 @@ export function WorkstationPage() {
   const [focusMode, setFocusMode] = useState(false);
   const [editing, setEditing] = useState(false);
   const board = useWorkstationLayout();
+  /** 出库桌子的排布与入库**各存一份**（`workstation.layout` / `workstation.layout.out`）：两边各自拖各自的 */
+  const outBoard = useOutboundLayout();
+  /**
+   * 页头那两颗布局按钮与编辑态的「显示区块」只管**当前这张桌子**。
+   * 两套排布的格子互不相干（同一台磅房机入库摆 A 样、出库摆 B 样），
+   * 所以这里按模式选一份，不给一张合并的假桌子。
+   */
+  const layoutOps = outboundMode ? outBoard : board;
 
   const goOrder = useCallback(
     (no: string | null) => void navigate({ to: "/workstation", search: { orderNo: no ?? undefined } }),
@@ -333,9 +362,10 @@ export function WorkstationPage() {
   );
 
   /**
-   * 出库模式打当前那张出库码单。走的是与磅单、与出库详情页同一条 `useSilentReceiptPrint`
-   * （无预览直打 → 失败才回退预览框），刷新键传 `["outbound"]`——`prints` 挂在这张单的
-   * 详情查询上，用缺省值（磅单那条）打完「已打 N 张」不会动。
+   * 出库模式打当前那张出库单。出库只印一种纸（出库磅单，票面照现场那张固定表格），与详情页
+   * 同一个 `scenario`。走的是与磅单同一条 `useSilentReceiptPrint`（无预览直打 → 失败才回退
+   * 预览框），刷新键传 `["outbound"]`——`prints` 挂在这张单的详情查询上，用缺省值（磅单那条）
+   * 打完「已打 N 张」不会动。
    *
    * 出票前先把这一单重取一遍：刚捕完毛/皮就按 F9 的场合，缓存里还是写之前那份，
    * 票面会把刚称到的那一栏印成空的。取不到就照缓存印，宁可旧一点也不能不出票。
@@ -358,10 +388,10 @@ export function WorkstationPage() {
       announce("这一单还没有出库净重，先不出票", `ws-ob-print-nonet:${target}`);
       return;
     }
-    // 补打角标只数码单自己那几条：详情里现在同时挂着发货凭证的留痕（另一种票各数各的）
-    const printed = (fresh.prints ?? []).filter((p) => p.doc_type === "outbound_order" && p.result === "success").length;
+    // 与 `outboundPrinted` 同一口径：合一之后从前那张码单就是这张单的前一次出纸，合着数
+    const printed = (fresh.prints ?? []).filter((p) => p.result === "success").length;
     void printReceipt({
-      scenario: "outbound_order",
+      scenario: "outbound_voucher",
       docNo: target,
       isReprint: printed > 0,
       context: { station, names, outbound: fresh },
@@ -375,7 +405,7 @@ export function WorkstationPage() {
     : !station
       ? "站点信息还没加载"
       : !outboundDoc
-        ? "先在左边队列选一张出库单，或扫出库码单"
+        ? "先在左边队列选一张出库单，或输单号检索"
         : outboundDoc.net_weight_01kg == null
           ? "本单还没有出库净重，打不出有效票据；请先称重或改单填净重"
           : null;
@@ -668,7 +698,7 @@ export function WorkstationPage() {
         announce("查不到这张出库单，请核对票面单号", `ws-ob-gone:${no}`);
         return;
       }
-      setOutboundNo(no);
+      pickOutbound(no);
       if (scanned.status !== "draft") {
         toast.info(`${no} 已是「${OUTBOUND_STATUS[scanned.status].label}」：这里只能查看和补打，称重与过账都不开放。`, {
           id: `ws-ob-status:${no}`,
@@ -685,7 +715,7 @@ export function WorkstationPage() {
         announce("这串号也有磅单，请核对拿的哪张纸", `ws-ob-twin:${no}`);
       }
     },
-    [showScanReject],
+    [showScanReject, pickOutbound],
   );
 
   /**
@@ -774,7 +804,7 @@ export function WorkstationPage() {
   // 弹窗/结算框/补付框开着时不捕获扫码：那会儿焦点在弹层里，扫进来的码不该把底下的单换掉。
   // 后台常驻捕获（键盘枪免聚焦，`useScannerCapture` 已反向让位在输入框里打字的人）。
   useScannerCapture((raw) => void handleScan(raw), {
-    enabled: !regOpen && settleNo == null && payNo == null && !outboundForm.open,
+    enabled: !regOpen && settleNo == null && payNo == null,
   });
 
   // F7（制单）已收进顶部工具条作全局键：任何页面都弹同一张 RegistrationDialog，
@@ -944,6 +974,66 @@ export function WorkstationPage() {
       ? `${draft.party.name} · 未制单`
       : "未制单";
 
+  /**
+   * 出库那张桌子的面板本体（05 §4）。四格与入库同一套网格、各存一份排布：
+   *  - `queue` 草稿队列：点一张把它喂给 `form` / `weigh`；
+   *  - `form` 出库单：**就地编辑、改完自动存**，制单与改单都不再弹窗；
+   *  - `weigh` 地磅称重：过磅抓拍挂在本单附件上；
+   * 两格在**没点中草稿**时照样铺满：出库单是整张灰着的空表，称重区给实时读数与切磅、捕获灰掉
+   * （与入库那侧 `order ?? null` 同一副样子）——车已上磅时先看读数、先切磅，不该被"先选一张单"挡住。
+   *  - `camera` 过磅画面：不看单据在不在，常驻。
+   */
+  const outBodies: Record<OutboundPanelId, ReactNode> = {
+    queue: (
+      <OutboundDraftsPanel
+        drafts={outboundDrafts}
+        loading={draftsQuery.isPending}
+        selectedNo={outboundNo}
+        isNew={outboundNew}
+        canCreate={can("outbound.create")}
+        onPick={pickOutbound}
+        onNew={newOutbound}
+        onDelete={setOutboundDel}
+      />
+    ),
+    form: (
+      <OutboundFormPanel
+        doc={outboundDoc}
+        selectedNo={outboundNo}
+        isNew={outboundNew}
+        canEdit={can("outbound.create")}
+        completing={completeOutbound.isPending}
+        printBlockedReason={printBlockedReason}
+        printedCount={outboundPrinted}
+        onCreated={(row) => {
+          // 新建那张的号是这一刻才从服务端取出来的：取到了就把界面挪到这张单上，
+          // 称重与队列随即跟着走，不必回队列里找刚开的号
+          setOutboundNew(false);
+          setOutboundNo(row.order_no);
+        }}
+        onCancelNew={() => setOutboundNew(false)}
+        onComplete={() => {
+          if (outboundDoc) completeOutbound.mutate(outboundDoc.order_no);
+        }}
+        onPrint={() => void printOutbound()}
+        onDetail={() => {
+          if (outboundDoc) void navigate({ to: "/outbound/$no", params: { no: outboundDoc.order_no } });
+        }}
+      />
+    ),
+    camera: <CameraPanel cameras={cameras} order={outboundDoc ?? null} />,
+    weigh: (
+      <OutboundWeighPanel
+        order={outboundDoc ?? null}
+        scales={scales}
+        onSelectScale={(code) => switchScale.mutate(code)}
+        switchingScale={switchScale.isPending}
+        captureCams={captureCams}
+        anyCamOnline={anyCamOnline}
+      />
+    ),
+  };
+
   return (
     <div className={focusMode ? "fixed inset-0 z-40 flex flex-col bg-background" : "flex min-h-0 flex-1 flex-col"}>
       {!focusMode && (
@@ -1011,7 +1101,7 @@ export function WorkstationPage() {
                     </Button>
                   )}
               {outboundMode ? (
-                <Button size="sm" disabled={!can("outbound.create")} onClick={() => setOutboundForm({ open: true, editing: null })}>
+                <Button size="sm" disabled={!can("outbound.create")} onClick={newOutbound}>
                   <PlusIcon />
                   新建出库单
                 </Button>
@@ -1064,26 +1154,26 @@ export function WorkstationPage() {
               </Tooltip>
               {/* 除语音外的页头操作一律 ghost：无边框无底色，只留 hover 反馈，跟那颗喇叭图标同一套视觉。
                   编辑态的「完成」靠 aria-expanded 给一点底色表示"正在编辑"，仍是幽灵不是实心按钮。 */}
-              {!outboundMode && editing && (
-                <Button size="sm" variant="ghost" onClick={board.reset}>
+              {/* 布局编辑两种模式都能用（05 §4）：出库那张桌子从前是写死的三栏，
+                  现在与入库同一套网格，各存各的排布，所以这两颗不再按模式藏起来 */}
+              {editing && (
+                <Button size="sm" variant="ghost" onClick={layoutOps.reset}>
                   <RotateCcwIcon />
                   恢复默认
                 </Button>
               )}
-              {!outboundMode && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-expanded={editing}
-                  onClick={() => {
-                    board.flush();
-                    setEditing((v) => !v);
-                  }}
-                >
-                  <LayoutGridIcon />
-                  {editing ? "完成" : "自定义布局"}
-                </Button>
-              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-expanded={editing}
+                onClick={() => {
+                  layoutOps.flush();
+                  setEditing((v) => !v);
+                }}
+              >
+                <LayoutGridIcon />
+                {editing ? "完成" : "自定义布局"}
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -1114,32 +1204,12 @@ export function WorkstationPage() {
             本单已作废：{order.void_reason}（仅作留痕，要继续作业请新建下一单）
           </p>
         )}
-        {!outboundMode && editing && (
-          <div className="mr-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <span className="shrink-0">显示区块</span>
-            {/* 原「面板」下拉里的勾选项搬进编辑态：点「自定义布局」进来就能收放，
-                不必再在抬头常驻一颗按钮。最后一直留着的这颗不许再收（沿用原下拉的闸门），
-                否则整张桌子会被自己收空。 */}
-            {board.specs.map((s) => (
-              <Button
-                key={s.id}
-                size="xs"
-                variant={s.shown ? "secondary" : "ghost"}
-                aria-pressed={s.shown}
-                title={s.hint}
-                disabled={s.shown && board.specs.filter((x) => x.shown).length === 1}
-                onClick={() => board.togglePanel(s.id, s.shown)}
-              >
-                {s.shown && <CheckIcon />}
-                {s.title}
-              </Button>
-            ))}
-            <span className="ml-auto shrink-0">
-              排布存在你本人账号上，换台磅房机登录也是这一套。
-              {board.saving && <span className="ml-1 text-primary">保存中…</span>}
-            </span>
-          </div>
-        )}
+        {editing &&
+          (outboundMode ? (
+            <PanelToggles specs={outBoard.specs} saving={outBoard.saving} onToggle={outBoard.togglePanel} />
+          ) : (
+            <PanelToggles specs={board.specs} saving={board.saving} onToggle={board.togglePanel} />
+          ))}
         {modeLoading ? (
           // 本人那份模式偏好还没读回来：先铺骨架，别让人看一眼入库桌子又跳成出库板面
           <div className="grid flex-1 grid-cols-1 gap-1 py-1 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
@@ -1151,32 +1221,28 @@ export function WorkstationPage() {
             ))}
           </div>
         ) : outboundMode ? (
-          <OutboundBoard
-            drafts={outboundDrafts}
-            draftsLoading={draftsQuery.isPending}
-            selectedNo={outboundNo}
-            doc={outboundDoc}
-            docLoading={outboundNo != null && outboundQuery.isPending}
-            canCreate={can("outbound.create")}
-            completing={completeOutbound.isPending}
-            printBlockedReason={printBlockedReason}
-            printedCount={outboundPrinted}
-            scales={scales}
-            switchingScale={switchScale.isPending}
-            captureCams={captureCams}
-            anyCamOnline={anyCamOnline}
-            onSelectScale={(code) => switchScale.mutate(code)}
-            onPick={setOutboundNo}
-            onNew={() => setOutboundForm({ open: true, editing: null })}
-            onEdit={() => setOutboundForm({ open: true, editing: outboundDoc })}
-            onComplete={() => {
-              if (outboundDoc) completeOutbound.mutate(outboundDoc.order_no);
-            }}
-            onPrint={() => void printOutbound()}
-            onDetail={() => {
-              if (outboundDoc) void navigate({ to: "/outbound/$no", params: { no: outboundDoc.order_no } });
-            }}
-          />
+          !outBoard.ready ? (
+            <div className="grid flex-1 grid-cols-1 gap-1 py-1 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
+              {Array.from({ length: 4 }, (_, i) => (
+                <div key={i} className="flex flex-col gap-1">
+                  <Skeleton className="h-72" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <WorkstationGrid
+              items={outBoard.items}
+              editing={editing}
+              onLayout={outBoard.applyLayout}
+              onCommit={outBoard.flush}
+            >
+              {outBoard.tiles.map(({ spec }) => (
+                <PanelTile key={spec.id} spec={spec} editing={editing} onHide={() => outBoard.togglePanel(spec.id, true)}>
+                  {outBodies[spec.id]}
+                </PanelTile>
+              ))}
+            </WorkstationGrid>
+          )
         ) : !board.ready || isLoading ? (
           <div className="grid flex-1 grid-cols-1 gap-1 py-1 xl:grid-cols-[minmax(230px,0.85fr)_minmax(430px,1.8fr)_minmax(290px,1.1fr)]">
             {Array.from({ length: 3 }, (_, i) => (
@@ -1224,14 +1290,9 @@ export function WorkstationPage() {
         onCreated={(no) => goOrder(no)}
       />
 
-      {/* 出库制单 / 改草稿：与「库存与出库」那张表单同一份。新建成功就顺手选中，
-          下一步直接是称重，不必再回队列里找一遍刚开的号 */}
-      <OutboundFormDialog
-        open={outboundForm.open}
-        onOpenChange={(v) => setOutboundForm((s) => ({ ...s, open: v }))}
-        editing={outboundForm.editing}
-        onSaved={(row) => setOutboundNo(row.order_no)}
-      />
+      {/* 出库单的制单与改单都在「出库单」那一格里就地完成（`OutboundFormPanel`）：
+          从前这里挂的是 `OutboundFormDialog`，弹窗一开就把常驻的过磅画面顶掉，
+          而磅员一手票据一手鼠标，要的是改完就生效的那张桌子，不是一个模态框。 */}
 
       {/* 结算框：复用 SettleForm（第③刷 / 扫票 / 称重区「去结算」同一条算钱口径，06 §6.3）。
           开框的三种由头（第三刷 / 扫票 / 净重刚定而磅单上没价）各自给 defaultUnpaid，
@@ -1299,6 +1360,29 @@ export function WorkstationPage() {
           直打失败时的兜底预览框由 hook 给出，没发起过出票就是 null */}
       {printFallback}
 
+      {/*
+        删除出库草稿（02 §F11.1）：入口只有队列行尾那只垃圾桶（悬停即出，整列都能一键删），
+        表单底部刻意不再放一颗——同一张桌子两个删除按钮只会让人怀疑删的是不是同一件事。
+        ≥6 字原因那道闸门对删除放开（服务端把动作连同快照写进审计，界面只收一句选填的话），
+        作废红冲仍是硬闸门。删成功要把界面从这张单上挪开：单子真没了，
+        称重区继续挂着一个空号等于骗人点「捕获」。
+      */}
+      <CloseOutboundDialog
+        open={outboundDel != null}
+        onOpenChange={(v) => {
+          if (!v) setOutboundDel(null);
+        }}
+        order={outboundDel}
+        mode="delete"
+        onDone={(no) => {
+          if (no === outboundNo) {
+            setOutboundNo(null);
+            setOutboundNew(false);
+          }
+          setOutboundDel(null);
+        }}
+      />
+
       {focusMode && (
         <div className="absolute right-3 top-3 z-50">
           <Tooltip>
@@ -1340,6 +1424,47 @@ function RegYieldCard() {
   return (
     <div className="flex h-full min-h-16 items-center justify-center rounded-2xl border border-dashed px-3 text-center text-xs text-muted-foreground">
       制单弹窗已打开：读卡与取号在那个框里做，关掉后这里继续填写
+    </div>
+  );
+}
+
+/**
+ * 编辑态那一行「显示区块」。入库与出库两张桌子各传自己那份面板清单
+ * （两套 id 各自成表，`togglePanel` 的参数类型也跟着变，所以用泛型收一下而不是合并成一张表）。
+ */
+function PanelToggles<I extends string>({
+  specs,
+  saving,
+  onToggle,
+}: {
+  specs: { id: I; title: string; hint: string; shown: boolean }[];
+  saving: boolean;
+  onToggle: (id: I, hide: boolean) => void;
+}) {
+  return (
+    <div className="mr-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+      <span className="shrink-0">显示区块</span>
+      {/* 原「面板」下拉里的勾选项搬进编辑态：点「自定义布局」进来就能收放，
+          不必再在抬头常驻一颗按钮。最后一直留着的这颗不许再收（沿用原下拉的闸门），
+          否则整张桌子会被自己收空。 */}
+      {specs.map((s) => (
+        <Button
+          key={s.id}
+          size="xs"
+          variant={s.shown ? "secondary" : "ghost"}
+          aria-pressed={s.shown}
+          title={s.hint}
+          disabled={s.shown && specs.filter((x) => x.shown).length === 1}
+          onClick={() => onToggle(s.id, s.shown)}
+        >
+          {s.shown && <CheckIcon />}
+          {s.title}
+        </Button>
+      ))}
+      <span className="ml-auto shrink-0">
+        排布存在你本人账号上，换台磅房机登录也是这一套。
+        {saving && <span className="ml-1 text-primary">保存中…</span>}
+      </span>
     </div>
   );
 }

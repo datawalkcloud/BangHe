@@ -18,6 +18,8 @@
 //! 11. 出库过地磅（0029）：净重 = 毛 − 皮 由服务端算、半截读数不顶掉净重、复称不删行、
 //!     手录过一次来源就回不到 scale、称过的单表单改不动净重；
 //!     **轨迹按 `doc_kind` 分家**——同 id 的磅单与出库单互不串号。
+//! 12. 删除草稿：真删行（区别於作废留行）、只允许还没上过磅的草稿、原因选填但
+//!     `outbound.delete` 审计必录（带当时内容快照）、号段不回滚不复用。
 //!
 //! 与 orders_contract 同一套内存库 + 真实迁移（种子：station 01、admin(id=1,站长)、
 //! 四个默认品种）。AuthProfile 手工构造，直接调用 `stock`/`outbound` 的 pub 服务函数。
@@ -29,7 +31,7 @@ use banghe_lib::auth::AuthProfile;
 use banghe_lib::db::{in_memory_migrated, MIGRATIONS};
 use banghe_lib::orders;
 use banghe_lib::outbound::{
-    self, OutboundCaptureInput, OutboundCloseInput, OutboundCompleteInput, OutboundSaveInput,
+    self, OutboundCaptureInput, OutboundCloseInput, OutboundCompleteInput, OutboundFilters, OutboundSaveInput,
 };
 use banghe_lib::stock;
 
@@ -182,6 +184,21 @@ fn close_input(order_no: &str, reason: &str) -> OutboundCloseInput {
 
 fn complete_input(order_no: &str) -> OutboundCompleteInput {
     OutboundCompleteInput { order_no: order_no.into(), operator_id: None }
+}
+
+/// 不带任何筛选的第一页（队列默认就是这一页）。
+fn default_filters() -> OutboundFilters {
+    OutboundFilters {
+        date_from: None,
+        date_to: None,
+        status: None,
+        kind: None,
+        warehouse_id: None,
+        variety_id: None,
+        keyword: None,
+        page: None,
+        page_size: None,
+    }
 }
 
 /// 建一张 sale 草稿并完成出库，返回 (单据, 出仓仓房, 品种)。
@@ -857,7 +874,7 @@ fn print_log_accepts_the_new_doc_types() {
         let c = conn.query_row("SELECT COUNT(1) FROM print_log WHERE doc_type = 'payment_receipt'", [], |r| r.get(0)).unwrap();
         (a, b, c)
     };
-    assert_eq!((out_rows, vch_rows, pay_rows), (1, 1, 1), "发货凭证与出库码单、付款小票的留痕都必须写得进 print_log");
+    assert_eq!((out_rows, vch_rows, pay_rows), (1, 1, 1), "出库磅单与出库码单、付款小票的留痕都必须写得进 print_log");
 
     // 值域仍然有边界：没扩进去的种类照样撞 CHECK（不是把闸门一拆了之）
     let e = conn
@@ -916,10 +933,10 @@ fn print_history_does_not_leak_across_same_numbered_docs() {
 
     let detail = outbound::detail(&conn, "01202610000007").unwrap().expect("出库单读得回来");
     assert_eq!(detail.order.id, doc.id, "同号时按号取详情取到的是出库这一张");
-    assert_eq!(detail.prints.len(), 3, "出库详情只该看见出库自己的三条留痕（码单两条 + 发货凭证一条）");
+    assert_eq!(detail.prints.len(), 3, "出库详情只该看见出库自己的三条留痕（码单两条 + 出库磅单一条）");
     assert!(detail.prints.iter().all(|p| p.doc_type == "outbound_order" || p.doc_type == "outbound_voucher"));
     assert_eq!(detail.prints.iter().filter(|p| p.doc_type == "outbound_order").count(), 2, "码单自己的两条");
-    assert_eq!(detail.prints.iter().filter(|p| p.doc_type == "outbound_voucher").count(), 1, "发货凭证一条");
+    assert_eq!(detail.prints.iter().filter(|p| p.doc_type == "outbound_voucher").count(), 1, "出库磅单一条");
     assert_eq!(detail.prints.iter().filter(|p| p.is_reprint == 1).count(), 1, "一条首打一条补打");
 
     let full = orders::load_order_full(&conn, "01202610000007").unwrap().expect("磅单读得回来");
@@ -927,4 +944,107 @@ fn print_history_does_not_leak_across_same_numbered_docs() {
     assert_eq!(prints.len(), 1, "磅单详情混进出库的留痕 = 把「已打 1 张」报成 3 张");
     assert_eq!(prints[0].doc_type, "weigh_order");
     assert_eq!(full.id, weigh_id);
+}
+
+// =========================================================== 删除草稿（真删行）
+
+/// 库里还剩几行这个号。删除的判据就是这一句归零。
+fn rows_with_no(conn: &Connection, order_no: &str) -> i64 {
+    conn.query_row("SELECT COUNT(1) FROM outbound_order WHERE order_no = ?1", params![order_no], |r| r.get(0))
+        .unwrap()
+}
+
+/// 最近一条删除审计的正文。删除不留行、号段又不回滚，库里能解释那个洞的只有这一句。
+fn delete_audit(conn: &Connection, order_no: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT reason FROM audit_log
+          WHERE action = 'outbound.delete' AND entity_no = ?1
+          ORDER BY at DESC, id DESC LIMIT 1",
+        params![order_no],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// **删除 ＝ 真删行**：与作废的分界就在这。删掉的那一格号不复用（可能已经打印过），
+/// 但动作必须落到审计，且快照里要看得见当时记了什么内容。
+#[test]
+fn delete_removes_the_row_and_leaves_a_snapshot_audit() {
+    let conn = db();
+    let wh = seed_warehouse(&conn, "CW-A");
+    let party = seed_party(&conn, "农户甲");
+    let xm = variety(&conn, "XM");
+    let doc = outbound::save(&conn, &actor(), sale_input(wh, xm, party, 8000, 250000)).unwrap();
+    assert_eq!(doc.status, "draft");
+    assert_eq!(rows_with_no(&conn, &doc.order_no), 1);
+
+    // 原因**选填**（2026-11-25 定）：手滑多点一颗「新建」，清掉它就是点一下的事
+    let deleted = outbound::delete(&conn, &actor(), close_input(&doc.order_no, "")).unwrap();
+    assert_eq!(deleted.as_deref(), Some(doc.order_no.as_str()), "要把删掉的号报回去，界面按它清表单");
+    assert_eq!(rows_with_no(&conn, &doc.order_no), 0, "删除不是把状态改成某个词——行本身要没了");
+    assert!(outbound::detail(&conn, &doc.order_no).unwrap().is_none(), "详情也读不回来了");
+    assert!(
+        !outbound::list(&conn, &default_filters()).unwrap().rows.iter().any(|o| o.order_no == doc.order_no),
+        "行没了却不从队列消失 = 磅员数不清手上压着几张纸"
+    );
+
+    let snap = delete_audit(&conn, &doc.order_no).expect("删除动作必录审计，与原因填没填无关");
+    assert!(snap.contains("原因：未填"), "空原因要写成「未填」，审计才分得清漏填和真没填，实际：{snap}");
+    for want in ["销售出库", "CW-A", "小麦", "农户甲", "手填净重 800.0 kg"] {
+        assert!(snap.contains(want), "快照要留得住这张单当时的内容（缺 {want}）：{snap}");
+    }
+
+    // 号段不回滚：`seq_counter` 那一格照旧占着，新建拿的是下一个号
+    let again = outbound::save(&conn, &actor(), sale_input(wh, xm, party, 1000, 250000)).unwrap();
+    assert_ne!(again.order_no, doc.order_no, "删掉的号不许复用");
+}
+
+/// **闸门一：上过磅就不许删**。那几行读数是计量证据、抓拍图就挂在上面，
+/// 删掉等于销毁证据——这种单子只给出作废一条路。
+#[test]
+fn a_weighed_draft_refuses_deletion_and_stays_intact() {
+    let conn = db();
+    let wh = seed_warehouse(&conn, "CW-A");
+    let party = seed_party(&conn, "农户乙");
+    let ym = variety(&conn, "YM");
+    let doc = outbound::save(&conn, &actor(), sale_input(wh, ym, party, 5000, 250000)).unwrap();
+    outbound::capture(&conn, &actor(), cap_input(&doc.order_no, "gross", 30000, "scale")).unwrap();
+
+    let e = outbound::delete(&conn, &actor(), close_input(&doc.order_no, "选错仓房")).unwrap_err();
+    assert!(e.contains("不能删除"), "实际：{e}");
+    assert!(e.contains("作废"), "要给出路：这张纸不算了走作废并写明原因，实际：{e}");
+    assert_eq!(rows_with_no(&conn, &doc.order_no), 1, "被拒的删除不许已经把行删掉一半");
+    assert_eq!(trail_of(&conn, doc.id), (1, 1), "称重轨迹原样在");
+    assert!(delete_audit(&conn, &doc.order_no).is_none(), "被拒的尝试不得留下删除记录");
+}
+
+/// **闸门二：只有草稿能删**，且判据要说清"该走哪条路"（与 02 §M11 F11.5 的三分法一致）。
+/// 号不存在时与作废/红冲同口径幂等返回 None，不报错、也不假记一条删除。
+#[test]
+fn only_a_draft_can_be_deleted() {
+    let conn = db();
+    let wh = seed_warehouse(&conn, "CW-A");
+    let party = seed_party(&conn, "农户丙");
+    let xm = variety(&conn, "XM");
+
+    // 已完成：库存已扣，只能红冲
+    let done = sale_done(&conn, wh, xm, party, 6000, 250000);
+    let e = outbound::delete(&conn, &actor(), close_input(&done.order_no, "手滑")).unwrap_err();
+    assert!(e.contains("红冲"), "实际：{e}");
+    assert_eq!(rows_with_no(&conn, &done.order_no), 1);
+
+    // 已作废：作废行本身就是留痕，不再二次删除
+    let voided = outbound::save(&conn, &actor(), sale_input(wh, xm, party, 7000, 250000)).unwrap();
+    outbound::void(&conn, &actor(), close_input(&voided.order_no, "重复制单作废")).unwrap();
+    let e2 = outbound::delete(&conn, &actor(), close_input(&voided.order_no, "手滑")).unwrap_err();
+    assert!(e2.contains("留痕"), "实际：{e2}");
+    assert_eq!(rows_with_no(&conn, &voided.order_no), 1, "作废行删不掉");
+
+    // 查无此号：与 void/reverse 同一条幂等口径
+    assert_eq!(outbound::delete(&conn, &actor(), close_input("CK00000000000000", "手滑")).unwrap(), None);
+    let orphan: i64 = conn
+        .query_row("SELECT COUNT(1) FROM audit_log WHERE action = 'outbound.delete'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(orphan, 0, "没删到任何东西就不该有删除记录");
 }

@@ -751,7 +751,7 @@ export interface OutboundDetail extends OutboundOrder {
    */
   photos: CapturePhoto[];
   /**
-   * 这张出库单打过的票（0030 / F11.7 出库码单，发货凭证起另有 `outbound_voucher`）。
+   * 这张出库单打过的票（0030 / F11.7 出库码单，出库磅单起另有 `outbound_voucher`）。
    * 详情页据此显示「已打 N 张」并决定下一次算不算补打。
    * 后端按 `doc_type IN ('outbound_order','outbound_voucher')` + 单号查，不是只按号——
    * 同站同月的磅单与出库单会撞成同一串数字。

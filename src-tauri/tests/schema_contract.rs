@@ -1379,7 +1379,7 @@ fn migration_0030_widens_print_doc_type_without_disturbing_history() {
     assert_eq!(dangling, 0, "重建后不应有悬挂外键引用");
 }
 
-/// 0036 同 0030 一样重建 `print_log`，只是值域再多一格 `outbound_voucher`（发货凭证）。
+/// 0036 同 0030 一样重建 `print_log`，只是值域再多一格 `outbound_voucher`（出库磅单）。
 /// 守的与 0030 相同：存量保号、新值写得进、边界仍在、两个索引按原口径建回。
 /// 测试自身也先证一遍"旧结构真的旧"：0036 之前 `outbound_order` 写得进而 `outbound_voucher` 撞 CHECK。
 #[test]
@@ -1439,7 +1439,7 @@ fn migration_0036_adds_outbound_voucher_to_print_log_without_disturbing_history(
              VALUES (?1, 1, ?2, 1, 'A4', 'p1', 'pdf_silent', 'success', '2026-10-08T10:00:00.000', ?3)",
             rusqlite::params![dt, dt, user_id],
         )
-        .unwrap_or_else(|e| panic!("{dt} 的留痕写不进去，发货凭证的补打角标就永远不准：{e}"));
+        .unwrap_or_else(|e| panic!("{dt} 的留痕写不进去，出库磅单的补打角标就永远不准：{e}"));
     }
     let e = conn
         .execute(

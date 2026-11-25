@@ -148,10 +148,12 @@ pub struct OutboundDetail {
     /// 过磅抓拍墙（与磅单侧 `orders::build_capture_wall` 同一判据：`attachment` 按
     /// `biz_type='scale_capture'` 挂在各条称重轨迹上）。空数组＝没有已被采纳的轨迹挂图。
     pub photos: Vec<crate::orders::CapturePhoto>,
-    /// 这张出库单打过的票（F11.7 出库码单）。详情页据此显示「已打 N 张」并决定下一次算不算补打。
+    /// 这张出库单打过的票（F11.7）。详情页据此显示「已打 N 张」并决定下一次算不算补打。
     ///
-    /// 按 `doc_type='outbound_order'` 查而不是只按号：号面上没有票种字母（0026），
-    /// 同站同月的磅单与出库单会撞成同一串数字，混了就等于把别人的打印次数记到这张单头上。
+    /// 取 `outbound_order` + `outbound_voucher` 两种票的留痕（2026-11-25 合一：现场只印出库磅单，
+    /// 从前那张码单就是同一张单的前一次出纸），但**按号 + 票种两个条件查而不是只按号**：
+    /// 号面上没有票种字母（0026），同站同月的磅单与出库单会撞成同一串数字，
+    /// 混了就等于把别人的打印次数记到这张单头上。
     pub prints: Vec<crate::orders::PrintLog>,
 }
 
@@ -608,6 +610,80 @@ pub fn void(conn: &Connection, actor: &AuthProfile, input: OutboundCloseInput) -
     load_order(conn, &cur.order_no)
 }
 
+// -------------------------------------------------------------------- 写：删除草稿
+
+/// **真删行**，只允许还没上过磅的草稿。与 [`void`] 的分工：
+///
+///  - **作废**＝这张纸不算了，但单据行与它的号都留在库里（留痕给迎检看）；
+///  - **删除**＝这张纸压根不该开出来（手滑多点了一颗「新建」、仓房品种选错重来），
+///    留在队列里只会让磅员数不清手上到底压着几张纸。
+///
+/// 判据只有一条硬闸门：**`weigh_record` 一有行就拒绝**。那几行读数是计量证据
+/// （哪台磅、原始帧、谁在什么时候按的），抓拍图就挂在这些行上——删掉等于销毁证据，
+/// 这种单子只能作废并写明原因。**没上过磅就什么都没有**，一行都没动过库存账，
+/// 删干净不留后患。
+///
+/// 号段**不回滚**：`seq_counter` 里那一格照旧占着，删掉的号不复用（复用会让
+/// 已经打出去的那张纸上的号指向另一张单）。因此库里会出现一个对不上号的洞，
+/// 这个洞由下面那一条审计自己解释——所以**先把这一张单当时的内容写成快照，再删行**，
+/// 且两步在 `write_tx` 给的同一事务里：删失败时快照也不会单独留下来。
+///
+/// **原因选填、审计必填**（2026-11-25 定）：磅员手滑多点一颗「新建」，清掉它就是
+/// 一个动作，硬逼他凑六个字只会逼出一句废话。留痕的下限由这条 `outbound.delete`
+/// 审计兜住——动作名、单号、经办人、时间、这张单当时的全部内容都在快照里，
+/// 有没有那句人话都不影响审计页能回答「这个号为什么没了」。
+pub fn delete(conn: &Connection, actor: &AuthProfile, input: OutboundCloseInput) -> Result<Option<String>, String> {
+    let reason = input.reason.trim().to_string();
+    let cur = match load_order(conn, &input.order_no)? {
+        Some(o) => o,
+        None => return Ok(None),
+    };
+    if cur.status != "draft" {
+        return Err(match cur.status.as_str() {
+            "voided" => "本单已作废：作废行是留痕，不再删除".into(),
+            "done" | "reversed" => format!("本单已「{}」，库存已扣，只能由站长或保管员走红冲更正", status_label(&cur.status)),
+            other => format!("本单当前为「{}」，只有草稿能删除", status_label(other)),
+        });
+    }
+    let records: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM weigh_record WHERE doc_kind = 'outbound_order' AND order_id = ?1",
+            params![cur.id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("读取本单称重轨迹失败：{e}"))?;
+    if records > 0 {
+        return Err(format!(
+            "本单已留下 {records} 次称重读数（过磅抓拍就挂在这些读数上），不能删除；这张纸不算了请作废并写明原因"
+        ));
+    }
+
+    // 删掉之后这张单在库里只剩这一句话，所以把当时记着的内容逐个摊开。
+    // 原因选填，空着就在快照里写「未填」——审计那条必须有字，否则看不出是漏填还是真没填。
+    let reason_text = if reason.is_empty() { "未填" } else { &reason };
+    let mut snapshot = format!(
+        "删除出库草稿：{} {} · {} {} · 领出方 {} · 制单人 {} · 原因：{}",
+        if cur.kind == "sale" { "销售出库" } else { "登记出库" },
+        cur.warehouse_name,
+        cur.variety_name.as_deref().unwrap_or("未定品种"),
+        cur.grade.as_deref().unwrap_or("未定级"),
+        cur.party_name.or(cur.counterparty_label.clone()).unwrap_or_else(|| "未填".into()),
+        cur.created_name,
+        reason_text,
+    );
+    if let Some(w) = cur.net_weight_01kg {
+        snapshot.push_str(&format!("；手填净重 {:.1} kg", w as f64 / 10.0));
+    }
+    if let Some(r) = clean(&cur.remark) {
+        snapshot.push_str(&format!("；备注：{r}"));
+    }
+
+    conn.execute("DELETE FROM outbound_order WHERE id = ?1", params![cur.id])
+        .map_err(|e| format!("删除草稿失败：{e}"))?;
+    audit(conn, actor, "outbound.delete", "outbound_order", &cur.order_no, Some(&snapshot), None);
+    Ok(Some(cur.order_no))
+}
+
 // ----------------------------------------------------------------------- 写：红冲
 
 /// 红冲已完成的出库单：原单置 `reversed`，**补一条对称入库流水**把货还回原来那个仓。
@@ -994,7 +1070,7 @@ pub fn detail(conn: &Connection, order_no: &str) -> Result<Option<OutboundDetail
     // 抓拍墙同借磅单侧那一只（判据同源：attachment 挂在 adopted 轨迹上）。
     let photos = crate::orders::build_capture_wall(conn, &records)?;
     // 打印留痕同理走 `orders::load_prints_of` 那一只口（0030）：按号 + 票种两个条件查，
-    // 判据写一处，出库侧不再拼第二遍。出库码单与发货凭证（0036）都算这张单的留痕——
+    // 判据写一处，出库侧不再拼第二遍。出库码单与出库磅单（0036）都算这张单的留痕——
     // 详情页时间轴全展示，两枚按钮各自按自己的票种数「已打 N 张」。
     let prints = crate::orders::load_prints_of(conn, &["outbound_order", "outbound_voucher"], &order.order_no)?;
     Ok(Some(OutboundDetail { order, movements, records, photos, prints }))
@@ -1035,6 +1111,14 @@ pub async fn outbound_void(app: AppHandle, input: OutboundCloseInput) -> Result<
 #[tauri::command]
 pub async fn outbound_reverse(app: AppHandle, input: OutboundCloseInput) -> Result<Option<OutboundOrder>, String> {
     write_tx(&app, move |conn, actor| reverse(conn, actor, input), CLOSE_ROLES, "红冲出库单").await
+}
+
+/// 删除草稿用 [`OUTBOUND_ROLES`] 而不是 [`CLOSE_ROLES`]：清的是**自己刚开错的那张空单**，
+/// 上一秒还在磅房台上的人自己就能收掉，不必为一张什么都没发生的纸去够站长的账号。
+/// 真正兜住风险的不是岗位而是 [`delete`] 里那两条判据（非草稿不许删、上过磅不许删）。
+#[tauri::command]
+pub async fn outbound_delete(app: AppHandle, input: OutboundCloseInput) -> Result<Option<String>, String> {
+    write_tx(&app, move |conn, actor| delete(conn, actor, input), OUTBOUND_ROLES, "删除出库草稿").await
 }
 
 /// 出库单过地磅。岗位用 [`OUTBOUND_ROLES`]（含磅员）而不是 [`CLOSE_ROLES`]：

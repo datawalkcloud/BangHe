@@ -50,10 +50,10 @@ import { WeightDisplay } from "@/components/business/WeightDisplay";
 import { InlineNumField } from "@/components/business/NumField";
 import { PriceDialog } from "@/components/business/PriceDialog";
 import { ToneBadge } from "@/components/business/badges";
+import { ScaleSwitcher } from "@/components/business/ScaleSwitcher";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Kbd } from "@/components/ui/kbd";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "cn";
 
 /** 本面板里"哪一项"的取值域，毛重 / 皮重两行共用一套渲染与提交 */
@@ -118,13 +118,6 @@ export function WeighPanel({
   captureCams: DeviceConfig[];
 }) {
   const scale = useDeviceStore((s) => s.scale);
-  /**
-   * 这一组数此刻属于哪台磅：以帧里的 `code` 为准（"读数是从哪条串口来的"只有后端知道），
-   * 还没收到帧时退回台账里的当前磅。下拉显示的是**真正的读数来源**，不是刚点过的那一项——
-   * 切到一台打不开的磅时，状态会变成"这台 · 离线"，而不是假装已经切过去了。
-   */
-  const currentScale = scales.find((d) => d.code === scale.code) ?? scales.find((d) => d.is_default === 1) ?? null;
-  const scaleItems = scales.map((d) => ({ value: d.code, label: d.name }));
   const setCamera = useDeviceStore((s) => s.setCamera);
   const can = useSession((s) => s.can);
   const qc = useQueryClient();
@@ -469,37 +462,8 @@ export function WeighPanel({
       <CardHeader className="card-header-compact grid-cols-[1fr_auto] items-center px-2.5">
         <CardTitle className="text-xs font-semibold">称重区</CardTitle>
         <CardAction className="flex items-center gap-1.5 self-center text-xs text-muted-foreground">
-          {/*
-            现场配了两台以上地磅：这一车开上哪台秤就在这儿切哪台。切的是台账里 scale 类的
-            「当前磅」，落库归属（weigh_record.device_id）与整量化跟着一起走，所以**必须**从
-            这里切，而不是只把屏幕上的数换一台——两处各切一份就会出现"屏幕是 2 号磅、库里记 1 号磅"。
-            只有一台时整格不渲染，界面与从前逐字一致。
-          */}
-          {scales.length > 1 && (
-            <Select
-              value={currentScale?.code}
-              items={scaleItems}
-              onValueChange={(v) => {
-                if (v && v !== currentScale?.code) onSelectScale?.(v);
-              }}
-              disabled={switchingScale}
-            >
-              <SelectTrigger
-                size="sm"
-                className="h-6 w-auto gap-1 rounded-md border-dashed px-1.5 py-0 text-xs font-medium text-foreground"
-                aria-label="切换当前地磅"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="end">
-                {scales.map((d) => (
-                  <SelectItem key={d.code} value={d.code}>
-                    {d.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          {/* 现场配了两台以上地磅：这一车开上哪台秤就在这儿切哪台（判据见 `business/ScaleSwitcher`） */}
+          <ScaleSwitcher scales={scales} liveCode={scale.code} onSelect={onSelectScale} switching={switchingScale} />
           {/*
             分度值只报后端随帧下发的那一个数（`align.division_01kg`，04 §2.3）——它与读线程
             定格面板数字、与 `weigh_record.aligned_weight_01kg` 的取整是同一份模板。从前这里读

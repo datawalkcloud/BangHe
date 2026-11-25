@@ -139,7 +139,7 @@ export function WorkstationGrid({
  * 缩放手柄就成了夹在卡片末尾的一个 0×0 inline span——看着像"没有右下角可拽"。
  * React 19 里 `ref` 也走 props，所以连同 `ref` 一起摊开即可，不必再包一层 forwardRef。
  */
-export function PanelTile({
+export function PanelTile<I extends string>({
   spec,
   editing,
   onHide,
@@ -147,7 +147,8 @@ export function PanelTile({
   children,
   ...rest
 }: ComponentPropsWithRef<"div"> & {
-  spec: PanelSpec;
+  /** 入库与出库两套面板注册表的 id 各自成表，这里只用到 `title`，按各自的 id 类型推断即可 */
+  spec: PanelSpec<I>;
   editing: boolean;
   onHide: () => void;
 }) {

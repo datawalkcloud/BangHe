@@ -1,7 +1,7 @@
 /**
  * 详情抽屉的"开关 + 内联链接 + 列表操作列"。
  *
- * 单独成模块是因为抽屉现在要直接渲染四个详情页的正文（`XxxDetailBody`），
+ * 单独成模块是因为抽屉现在要直接渲染五个详情页的正文（`XxxDetailBody`），
  * 而详情页正文里又要用 QuickDetailLink 跳到另一张单——两边都放在
  * `QuickDetailSheet.tsx` 里会形成循环 import。列表页同样要挂这枚入口，
  * 所以 `detailColumn` 也待在这个不引任何页面的模块里。
@@ -11,7 +11,7 @@ import { create } from "zustand";
 import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 
-export type QuickDetailType = "order" | "party" | "qc" | "settlement";
+export type QuickDetailType = "order" | "outbound" | "party" | "qc" | "settlement";
 
 interface QuickDetailTarget {
   type: QuickDetailType;

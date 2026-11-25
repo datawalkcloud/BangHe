@@ -28,12 +28,14 @@ import { actorId, useSession } from "@/store/session";
 import { ALL, Choose } from "@/components/business/Choose";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { PaymentStatusBadge, ToneBadge, WeightSourceBadge } from "@/components/business/badges";
+import { useQuickDetail } from "@/components/business/quickDetail";
 import { PAGE_CARD, EmptyState, PageHeader } from "@/components/business/layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { OutboundFormDialog } from "@/components/outbound/OutboundFormDialog";
+import { CloseOutboundDialog } from "@/components/outbound/CloseOutboundDialog";
 import type { OutboundFilters, OutboundOrder } from "@/mock/types";
 
 const DEFAULT_FILTERS: OutboundFilters = {
@@ -54,6 +56,11 @@ export function OutboundPage() {
   const [filters, setFilters] = useState<OutboundFilters>(DEFAULT_FILTERS);
   const [kw, setKw] = useState("");
   const [form, setForm] = useState<{ open: boolean; editing: OutboundOrder | null }>({ open: false, editing: null });
+  /**
+   * 待删除的草稿行：行尾那颗「删除」把自己那一行塞进来，确认框与详情页的作废红冲共用一张
+   * （`CloseOutboundDialog` 的 delete 模式）。判据在服务端，这里只给入口。
+   */
+  const [delRow, setDelRow] = useState<OutboundOrder | null>(null);
 
   const query = useQuery({
     queryKey: ["outbound", filters],
@@ -128,19 +135,57 @@ export function OutboundPage() {
       {
         key: "actions",
         header: "操作",
-        cell: (r) =>
-          r.status === "draft" ? (
-            <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-              <Button size="sm" variant="ghost" disabled={!can("outbound.create")} onClick={() => setForm({ open: true, editing: r })}>
-                修改
-              </Button>
-              <Button size="sm" variant="ghost" disabled={!can("outbound.create") || complete.isPending} onClick={() => complete.mutate(r.order_no)}>
-                完成出库
-              </Button>
-            </div>
-          ) : (
-            <span className="text-xs text-muted-foreground">{r.stock_warning ? "见警示" : "—"}</span>
-          ),
+        align: "right",
+        /**
+         * 钉死末列，与磅单中心同一条口径（05 §6.3）：行不响应单击，「详情」又是每一行都要点的，
+         * 跟着横向滚动条走等于逼人每看一行先拖一次。
+         */
+        pinRight: true,
+        cell: (r) => (
+          <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+            {r.status === "draft" && (
+              <>
+                <Button size="xs" variant="ghost" className="text-xs" disabled={!can("outbound.create")} onClick={() => setForm({ open: true, editing: r })}>
+                  修改
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="text-xs"
+                  disabled={!can("outbound.create") || complete.isPending}
+                  onClick={() => complete.mutate(r.order_no)}
+                >
+                  完成出库
+                </Button>
+                {/*
+                  真删这张草稿（02 §F11.8）：与制单同岗，判据（上过磅不许删、非草稿不许删）在 Rust。
+                  上过磅的行点了会被服务端原句退回——列表这一列本来就不显示读数，
+                  与其在这里再算一遍判据，不如把那句人话露出来。
+                */}
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="text-xs text-muted-foreground hover:text-destructive"
+                  disabled={!can("outbound.create")}
+                  title="真删这张草稿：只删没上过磅的，删掉后纸上不留字、单号也不回收"
+                  onClick={() => setDelRow(r)}
+                >
+                  删除
+                </Button>
+              </>
+            )}
+            {/* 超库存的行整行染琥珀（见 rowClassName），这里只补一句字，别让提示只剩颜色 */}
+            {r.stock_warning ? <span className="text-xs text-muted-foreground">见警示</span> : null}
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-xs"
+              onClick={() => useQuickDetail.getState().open("outbound", r.order_no)}
+            >
+              详情
+            </Button>
+          </div>
+        ),
       },
     ],
     [can, complete],
@@ -250,6 +295,15 @@ export function OutboundPage() {
       </div>
 
       <OutboundFormDialog open={form.open} onOpenChange={(v) => setForm((s) => ({ ...s, open: v }))} editing={form.editing} />
+      <CloseOutboundDialog
+        open={delRow != null}
+        onOpenChange={(v) => {
+          if (!v) setDelRow(null);
+        }}
+        order={delRow}
+        mode="delete"
+        onDone={() => setDelRow(null)}
+      />
     </div>
   );
 }

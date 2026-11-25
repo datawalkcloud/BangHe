@@ -59,7 +59,7 @@ import { QuickDetailLink } from "@/components/business/quickDetail";
 import { PartyPicker } from "@/components/workstation/PartyPicker";
 import { CardBindDialog } from "@/components/workstation/CardBindDialog";
 import { IdCardWatchHint } from "@/components/workstation/IdCardWatchHint";
-import { QuickPartyDialog } from "@/components/workstation/QuickPartyDialog";
+import { QuickPartyDialog } from "@/components/business/QuickPartyDialog";
 import { SamePartyDialog } from "@/components/workstation/SamePartyDialog";
 import { OrderStatusBadge, ToneBadge } from "@/components/business/badges";
 import { Button } from "@/components/ui/button";
