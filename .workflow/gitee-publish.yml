@@ -4,8 +4,9 @@ displayName: Gitee 发布（下载镜像 + 发行版）
 
 # 这条流水线只负责「把最新一次 GitHub Release 搬到 Gitee」，构建仍在 GitHub
 # （Gitee Go 云端没有 Windows runner，跑不了 Tauri + NSIS）。
-# 落点两个仓：banghe-release（raw 下载镜像 + 按版本翻的发行版）、
-# BangHe（源码镜像，项目首页「发行版」区也建一份）。
+# 落点两个仓：banghe-release（raw 只留 latest.json 兜底 + 按版本翻的发行版）、
+# BangHe（源码镜像，项目首页「发行版」区也建一份）。安装包与更新清单都挂发行版附件：
+# 客户端 endpoints 首位读 releases/download/latest/latest.json，从发行版附件下载安装包。
 #
 # 触发方式只有两种，故意不配 triggers：
 #   1) GitHub 发完 Release 后经 go-api 触发

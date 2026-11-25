@@ -12,8 +12,9 @@ plugins.updater.endpoints 拉它，下载前用 plugins.updater.pubkey 验签，
 （gen_release_notes.py）给人类的链接也走同款镜像。endpoints 里的直连兜底只兜得住
 清单本身，兜不住清单里的安装包地址——所以这个地址只能选一个，选能落地的那个。
 （本脚本产出的是 GitHub Release 用的那份；scripts/release-notes/gitee_publish.py 在
-Gitee Go 流水线里把它换成 Gitee raw 直链后，随安装包强推到 datawalkcloud/banghe-release
-——客户端 endpoints 首位拉的正是这一份，GitHub 那两份只在 Gitee 拉不到时兜底。）
+Gitee Go 流水线里把安装包地址换成 Gitee 发行版附件直链后，把清单强推到
+datawalkcloud/banghe-release 的 raw 分支——客户端 endpoints 首位拉的正是这一份，
+GitHub 那两份只在 Gitee 拉不到时兜底。）
 
 注意：端点指到 releases/latest/download/latest.json，**Draft Release 拉不到**——
 发版后在 GitHub 上把 Draft 发布（publish）出去，更新才对客户端生效。

@@ -35,19 +35,19 @@ name: Release
 #   - 分发面（2026-10-16 起）：产物直接挂主仓 datawalkcloud/BangHe 的 GitHub Release。
 #     曾用的独立公开发版仓 BangHe-releases + 跨仓 RELEASES_REPO_TOKEN 已退役（主仓公开后
 #     "匿名拉不到主仓产物"这一前提不成立）。
-#   - Gitee 侧发布（2026-11-25 重构）：raw 下载镜像（banghe-release 仓）与 Gitee 发行版
-#     页面都在 **Gitee 服务器**上执行，见 .workflow/gitee-publish.yml + scripts/release-notes/
-#     {gitee_publish,trigger_gitee_pipeline}.py。此前由本工作流用私人令牌从 GitHub runner
-#     推库/调 v5 接口——从 GitHub 的 IP 调 Gitee 会撞风控（不稳定、疑似要登录态）。构建仍只在
-#     GitHub：Gitee Go 云端 runner 没有 Windows，跑不了 Tauri + NSIS。
+#   - Gitee 侧发布（2026-11-25 重构）：Gitee 发行版与 raw 更新清单都在 **Gitee 服务器**上
+#     执行，见 .workflow/gitee-publish.yml + scripts/release-notes/{gitee_publish,trigger_gitee_pipeline}.py。
+#     此前由本工作流用私人令牌从 GitHub runner 推库/调 v5 接口——从 GitHub 的 IP 调 Gitee 会撞
+#     风控（不稳定、疑似要登录态）。构建仍只在 GitHub：Gitee Go 云端 runner 没有 Windows。
 #     release job 发完 GitHub Release（含 latest.json 与 release_body.md 两份附件）后，
-#     publish-gitee job 经 go-api 触发 Gitee Go 流水线，由它下载成品、更新 raw 清单、
-#     打 tag 建发行版；失败会让本工作流变红，不靠人肉对账。
-#     发行版两个仓各建一份：banghe-release（按版本翻的下载页）与源码镜像 BangHe
+#     publish-gitee job 经 go-api 触发 Gitee Go 流水线，由它下载成品、打 tag 建发行版
+#     （安装包挂发行版附件）、把 raw 清单更新成指向该附件的 latest.json；失败会让本工作流变红。
+#     发行版两个仓各建一份：banghe-release（官网/README 的下载入口）与源码镜像 BangHe
 #     （项目首页「发行版」区直接可见）。BangHe 侧镜像同步滞后、还没有该 tag 时，
 #     流水线会把 tag 从 GitHub 原样取过来推过去。
-#     应用内更新 endpoints 首位仍是 banghe-release 的 raw latest.json（2026-11-19 落地），
-#     已装出去的老客户端不受这次链路调整影响。
+#     应用内更新 endpoints 首位是 banghe-release 发行版里的 latest.json
+#     （releases/download/latest/latest.json），安装包也从发行版附件下载；
+#     raw 清单（2026-11-19 起的老入口）与 GitHub Release 依次兜底。
 #     一次性配置（Gitee 侧，不在本仓库）：
 #       1) datawalkcloud/BangHe 已开通 Gitee Go（服务状态 active）；
 #       2) Gitee Go → 通用变量：BH_GITEE_TOKEN（私人令牌，projects 权限；GITEE_ 前缀被

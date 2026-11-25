@@ -49,10 +49,10 @@ Gitee ：<https://gitee.com/datawalkcloud/BangHe>
 
 Windows 64 位安装包，公网可直接下载：
 
-- **国内高速（推荐）**：<https://gitee.com/datawalkcloud/banghe-release/raw/master/banghe-latest-windows-x64-setup.exe>
+- **国内高速（推荐）**：<https://gitee.com/datawalkcloud/banghe-release/releases/latest>
 - **GitHub 备用**：<https://github.com/datawalkcloud/BangHe/releases/latest>
 
-> `banghe-latest-windows-x64-setup.exe` 是稳定文件名，始终指向最新版（由 CI 每次发版同步到公开 Gitee 仓 `banghe-release`）。安装包与在线更新清单直接挂在本仓的 GitHub Release。
+> 安装包挂在 Gitee 发行版上（每次发版自动创建，附件就是本次安装包）；应用内更新先读发行版里的 `latest.json`，`banghe-release` 仓 raw 分支那份作兜底，安装包一律从发行版附件下载。
 
 ## 开源协议
 **使用本软件或源码，表示同意以下协议。** 

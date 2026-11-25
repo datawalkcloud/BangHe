@@ -84,8 +84,8 @@ pub fn run() {
 
     // 更新检查（「关于 → 检查更新」）：前端 @tauri-apps/plugin-updater 拉取清单、
     // 本插件做 minisign 验签与静默安装。更新源与公钥在 tauri.conf.json 的
-    // plugins.updater（首位是国内 Gitee 镜像的 raw 直链，GitHub 作兜底）；
-    // 签名私钥只存在于 GitHub Secrets，离线的本地构建不受影响。
+    // plugins.updater（首位是 Gitee 发行版里的 latest.json，安装包从发行版附件下载；
+    // raw 清单与 GitHub 依次兜底）；签名私钥只存在于 GitHub Secrets，本地构建不受影响。
     //
     // 商店版（`--features store-build`）这一行整体不存在：Microsoft Store 要求应用
     // 更新走商店通道，指向 GitHub Releases 的装内更新必须拔掉。唯一开关就是这一个

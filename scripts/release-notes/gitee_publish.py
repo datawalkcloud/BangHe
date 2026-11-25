@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把最新一次 GitHub Release 发布到 Gitee：更新 raw 下载镜像 + 建 Gitee 发行版。
+"""把最新一次 GitHub Release 发布到 Gitee：建发行版 + 更新 raw 更新清单。
 
 在 Gitee 服务器上执行（.workflow/gitee-publish.yml → build@python 步骤）。
 GitHub Actions 发完 GitHub Release 后经 go-api 触发这条流水线
@@ -14,15 +14,18 @@ Windows runner，所以 Tauri + NSIS 的构建仍留在 GitHub。
   1. 定位目标 tag：TARGET_TAG 环境变量优先，否则取 GitHub「latest release」重定向；
   2. 从该 GitHub Release 下载 安装包 / latest.json / release_body.md（正文缺失时
      用最小正文兜底——补发 2026-11-25 之前打过 tag 的旧版本会碰到）；
-  3. 造 orphan 工作树：版本号包 + 固定名包 + 改写安装包地址的 latest.json + README，
-     强推到 datawalkcloud/banghe-release（raw 直链，客户端 endpoints 首位拉的就是它）；
+  3. 造 orphan 工作树：只放 latest.json（安装包地址指向本次发行版附件）+ README，
+     强推到 datawalkcloud/banghe-release 的 raw 分支——客户端 endpoints 首位读的就是
+     这份清单当「稳定入口」，安装包本体不在 raw 上重复存一份；
      同一提交上打 tag 并推过去——Gitee 发行版绑 git tag，tag 不在创建接口直接失败；
-  4. 建/复用发行版并挂附件（含回读校验），两个仓各建一次：
-     - datawalkcloud/banghe-release：下载镜像仓，人类按版本翻的入口；
+  4. 建/复用发行版并挂安装包附件（含回读校验），两个仓各建一次：
+     - datawalkcloud/banghe-release：下载入口仓，官网/README 指向它的发行版页面；
      - datawalkcloud/BangHe：源码镜像仓，项目首页「发行版」区要能直接看到最新版。
        镜像同步是手动/滞后的，tag 还没同步过去时从 GitHub 原样取过来推过去
        （提交与 GitHub 一致，之后的镜像同步不会打架）；
-  5. 回读 raw latest.json，确认客户端实际拉的地址已是本次版本。
+  5. 顺序是先建发行版、后推清单：客户端读到新清单时附件必须已经能下；
+     清单本身也挂进发行版（releases/download/latest/latest.json，客户端 endpoints 首位），
+     raw 分支那份是兜底；最后两份都回读版本。
 
 凭据（Gitee Go 仓库级「通用变量」，界面配置，不进仓库；名字不能以 GITEE_ 开头）：
   BH_GITEE_TOKEN  必填，私人令牌（projects 权限）
@@ -99,7 +102,6 @@ if not TOKEN:
         print("BH_GITEE_TOKEN 没进环境，改用构建机检出凭据充当令牌", flush=True)
 
 ASSET_TPL = "banghe-{version}-windows-x64-setup.exe"
-STABLE_ASSET = "banghe-latest-windows-x64-setup.exe"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RELEASE_SCRIPT = os.path.join(SCRIPT_DIR, "gitee_release.py")
@@ -248,42 +250,54 @@ def ensure_src_tag(repo: str, tag: str, auth: list[str], env: dict) -> None:
 
 
 def make_release(repo_name: str, tag: str, version: str, body_path: str, ref: str,
-                 asset: str) -> None:
+                 assets: list[str]) -> None:
     log(f"建/复用 Gitee 发行版 {repo_name} 并挂附件（含回读校验）")
     proc = subprocess.run(
         [sys.executable, RELEASE_SCRIPT,
          "--owner", OWNER, "--repo", repo_name, "--tag", tag, "--version", version,
          "--title", f"磅禾粮站收粮系统 {version}", "--body-file", body_path,
-         "--ref", ref, "--assets", asset],
+         "--ref", ref, "--assets", *assets],
         env={**os.environ, "GITEE_TOKEN": TOKEN})
     if proc.returncode != 0:
         fail(f"{repo_name} 的发行版步骤失败（退出码 {proc.returncode}），见上方输出")
 
 
-def build_tree(work: str, exe: str, manifest: dict) -> tuple[str, str]:
-    """造 orphan 工作树，返回 (仓库目录, 带版本号的安装包路径)。"""
+def fetch_json(url: str) -> dict:
+    """匿名读一个公开 URL 的 JSON，失败回空字典（用于回读发行版里的清单）。"""
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read() or b"{}")
+    except Exception:
+        return {}
+
+
+def build_tree(work: str, tag: str, manifest: dict) -> tuple[str, str]:
+    """造 orphan 工作树：只放 latest.json 指针，安装包本体走发行版附件。
+
+    返回 (仓库目录, 改写后的 latest.json 路径)——后者要挂进发行版当附件。
+    """
     repo = os.path.join(work, "repo")
     os.makedirs(repo)
     version = manifest["version"]
     asset = ASSET_TPL.format(version=version)
-    shutil.copyfile(exe, os.path.join(repo, asset))
-    # 固定文件名一份：官网/README 的下载直链只认 banghe-latest-*，改版号不用动网页
-    shutil.copyfile(exe, os.path.join(repo, STABLE_ASSET))
 
-    # 只把安装包地址换成 raw 直链，签名与版本原样保留（客户端用的仍是同一把 minisign 公钥）
-    rawbase = f"{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}"
+    # 安装包地址指向本次发行版的附件；签名与版本原样保留（仍是同一把 minisign 公钥）
+    relbase = f"{GITEE_HOST}/{OWNER}/{REPO}/releases/download/{tag}"
     for plat in (manifest.get("platforms") or {}).values():
-        plat["url"] = f"{rawbase}/{asset}"
-    with open(os.path.join(repo, "latest.json"), "w", encoding="utf-8", newline="\n") as f:
+        plat["url"] = f"{relbase}/{asset}"
+    manifest_out = os.path.join(repo, "latest.json")
+    with open(manifest_out, "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
     with open(os.path.join(repo, "README.md"), "w", encoding="utf-8", newline="\n") as f:
-        f.write("# 磅禾粮站收粮系统 · 下载\n\n"
+        f.write("# 磅禾粮站收粮系统 · 在线更新\n\n"
                 f"当前版本：{version}\n\n"
-                f"稳定直链（始终指向最新版，可直接用）：\n{rawbase}/{STABLE_ASSET}\n\n"
-                "本仓仅存放最新安装包与在线更新清单（latest.json），不含源码。\n")
-    return repo, os.path.join(repo, asset)
+                f"安装包在发行版页面：{GITEE_HOST}/{OWNER}/{REPO}/releases/latest\n\n"
+                "本仓只在 raw 分支放一份 latest.json（客户端在线更新的稳定入口），"
+                "安装包本体一律从发行版附件下载。\n")
+    return repo, manifest_out
 
 
 def main() -> None:
@@ -308,7 +322,8 @@ def main() -> None:
     work = tempfile.mkdtemp(prefix="gitee-publish-")
     try:
         asset_name = ASSET_TPL.format(version=version)
-        exe = os.path.join(work, "installer.exe")
+        # 附件名取版本化文件名：发行版里看到的名字要和客户端清单里的一致
+        exe = os.path.join(work, asset_name)
         manifest_path = os.path.join(work, "latest.json")
         body_path = os.path.join(work, "release_body.md")
         download(tag, asset_name, exe)
@@ -336,7 +351,7 @@ def main() -> None:
             if not f.read().strip():
                 fail("下载到的 release_body.md 是空的（GitHub Release 漏传了？）")
 
-        repo, asset_path = build_tree(work, exe, manifest)
+        repo, gitee_manifest = build_tree(work, tag, manifest)
         git("init", "-q", ".", cwd=repo)
         git("config", "user.email", "ci@datawalk.cn", cwd=repo)
         git("config", "user.name", "BangHe CI", cwd=repo)
@@ -359,21 +374,36 @@ def main() -> None:
         env.pop("GIT_ASKPASS", None)
 
         url = f"{GITEE_HOST}/{OWNER}/{REPO}.git"
-        if gitee_raw_version() == version:
-            log(f"raw 镜像已是 {version}，跳过 branch 推送（tag 与发行版照常校正）")
-        else:
-            git(*auth, "push", "-f", "-q", url, f"HEAD:refs/heads/{BRANCH}", cwd=repo, env=env)
-            log(f"已强推 {REPO}@{BRANCH}（只保留最新版，不累积历史）")
+        # 顺序要紧：先把 tag 与发行版附件落地，最后才推 latest.json 指针——
+        # 客户端读到新清单时，清单里的附件地址必须已经能下。
         git(*auth, "push", "-f", "-q", url, f"refs/tags/{tag}", cwd=repo, env=env)
         log(f"已推 tag {tag}")
+        # 附件顺序：先安装包、后清单——客户端拿到清单时清单里的地址必须已经能下
+        make_release(REPO, tag, version, body_path, tag, [exe, gitee_manifest])
 
-        make_release(REPO, tag, version, body_path, BRANCH, asset_path)
+        if gitee_raw_version() == version:
+            log(f"raw 清单已是 {version}，跳过 branch 推送")
+        else:
+            git(*auth, "push", "-f", "-q", url, f"HEAD:refs/heads/{BRANCH}", cwd=repo, env=env)
+            log(f"已强推 {REPO}@{BRANCH}（只保留 latest.json 指针，不累积历史）")
 
         if SRC_REPO and SRC_REPO != REPO:
             ensure_src_tag(repo, tag, auth, env)
-            make_release(SRC_REPO, tag, version, body_path, "master", asset_path)
+            make_release(SRC_REPO, tag, version, body_path, "master", [exe, gitee_manifest])
 
-        # 客户端 endpoints 首位就是这份 raw latest.json：回读不到版本 = 新版被藏起来
+        # 客户端 endpoints 首位是发行版里的这份清单（releases/download/latest/latest.json，
+        # latest 由 Gitee 解析到最新发行版）；回读不到版本 = 新版被藏起来
+        rel_manifest = (f"{GITEE_HOST}/{OWNER}/{REPO}"
+                        f"/releases/download/latest/latest.json")
+        for _ in range(5):
+            if fetch_json(rel_manifest).get("version") == version:
+                log(f"发行版更新清单已生效：{rel_manifest}（版本 {version}）")
+                break
+            time.sleep(3)
+        else:
+            fail(f"发行版更新清单回读不到版本 {version}：{rel_manifest}")
+
+        # raw 清单是 endpoints 的兜底：回读不到 = 客户端只剩发行版这条线
         for _ in range(5):
             if gitee_raw_version() == version:
                 log(f"raw 更新清单已生效：{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}/latest.json"
