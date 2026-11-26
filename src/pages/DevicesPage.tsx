@@ -31,7 +31,7 @@ import { LocalCameraLive } from "@/components/business/LocalCameraLive";
 import { IdCardText } from "@/components/business/IdCardText";
 import { IpCameraLive, ipCameraSpec } from "@/components/business/IpCameraLive";
 import { MEDIUM, READER_DRIVER_IDS, readerFields, readerSpec } from "@/lib/card-reader";
-import { ESCPOS_DRIVERS, PAPER_COLS, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
+import { ESCPOS_DRIVERS, PAPER_COLS, papersForDriver, parseHex, stamp, verifyReceiptPrinter, type PrintVerify } from "@/lib/print-guard";
 import type { DeviceConfig } from "@/mock/types";
 import type { DeviceKind, DeviceStatus, PaperKind, Tone } from "@/lib/constants";
 import { DEVICE_KIND, DEVICE_STATUS, PAPER, ROLE, TONE_DOT, TONE_TEXT } from "@/lib/constants";
@@ -196,17 +196,7 @@ function driverLabel(driver: string): string {
   return DRIVER_LABEL[driver] ?? driver;
 }
 
-/** ESC/POS 直写 usbprint.sys、靠 VID/PID 寻址的两类驱动（判据收在 print-guard，工作台直打同源） */
-
-/**
- * 纸型候选随驱动收敛：热敏只给 80/58、A4 只给 A4、针式只给 241。
- * 修的是旧表单把四类纸型恒并列、和所选驱动对不上的问题（"表单不合理"点之一）。
- */
-function paperOptionsFor(driver: string): string[] {
-  if (ESCPOS_DRIVERS.includes(driver)) return ["thermal80", "thermal58"];
-  if (driver === "raw_escp") return ["dot241"];
-  return ["A4"];
-}
+/** 纸型候选随驱动收敛（热敏只给 80/58、针式只给 241、其余只给 A4）：判据在 print-guard 的 papersForDriver */
 
 /**
  * 打印机驱动候选。`raw_escpos` 已从新登记里去掉了：它和 `escpos_usbprint` 在代码里全程同一条路
@@ -280,7 +270,7 @@ function networkCameraFields(driver: string, advanced: boolean): FieldSpec[] {
 /** 一栏关键参数随驱动动态化：打印机纸型、本机摄像头靠扫描回填（无需手填 host），其余照 DEVICE_SPEC 原样 */
 function fieldsFor(kind: DeviceKind, driver: string, camAdvanced: boolean): FieldSpec[] {
   if (kind === "printer") {
-    const options = paperOptionsFor(driver);
+    const options = papersForDriver(driver);
     // 落库仍是 A4/dot241/thermal80/thermal58 这些原值，磅员看到的是纸的现场叫法
     const optionLabels = Object.fromEntries(options.map((o) => [o, PAPER[o as PaperKind]]));
     return [{ key: "paper", label: "纸型", options, optionLabels, required: true }];
@@ -451,7 +441,7 @@ export function DevicesPage() {
     }
     setForm((f) => {
       const cfg = { ...f.cfg };
-      if (f.kind === "printer" && cfg.paper && !paperOptionsFor(driver).includes(cfg.paper)) delete cfg.paper;
+      if (f.kind === "printer" && cfg.paper && !papersForDriver(driver).includes(cfg.paper as PaperKind)) delete cfg.paper;
       // 换仪表牌子就把上一台手选的量纲清掉，回到「跟随型号」：耀华预设是 kg、柯力与顶松是 t，
       // 手选值跟着人走会把上一台的「吨」带到新换的 kg 仪表上——那是 1000 倍且校验拦不住的错
       if (f.kind === "scale") delete cfg.unit;
@@ -720,7 +710,7 @@ export function DevicesPage() {
     setForm((f) => {
       // 选队列机意味着走打印队列：热敏驱动下切回窗口预览；已是 preview / raw_escp 则尊重当前选择
       const driver = ESCPOS_DRIVERS.includes(f.driver) ? "preview" : f.driver;
-      return { ...f, kind: "printer", driver, name: f.name.trim() ? f.name : dev.name, cfg: { ...f.cfg, paper: paperOptionsFor(driver)[0], rawQueue: dev.name } };
+      return { ...f, kind: "printer", driver, name: f.name.trim() ? f.name : dev.name, cfg: { ...f.cfg, paper: papersForDriver(driver)[0], rawQueue: dev.name } };
     });
   }
 

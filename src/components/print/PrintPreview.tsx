@@ -30,7 +30,9 @@ export function PrintPreview({
   docNo,
   isReprint = false,
   paper: paperProp,
+  paperOptions,
   defaultPaper = "A4",
+  paperNote,
   onPaperChange,
   onPrint,
   onPrinted,
@@ -43,6 +45,15 @@ export function PrintPreview({
   isReprint?: boolean;
   /** 受控纸型：传入后此处选择会直接驱动预览与打印尺寸 */
   paper?: PaperKind;
+  /**
+   * 纸型候选由调用方给——**这里不再自己列全部四种**。
+   * 弹窗里能选的纸必须是台账里某台机器真装得下的（判据在 `receipt/silent.supportedPapers`），
+   * 否则选出来的那张纸既没有对应的机器出纸，又会把预览切到那张纸的模板版式上，
+   * 看着像"这么打就行"，实际打出来是另一回事。
+   */
+  paperOptions: PaperKind[];
+  /** 纸型下面那行小字；省略时取该纸型的规格说明 */
+  paperNote?: ReactNode;
   defaultPaper?: PaperKind;
   onPaperChange?: (p: PaperKind) => void;
   /**
@@ -148,9 +159,9 @@ export function PrintPreview({
                 className="w-40"
                 value={paper}
                 onChange={setPaper}
-                options={(Object.keys(PAPER) as PaperKind[]).map((k) => ({ value: k, label: PAPER[k] }))}
+                options={paperOptions.map((k) => ({ value: k, label: PAPER[k] }))}
               />
-              <span className="text-[10px] text-muted-foreground">{PAPER_SPEC[paper].note}</span>
+              <span className="text-[10px] text-muted-foreground">{paperNote ?? PAPER_SPEC[paper].note}</span>
             </Field>
             <Field className="gap-1">
               <FieldLabel className="text-xs">通道</FieldLabel>

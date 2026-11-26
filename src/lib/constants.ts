@@ -424,6 +424,13 @@ export const PAPER: Record<PaperKind, string> = {
   dot241: "241 针式连续纸",
 };
 
+/** 纸型全集与判定只从这里取：模板存储的键、编辑器的纸张标签页、台账回填都靠它认值 */
+export const PAPER_KINDS = Object.keys(PAPER) as PaperKind[];
+
+export function isPaperKind(v: unknown): v is PaperKind {
+  return typeof v === "string" && (PAPER_KINDS as string[]).includes(v);
+}
+
 /* -------------------------------------------------------------------- 通用 */
 
 export const TONE_BADGE: Record<Tone, string> = {

@@ -1,5 +1,5 @@
 /**
- * 票面"码"这条链路的无头自检（小票模板 → 条码 / 二维码）。
+ * 票面"码"这条链路的无头自检（打印模板 → 条码 / 二维码）。
  *
  * 为什么单独留这一份：CODE128 的条空宽度表、校验码、尺寸换算全是"错一位就在现场炸"的东西——
  * 表错一个数字、校验码权重差一位，打出来的票照样好看，只是结算窗口扫不出来。
@@ -24,7 +24,11 @@ import { CODE128_QUIET_MODULES, code128Runs, encodeCode128, measureCode128 } fro
 import { kvClusters } from "../../src/components/print/receipt/render";
 import { measureQr, qrSideDots } from "../../src/components/print/receipt/QrGraphic";
 import { receiptLines } from "../../src/components/print/receipt/escpos";
-import { defaultTemplate, normalizeTemplate, acquisitionVoucherTemplate, outboundWeighTicketTemplate, presetsFor } from "../../src/components/print/receipt/defaults";
+import { defaultTemplate, normalizeTemplate, acquisitionVoucherTemplate, acquisitionSheetTemplate, outboundWeighTicketTemplate, presetsFor } from "../../src/components/print/receipt/defaults";
+import { migrateCustom } from "../../src/components/print/receipt/migrate";
+import { PAPER_KINDS } from "../../src/lib/constants";
+import { fingerprint, matchPreset } from "../../src/components/print/receipt/preset-match";
+import { activePaper, supportedPapers } from "../../src/components/print/receipt/silent";
 import { SCENARIOS } from "../../src/components/print/receipt/scenarios";
 import { DOC_KIND_BY_CODE, encodeOrderCode, encodeTicketCode, parseScannedCode, searchKeyword, settleable } from "../../src/lib/ticket-code";
 import type { ReceiptSection, ReceiptTemplate } from "../../src/components/print/receipt/types";
@@ -137,7 +141,9 @@ ok("D2 相邻同字段仍合成一段", kvClusters(fakeSpec, ["b", "b"], {} as n
 ok("D3 票面行序逐字等于 fields 顺序", kvClusters(fakeSpec, ["c", "a", "b"], {} as never).flatMap((cl) => cl.rows.map((r) => r.key)).join("") === "cab");
 
 /* --------------------------------------------------- E. 模板 → 小票机行序列（契约） */
-const tpl = defaultTemplate("weigh_order");
+// 拿的是**热敏那一格**的出厂默认：E 段测的是 ESC/POS 行序列，而磅单在卷纸上的出厂就是字段区小票。
+// （A4 / 241 出厂已是固定表格，那份在卷纸上会降级成标签行，拿来当这条契约的样本不合适。）
+const tpl = defaultTemplate("weigh_order", "thermal80");
 const ctx = SCENARIOS.weigh_order.sampleContext();
 const codeSec = tpl.sections.find((s) => s.kind === "qr") as ReceiptSection;
 const lines = receiptLines({ ...tpl, sections: tpl.sections.map((s) => (s === codeSec ? { ...s, codeStyle: "both" as const } : s)) }, ctx);
@@ -629,7 +635,7 @@ ok("L1 写了「单号」的输入框都过了 searchKeyword（漏的文件列�
 const staleExempt = Object.keys(BOX_EXEMPT).filter((f) => !existsSync(f) || !/placeholder="[^"]*单号/.test(readFileSync(f, "utf8")));
 ok("L2 豁免名单没有过时条目（不写「单号」了就把它删掉）", staleExempt.length === 0, staleExempt);
 
-/* ---------------- O. 收购凭证预设（磅单的固定表格模板） */
+/* ---------------- O. 收购磅单的固定表格（照现场票样那张纸，2026-11-26 起是 A4 / 241 的出厂默认） */
 // 格子上的字段键是手写的字符串，绑错一个就打出一整列「—」；两纸型版本同形，免得改了 A4 忘了 241。
 const acqA4 = acquisitionVoucherTemplate("A4");
 const acq241 = acquisitionVoucherTemplate("dot241");
@@ -644,26 +650,36 @@ ok(
   { a4: acqA4.paper, s241: acq241.paper },
 );
 ok("O2 表格里绑定的字段都登记在磅单场景目录（绑错一个就打一列「—」）", acqBadKeys.length === 0, acqBadKeys);
-ok("O3 收购凭证不带任何码块（带码的票都得过 F6 那道同号闸门，这张不参与）", !acqA4.sections.some((s) => s.kind === "qr"));
+// 2026-11-26 这份升成 A4 / 241 的出厂默认，码块必须跟着搬进来：票样上本来没有码位，
+// 但「先打票、后结算」那条主路径靠它，默认换了版式不能顺手把扫码入口换没。
+const acqCodeSec = acqA4.sections.find((s) => s.kind === "qr");
+ok(
+  "O3 固定表格带凭票结算码，载荷就是磅单那枚 ticket_code（出厂默认换了版式，扫码入口不能跟着没）",
+  !!acqCodeSec && acqCodeSec.text === "{{ticket_code}}" && acqCodeSec.qrCaption !== false,
+  { 区块: acqA4.sections.map((s) => s.kind), 载荷: acqCodeSec?.text },
+);
 ok("O4 版式是单据风格（固定表格只在单据风格里画格子）", acqA4.layout === "sheet" && acq241.layout === "sheet");
 // `table-fixed` 的列数由第一行各格的 colspan 之和定下来（与 P3 同一条道理）：哪一行多一格少一格，
 // 值就跑到隔壁标签那一列底下，A4 预览只表现为「有点歪」，最容易放过
 const acqGridSec = acqA4.sections.find((s) => s.kind === "grid") as ReceiptSection;
 const acqSpans = (acqGridSec.rows ?? []).map((r) => r.cells.reduce((a, c) => a + (c.colspan ?? 1), 0));
 ok("O5 每行的列数之和相等（错一格整张纸的格线就歪）", acqSpans.every((n) => n === acqSpans[0]), acqSpans);
-// 票样上「霉变扣量 / 不完善粒扣量 / 折干水扣量」三栏是手写的：库里只有水扣、杂扣、其他扣与扣重合计
-// （化验那几项只出百分比，不单独折算成扣量），绑上去解析器给「—」，纸上就没处下笔
-const acqBlankHeads = ["霉变扣量", "不完善粒扣量", "折干水扣量/扣后量"];
+// 票样上那三栏（霉变扣量、不完善粒扣量、折干水扣量/扣后量）系统里没有数据源：化验只出百分比，
+// 库里也没有"折干水"这个口径。2026-11-26 起**整栏删除**——从前排成空白格说是"留现场手写"，
+// 可我们打的是空白 A4 / 联单，纸上没有格子可填，留着只是让现场以为该往这儿看。
+// 判据两头都查：格子里不许有它们的标签，热敏降级行里也不许有（少查一头就是纸上多一栏空的）。
+const acqGhostHeads = ["霉变扣量", "不完善粒扣量", "折干水扣量/扣后量"];
 const acqAllCells = (acqGridSec.rows ?? []).flatMap((r) => r.cells);
-const acqRightOfHead = acqBlankHeads.map((label) => {
-  const i = acqAllCells.findIndex((c) => c.label === label);
-  return i < 0 ? undefined : acqAllCells[i + 1];
-});
+const acqGhostInGrid = acqAllCells.filter((c) => acqGhostHeads.includes(c.label)).map((c) => c.label);
+const acqGhostInLines = receiptLines(acqA4, ctx).filter((l) => l.kind === "kv" && acqGhostHeads.includes(l.label)).map((l) => l.label);
 ok(
-  "O5b 无数据源的三栏留空白格，不绑字段（绑了假字段更骗人）",
-  acqRightOfHead.every((c) => c && !c.key),
-  acqBlankHeads.map((label, i) => `${label}→${acqRightOfHead[i]?.key ?? "空白"}`),
+  "O5b 没有数据源的三栏整栏删除（格子里、降级行里都不许留名）",
+  acqGhostInGrid.length === 0 && acqGhostInLines.length === 0,
+  { 格子: acqGhostInGrid, 行: acqGhostInLines },
 );
+// 空白格这个形状在这两张表里已经绝迹：没有 key 又没有标签的格子占了版位却什么都不印，
+// 而列数由第一行定死，多一格少一格都只表现为"有点歪"
+ok("O5c 两张固定表格里不再有空白格", acqAllCells.every((c) => c.key || c.label), acqAllCells.filter((c) => !c.key && !c.label));
 // 小票机降级：值格的标签从同行左侧的表头格补，整行只有值格时从上一行同列补；纯表头格与空白格不掺进来
 const acqKv = receiptLines(acqA4, ctx).filter((l) => l.kind === "kv" && l.value !== "＿＿＿＿＿＿").map((l) => l.label);
 const acqExpect = [
@@ -688,15 +704,31 @@ ok(
   acqWithParty.every((v) => v !== "—" && v !== "undefined") && acqNoParty.every((v) => v === "—"),
   { withParty: acqWithParty, noParty: acqNoParty },
 );
-// 编辑器「载入预设」下拉的候选就是这份：磅单三份、出库磅单两份、其余场景只有出厂默认
+// 编辑器「载入预设」下拉的候选（不传纸型 = 全给，自检按这条查出厂码块）：磅单三份、出库磅单三份，其余只有出厂默认。
+// 这里只钉总数：**同一张纸上不许出现两份同形预设**由 S6 管；跨纸并列时预设名可以重复——
+// 名字里不再带纸型（带了就会在 241 那一格挂着「出库磅单（A4）」），纸型由调用方那一格决定。
+const PRESET_COUNT: Record<string, number> = { weigh_order: 3, outbound_voucher: 3 };
 const acqPresets = presetsFor("weigh_order");
-const PRESET_COUNT: Record<string, number> = { weigh_order: 3, outbound_voucher: 2 };
 ok(
-  "O8 预设候选数量与名字钉死（磅单三份、出库磅单两份，其余只有出厂默认）",
+  "O8 预设候选数量钉死（磅单三份、出库磅单三份，其余只有出厂默认）",
   acqPresets.length === 3 &&
-    new Set(acqPresets.map((p) => p.name)).size === 3 &&
     Object.values(SCENARIOS).every((s) => presetsFor(s.id).length === (PRESET_COUNT[s.id] ?? 1)),
   Object.values(SCENARIOS).map((s) => `${s.id}:${presetsFor(s.id).length}`),
+);
+// 出厂默认与预设的分工反了个个：从前 A4 打系统单据、固定表格当预设；现在照票样的那份直接出厂。
+// 这条钉的是"新站点第一次打磅单打到什么"——现场拿的是印好的凭证纸，默认必须是那张
+const acqShapeOnly = (t: ReceiptTemplate) => JSON.stringify(t.sections.map(({ id: _id, ...rest }) => rest));
+ok(
+  "O9 A4 / 241 出厂即固定表格、系统单据退成预设；热敏出厂仍是系统单据（表格在卷纸上只会降级）",
+  acqShapeOnly(defaultTemplate("weigh_order", "A4")) === acqShapeOnly(acqA4) &&
+    acqShapeOnly(defaultTemplate("weigh_order", "dot241")) === acqShapeOnly(acq241) &&
+    defaultTemplate("weigh_order", "thermal80").sections.some((s) => s.kind === "kv") &&
+    presetsFor("weigh_order", "A4").map((p) => p.name).join("|") === "收购磅单（固定表格）|收购磅单（系统单据）" &&
+    presetsFor("weigh_order", "thermal80").length === 1,
+  {
+    A4: presetsFor("weigh_order", "A4").map((p) => p.name),
+    t80: presetsFor("weigh_order", "thermal80").map((p) => p.name),
+  },
 );
 
 /* ---------------- P. 出库磅单固定表格（出库单的票样还原） */
@@ -720,13 +752,19 @@ ok("P3 每行的列数之和相等（错一格整张纸的格线就歪）", ship
 const shipKeys = SCENARIOS.outbound_voucher.fields.map((f) => f.key);
 const shipBadKeys = shipRows.flatMap((r) => r.cells).filter((c) => c.key && !shipKeys.includes(c.key)).map((c) => c.key);
 ok("P4 表格里绑定的字段都登记在出库磅单场景目录（绑错一个就打一列「—」）", shipBadKeys.length === 0, shipBadKeys);
-// 票样上没有数据源的栏（水分/合同号/司机电话/箱封号/运费）排成**不绑字段**的空白格：
-// 绑上去解析器照样给空串，可编辑器里看着像接了真数据，改单时就会有人以为票上会有值
+// 票样上没有数据源的栏（水分/合同号/司机电话/箱封号/运费）2026-11-26 起**整栏删除**：从前排成
+// 空白格说"留现场手填"，可我们打的是空白 A4 / 联单、纸上没有格子可填，占着版位只是骗人往这儿看。
+// 判据两头：既不许绑字段（假字段比空白更骗人），也不许留标签（标签在 = 栏还在）。
 const shipUnbound = ["moisture_pct", "contract_no", "driver_phone", "front_box_no", "rear_box_no", "front_seal_no", "rear_seal_no", "freight"];
-const shipBound = new Set(shipRows.flatMap((r) => r.cells).map((c) => c.key).filter(Boolean));
-ok("P5 无数据源的栏留空白格，不绑字段（印「—」就没处下笔，绑了假字段更骗人）", shipUnbound.every((k) => !shipBound.has(k)), shipUnbound.filter((k) => shipBound.has(k)));
-// 热敏 / 241 静默直打没有格子可画：值格的标签从同行左侧的表头格补，整行只有值格时从上一行同列补。
-// 少一格 = 纸上整栏不见，而 A4 预览一切正常
+const shipCells = shipRows.flatMap((r) => r.cells);
+const shipBound = new Set(shipCells.map((c) => c.key).filter(Boolean));
+const shipGhostLabels = ["水分(%)", "合同号", "司机电话", "前箱号", "后箱号", "前封号", "后封号", "运费"];
+ok(
+  "P5 无数据源的栏整栏删除：不绑字段、标签也不留在格子里",
+  shipUnbound.every((k) => !shipBound.has(k)) && shipCells.every((c) => !shipGhostLabels.includes(c.label)),
+  { 绑上的: shipUnbound.filter((k) => shipBound.has(k)), 留名的: shipCells.filter((c) => shipGhostLabels.includes(c.label)).map((c) => c.label) },
+);
+// 热敏 / 241 静默直打没有格子可画：值格的标签从同行左侧的表头格补，整行只有值格时从上一行同列补。// 少一格 = 纸上整栏不见，而 A4 预览一切正常
 const shipKv = receiptLines(shipA4, SCENARIOS.outbound_voucher.sampleContext()).filter((l) => l.kind === "kv" && l.value !== "＿＿＿＿＿＿").map((l) => l.label);
 const shipExpect = [
   "日期", "凭证号",
@@ -772,6 +810,189 @@ const editorPath = "src/components/print/receipt/TemplateEditor.tsx";
 const editorSrc = existsSync(editorPath) ? readFileSync(editorPath, "utf8") : "";
 const tabList = editorSrc.match(/const SCENARIO_LIST[\s\S]*?;\n/)?.[0] ?? "";
 ok("Q5 编辑器标签排里点名摘掉「出库码单」", /outbound_order/.test(tabList), tabList.trim() || `找不到 ${editorPath} 里的 SCENARIO_LIST`);
+
+/* ---------------- R. 纸型是模板的存储键（2026-11-26 改成「一台打印机一张纸一套版式」） */
+
+// 存量的本机 localStorage 是 v1 形状：一个场景一份模板，纸型只是模板里的字段，改一次覆盖所有纸。
+// 迁移必须把老模板搬进**它自己那张纸**的格子里，且不能让别的纸凭空长出内容。
+// 这里刻意拿"站长在 80 热敏上调过的磅单"（该场景出厂是 A4）做样本：若迁移按出厂纸型落位，
+// 他那份版式就会串到 A4 那一格里——打热敏时读不到、打 A4 时莫名其妙变样，两头都错且没有报错。
+const legacy80 = { ...defaultTemplate("weigh_order", "thermal80"), name: "站长在 80 热敏上调过的磅单" };
+const legacyA4 = { ...defaultTemplate("ledger"), name: "站长调过的台账" };
+const migrated = migrateCustom({ weigh_order: legacy80, ledger: legacyA4 });
+ok(
+  "R1 v1 的老模板落到它自己那张纸的格子里",
+  migrated.weigh_order?.thermal80?.name === "站长在 80 热敏上调过的磅单" &&
+    migrated.ledger?.[defaultTemplate("ledger").paper] !== undefined,
+  { paper: legacy80.paper, bucket: Object.keys(migrated.weigh_order ?? {}) },
+);
+ok("R2 别的纸型格里没有偷渡：磅单的 A4 那一格仍是空（取用侧回出厂默认）", migrated.weigh_order?.A4 === undefined, migrated.weigh_order);
+// paper 脏/缺失（更早版本没这字段、手改脏）时按该场景出厂纸型落位：宁可跟出厂同格，
+// 也别造一档顶部没有入口的纸型——那种模板永远读不出来，等于把站长的版式扔掉。
+const dirty = migrateCustom({ weigh_order: { ...legacy80, paper: "100mm 神秘纸" } });
+ok("R3 纸型认不出来时落到出厂那一格，不丢掉也不瞎造", dirty.weigh_order?.[defaultTemplate("weigh_order").paper] !== undefined, dirty.weigh_order);
+ok("R4 已经是 v2 的桶原样留下，脏值（字符串/null）丢掉", (() => {
+  const t = defaultTemplate("payment_receipt");
+  const out = migrateCustom({ payment_receipt: { thermal58: t }, weigh_order: null, ledger: "坏了" });
+  return out.payment_receipt?.thermal58 === t && out.weigh_order === undefined && out.ledger === undefined;
+})());
+// 同一场景换纸 = 另一份出厂基线，不是"把 A4 那张纸的字段硬塞进 58mm"
+const t80 = defaultTemplate("weigh_order", "thermal80");
+ok("R5 80 热敏的出厂默认自带热敏版式（layout=receipt），A4 那份仍是单据风格", t80.paper === "thermal80" && t80.layout === "receipt" && defaultTemplate("weigh_order").layout === "sheet", {
+  t80layout: t80.layout,
+  a4layout: defaultTemplate("weigh_order").layout,
+});
+// 载入预设按纸型筛：在 80 热敏那一页里列出一份 241 的版式，载入完 paper 跟着跳到 241，
+// 等于让"选一份预设"这个动作偷偷改了顶部的纸张标签页。
+ok("R6 预设筛过纸型：241 那一页两份都是 241 的版式，热敏那一页只剩出厂默认", presetsFor("weigh_order", "dot241").every((p) => p.paper === "dot241") && presetsFor("weigh_order", "thermal80").length === 1, {
+  dot241: presetsFor("weigh_order", "dot241").map((p) => p.name),
+  t80: presetsFor("weigh_order", "thermal80").map((p) => p.name),
+});
+// 接线守卫：纸型这一维必须一路传到底。这几处漏一个参数就是"存到 A4 格、打的时候读 80 格"，
+// 现场表现是站长明明改过、票还是老版式，而且没有任何报错。
+const storeSrc = readFileSync("src/components/print/receipt/store.ts", "utf8");
+ok(
+  "R7 存储按「场景 × 纸型」两级读写，v1 那种单键取值已消失",
+  /custom\[scenario\]\?\.\[paper\]/.test(storeSrc) &&
+    /migrateCustom\(/.test(storeSrc) &&
+    !/custom\[scenario\]\s*\?\?\s*defaultTemplate\(scenario\)/.test(storeSrc),
+  storeSrc.match(/custom\[scenario\][^\n]*/g),
+);
+const silentSrc = readFileSync("src/components/print/receipt/silent.ts", "utf8");
+ok("R8 业务出票先认台账那台机的纸，没登记打印机就交浏览器预览", /activePaper\(devices\)/.test(silentSrc) && /if \(!wantedPaper\) return "preview"/.test(silentSrc) && /effectiveTemplate\(scenario, target\.paper\)/.test(silentSrc), silentSrc.match(/activePaper|wantedPaper|effectiveTemplate[^\n]*/g));
+// 纸型候选唯一来源：设备中心登记表单与模板编辑器顶部标签页必须同一份判断，
+// 否则会出现"登记时能选 80 热敏、编辑器里却没有那一页可改"
+const devicesSrc = readFileSync("src/pages/DevicesPage.tsx", "utf8");
+ok("R9 设备中心不再自己写一份驱动→纸型候选，统一走 papersForDriver", !/function paperOptionsFor/.test(devicesSrc) && /papersForDriver\(driver\)/.test(devicesSrc), devicesSrc.match(/paperOptionsFor|papersForDriver/g));
+const previewSrc = readFileSync("src/components/print/receipt/ReceiptPrintPreview.tsx", "utf8");
+ok(
+  "R10 编辑器顶部纸张标签页跟着台账那台机，纸型/版式两个下拉不再存在",
+  /supportedPapers\(devices\)/.test(editorSrc) && !/aria-label="纸型"/.test(editorSrc) && !/aria-label="版式"/.test(editorSrc),
+  { tabs: /supportedPapers\(devices\)/.test(editorSrc), 纸型: /aria-label="纸型"/.test(editorSrc), 版式: /aria-label="版式"/.test(editorSrc) },
+);
+ok("R11 预览框读模板也带纸型：弹窗里换纸 = 换那张纸的模板", /useReceiptTemplate\(scenario, paper\)/.test(previewSrc) && /activePaper\(devices\)/.test(previewSrc), previewSrc.match(/useReceiptTemplate[^\n]*|activePaper[^\n]*/g));
+// 弹窗里那张「纸型」下拉是自由四选一的时候，站点能选出一台机器都不装的纸：预览切到那张纸的版式，
+// 看着像"这么打就行"，按下去出的是默认那台机装的另一种纸。候选必须跟编辑器顶部标签页同一份判据。
+const previewShellSrc = readFileSync("src/components/print/PrintPreview.tsx", "utf8");
+ok(
+  "R16 打印弹窗的纸型候选由调用方给（台账在用的机器装得下的），弹窗不再自己列全部四种",
+  /paperOptions=\{supportedPapers\(devices\)\}/.test(previewSrc) &&
+    /paperOptions: PaperKind\[\]/.test(previewShellSrc) &&
+    !/Object\.keys\(PAPER\) as PaperKind\[\]/.test(previewShellSrc),
+  { 调用方传候选: /paperOptions=\{supportedPapers\(devices\)\}/.test(previewSrc), 壳层仍自己列: /Object\.keys\(PAPER\) as PaperKind\[\]/.test(previewShellSrc) },
+);
+
+// 台账 → 纸型的解析（silent.ts 里那三个纯函数，自检直接调它们而不是查源码文本）
+type Dev = Parameters<typeof supportedPapers>[number];
+const printer = (driver: string, paper: string, flags: { is_default?: number; is_enabled?: number; is_mock?: number } = {}): Dev =>
+  ({ kind: "printer", name: `${driver}/${paper}`, driver, config: { paper }, is_enabled: flags.is_enabled ?? 1, is_default: flags.is_default ?? 0, is_mock: flags.is_mock ?? 0 }) as unknown as Dev;
+// 磅房常态：一台 A4 激光（默认，出结算凭证/台账）+ 一台小票机（出码单），外加一台停用的 241 和一台
+// Mock 机。只看默认那台，小票机上存的版式就没有页面可改；把停用与 Mock 的也算进来，
+// 又给站点多出并不在用的纸页（Mock 背后没有能出纸的硬件）。
+const mixed = [
+  printer("preview", "A4", { is_default: 1 }),
+  printer("escpos_usbprint", "thermal80"),
+  printer("raw_escp", "dot241", { is_enabled: 0 }),
+  printer("raw_escp", "dot241", { is_mock: 1 }),
+];
+ok(
+  "R12 纸张标签页 = 登记中（启用、非 Mock）机器能装的纸型并集：80 机连带的 58 卷算，停用的 241 不算",
+  JSON.stringify(supportedPapers(mixed)) === JSON.stringify(["thermal58", "thermal80", "A4"]),
+  supportedPapers(mixed),
+);
+// 并集决定"哪些纸有页面可改"，默认那台决定"当场出纸打到哪儿、取哪一格模板"——两者不能混成一件
+ok("R13 当前用纸仍只认打了默认标记那台（排在数组前面的不算）", activePaper(mixed) === "A4" && activePaper([printer("preview", "A4"), printer("escpos_usbprint", "thermal80", { is_default: 1 })]) === "thermal80", {
+  mixed: activePaper(mixed),
+  换默认: activePaper([printer("preview", "A4"), printer("escpos_usbprint", "thermal80", { is_default: 1 })]),
+});
+ok("R14 一台都没登记：四种纸全给（出纸本来走浏览器预览，没有硬件能拒）", JSON.stringify(supportedPapers([])) === JSON.stringify(["thermal58", "thermal80", "A4", "dot241"]), supportedPapers([]));
+// 老记录/手改把纸型配到驱动装不下的档位：两条不变量——「当前用纸」那一格必然在标签页里
+// （顶部没有那一格、下面却按它排版 = 让人对着看不见的纸调版式），以及完全认不出的值落到驱动第一档
+// （脏配置该让票照出厂那台机打，不该每次出纸都弹框）。
+const offDriver = [printer("escpos_usbprint", "A4", { is_default: 1 })];
+const unrecognized = [printer("escpos_usbprint", "100mm 神秘纸", { is_default: 1 })];
+ok(
+  "R15 脏纸型配置：当前用纸永远有对应那一页，认不出的值落到驱动第一档",
+  supportedPapers(offDriver).includes(activePaper(offDriver)!) &&
+    supportedPapers(unrecognized).includes(activePaper(unrecognized)!) &&
+    activePaper(unrecognized) === "thermal80",
+  { 超范围: { active: activePaper(offDriver), tabs: supportedPapers(offDriver) }, 认不出: { active: activePaper(unrecognized), tabs: supportedPapers(unrecognized) } },
+);
+
+/* ---------------- S. 「载入版式预设」下拉显示哪一份：按内容撞，不按"上次点了什么" */
+
+// 从前这个下拉选完就复位到「载入预设…」，草稿明明已经被整份覆盖，控件上却看不出来（现场只当没点上）。
+// 现在按版式内容认，判据就是 `preset-match.matchPreset`。
+const presetsA4 = presetsFor("weigh_order", "A4");
+// A4 那一格的第 0 项是出厂的固定表格，被"载入"的那份换成退成预设的系统单据（S1 要的是
+// 「载入的不是出厂那份」这个前提，两份对调了就得跟着换样本）
+const voucherA4 = acquisitionSheetTemplate("A4");
+const voucherIdx = presetsA4.findIndex((p) => p.name === voucherA4.name);
+ok("S1 载入「收购磅单（系统单据）」后草稿撞上那一份，而且不是出厂那份（两份真的不一样）", voucherIdx > 0 && matchPreset(structuredClone(voucherA4), presetsA4) === voucherIdx, {
+  预设表: presetsA4.map((p) => p.name),
+  撞上: matchPreset(structuredClone(voucherA4), presetsA4),
+});
+ok("S2 区块 id 每次现生成（uid 随机），不参与判定：整份换个 id 仍撞上同一份", (() => {
+  const c = structuredClone(voucherA4);
+  c.sections = c.sections.map((s) => ({ ...s, id: `zz${Math.random().toString(36).slice(2)}` }));
+  return matchPreset(c, presetsA4) === voucherIdx;
+})(), presetsA4[voucherIdx]?.sections.map((s) => s.kind));
+ok("S3 名字与存盘时刻是标签不是版式：改了它们仍撞上", (() => {
+  const c = { ...structuredClone(voucherA4), name: "我自己起的名字", updatedAt: new Date().toISOString() };
+  return matchPreset(c, presetsA4) === voucherIdx;
+})());
+ok("S4 真改了版式就不再撞：那份已经不是任何预设（控件该回到「载入预设…」）", matchPreset({ ...structuredClone(voucherA4), title: "系统单据（改过）" }, presetsA4) === -1);
+// 打开编辑器没动过 = 出厂那一格，下拉该说"这就是出厂那份"，而不是空着让人以为没载入
+ok("S5 草稿还是出厂那份时撞上第 0 项", matchPreset(defaultTemplate("weigh_order", "A4"), presetsA4) === 0, presetsA4.map((p) => p.name));
+
+// 出厂那份不撞任何预设（改过了），控件该回到「载入预设…」
+ok("S6 出库磅单在 A4 / 241 上各有两份可选预设，且两份版式真的不同", (() => {
+  for (const p of ["A4", "dot241"] as const) {
+    const list = presetsFor("outbound_voucher", p);
+    if (list.length !== 2) return { 纸型: p, 份数: list.length, 名单: list.map((t) => t.name) };
+    if (fingerprint(list[0]) === fingerprint(list[1])) return { 纸型: p, 两份同形: list.map((t) => t.name) };
+  }
+  return true;
+})(), presetsFor("outbound_voucher", "A4").map((t) => t.name));
+ok("S7 热敏那一页不列系统单据（固定表格在卷纸上降级成标签行，两份同形只会让人分不清）", presetsFor("outbound_voucher", "thermal80").length === 1, presetsFor("outbound_voucher", "thermal80").map((t) => t.name));
+// 预设的字段必须落在**本场景**的字段目录里：跨场景抄（出库磅单抄码单的字段）在编辑器里挑不出来、
+// 打出来就是一片「—」，而站点只知道自己"载入了预设"。
+// 按纸型逐格遍历（不是只看不传纸型那一份）：A4 与 241 的出厂默认各是一格，漏一个参数就只查到 A4。
+ok("S8 每张纸上每份预设的字段与占位都在该场景的字段目录里", (() => {
+  const bad: string[] = [];
+  for (const s of Object.keys(SCENARIOS) as (keyof typeof SCENARIOS)[]) {
+    const keys = new Set(SCENARIOS[s].fields.map((f) => f.key));
+    for (const paper of PAPER_KINDS) {
+      for (const p of presetsFor(s, paper)) {
+        for (const sec of p.sections) {
+          if (sec.kind === "kv") for (const k of sec.fields ?? []) if (!keys.has(k)) bad.push(`${s}/${paper}/${p.name}/${k}`);
+          if (sec.kind === "grid") for (const r of sec.rows ?? []) for (const c of r.cells) if (c.key && !keys.has(c.key)) bad.push(`${s}/${paper}/${p.name}/${c.key}`);
+          if (sec.kind === "text" || sec.kind === "qr") for (const m of String(sec.text ?? "").matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/g)) if (!keys.has(m[1])) bad.push(`${s}/${paper}/${p.name}/${m[1]}`);
+        }
+      }
+    }
+  }
+  return bad.length === 0 ? true : bad;
+})());
+// 固定表格的两条几何规矩，一次查遍所有场景 × 所有纸型（O5 / P3 那两条只管 A4 那一份）：
+//  - 每行 colspan 合计相等：列数由第一行定死（`table-fixed`），歪一行 = 整张纸的格线错位；
+//  - 不许有"既没绑字段也没标签"的空白格：它占着版位却什么都不印，热敏降级时又会被跳过，
+//    等于 A4 上有栏、纸上没有——2026-11-26 把系统里没有数据源的栏整栏删掉之后，这个形状就该绝迹。
+ok("S9 每张纸上的固定表格：行行等宽、且不留空白格", (() => {
+  const bad: string[] = [];
+  for (const s of Object.keys(SCENARIOS) as (keyof typeof SCENARIOS)[]) {
+    for (const paper of PAPER_KINDS) {
+      for (const p of presetsFor(s, paper)) {
+        for (const sec of p.sections.filter((x) => x.kind === "grid")) {
+          const spans = (sec.rows ?? []).map((r) => r.cells.reduce((a, c) => a + (c.colspan ?? 1), 0));
+          if (!spans.every((n) => n === spans[0])) bad.push(`${s}/${paper}/${p.name} 行宽不齐 ${JSON.stringify(spans)}`);
+          for (const c of (sec.rows ?? []).flatMap((r) => r.cells)) if (!c.key && !c.label) bad.push(`${s}/${paper}/${p.name} 空白格`);
+        }
+      }
+    }
+  }
+  return bad.length === 0 ? true : bad;
+})());
 
 console.log(fails === 0 ? "\n全部通过" : `\n${fails} 条不通过`);
 process.exit(fails === 0 ? 0 : 1);

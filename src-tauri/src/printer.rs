@@ -250,7 +250,7 @@ pub struct ReceiptPrintInput {
     #[serde(default)]
     pub copies: Option<u8>,
     /// 现场实测列数（汉字占 2 列）；缺省按纸宽标称（80 → 48 / 58 → 32）。
-    /// 票面折行的头号原因是这个数比实机大，实测入口在「小票模板 → 小票机列数」，
+    /// 票面折行的头号原因是这个数比实机大，实测入口在「打印模板 → 小票机列数」，
     /// 值由自检票上的标尺读出来。
     #[serde(default)]
     pub cols: Option<u8>,

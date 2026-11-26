@@ -2,7 +2,9 @@
  * 打印入口包装：把「场景 + 上下文」交给当前生效的用户模板渲染，再走 PrintPreview 的通道/纸型/留痕。
  *
  * 业务页只需关心「打哪张单、数据是什么」，模板长什么样由用户在编辑器里决定。
- * 纸型默认取模板设置，但允许在打印弹窗里临时改——改完预览和出纸尺寸同步变（所见即所得）。
+ * 纸型默认取**设备中心默认那台打印机登记的纸**（没登记任何打印机时取该场景出厂那张），弹窗里可以临时换，
+ * 但候选只有台账里在用的机器装得下的那几种（与「系统 → 打印模板」顶部标签页同一份判据）。
+ * 换的不只是尺寸：模板按 (场景, 纸型) 存，换纸型就换那张纸的版式，预览和出纸跟着同一份走（所见即所得）。
  *
  * 这个框现在是非小票机（A4 激光 / 241 针式）**打票的常规去处**：`silent.ts` 只让热敏直连机
  * 当场出纸，其余一律回到这里（issue #4）。三条通道各走各的：
@@ -21,8 +23,9 @@ import { nativePrinter, toNativePaper } from "@/lib/native";
 import { PrintPreview } from "../PrintPreview";
 import { printJob } from "../printPage";
 import { receiptLines } from "./escpos";
+import { defaultTemplate } from "./defaults";
 import { PaperFrame, ReceiptDocument, docMeta } from "./render";
-import { resolveDirectTarget } from "./silent";
+import { activePaper, resolveDirectTarget, supportedPapers } from "./silent";
 import { PAPER_SPEC } from "./paper";
 import { useReceiptStore, useReceiptTemplate } from "./store";
 import type { ReceiptContext, ReceiptScenario } from "./types";
@@ -49,12 +52,16 @@ export function ReceiptPrintPreview({
   /** 出纸并留痕成功后回调，调用方用它刷新"这张票打过几次" */
   onPrinted?: () => void;
 }) {
-  const tpl = useReceiptTemplate(scenario);
+  // 用哪张纸由台账里默认那台打印机决定；一台都没登记（浏览器演示 / 还没配机器）才回落到该场景出厂那张纸
+  const printerPaper = activePaper(devices);
+  const [paper, setPaper] = useState<PaperKind>(printerPaper ?? defaultTemplate(scenario).paper);
+  useEffect(() => {
+    if (printerPaper) setPaper(printerPaper);
+  }, [printerPaper]);
+  // 纸型是模板的存储键：弹窗里换纸型 = 换那张纸的模板，预览与出纸跟着同一份版式走
+  const tpl = useReceiptTemplate(scenario, paper);
   // 站点级实测列数；null = 按纸型标称。见 store.ts 的说明
   const thermalCols = useReceiptStore((s) => s.thermalCols);
-  const [paper, setPaper] = useState<PaperKind>(tpl.paper);
-  // 模板换过纸型（站长刚改过）时，本次打印默认跟随
-  useEffect(() => setPaper(tpl.paper), [tpl.paper]);
   const no = docNo ?? docMeta(context).docNo;
 
   /**
@@ -115,7 +122,7 @@ export function ReceiptPrintPreview({
     const out = res.data;
     if (out?.ok) return true;
     toast.error(`小票机没有出纸：${out?.error ?? res.error ?? "未知原因"}`, {
-      description: "可在「系统 → 小票模板」里用「小票机自检」分清是机器的问题还是版面的问题。",
+      description: "可在「系统 → 打印模板」里用「小票机自检」分清是机器的问题还是版面的问题。",
     });
     return false;
   }
@@ -128,6 +135,17 @@ export function ReceiptPrintPreview({
       docNo={no}
       isReprint={isReprint}
       paper={paper}
+      paperOptions={supportedPapers(devices)}
+      // 选了别的纸就说清楚：这一格打的是那张纸的版式，而当场出纸走的是默认那台机装的纸
+      paperNote={
+        printerPaper && paper !== printerPaper ? (
+          <span>
+            {PAPER_SPEC[paper].note}
+            <br />
+            默认打印机装的是{PAPER[printerPaper]}，这一格是{PAPER[paper]}的版式
+          </span>
+        ) : undefined
+      }
       onPaperChange={setPaper}
       onPrint={handlePrint}
       onPrinted={onPrinted}

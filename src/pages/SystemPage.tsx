@@ -70,7 +70,7 @@ const SECTIONS: { key: SystemSection; label: string; desc: string }[] = [
   { key: "shift", label: "日结交班", desc: "封账前的挂起清单" },
   { key: "window", label: "窗口", desc: "关闭主窗口是退出还是藏进托盘，只影响本机" },
   { key: "appearance", label: "外观与主题", desc: "显示模式与色板，只影响本机" },
-  { key: "templates", label: "小票模板", desc: "各场景票据版式与可打印字段" },
+  { key: "templates", label: "打印模板", desc: "按纸张分存的票据版式与可打印字段" },
 ];
 
 export function SystemPage({ section }: { section: SystemSection }) {

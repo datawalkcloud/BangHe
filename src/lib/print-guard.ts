@@ -10,6 +10,7 @@
  *   绝不用 mock 的"测试通过"骗成绿标。
  */
 import { nativePrinter, type NativePaper } from "@/lib/native";
+import type { PaperKind } from "@/lib/constants";
 
 export type PrintVerify =
   | { mode: "device"; ok: boolean; at: string; message: string }
@@ -32,6 +33,19 @@ export const PAPER_COLS: Record<NativePaper, number> = { p80: 48, p58: 32 };
  * （Rust 侧 devices.rs 的 probe_plan 有同名判断，由契约测试对值。）
  */
 export const ESCPOS_DRIVERS = ["escpos_usbprint", "raw_escpos"];
+
+/**
+ * 一台机器能装哪几种纸，只由驱动决定：热敏直连 = 80 / 58 两卷（同一台 80 机塞得进 58 卷纸），
+ * 针式 = 241 连续纸，预览 / 激光 = A4。
+ *
+ * 设备中心登记表单的纸型候选、打印模板编辑器顶部的纸张标签页、打印时"当前该用哪张纸的模板"
+ * 都从这里取。分叉的代价是"登记时能选 80 热敏、编辑器里却没有那一页可改"。
+ */
+export function papersForDriver(driver: string): PaperKind[] {
+  if (ESCPOS_DRIVERS.includes(driver)) return ["thermal80", "thermal58"];
+  if (driver === "raw_escp") return ["dot241"];
+  return ["A4"];
+}
 
 /** 配置里的 VID/PID 手写成 "0x0483" 这样的十六进制串，这里统一转数字 */
 export function parseHex(v: unknown): number | null {

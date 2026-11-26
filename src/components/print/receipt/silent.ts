@@ -13,7 +13,9 @@
  *  - **其余一律回 `"preview"`**——A4 激光与 241 针式这类走 Windows 打印队列的机器，
  *    交回预览框由人看过版面再打（issue #4）。队列机的 GDI 直打命令
  *    （`nativePrinter.receiptToQueue` → `print_receipt_queue`）仍在，只是不在这条默认路径上。
- *  台账没登记打印机时，才按**票面模板纸型**分流（热敏自动挑一台直连机 / 其余交预览框）。
+ *  台账没登记打印机时，才按**票面模板纸型**分流（热敏自动挑一台直连机 / 其余交预览框）——
+ *  这条只剩预览框里的「静默直打」还会走到；业务出票这条路在入口就拦住了：
+ *  **一台打印机都没登记就直接交浏览器预览**，不拿模板纸型去猜有机器还是没机器。
  *
  * 为什么队列机不直打：GDI 那条路把前端排好的行序列交给打印机驱动自己排版，纸型、托盘、
  * 方向一概不传，打出来什么全看驱动当时的配置；A4 又是单张纸，废一张是一张。预览框里
@@ -28,8 +30,8 @@ import { api } from "@/lib/api";
 import { announce } from "@/lib/voice-prompt";
 import { runningInTauri, nativePrinter, toNativePaper } from "@/lib/native";
 import type { DeviceConfig } from "@/mock/types";
-import type { PaperKind } from "@/lib/constants";
-import { parseHex, ESCPOS_DRIVERS } from "@/lib/print-guard";
+import { isPaperKind, PAPER_KINDS, type PaperKind } from "@/lib/constants";
+import { ESCPOS_DRIVERS, papersForDriver, parseHex } from "@/lib/print-guard";
 import { useDeviceStore } from "@/store/device";
 import { actorId } from "@/store/session";
 import { receiptLines } from "./escpos";
@@ -50,6 +52,58 @@ type DirectTarget =
   /** Windows 打印队列：printer = 真实队列名，undefined = 系统默认打印机 */
   | { kind: "queue"; printer?: string; deviceName?: string };
 
+/** 台账里**真的在用**的打印机：启用、非 Mock。当前那台与纸型并集都从这份推，判据只写一次 */
+function registeredPrinters(devices: DeviceConfig[]): DeviceConfig[] {
+  return devices.filter((d) => d.kind === "printer" && d.is_enabled === 1 && d.is_mock !== 1);
+}
+
+/**
+ * 台账里「系统当前那台打印机」：默认项优先，没标默认就取登记顺序第一台。
+ *
+ * 出纸口、当前用纸、取哪一格模板，全都从这一台推出来——整个系统默认一台打印机，
+ * 判定只写这一份（`resolveDirectTarget` 与打印模板编辑器共用）。
+ */
+export function pickPrinterDevice(devices: DeviceConfig[]): DeviceConfig | null {
+  const printers = registeredPrinters(devices);
+  return printers.find((d) => d.is_default === 1) ?? printers[0] ?? null;
+}
+
+/**
+ * 台账里**登记过的机器**能装哪几种纸的并集，驱动决定（判据在 `print-guard.papersForDriver`，
+ * 与设备中心登记表单同一份）。
+ *
+ * 取并集而不是只看默认那台：磅房常见一台小票机 + 一台 A4 激光 + 一台 241，默认那台只决定
+ * "当场出纸打到哪儿"，而预览框里的静默直打与 RAW 直连照样会用另外几台。只看默认那台，
+ * 另外两台的版式就没有地方改，改不动的模板等于没有那台机器。
+ *
+ * **一台都没登记**时四种全给：那种情况下出纸本来就走浏览器预览，纸型只是挑一张纸来排版，
+ * 没有硬件能拒。
+ */
+export function supportedPapers(devices: DeviceConfig[]): PaperKind[] {
+  const printers = registeredPrinters(devices);
+  if (printers.length === 0) return PAPER_KINDS;
+  const seen = new Set<PaperKind>();
+  for (const d of printers) for (const k of papersForDriver(d.driver)) seen.add(k);
+  // 台账配了个驱动范围外的纸型（老记录、手改脏）也要有那一页：否则顶部没有它、下面却按它排版
+  const cur = activePaper(devices);
+  if (cur) seen.add(cur);
+  // 按 PAPER_KINDS 的顺序出，不让登记顺序决定标签页顺序（现场习惯热敏在前）
+  return PAPER_KINDS.filter((k) => seen.has(k));
+}
+
+/**
+ * 当前用纸 = 台账里**默认那台**打印机登记的纸型；**没登记任何打印机 = null**，打印一律回浏览器预览。
+ *
+ * 老记录没填纸型或填了认不出的值，按该驱动默认那一档认（热敏 = 80）：脏配置该让票照出厂那台机打，
+ * 不该把出纸卡成每次弹窗。
+ */
+export function activePaper(devices: DeviceConfig[]): PaperKind | null {
+  const picked = pickPrinterDevice(devices);
+  if (!picked) return null;
+  const cfg = picked.config.paper;
+  return isPaperKind(cfg) ? cfg : papersForDriver(picked.driver)[0] ?? null;
+}
+
 /**
  * 出纸口解析：设备中心登记的打印机（启用、非 Mock，默认项优先）说了算；
  * 没登记才按模板纸型兜底分流。Mock 机不参与——它背后没有能出纸的硬件。
@@ -58,8 +112,7 @@ type DirectTarget =
  * 「静默直打」那条通道准备的（见 `ReceiptPrintPreview.handlePrint`）。
  */
 export function resolveDirectTarget(devices: DeviceConfig[], templatePaper: PaperKind): DirectTarget {
-  const printers = devices.filter((d) => d.kind === "printer" && d.is_enabled === 1 && d.is_mock !== 1);
-  const picked = printers.find((d) => d.is_default === 1) ?? printers[0];
+  const picked = pickPrinterDevice(devices);
   if (picked) {
     if (ESCPOS_DRIVERS.includes(picked.driver)) {
       const paper = String(picked.config.paper ?? "") === "thermal58" ? "thermal58" : "thermal80";
@@ -91,13 +144,18 @@ export async function printReceiptSilently({
 }): Promise<SilentOutcome> {
   if (!runningInTauri()) return "preview";
 
+  // 用哪张纸由设备中心那台打印机决定；一台都没登记 = 没有能直连的机器，直接交浏览器预览
+  const wantedPaper = activePaper(devices);
+  if (!wantedPaper) return "preview";
+
   // 票种名只从场景目录取一份：这条路不只打码单（质检单/结算凭证/付款小票都走它），
   // 失败提示写死"码单"会在别的页面变成谎话
   const docLabel = SCENARIOS[scenario]?.label ?? "单据";
-  const tpl = effectiveTemplate(scenario);
-  const target = resolveDirectTarget(devices, tpl.paper as PaperKind);
+  const target = resolveDirectTarget(devices, wantedPaper);
   // 只有 ESC/POS 直连的热敏机保持"点打印＝出纸"；A4 / 241 这类队列机一律先交预览框（issue #4）
   if (target.kind !== "thermal") return "preview";
+  // 模板取机器实际那张纸的那一格：热敏分支下 target.paper 就是台账登记的 80 / 58
+  const tpl = effectiveTemplate(scenario, target.paper);
 
   /* ---------------------------------------------- 热敏：ESC/POS usbprint 直写 */
   // 告诉机器的那张纸要一起给排版的：热敏机的码落点与宽度预算都按它算（见 code-size.ts）

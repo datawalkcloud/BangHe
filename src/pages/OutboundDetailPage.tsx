@@ -127,7 +127,7 @@ export function OutboundDetailBody({
 
   /**
    * 出库单唯一的那张纸：`outboundWeighTicketTemplate` 照现场票样排的固定表格。
-   * A4 / 241 针式在预览框里切，纸型与版式都在小票模板编辑器的「出库磅单」那一页改。
+   * A4 / 241 针式在预览框里切，纸型与版式都在打印模板编辑器的「出库磅单」那一页改。
    */
   const printTicket = () => {
     if (!doc || !station) return;

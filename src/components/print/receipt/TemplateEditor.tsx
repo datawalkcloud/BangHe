@@ -1,7 +1,8 @@
 /**
- * 小票模板编辑器（系统 → 小票模板）。
+ * 打印模板编辑器（系统 → 打印模板）。
  *
- * 左侧改配置，右侧即时预览同一张样例数据；保存即覆盖该场景的出厂默认。
+ * 顶部先选**纸张**，再选票据场景：模板按 (场景, 纸型) 各存一份，改这一张纸上的版式不动其它纸。
+ * 左侧改配置，右侧即时预览同一张样例数据；保存即覆盖「该场景 + 该纸型」的出厂默认。
  * 核心交互是「动态挑选字段」：每种场景在 scenarios.tsx 里登记了全部可用数据，
  * 这里按分组列出复选项，勾上就出现在票面、去掉就消失，用户不必碰任何代码。
  */
@@ -13,6 +14,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 import { PAPER } from "@/lib/constants";
 import type { PaperKind } from "@/lib/constants";
+import { api } from "@/lib/api";
 import { nativePrinter, toNativePaper } from "@/lib/native";
 import { useSession } from "@/store/session";
 import { Button } from "@/components/ui/button";
@@ -25,6 +27,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Choose } from "@/components/business/Choose";
 import { CallOut, EmptyState, PageHeader } from "@/components/business/layout";
 import { defaultTemplate, presetsFor, uid } from "./defaults";
+import { matchPreset } from "./preset-match";
 import { receiptLines } from "./escpos";
 import { printJob } from "../printPage";
 import { SCENARIOS } from "./scenarios";
@@ -32,8 +35,8 @@ import { PaperFrame, ReceiptDocument } from "./render";
 import { measureQr } from "./QrGraphic";
 import { measureCode128 } from "./code128";
 import { CODE_SCALE_DOTS, CODE_SCALE_LABEL, type CodeScale, dotsToMm, printableDots, printableMm, scaleOf } from "./code-size";
-import { defaultLayout, LAYOUT, PAPER_SPEC } from "./paper";
-import type { ReceiptLayout } from "./paper";
+import { PAPER_SPEC } from "./paper";
+import { activePaper, supportedPapers } from "./silent";
 import { effectiveTemplate, useReceiptStore } from "./store";
 import type { BlockKind, CodeStyle, ReceiptContext, ReceiptScenario, ReceiptSection, ReceiptTemplate } from "./types";
 import { BLOCK_LABEL, CODE_STYLE_LABEL } from "./types";
@@ -60,12 +63,39 @@ export function ReceiptTemplateEditor() {
   const thermalCols = useReceiptStore((s) => s.thermalCols);
   const setThermalCols = useReceiptStore((s) => s.setThermalCols);
 
+  /**
+   * 设备台账：顶部纸张标签页取所有登记机器的纸型并集，"当前用纸"那格标在默认那台的纸上。
+   * 与工作台/预览框同一个 query key，不重复拉。
+   */
+  const { data: devices = [] } = useQuery({ queryKey: ["devices"], queryFn: () => api.listDevices(), staleTime: 60_000 });
+  const printerPaper = activePaper(devices);
+  /**
+   * 标签页 = 台账里登记过的打印机能装的纸型并集（并集的理由与脏配置的兜底都在 `silent.supportedPapers`
+   * 里，那边已经把当前用纸算进去了）。
+   */
+  const papers = useMemo(() => supportedPapers(devices), [devices]);
+
   const [scenario, setScenario] = useState<ReceiptScenario>("weigh_order");
   const spec = SCENARIOS[scenario];
-  const [draft, setDraft] = useState<ReceiptTemplate>(() => effectiveTemplate(scenario));
-  /** 版式预设下拉的选中值：常态停在被遮蔽的「载入预设…」项上，选一份即覆盖草稿并复位 */
-  const [presetChoice, setPresetChoice] = useState("__preset__");
-  const presets = useMemo(() => presetsFor(scenario), [scenario]);
+  /** 站长在纸张标签页上手动切过的那一档；没手动切过就跟随打印机 */
+  const [pickedPaper, setPickedPaper] = useState<PaperKind | null>(null);
+  // 当前编辑的纸型：手动切的 > 台账那台机选的纸 > 该场景出厂那张纸（没配机器时）
+  const paper = pickedPaper ?? printerPaper ?? defaultTemplate(scenario).paper;
+
+  const [draft, setDraft] = useState<ReceiptTemplate>(() => effectiveTemplate(scenario, paper));
+  const presets = useMemo(() => presetsFor(scenario, paper), [scenario, paper]);
+  /**
+   * 预设下拉显示哪一项，看的是**当前草稿撞上了哪一份预设**，不是"上次点了什么"。
+   *
+   * 从前这里存的是状态、载入完立刻复位到「载入预设…」，于是点下去草稿已经被整份覆盖，
+   * 控件上却看不出选了谁——现场只当没点上。按内容认还附带一个好处：改过任何一项就谁都不撞，
+   * 控件自己回到「载入预设…」，因为那份已经不是任何预设了，硬写个预设名反倒是骗人。
+   * 判据在 `preset-match.ts`，自检脚本直接断言它（S 段）。
+   */
+  const presetChoice = useMemo(() => {
+    const hit = matchPreset(draft, presets);
+    return hit >= 0 ? String(hit) : "__preset__";
+  }, [draft, presets]);
 
   /**
    * 左栏当前选中的区块：预览里对应的那一格会被描一圈。
@@ -75,13 +105,12 @@ export function ReceiptTemplateEditor() {
    */
   const [activeSection, setActiveSection] = useState<string | null>(null);
 
-  // 切换场景时载入该场景当前生效模板（用户覆盖优先；effectiveTemplate 会补回出库码单的必备码）
+  // 切换场景或纸张时载入「这一张纸上的这一票」当前生效模板（用户覆盖优先；effectiveTemplate 会补回必备码）
   useEffect(() => {
-    setDraft(effectiveTemplate(scenario));
-    setPresetChoice("__preset__");
-    // 区块 id 是"每个场景各自一套"，留着上一个场景的选中会把高亮指到不存在的那一格
+    setDraft(effectiveTemplate(scenario, paper));
+    // 区块 id 是"每个场景、每张纸各自一套"，留着上一格的选中会把高亮指到不存在的那一格
     setActiveSection(null);
-  }, [scenario]);
+  }, [scenario, paper]);
 
   function focusSection(id: string) {
     setActiveSection(id);
@@ -161,20 +190,22 @@ export function ReceiptTemplateEditor() {
 
   function doSave() {
     if (!canEdit) {
-      toast.error("只有站长能保存小票模板");
+      toast.error("只有站长能保存打印模板");
       return;
     }
-    save(draft);
-    toast.success(`${spec.label}模板已保存，此后该场景打印均用此版式`);
+    // 纸型由顶部标签页决定：不让草稿里残留的值把这份版式存进别的纸型格子
+    save({ ...draft, paper });
+    toast.success(`${PAPER[paper]} · ${spec.label}已保存，该场景用这张纸打印即取此版式`);
   }
   function doReset() {
     if (!canEdit) {
       toast.error("只有站长能恢复默认模板");
       return;
     }
-    reset(scenario);
-    setDraft(defaultTemplate(scenario));
-    toast.success(`${spec.label}已恢复出厂默认`);
+    // 只摘这一张纸上的覆盖：同一票种在别的纸上调好的版式不该跟着一起回出厂
+    reset(scenario, paper);
+    setDraft(defaultTemplate(scenario, paper));
+    toast.success(`${PAPER[paper]} · ${spec.label}已恢复出厂默认`);
   }
   /**
    * 打印测试：把右侧预览（当前版式 + 样例数据）打成一张**真票**。
@@ -251,7 +282,7 @@ export function ReceiptTemplateEditor() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
-        title="小票模板"
+        title="打印模板"
         description={`${spec.label} · 触发于${spec.entry}`}
         actions={
           <div className="flex gap-2">
@@ -279,6 +310,28 @@ export function ReceiptTemplateEditor() {
           </div>
         }
       />
+
+      {/*
+        纸张切换（在场景之上）：模板按「场景 × 纸型」各存一份，先选纸、再调那张纸上的这一票。
+        候选来自台账那台打印机支持的纸型；没登记打印机时四种都开，那会儿出纸本来就走窗口预览。
+      */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-6 pt-3">
+        <Tabs value={paper} onValueChange={(v) => setPickedPaper(v as PaperKind)} className="gap-0">
+          <TabsList className="h-auto max-w-full flex-wrap justify-start">
+            {papers.map((k) => (
+              <TabsTrigger key={k} value={k} className="flex-none text-sm">
+                {PAPER[k]}
+                {k === printerPaper && <span className="ml-1 text-[10px] opacity-70">当前用纸</span>}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <p className="text-[10px] text-muted-foreground">
+          {printerPaper
+            ? `改的是「${PAPER[paper]}」上存的版式，换纸型不动别的纸；打印时按默认打印机装的那张纸取对应那一套`
+            : "设备中心还没登记打印机：四种纸都可调，出纸走窗口打印预览"}
+        </p>
+      </div>
 
       {/* 场景切换 */}
       <Tabs
@@ -318,7 +371,6 @@ export function ReceiptTemplateEditor() {
                     const preset = presets[Number(v)];
                     if (!preset) return;
                     setDraft(structuredClone(preset));
-                    setPresetChoice("__preset__");
                     toast.message(`已载入「${preset.name}」`, {
                       description: "点「保存模板」后，该场景打印即用这份版式。",
                     });
@@ -330,7 +382,9 @@ export function ReceiptTemplateEditor() {
                   size="sm"
                   aria-label="载入版式预设"
                 />
-                <span className="text-[10px] text-muted-foreground">选一份整体覆盖当前编辑区，保存后才对该场景打印生效。</span>
+                <span className="text-[10px] text-muted-foreground">
+                  选一份整体覆盖当前编辑区，保存后才对该场景打印生效。这里显示的是「当前这份撞上了哪套预设」，改过任何一项就回到「载入预设…」——那份已经不是预设了。
+                </span>
               </Label>
             )}
             <div className="grid grid-cols-2 gap-2">
@@ -342,30 +396,11 @@ export function ReceiptTemplateEditor() {
                 联次说明
                 <Input value={draft.copyNote} onChange={(e) => patch({ copyNote: e.target.value })} className="h-8 text-sm" />
               </Label>
-              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                纸型（换纸型会同步换成该纸型的默认版式）
-                <Choose
-                  value={draft.paper}
-                  onChange={(v) => {
-                    const p = v as PaperKind;
-                    patch({ paper: p, layout: defaultLayout(p) });
-                  }}
-                  options={(Object.keys(PAPER) as PaperKind[]).map((k) => ({ value: k, label: PAPER[k] }))}
-                  size="sm"
-                  aria-label="纸型"
-                />
-              </Label>
-              <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                版式
-                <Choose
-                  value={draft.layout ?? defaultLayout(draft.paper)}
-                  onChange={(v) => patch({ layout: v as ReceiptLayout })}
-                  options={(Object.keys(LAYOUT) as ReceiptLayout[]).map((k) => ({ value: k, label: LAYOUT[k] }))}
-                  size="sm"
-                  aria-label="版式"
-                />
-                <span className="text-[10px] text-muted-foreground">热敏小票用「小票风格」</span>
-              </Label>
+              {/* 纸型与版式都不在这里选：纸型是顶部标签页（也是存储键的一维），版式由它推——
+                  旧的下拉能让人把 80 热敏的票存成 A4 版式，那是现场调不平的坑 */}
+              <p className="col-span-2 text-[10px] text-muted-foreground">
+                纸型跟随顶部标签页（当前{PAPER[paper]}），版式按纸型自动定；要改别的纸回顶部切一格
+              </p>
               <Label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 补打角标
                 <span className="flex h-8 items-center gap-2">
