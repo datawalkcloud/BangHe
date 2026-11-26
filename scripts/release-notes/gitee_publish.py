@@ -42,6 +42,7 @@ path，带 /）和 GITEE_BRANCH（本次构建的分支）不能当发布仓名/
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -194,15 +195,63 @@ def download(tag: str, name: str, dest: str, *, optional: bool = False) -> bool:
     fail(f"从 GitHub Release {tag} 下载不到 {name}（直连与 gh-proxy 都失败）")
 
 
-def gitee_raw_version() -> str | None:
-    url = f"{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}/latest.json?t={int(time.time())}"
-    status, body = http(url, timeout=30)
+def raw_manifest() -> dict | None:
+    """读下载镜像仓当前那份 latest.json，读不到回 None。
+
+    先走 v5 contents 接口：它直接读 git，强推完立刻拿得到新内容。raw 直链会 302 到
+    foruda 的签名地址，CDN 滞后几十秒（构建 #11 实测：推送后 32 秒仍回旧版），拿它判
+    「有没有推上去」会把已经成功的发布判成失败。
+    """
+    status, body = http(
+        f"https://gitee.com/api/v5/repos/{OWNER}/{REPO}/contents/latest.json"
+        f"?ref={BRANCH}", timeout=30)
+    if status == 200:
+        try:
+            blob = json.loads(body).get("content") or ""
+            return json.loads(base64.b64decode(blob).decode("utf-8"))
+        except Exception:
+            pass
+    status, body = http(
+        f"{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}/latest.json?t={int(time.time())}",
+        timeout=30)
     if status != 200:
         return None
     try:
-        return json.loads(body.decode("utf-8")).get("version")
+        return json.loads(body.decode("utf-8"))
     except ValueError:
         return None
+
+
+def raw_is_ready(man: dict | None, version: str, tag: str) -> bool:
+    """raw 那份既是本次版本、安装包地址又已改指发行版附件，才算到位。
+
+    只看版本号会漏掉「同 tag 重跑但 raw 还是上一版脚本推的旧版式」：那种清单版本号对得上，
+    安装包却还挂在 raw 上，跳过推送就让新加的发行版附件白挂。
+    """
+    if not man or man.get("version") != version:
+        return False
+    plat = (man.get("platforms") or {}).get("windows-x86_64") or {}
+    return f"/{OWNER}/{REPO}/releases/download/{tag}/" in (plat.get("url") or "")
+
+
+def release_asset_names(repo: str, tag: str) -> list[str]:
+    """发行版实际挂着的附件名（走 v5 接口，绕开附件直链的 CDN）；查不到回空列表。"""
+    api = "https://gitee.com/api/v5"
+    status, body = http(f"{api}/repos/{OWNER}/{repo}/releases/tags/{urllib.parse.quote(tag)}",
+                        timeout=30)
+    if status != 200:
+        return []
+    try:
+        rid = int(json.loads(body).get("id"))
+    except (ValueError, TypeError):
+        return []
+    status, body = http(f"{api}/repos/{OWNER}/{repo}/releases/{rid}/attach_files", timeout=30)
+    if status != 200:
+        return []
+    try:
+        return [a.get("name") for a in json.loads(body)]
+    except ValueError:
+        return []
 
 
 def push_user() -> str:
@@ -381,8 +430,8 @@ def main() -> None:
         # 附件顺序：先安装包、后清单——客户端拿到清单时清单里的地址必须已经能下
         make_release(REPO, tag, version, body_path, tag, [exe, gitee_manifest])
 
-        if gitee_raw_version() == version:
-            log(f"raw 清单已是 {version}，跳过 branch 推送")
+        if raw_is_ready(raw_manifest(), version, tag):
+            log(f"raw 清单已是 {version} 且指向发行版附件，跳过 branch 推送")
         else:
             git(*auth, "push", "-f", "-q", url, f"HEAD:refs/heads/{BRANCH}", cwd=repo, env=env)
             log(f"已强推 {REPO}@{BRANCH}（只保留 latest.json 指针，不累积历史）")
@@ -392,28 +441,36 @@ def main() -> None:
             make_release(SRC_REPO, tag, version, body_path, "master", [exe, gitee_manifest])
 
         # 客户端 endpoints 首位是发行版里的这份清单（releases/download/latest/latest.json，
-        # latest 由 Gitee 解析到最新发行版）；回读不到版本 = 新版被藏起来
+        # latest 由 Gitee 解析到最新发行版）；这条是客户端实际要拉的地址，只能等它自己通。
         rel_manifest = (f"{GITEE_HOST}/{OWNER}/{REPO}"
                         f"/releases/download/latest/latest.json")
-        for _ in range(5):
+        for _ in range(10):
             if fetch_json(rel_manifest).get("version") == version:
                 log(f"发行版更新清单已生效：{rel_manifest}（版本 {version}）")
                 break
-            time.sleep(3)
+            time.sleep(5)
         else:
-            fail(f"发行版更新清单回读不到版本 {version}：{rel_manifest}")
+            names = release_asset_names(REPO, tag)
+            if "latest.json" not in names:
+                fail(f"发行版 {tag} 的附件只有 {names or '（空）'}，没挂上 latest.json，"
+                     f"客户端 endpoints 首位 {rel_manifest} 会 404。"
+                     "\n（附件里只有安装包 = 流水线跑的是 Gitee 镜像仓 master 的旧脚本："
+                     "先在 Gitee 仓库页点「同步」把改动带过去，再重跑）")
+            fail(f"latest.json 已挂上（附件 {names}），但 {rel_manifest} 回读不到版本 {version}；"
+                 f"客户端会退到 raw 那条兜底")
 
-        # raw 清单是 endpoints 的兜底：回读不到 = 客户端只剩发行版这条线
-        for _ in range(5):
-            if gitee_raw_version() == version:
-                log(f"raw 更新清单已生效：{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}/latest.json"
-                    f"（版本 {version}）")
+        # raw 清单是 endpoints 的兜底：回读走 v5 contents，读的是 git，不受 CDN 滞后影响
+        for _ in range(4):
+            if raw_is_ready(raw_manifest(), version, tag):
+                log(f"raw 更新清单已就位：{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}/latest.json"
+                    f"（版本 {version}，安装包走发行版附件）")
                 log(f"发行版页面：{GITEE_HOST}/{OWNER}/{REPO}/releases/tag/{tag}")
                 if SRC_REPO and SRC_REPO != REPO:
                     log(f"           {GITEE_HOST}/{OWNER}/{SRC_REPO}/releases/tag/{tag}")
                 return
             time.sleep(3)
-        fail(f"raw latest.json 回读不到版本 {version}，客户端会停在旧版")
+        fail(f"raw {BRANCH} 上的 latest.json 回读不到版本 {version} 的发行版附件地址，"
+             f"客户端只剩 GitHub 那条兜底")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
