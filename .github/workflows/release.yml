@@ -54,7 +54,9 @@ name: Release
 #          系统保留所以加 BH_；可选 BH_GITEE_USER 填令牌账号登录名，不配则用令牌反查）。
 #          建完还要「编辑流水线 → 变量设置 → 引用变量」勾选并保存，未引用的变量不会进构建；
 #       3) Gitee 镜像仓 master 要同步到含 .workflow/gitee-publish.yml 的提交，
-#          否则触发会报「流水线文件不存在」。
+#          否则触发会报「流水线文件不存在」。该 YAML 里的自举命令会从 GitHub master 现取
+#          scripts/release-notes/ 再跑，所以之后改发布脚本不需要同步镜像；只有改这条
+#          YAML 本身（命令、通用变量引用）才要点一次「同步」。
 #
 # Microsoft Store 变体（2026-10-17 加入，build-msix-store job）：
 #   - 商店要求应用更新走商店通道，商店版用 cargo feature `store-build` 掐掉装内

@@ -24,6 +24,9 @@ displayName: Gitee 发布（下载镜像 + 发行版）
 # （可视化界面的「编辑流水线 → 变量设置 → 引用变量」保存后写的就是这个）。
 # 没被引用的通用变量不会进构建环境（实测：env 里没有、${} 也不替换）。
 #   其余缺省值写死在 scripts/release-notes/gitee_publish.py 里。
+#
+# 脚本自举（见下面最后一条命令）：发布脚本一律从 GitHub master 现取现跑，不用先把改动
+# 同步到 Gitee 镜像仓。这条流水线自己（本文件的 commands）才是唯一需要同步的部分。
 variables:
   BH_PROBE: probe-value
   global:
@@ -45,8 +48,25 @@ stages:
           - python3 -V
           # 只打印长度不打印值：检测 ${} 替换与检出凭据可用性（gitee_probe.py）
           - set +x; T='${BH_GITEE_TOKEN}'; P='${BH_PROBE}'; echo "subst token_len=${#T} probe_len=${#P}"; python3 scripts/release-notes/gitee_probe.py
-          # set +x 先关回显，免得令牌以明文出现在公开的构建日志里
-          - set +x; python3 scripts/release-notes/gitee_publish.py
+          # set +x 先关回显，免得令牌以明文出现在公开的构建日志里。
+          # 自举：Gitee Go 检出的是 Gitee 镜像仓，而镜像「同步」要人手点，滞后时跑的就是
+          # 上一版脚本——构建 #11 为此判红（002f71e 没同步过去，raw 推成旧版式、发行版
+          # 没挂 latest.json）。所以先浅取 GitHub master 的 scripts/ 再跑那份；GitHub 取不到
+          # 才退回检出仓，网络抖动不该让本来已经能成的发布变红。日志里的两个 SHA 就是
+          # 本次实际跑的脚本版本。GH_REPO 要与 gitee_publish.py 的缺省值保持一致。
+          # 不 cd 进 $BOOT：cwd 留在检出仓，gitee_publish.py 万一拿不到通用变量时还能沿用
+          # 构建机注入的检出凭据（http.extraheader 是仓级配置）。
+          - >-
+            set +x; echo "流水线检出（Gitee 镜像仓）@ $(git rev-parse --short HEAD 2>/dev/null)";
+            BOOT=$(mktemp -d); GH_REPO=datawalkcloud/BangHe; export GH_REPO;
+            if git init -q "$BOOT" && git -C "$BOOT" remote add origin "https://github.com/$GH_REPO.git"
+            && git -C "$BOOT" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20
+            fetch -q --depth=1 --no-tags origin master
+            && git -C "$BOOT" checkout -q FETCH_HEAD -- scripts; then
+            echo "发布脚本取自 GitHub master @ $(git -C "$BOOT" rev-parse --short FETCH_HEAD)";
+            SRC="$BOOT"; else echo "取 GitHub 脚本失败，改用检出仓那份"; SRC="$(pwd)"; fi;
+            python3 "$SRC/scripts/release-notes/gitee_publish.py"; rc=$?;
+            rm -rf "$BOOT" 2>/dev/null; exit $rc
         notify: []
         strategy:
           retry: '0'

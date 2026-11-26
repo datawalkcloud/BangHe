@@ -5,6 +5,8 @@
 在 Gitee 服务器上执行（.workflow/gitee-publish.yml → build@python 步骤）。
 GitHub Actions 发完 GitHub Release 后经 go-api 触发这条流水线
 （scripts/release-notes/trigger_gitee_pipeline.py）；也可以在 Gitee Go 页面手动执行。
+流水线跑的是它自己从 GitHub master 现取的那份（YAML 里的自举命令），不受 Gitee 镜像
+同步滞后影响——Gitee Go 检出的是镜像仓，滞后时直接跑会用到旧逻辑（构建 #11 就这么红过）。
 
 为什么搬到这里：从 GitHub 的 IP 调 Gitee v5 接口传附件撞过风控；Gitee Go 的构建机
 在 Gitee 自己的网络里，推库与调接口都走内网侧，不再受这个限制。Gitee Go 云端没有
