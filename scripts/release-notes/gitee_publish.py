@@ -106,6 +106,15 @@ if not TOKEN:
 
 ASSET_TPL = "banghe-{version}-windows-x64-setup.exe"
 
+# 发行版附件直链会 302 到 foruda 的签名地址，CDN 滞后按分钟计。构建 #13 里 tag、附件、raw
+# 强推、镜像发行版全都做完了，releases/download/latest/latest.json 仍回旧版，50s 的回读
+# 窗口把已经发成功的发布判成红。窗口按实测放宽，并让每次回读把看到的版本打进日志——
+# 再判红时日志本身就能分清是 CDN 没热（客户端此时仍可退 raw）还是附件真没挂上。
+REL_READBACK_TRIES = 18
+REL_READBACK_WAIT = 10
+RAW_READBACK_TRIES = 9
+RAW_READBACK_WAIT = 10
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RELEASE_SCRIPT = os.path.join(SCRIPT_DIR, "gitee_release.py")
 
@@ -446,11 +455,18 @@ def main() -> None:
         # latest 由 Gitee 解析到最新发行版）；这条是客户端实际要拉的地址，只能等它自己通。
         rel_manifest = (f"{GITEE_HOST}/{OWNER}/{REPO}"
                         f"/releases/download/latest/latest.json")
-        for _ in range(10):
-            if fetch_json(rel_manifest).get("version") == version:
-                log(f"发行版更新清单已生效：{rel_manifest}（版本 {version}）")
+        seen = ""
+        for i in range(REL_READBACK_TRIES):
+            man = fetch_json(rel_manifest)
+            if man.get("version") == version:
+                log(f"发行版更新清单已生效：{rel_manifest}（版本 {version}，"
+                    f"第 {i + 1}/{REL_READBACK_TRIES} 次回读）")
                 break
-            time.sleep(5)
+            seen = str(man.get("version") or "（读不到）")
+            if i + 1 < REL_READBACK_TRIES:
+                log(f"  第 {i + 1}/{REL_READBACK_TRIES} 次回读到 {seen}，"
+                    f"等 {REL_READBACK_WAIT}s 再试")
+                time.sleep(REL_READBACK_WAIT)
         else:
             names = release_asset_names(REPO, tag)
             if "latest.json" not in names:
@@ -458,21 +474,27 @@ def main() -> None:
                      f"客户端 endpoints 首位 {rel_manifest} 会 404。"
                      "\n（附件里只有安装包 = 流水线跑的是 Gitee 镜像仓 master 的旧脚本："
                      "先在 Gitee 仓库页点「同步」把改动带过去，再重跑）")
-            fail(f"latest.json 已挂上（附件 {names}），但 {rel_manifest} 回读不到版本 {version}；"
-                 f"客户端会退到 raw 那条兜底")
+            fail(f"latest.json 已挂上（附件 {names}），但 {rel_manifest} 回读到的始终是 {seen}，"
+                 f"本次 {version} 没生效（已等 "
+                 f"{REL_READBACK_TRIES * REL_READBACK_WAIT}s）；客户端会退到 raw 那条兜底")
 
-        # raw 清单是 endpoints 的兜底：回读走 v5 contents，读的是 git，不受 CDN 滞后影响
-        for _ in range(4):
+        # raw 清单是 endpoints 的兜底：回读优先走 v5 contents（读的是 git，不受 CDN 滞后影响），
+        # 但那次接口调用本身可能 403/限流而退到 raw 直链——同样要给它重试的余地。
+        for i in range(RAW_READBACK_TRIES):
             if raw_is_ready(raw_manifest(), version, tag):
                 log(f"raw 更新清单已就位：{GITEE_HOST}/{OWNER}/{REPO}/raw/{BRANCH}/latest.json"
-                    f"（版本 {version}，安装包走发行版附件）")
+                    f"（版本 {version}，安装包走发行版附件，"
+                    f"第 {i + 1}/{RAW_READBACK_TRIES} 次回读）")
                 log(f"发行版页面：{GITEE_HOST}/{OWNER}/{REPO}/releases/tag/{tag}")
                 if SRC_REPO and SRC_REPO != REPO:
                     log(f"           {GITEE_HOST}/{OWNER}/{SRC_REPO}/releases/tag/{tag}")
                 return
-            time.sleep(3)
-        fail(f"raw {BRANCH} 上的 latest.json 回读不到版本 {version} 的发行版附件地址，"
-             f"客户端只剩 GitHub 那条兜底")
+            if i + 1 < RAW_READBACK_TRIES:
+                log(f"  第 {i + 1}/{RAW_READBACK_TRIES} 次回读 raw 清单未就位，"
+                    f"等 {RAW_READBACK_WAIT}s 再试")
+                time.sleep(RAW_READBACK_WAIT)
+        fail(f"raw {BRANCH} 上的 latest.json 回读不到版本 {version} 的发行版附件地址"
+             f"（已等 {RAW_READBACK_TRIES * RAW_READBACK_WAIT}s），客户端只剩 GitHub 那条兜底")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
