@@ -90,6 +90,10 @@ pub struct WindowsPrinter {
     pub share: String,
     pub is_default: bool,
     pub network: bool,
+    /// `PRINTER_INFO_2W.Status` 原值，供 [`queue_verdict`] 解读。
+    /// 前端那份（`NativeWindowsPrinter`）刻意不收：一个位图数字进了 TS 只会被当成状态自己翻译一遍。
+    #[serde(skip)]
+    pub status: u32,
 }
 
 /// 枚举本机打印队列。设备中心「扫描本机打印机」的系统队列部分的数据源。
@@ -137,6 +141,7 @@ pub(crate) fn list_queues_blocking() -> Result<Vec<WindowsPrinter>, String> {
                 share: wide_to_string(i.pShareName),
                 is_default: i.Attributes & PRINTER_ATTRIBUTE_DEFAULT != 0,
                 network: i.Attributes & PRINTER_ATTRIBUTE_NETWORK != 0,
+                status: i.Status,
             })
             .collect())
     }
@@ -169,6 +174,284 @@ pub(crate) fn wide_to_string(p: windows::core::PWSTR) -> String {
 #[cfg(not(target_os = "windows"))]
 fn list_queues_blocking() -> Result<Vec<WindowsPrinter>, String> {
     Err("枚举本机打印队列仅支持 Windows".to_string())
+}
+
+/* ------------------------------------------------------- 队列机的联机探测 */
+
+/// 一次队列探测的结论，直接被 `devices.rs` 的 `ProbePlan::PrinterQueue` 换成设备中心那张结果卡。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueVerdict {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// 队列 `Status` 位里**判故障**的那几档 → 现场看得懂的说法。数值照 windi.h 的
+/// `PRINTER_STATUS_*` 写死（`Status` 是 `u32`，windows crate 的同名常量要 `cfg(windows)` 才拿得到，
+/// 而下面这套解读规则得在任何平台都单测得动）；`status_bits_match_windi` 那条测试在 Windows
+/// 上逐位对一遍，防止抄错一位就把正常机器报成故障。
+///
+/// 刻意不收 `PRINTING`/`BUSY`/`IO_ACTIVE`/`WAITING`/`PROCESSING`/`INITIALIZING`/`WARMING_UP`/
+/// `POWER_SAVE`/`TONER_LOW`：连打、进省电休眠、粉将尽都是照常出纸的正常态，置红等于把一次
+/// 正常作业报成"打印机不可用"，它们只作为补充说明附在绿标后面（[`NEUTRAL_QUEUE_BITS`]）。
+const BAD_QUEUE_BITS: &[(u32, &str)] = &[
+    (1, "已暂停"),                    // PAUSED
+    (2, "驱动报错"),                  // ERROR
+    (4, "正在删除"),                  // PENDING_DELETION
+    (8, "卡纸"),                      // PAPER_JAM
+    (16, "缺纸"),                     // PAPER_OUT
+    (32, "等待手动进纸"),             // MANUAL_FEED
+    (64, "纸路异常"),                 // PAPER_PROBLEM
+    (128, "脱机"),                    // OFFLINE
+    (2048, "出纸盒已满"),             // OUTPUT_BIN_FULL
+    (4096, "不可用"),                 // NOT_AVAILABLE
+    (262144, "缺粉"),                 // NO_TONER
+    (524288, "无法处理当前页"),       // PAGE_PUNT
+    (1048576, "需要人工处理"),        // USER_INTERVENTION
+    (2097152, "内存不足"),            // OUT_OF_MEMORY
+    (4194304, "舱门打开"),            // DOOR_OPEN
+    (8388608, "打印服务器状态未知"),  // SERVER_UNKNOWN
+    (33554432, "打印服务器离线"),     // SERVER_OFFLINE
+    (67108864, "驱动需要更新"),       // DRIVER_UPDATE_NEEDED
+];
+
+/// 绿标里附一句的"此刻在忙什么"，不参与成败判定。
+const NEUTRAL_QUEUE_BITS: &[(u32, &str)] = &[
+    (256, "正在收数据"),   // IO_ACTIVE
+    (512, "正忙"),         // BUSY
+    (1024, "正在打印"),    // PRINTING
+    (8192, "等待中"),      // WAITING
+    (16384, "正在处理"),   // PROCESSING
+    (32768, "正在初始化"), // INITIALIZING
+    (65536, "正在预热"),   // WARMING_UP
+    (131072, "粉将尽"),    // TONER_LOW
+    (16777216, "省电模式"), // POWER_SAVE
+];
+
+fn status_labels<'a>(status: u32, table: &[(u32, &'a str)]) -> Vec<&'a str> {
+    table.iter().filter(|(bit, _)| status & bit != 0).map(|(_, label)| *label).collect()
+}
+
+/// 按台账点名的队列给出一次真结论。**纯函数**：枚举由调用方做，这里只解读，
+/// 于是判据在任何平台都能单测（`Status` 位是 Win32 才有，但解读规则与调用无关）。
+///
+/// 点名匹配是**逐字**的（只忽略大小写），不做模糊匹配：队列名与系统里的名字差一个字时，
+/// 直打会把作业投到另一台上去，现场见到的是"这台没出纸、那台出了一沓"——正是要在这里拦住的错。
+pub(crate) fn queue_verdict(queues: &[WindowsPrinter], wanted: Option<&str>) -> QueueVerdict {
+    let want = wanted.map(str::trim).filter(|s| !s.is_empty());
+    let no_queue = "先在 Windows「设置 → 蓝牙和其他设备 → 打印机和扫描仪」里装好打印机并记进台账";
+
+    let (picked, via): (&WindowsPrinter, String) = match want {
+        Some(w) => match queues.iter().find(|p| p.name.eq_ignore_ascii_case(w)) {
+            Some(p) => (p, String::new()),
+            None => {
+                let named: Vec<&str> = queues.iter().take(3).map(|p| p.name.as_str()).collect();
+                let more = if queues.len() > named.len() { "…" } else { "" };
+                let tail = if named.is_empty() { no_queue.to_string() } else { format!("本机现有队列：{}{more}", named.join("、")) };
+                return QueueVerdict {
+                    ok: false,
+                    message: format!("本机打印队列里没有「{w}」，打印会投不到这台机。{tail}"),
+                };
+            }
+        },
+        None => {
+            // 台账没填队列名（手打的设备名不算队列名）：退到本机默认队列，并把这条退让说在结论里
+            match queues.iter().find(|p| p.is_default).or_else(|| queues.first()) {
+                Some(p) => {
+                    let via = if p.is_default {
+                        "（台账未填队列名，探的是本机默认队列）"
+                    } else {
+                        "（台账未填队列名，本机也没有默认队列，探的是枚举到的第一台）"
+                    };
+                    (p, via.to_string())
+                }
+                None => return QueueVerdict { ok: false, message: format!("本机没有已安装的打印队列：{no_queue}") },
+            }
+        }
+    };
+
+    let port = if picked.port.trim().is_empty() { "端口未知" } else { picked.port.trim() };
+    let bad = status_labels(picked.status, BAD_QUEUE_BITS);
+    if !bad.is_empty() {
+        // 回话按"下一步去哪儿点"分组：纸路的、暂停的、脱机的，现场照着做就行，不必读状态位
+        let hint = if bad.iter().any(|l| ["卡纸", "缺纸", "纸路异常", "等待手动进纸", "出纸盒已满"].contains(l)) {
+            "先查纸路、纸盒与上盖，处理完再测一次"
+        } else if bad.contains(&"已暂停") {
+            "在「设置 → 蓝牙和其他设备 → 打印机和扫描仪 → 打开队列」里取消暂停后再测"
+        } else {
+            "检查电源、联机键与打印服务器，处理完再测一次"
+        };
+        return QueueVerdict {
+            ok: false,
+            message: format!("打印队列「{}」报异常：{}（端口 {port}）。{hint}", picked.name, bad.join(" / ")),
+        };
+    }
+
+    let busy = status_labels(picked.status, NEUTRAL_QUEUE_BITS);
+    let mut message = format!("打印队列「{}」就绪（端口 {port}）{via}", picked.name);
+    if !busy.is_empty() {
+        message.push_str(&format!("，当前：{}", busy.join(" / ")));
+    }
+    // 判据的边界必须写在结论里：假脱机只保证收得下作业，不保证设备通着电
+    message.push_str("。队列接受作业即算通过，不代表设备已通电出纸");
+    QueueVerdict { ok: true, message }
+}
+
+/// 设备中心「联机测试」的队列机分支：只枚举并解读队列状态，**不提交作业**。
+/// 打一张测试页要占纸，与"改配置不该浪费一张票"（前端 `verifyReceiptPrinter` 只发状态查询）同一条纪律。
+pub async fn probe_queue(wanted: Option<String>) -> Result<QueueVerdict, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(queue_verdict(&list_queues_blocking()?, wanted.as_deref())))
+        .await
+        .map_err(|e| format!("队列探测任务失败: {e}"))?
+}
+
+/// 按标签反查状态位（只给下面那条 Windows 对表测试用）
+#[cfg(all(test, target_os = "windows"))]
+fn bit_of_label(label: &str) -> Option<u32> {
+    BAD_QUEUE_BITS
+        .iter()
+        .chain(NEUTRAL_QUEUE_BITS)
+        .find(|(_, l)| *l == label)
+        .map(|(bit, _)| *bit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue(name: &str, port: &str, status: u32, is_default: bool) -> WindowsPrinter {
+        WindowsPrinter {
+            name: name.into(),
+            driver: "Test Driver".into(),
+            port: port.into(),
+            share: String::new(),
+            is_default,
+            network: false,
+            status,
+        }
+    }
+
+    /// 现场最常见的那一档：队列在、没报错 → 绿，且结论里必须把"不代表已通电"说出来，
+    /// 否则操作员拿绿标当"纸出得来"的证据，反而比红标更误导。
+    #[test]
+    fn a_healthy_named_queue_greens_with_its_port_and_the_honest_caveat() {
+        let v = queue_verdict(&[queue("HP LaserJet 1020", "USB001", 0, false)], Some("HP LaserJet 1020"));
+        assert!(v.ok, "{:?}", v);
+        assert!(v.message.contains("HP LaserJet 1020") && v.message.contains("USB001"), "{}", v.message);
+        assert!(v.message.contains("不代表设备已通电出纸"), "绿标要写清判据边界：{}", v.message);
+        assert!(!v.message.contains("默认队列"), "点名探到的不该声称是默认队列：{}", v.message);
+    }
+
+    /// 队列名逐字匹配、大小写不敏感：差一个字就是另一台机器，必须拦下来并把本机现有的列出来
+    #[test]
+    fn an_unknown_queue_name_fails_and_lists_what_this_machine_actually_has() {
+        let queues = [queue("HP LaserJet 1020", "USB001", 0, true), queue("EPSON LQ-630K", "LPT1:", 0, false)];
+        let v = queue_verdict(&queues, Some("hP laserjet 1020"));
+        assert!(v.ok, "大小写不该影响命中：{:?}", v);
+
+        let v = queue_verdict(&queues, Some("HP LaserJet M403d"));
+        assert!(!v.ok, "本机没有这台队列不能报绿");
+        assert!(v.message.contains("HP LaserJet M403d") && v.message.contains("EPSON LQ-630K"), "{}", v.message);
+
+        let v = queue_verdict(&[], Some("任意"));
+        assert!(!v.ok && v.message.contains("装好打印机"), "一台队列都没有时要给出下一步：{}", v.message);
+    }
+
+    /// 台账没填队列名（手打的设备名不是队列名）时退到默认队列，但这条退让必须写在结论里
+    #[test]
+    fn an_unnamed_device_falls_back_to_the_default_queue_and_says_so() {
+        let queues = [queue("First One", "USB001", 0, false), queue("Default One", "PORTPROMPT:", 0, true)];
+        let v = queue_verdict(&queues, None);
+        assert!(v.ok && v.message.contains("Default One") && v.message.contains("未填队列名"), "{}", v.message);
+
+        let v = queue_verdict(&queues[..1], Some("   "));
+        assert!(v.ok && v.message.contains("First One") && v.message.contains("没有默认队列"), "空白队列名按未填处理：{}", v.message);
+    }
+
+    /// 故障位要说清是哪一种，并给出"下一步去哪儿点"：纸路的、暂停的、脱机的各说各的
+    #[test]
+    fn fault_bits_turn_red_and_name_the_specific_condition() {
+        let v = queue_verdict(&[queue("P", "USB002", 16 | 8, false)], Some("P"));
+        assert!(!v.ok, "缺纸加卡纸不能报绿：{:?}", v);
+        assert!(v.message.contains("缺纸") && v.message.contains("卡纸") && v.message.contains("纸路"), "{}", v.message);
+
+        let v = queue_verdict(&[queue("P", "USB002", 1, false)], Some("P"));
+        assert!(!v.ok && v.message.contains("已暂停") && v.message.contains("取消暂停"), "{}", v.message);
+
+        let v = queue_verdict(&[queue("P", "USB002", 128, false)], Some("P"));
+        assert!(!v.ok && v.message.contains("脱机") && v.message.contains("电源"), "{}", v.message);
+    }
+
+    /// 正在打印 / 省电休眠不是故障：绿标，但那一句要附出来，免得现场以为程序看错了机器
+    #[test]
+    fn busy_and_power_save_stay_green_with_a_note() {
+        let v = queue_verdict(&[queue("P", "USB003", 1024, false)], Some("P"));
+        assert!(v.ok && v.message.contains("正在打印"), "正常连打不能报红：{}", v.message);
+
+        let v = queue_verdict(&[queue("P", "USB003", 16777216, false)], Some("P"));
+        assert!(v.ok && v.message.contains("省电模式"), "休眠不是故障，但要说明：{}", v.message);
+
+        let v = queue_verdict(&[queue("P", "", 0, false)], Some("P"));
+        assert!(v.ok && v.message.contains("端口未知"), "端口为空也不能编出一个端口：{}", v.message);
+    }
+
+    /// 状态位照 windi.h 写死，这里在 Windows 上与 windows crate 的同名常量逐位对一遍。
+    /// 抄错一位的后果是"好机器报故障"或"故障机器报绿"，肉眼读表看不出来。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn queue_status_bits_match_the_windows_constants() {
+        use windows::Win32::Graphics::Printing as w;
+        let pairs: &[(&str, u32)] = &[
+            ("已暂停", w::PRINTER_STATUS_PAUSED),
+            ("驱动报错", w::PRINTER_STATUS_ERROR),
+            ("正在删除", w::PRINTER_STATUS_PENDING_DELETION),
+            ("卡纸", w::PRINTER_STATUS_PAPER_JAM),
+            ("缺纸", w::PRINTER_STATUS_PAPER_OUT),
+            ("等待手动进纸", w::PRINTER_STATUS_MANUAL_FEED),
+            ("纸路异常", w::PRINTER_STATUS_PAPER_PROBLEM),
+            ("脱机", w::PRINTER_STATUS_OFFLINE),
+            ("出纸盒已满", w::PRINTER_STATUS_OUTPUT_BIN_FULL),
+            ("不可用", w::PRINTER_STATUS_NOT_AVAILABLE),
+            ("缺粉", w::PRINTER_STATUS_NO_TONER),
+            ("无法处理当前页", w::PRINTER_STATUS_PAGE_PUNT),
+            ("需要人工处理", w::PRINTER_STATUS_USER_INTERVENTION),
+            ("内存不足", w::PRINTER_STATUS_OUT_OF_MEMORY),
+            ("舱门打开", w::PRINTER_STATUS_DOOR_OPEN),
+            ("打印服务器状态未知", w::PRINTER_STATUS_SERVER_UNKNOWN),
+            ("打印服务器离线", w::PRINTER_STATUS_SERVER_OFFLINE),
+            ("驱动需要更新", w::PRINTER_STATUS_DRIVER_UPDATE_NEEDED),
+            ("正在收数据", w::PRINTER_STATUS_IO_ACTIVE),
+            ("正忙", w::PRINTER_STATUS_BUSY),
+            ("正在打印", w::PRINTER_STATUS_PRINTING),
+            ("等待中", w::PRINTER_STATUS_WAITING),
+            ("正在处理", w::PRINTER_STATUS_PROCESSING),
+            ("正在初始化", w::PRINTER_STATUS_INITIALIZING),
+            ("正在预热", w::PRINTER_STATUS_WARMING_UP),
+            ("粉将尽", w::PRINTER_STATUS_TONER_LOW),
+            ("省电模式", w::PRINTER_STATUS_POWER_SAVE),
+        ];
+        for (label, expect) in pairs {
+            let got = bit_of_label(label).unwrap_or_else(|| panic!("状态表里没有「{label}」这一档"));
+            assert_eq!(got, *expect, "「{label}」的状态位与 windows crate 不一致");
+        }
+        let bad: u32 = BAD_QUEUE_BITS.iter().map(|(b, _)| b).fold(0, |a, b| a | b);
+        let neutral: u32 = NEUTRAL_QUEUE_BITS.iter().map(|(b, _)| b).fold(0, |a, b| a | b);
+        assert_eq!(bad & neutral, 0, "同一位不能既算故障又算正常态");
+    }
+
+    /// 真机冒烟：枚举本机打印队列，逐台按「点名」口径给一次结论（只读状态，不提交作业、不打纸）。
+    /// 自动化环境不跑；装机现场要核对"台账里的队列名对不对得上真机"时手动执行：
+    /// `cargo test --lib printer::tests::verdict_on_every_real_queue -- --ignored --nocapture`
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "要读真机打印队列，只在装了打印机的机器上手动跑"]
+    fn verdict_on_every_real_queue() {
+        let queues = list_queues_blocking().expect("应能枚举本机打印队列");
+        assert!(!queues.is_empty(), "这台机器一个打印队列都没有");
+        for q in &queues {
+            let v = queue_verdict(&queues, Some(&q.name));
+            println!("{} [端口 {}{} · 状态位 0x{:X}] → ok={} {}", q.name, q.port, if q.is_default { " · 默认" } else { "" }, q.status, v.ok, v.message);
+        }
+    }
 }
 
 /// 查设备状态（不出纸）。设备中心的状态灯与缺纸告警走这条。

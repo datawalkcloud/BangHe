@@ -1,10 +1,11 @@
 //! 设备台账的行为守卫（03 §9.20 `device_config`、02 §M9；页面 `src/pages/DevicesPage.tsx`）
 //!
 //! 守的是"接上 SQLite 才会犯、纸面 review 看不出来"的六件事：
-//!  1. **自检不许假装成功**：`probe_plan` 只放行本机真有通道的四类——ESC/POS 小票机、
+//!  1. **自检不许假装成功**：`probe_plan` 只放行本机真有通道的五类——ESC/POS 小票机、
+//!     队列打印机（A4 激光 / 241 针式，探的是那条 Windows 假脱机队列的状态位）、
 //!     精伦读卡器、地磅（读数流 / 一次性试读）、内网摄像机（与过磅抓拍、工作台预览同一条
-//!     HTTP 抓图通道），针式与窗口预览打印机必须落到
-//!     "未接入探测通道"，台账里标成 Mock 或已停用的磅/摄像机绝不许去开口，本机 USB 摄像头
+//!     HTTP 抓图通道），队列名还得与打印时用的口径逐字一致（`rawQueue` → 台账名 → 默认队列），
+//!     台账里标成 Mock 或已停用的磅/摄像机/打印机绝不许去开口，本机 USB 摄像头
 //!     更是留给 WebView2 探测（服务端压根没有那条通道）；
 //!     VID/PID 还得从 `"0x0483"` 这种手写十六进制里解析出来——解析错了就是拿另一台机器的应答糊弄。
 //!  2. **默认设备互斥**：`uk_dev_default` 是部分唯一索引，登记第二台默认机时
@@ -121,19 +122,60 @@ fn update_input(code: &str, verify: PrintVerify) -> UpdateDeviceConfigInput {
 fn probe_plan_routes_only_drivers_with_a_real_channel() {
     let conn = db();
     insert_device(&conn, "prn_ticket", "printer", "escpos_usbprint", r#"{"vid":"0x0483","pid":"0x5720","paper":"thermal80"}"#);
-    insert_device(&conn, "prn_main", "printer", "preview", r#"{"paper":"A4"}"#);
-    insert_device(&conn, "prn_dot", "printer", "raw_escp", r#"{"paper":"dot241"}"#);
+    insert_device(&conn, "prn_main", "printer", "preview", r#"{"paper":"A4","rawQueue":"HP LaserJet 1020"}"#);
+    insert_device(&conn, "prn_dot", "printer", "raw_escp", r#"{"paper":"dot241","rawQueue":"EPSON LQ-630K"}"#);
     insert_device(&conn, "idcard1", "idcard", "routon_sdtapi", r#"{"dll":"resources/sdtapi/Sdtapi.dll"}"#);
     insert_device(&conn, "scale1", "scale", "yaohua_xk3190", r#"{"port":"COM3","baud":9600}"#);
 
     assert_eq!(probe_plan(&conn, "prn_ticket").unwrap(), ProbePlan::Printer { vid: Some(0x0483), pid: Some(0x5720) });
     assert_eq!(probe_plan(&conn, "idcard1").unwrap(), ProbePlan::IdCard);
-    for code in ["prn_main", "prn_dot"] {
-        let plan = probe_plan(&conn, code).unwrap();
-        let ProbePlan::NotWired { message } = plan else { panic!("{code} 没有本机探测通道，不该被派发到真设备：{plan:?}") };
-        assert!(message.starts_with("该驱动（") && message.contains("暂未接入本机探测通道"), "{message}");
-    }
+    // 队列机（A4 激光 / 241 针式）的本机通道是那条 Windows 假脱机队列，探它不再等于"拿别的机器的应答糊弄"
+    assert_eq!(probe_plan(&conn, "prn_main").unwrap(), ProbePlan::PrinterQueue { queue: Some("HP LaserJet 1020".into()) });
+    assert_eq!(probe_plan(&conn, "prn_dot").unwrap(), ProbePlan::PrinterQueue { queue: Some("EPSON LQ-630K".into()) });
     assert_eq!(probe_plan(&conn, "nope").unwrap(), ProbePlan::Missing);
+
+    // 既不是直连也不是队列的驱动名（历史脏数据 / 将来新增但后端还没接）仍不许凭空派发
+    insert_device(&conn, "prn_odd", "printer", "smb_cifs", r#"{"paper":"A4"}"#);
+    let plan = probe_plan(&conn, "prn_odd").unwrap();
+    let ProbePlan::NotWired { message } = plan else { panic!("不认识的打印机驱动不该被派发到任何真通道：{plan:?}") };
+    assert!(message.starts_with("该驱动（") && message.contains("暂未接入本机探测通道"), "{message}");
+}
+
+/// 队列名的口径必须与**打印时**用的那一条（`src/components/print/receipt/silent.ts` 的
+/// `resolveDirectTarget`）逐字一致，否则测的是 A 队列、打的是 B 队列，绿灯就成了假证据：
+/// `rawQueue`（扫队列机回填的真名）优先 → 台账名 → 都没有才由探测退到本机默认队列。
+#[test]
+fn probe_plan_names_the_queue_the_way_printing_does() {
+    let conn = db();
+    insert_device(&conn, "prn_note", "printer", "preview", r#"{"paper":"A4"}"#);
+    insert_device(&conn, "prn_blank", "printer", "preview", r#"{"rawQueue":"   ","paper":"A4"}"#);
+    insert_device(&conn, "prn_both", "printer", "preview", r#"{"rawQueue":"Real Queue","paper":"A4"}"#);
+
+    assert_eq!(probe_plan(&conn, "prn_note").unwrap(), ProbePlan::PrinterQueue { queue: Some("台账prn_note".into()) });
+    assert_eq!(probe_plan(&conn, "prn_blank").unwrap(), ProbePlan::PrinterQueue { queue: Some("台账prn_blank".into()) });
+    assert_eq!(probe_plan(&conn, "prn_both").unwrap(), ProbePlan::PrinterQueue { queue: Some("Real Queue".into()) });
+
+    // 名字与 rawQueue 都空白 = 台账没这台机的队列线索，交给探测按默认队列处理（不能凭空编一个名字）
+    conn.execute("UPDATE device_config SET name = '  ' WHERE code = 'prn_blank'", []).unwrap();
+    conn.execute("UPDATE device_config SET config_json = '{}' WHERE code = 'prn_blank'", []).unwrap();
+    assert_eq!(probe_plan(&conn, "prn_blank").unwrap(), ProbePlan::PrinterQueue { queue: None });
+}
+
+/// Mock 与已停用的队列机一律不开口枚举：Mock 行背后没有能收作业的队列，
+/// 停用那台要先在设备中心启用——与地磅、摄像机同一条纪律（02 §M9）。
+#[test]
+fn probe_plan_refuses_to_probe_mock_or_disabled_queue_printers() {
+    let conn = db();
+    insert_device(&conn, "prn_mock", "printer", "preview", r#"{"rawQueue":"HP LaserJet 1020"}"#);
+    conn.execute("UPDATE device_config SET is_mock = 1 WHERE code = 'prn_mock'", []).unwrap();
+    insert_device(&conn, "prn_off", "printer", "raw_escp", r#"{"rawQueue":"EPSON LQ-630K"}"#);
+    conn.execute("UPDATE device_config SET is_enabled = 0 WHERE code = 'prn_off'", []).unwrap();
+
+    for (code, expect) in [("prn_mock", "Mock"), ("prn_off", "已停用")] {
+        let plan = probe_plan(&conn, code).unwrap();
+        let ProbePlan::NotWired { message } = plan else { panic!("{code} 不该被派发到打印队列：{plan:?}") };
+        assert!(message.contains(expect), "{code} 的拒绝原因要说清「{expect}」：{message}");
+    }
 }
 
 /// 地磅的本机通道就是那条串口：启用的真机磅必须派发到 `Scale`（否则设备中心永远"未检测"，

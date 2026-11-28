@@ -8,9 +8,12 @@
 //! 入参 `operator_id` 一律忽略（操作人以会话为准）、读不设岗（与 dashboard 同口径）。
 //!
 //! `test_device` 是这一轮唯一**不只看库**的命令：它按台账里的 `kind`/`driver`/`config_json`
-//! 决定能不能真探，只放行本机确实有通道的三类——ESC/POS 小票机走
-//! [`crate::printer::printer_status`]（只发 `DLE EOT`，不出纸）、精伦读卡器走
-//! [`crate::idcard::idcard_status`]（读 SAM 号）、地磅走 [`crate::scale`] 的那条串口：
+//! 决定能不能真探，只放行本机确实有通道的五类——ESC/POS 小票机走
+//! [`crate::printer::printer_status`]（只发 `DLE EOT`，不出纸）、A4 激光 / 241 针式这类队列机走
+//! [`crate::printer::probe_queue`]（枚举 Windows 假脱机、读那条队列的状态位，不提交作业；
+//! 假脱机问不到设备通电，所以绿标的原话是"队列接受作业"）、精伦读卡器走
+//! [`crate::idcard::idcard_status`]（读 SAM 号）、地磅走 [`crate::scale`] 的那条串口、
+//! 内网摄像机走 [`crate::camera`] 的抓图 HTTP：
 //! 读数流正在收数就算在线（判据是 `LiveStatus::connected`，不自己数时间），没在流时
 //! `scale::probe_once` 一次性开端口读三帧再归还。其余一律 `ok:false` + 一句人话，
 //! 耗时用 `Instant::now()` 实测：把"没探"演成"探过了"是 mock 时代的病，不带来真库。
@@ -700,6 +703,9 @@ pub fn delete_device(conn: &Connection, actor: &AuthProfile, code: &str) -> Resu
 pub enum ProbePlan {
     /// ESC/POS 小票机：只发状态查询不出纸；vid/pid 齐了才指定，否则由驱动取枚举第一台
     Printer { vid: Option<u16>, pid: Option<u16> },
+    /// 队列打印机（A4 激光 / 241 针式）：本机通道就是 Windows 假脱机里那条队列。
+    /// `queue` 是台账点名的队列名（`rawQueue` → 设备名），`None` 由 `queue_verdict` 退到默认队列。
+    PrinterQueue { queue: Option<String> },
     /// 精伦 Routon 读卡器：读 SAM 号即算联机
     IdCard,
     /// 地磅：本机通道就是那条串口读数流（正在收数即在线；没在流时一次性开端口试读几帧）
@@ -738,13 +744,33 @@ pub fn probe_plan(conn: &Connection, code: &str) -> Result<ProbePlan, String> {
     else {
         return Ok(ProbePlan::Missing);
     };
-    // 与 PrinterPanel 的 `escpos` 判据同源：只有走 usbprint.sys 直写的两类能发 DLE EOT，
-    // preview / raw_escp 是窗口预览与针式队列，探它们等于拿别的机器的应答来糊弄这台。
+    // 与 PrinterPanel 的 `escpos` 判据同源：只有走 usbprint.sys 直写的两类能发 DLE EOT 问到设备
+    // 自己的状态；队列机（下面那档）问不到，只能问假脱机。
     if d.kind == "printer" && matches!(d.driver.as_str(), "escpos_usbprint" | "raw_escpos") {
         return Ok(ProbePlan::Printer {
             vid: parse_hex_u16(d.config.get("vid")),
             pid: parse_hex_u16(d.config.get("pid")),
         });
+    }
+    // 队列机（窗口预览 A4 / 针式 241）的本机通道是**那条 Windows 队列**：GDI 直打与
+    // `window.print()` 都把作业交给它，所以"这台队列在不在、报没报错"是这条通道给得出的真结论。
+    // 判据到此为止——假脱机不报设备通电，`queue_verdict` 会把这条边界原样写进结论。
+    // 队列名口径与前端 `resolveDirectTarget`（`src/components/print/receipt/silent.ts`）逐字一致：
+    // `rawQueue`（扫队列机回填的真名）优先，退回台账名，都空则由探测退到默认队列。
+    if d.kind == "printer" && matches!(d.driver.as_str(), "preview" | "raw_escp") {
+        if d.is_mock == 1 {
+            return Ok(ProbePlan::NotWired {
+                message: format!("这台打印机「{}」在台账里是 Mock，背后没有能收作业的队列，不做真机探测", d.name),
+            });
+        }
+        if d.is_enabled == 0 {
+            return Ok(ProbePlan::NotWired {
+                message: format!("这台打印机「{}」在台账里已停用，先在设备中心启用再做联机测试", d.name),
+            });
+        }
+        let named = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let raw = d.config.get("rawQueue").and_then(|v| v.as_str()).map(str::to_string);
+        return Ok(ProbePlan::PrinterQueue { queue: named(raw).or_else(|| named(Some(d.name.clone()))) });
     }
     // 精伦走进程内 Sdtapi.dll 直调，读得到 SAM 号才算通（见 crate::idcard 头注）
     if d.kind == "idcard" && d.driver.starts_with("routon") {
@@ -898,6 +924,10 @@ pub async fn device_test(app: AppHandle, code: String) -> Result<DeviceTestOutco
                     (true, format!("握手成功，设备已应答（{byte}）{paper}"))
                 }
             }
+        },
+        ProbePlan::PrinterQueue { queue } => match crate::printer::probe_queue(queue).await {
+            Err(e) => (false, e),
+            Ok(v) => (v.ok, v.message),
         },
         ProbePlan::IdCard => match crate::idcard::idcard_status(app.clone()).await {
             Err(e) => (false, e),

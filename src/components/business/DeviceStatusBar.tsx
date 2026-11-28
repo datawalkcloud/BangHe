@@ -19,6 +19,8 @@ import { useDeviceStore } from "@/store/device";
 import { useActor } from "@/store/session";
 import { weight, weightUnit } from "@/lib/format";
 import { DEVICE_STATUS } from "@/lib/constants";
+import { ESCPOS_DRIVERS } from "@/lib/print-guard";
+import { pickPrinterDevice } from "@/components/print/receipt/silent";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -173,7 +175,27 @@ export function DeviceStatusStrip() {
       .sort((a, b) => b.is_default - a.is_default || a.id - b.id)[0] ??
     cfg("scale1");
   const camCfg = cfg("cam1");
-  const prtCfg = devices.find((d) => d.kind === "printer" && d.is_default === 1) ?? cfg("prt1");
+  // 「印」这一格指的是**打印时真正会用到的那台**：判据取 `pickPrinterDevice`（启用、非 Mock、默认优先），
+  // 与出纸口 `resolveDirectTarget` 同一份。原先按 `is_default` 或写死的 `prt1` 找，现场把默认机停用、
+  // 或登记码不是 prt1 时，底栏指的是一台根本不会出纸的行。
+  const prtCfg = pickPrinterDevice(devices) ?? cfg("prt1");
+  /**
+   * 打印机 chip 的真相来源分两条，各跟各自的实测走：
+   *  - 直连小票机（ESC/POS）：下方 `PrinterPanel` 那次 `DLE EOT` 状态查询的实时结果，落在 store；
+   *  - 队列机（A4 激光 / 241 针式）：没有那条实时通道，读台账 `last_status`——它由「联机测试」
+   *    探队列后当场回写，也是打印留痕同一列，不会出现卡片与底栏两套说法。
+   * store 那份的初始值是演示默认（一台写死的 M403d），拿它当队列机的结论会把没测过的机器报成「就绪」，
+   * 与设备中心的「未检测」互相打脸（2026-11-28 现场截图即此）。
+   */
+  const prtRow = prtCfg && !ESCPOS_DRIVERS.includes(prtCfg.driver) ? prtCfg : null;
+  const prtStatus = prtRow ? prtRow.last_status : printer.status;
+  const prtName = prtRow ? String(prtRow.config.rawQueue ?? prtRow.name) : printer.name;
+  const prtDetail =
+    prtStatus === "online"
+      ? `${prtName} 就绪`
+      : prtRow
+        ? (prtRow.last_error ?? "未检测，点进设备中心做联机测试")
+        : (printer.lastError ?? "打印机不可用");
   const { readerDev } = readerGateOf(devices);
 
   /** 底栏键盘图标开的就是顶栏「帮助 → 快捷键一览」那一张，键位表同一份（F1 也是它） */
@@ -228,12 +250,7 @@ export function DeviceStatusStrip() {
           deviceCode="cam1"
         />
         <Separator orientation="vertical" className="my-auto h-4 shrink-0" />
-        <Chip
-          title="印"
-          status={printer.status}
-          detail={printer.status === "online" ? `${printer.name} 就绪` : (printer.lastError ?? "打印机不可用")}
-          deviceCode={prtCfg?.code ?? "prt1"}
-        />
+        <Chip title="印" status={prtStatus} detail={prtDetail} deviceCode={prtCfg?.code ?? "prt1"} />
       </div>
 
       <span className="ml-auto flex shrink-0 items-center gap-3">

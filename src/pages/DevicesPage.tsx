@@ -1495,16 +1495,18 @@ function TestPanel({ d }: { d: DeviceConfig }) {
   const [result, setResult] = useState<TestResult | null>(null);
   const now = () => new Date().toLocaleTimeString("zh-CN", { hour12: false });
 
-  // 地磅与 IP 摄像机的自检结论直接落台账：它们不像打印机/读卡器还有 VID、SAM 号那样的凭据可看，
-  // "真机答上了"本身就是结论，测一次不写回灯就还挂着旧状态，等于白测。
-  // （IP 摄像机尤其：灯会被过磅抓拍失败连续 5 次压成"离线"，没有这条回写，测通过也翻不了绿。）
+  // 地磅、IP 摄像机与队列打印机的自检结论直接落台账：它们不像直连小票机还有 VID、读卡器还有 SAM 号
+  // 那样的凭据可看，"真机答上了"本身就是结论，测一次不写回灯就还挂着旧状态，等于白测。
+  // （IP 摄像机尤其：灯会被过磅抓拍失败连续 5 次压成"离线"，没有这条回写，测通过也翻不了绿。
+  //  队列打印机同理：`probe_plan` 现在真探那条 Windows 队列，测完不写回就永远停在"未检测"。）
   const reportProbe = useMutation({
     mutationFn: (r: { ok: boolean; message: string }) =>
       api.reportDeviceProbe(d.code, { status: r.ok ? "online" : "offline", error: r.ok ? null : r.message, at: stamp() }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["devices"] }),
     onError: (e: Error) => toast.error(`状态回写失败：${e.message}`),
   });
-  const writesBackProbe = d.kind === "scale" || d.kind === "camera";
+  const queuePrinter = d.kind === "printer" && !ESCPOS_DRIVERS.includes(d.driver);
+  const writesBackProbe = d.kind === "scale" || d.kind === "camera" || queuePrinter;
   const testing = useMutation({
     mutationFn: () => api.testDevice(d.code),
     onSuccess: (r) => {
@@ -1580,6 +1582,17 @@ function TestPanel({ d }: { d: DeviceConfig }) {
               {d.is_mock === 1
                 ? "这台是 Mock 模拟设备，不做真机探测。"
                 : "测试会开一次真流取一帧，与工作台抓拍同一通道；被其它程序占用时报「打不开」，结果当场更新上方状态灯。"}
+            </p>
+          </>
+        ) : queuePrinter ? (
+          <>
+            <Button size="sm" variant="outline" onClick={() => testing.mutate()} disabled={testing.isPending}>
+              {testing.isPending ? "正在查队列…" : "联机测试"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              这台机走 Windows 打印队列，测试读的是台账「队列名」那条队列在不在、有没有报暂停／缺纸／脱机，
+              不提交作业也不打测试页。队列收下作业即算通过，纸是否真出来仍以实际打印为准；
+              结果当场更新上方状态灯。
             </p>
           </>
         ) : (
